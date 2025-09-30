@@ -35,212 +35,6 @@ def userinfo(self, message, *args, **kws):
     if self.isEnabledFor(USERINFO_LEVEL):
         self._log(USERINFO_LEVEL, message, args, **kws)
 logging.Logger.userinfo = userinfo
-# --- Script Functions ---
-def group_dark_files(input_dirs: list[str], log_groups: bool = True, log_skipped: bool = False, max_age_days: int = MAX_AGE_DAYS) -> dict[str, list[FitsInfo]]:
-    """
-    Groups dark files by temperature, exposure time, gain, and normalized camera name.
-    Ne conserve que les fichiers FITS les plus récents dans chaque groupe, sur un intervalle de max_age_days jours.
-    Retourne un dict {group_key: [FitsInfo, ...]} où chaque valeur est une liste d'objets FitsInfo.
-    Les fichiers filtrés par la date sont déplacés dans une liste séparée et logués.
-    """
-    dark_groups = {}
-    skipped_files = []
-    filtered_by_date = []  # Liste des fichiers filtrés par la date
-
-    for input_dir in input_dirs:
-        if not os.path.isdir(input_dir):
-            logging.warning(f"Input directory not found: {input_dir}. Ignored.")
-            continue
-
-        logging.info(f"Scanning directory: {input_dir}")
-        for root, _, files in os.walk(input_dir):
-            for filename in files:
-                if filename.lower().endswith(('.fit', '.fits')):
-                    filepath = os.path.join(root, filename)
-                    info = FitsInfo(filepath)
-                    group_key = None
-                    if info.validData():
-                        group_key = info.group_key()
-                    if group_key and info.is_dark():
-                        dark_groups.setdefault(group_key, []).append(info)
-                    else:
-                        skipped_files.append(filepath)
-
-    # Tri des groupes par date décroissante et filtrage par intervalle de temps
-    for key in list(dark_groups.keys()):
-        infos = dark_groups[key]
-        infos.sort(key=lambda x: x.date_obs(), reverse=True)
-        if infos:
-            latest_date = infos[0].date_obs()
-            max_age = datetime.timedelta(days=max_age_days)
-            filtered = [info for info in infos if (latest_date - info.date_obs()) <= max_age]
-            removed = [info for info in infos if (latest_date - info.date_obs()) > max_age]
-            dark_groups[key] = filtered
-            if removed:
-                filtered_by_date.extend(removed)
-                logging.info(f"Fichiers filtrés par la date (>{max_age_days} jours du plus récent) pour le groupe {key}:")
-                for info in removed:
-                    logging.info(f"  FILTERED: {info.filepath} | DATE-OBS={info.date_obs()}")
-
-    # Affichage des groupes et fichiers
-    if log_groups:
-        for group_key, infos in dark_groups.items():
-            logging.getLogger().userinfo(
-                f"GROUP: {group_key}"
-            )
-            for info in infos:
-                logging.getLogger().userinfo(
-                    f"  FILE: {info.filepath} | DATE-OBS={info.date_obs()} | BINNING={info.binning()}"
-                )
-    if log_skipped and skipped_files:
-        logging.info("Fichiers ignorés (non conformes ou non DARK) :")
-        for f in skipped_files:
-            logging.info(f"  SKIPPED: {f}")
-
-    return dark_groups
-
-def stack_and_save_master_dark(group_key: str, fitsinfo_list: list[FitsInfo], process_dir: str, link_dir: str, 
-                              dark_library_path: str, siril_cfa: bool = False,
-                              siril_output_norm: str = "noscale",
-                              siril_rejection_method: str = "winsorizedsigma",
-                              siril_rejection_param1: float = 3.0,
-                              siril_rejection_param2: float = 3.0,
-                              siril_stack_method: str = "average",
-                              siril_path: str = "siril",
-                              siril_mode: str = "flatpak") -> None:
-    """
-    Stacks darks for a given group using Siril and saves the master dark
-    in the library, handling overwrites based on date.
-    """
-    # Récupérer l'objet FitsInfo avec la date la plus récente
-    latest_infoFile: FitsInfo | None = None
-    for info in fitsinfo_list:
-        if info.validData():
-            if latest_infoFile is None:
-                latest_infoFile = info
-            else:
-                if latest_infoFile.is_equivalent(info):
-                    if info.date_obs() > latest_infoFile.date_obs():
-                        latest_infoFile = info
-                else:
-                    logging.error(f"Inconsistent in group {group_key}. File {info.filepath} has GAIN={info.gain()}, CAMERA={info.camera()}. Skipping group.")
-                    return
-        else:
-            logging.warning(f"Invalid FITS data in {info.filepath}, skipping for date comparison.")
-    if latest_infoFile is None:
-        logging.warning("No valid DATE-OBS found in group, skipping stacking.")
-        return
-
-    # Utilise directement group_key pour le nom du fichier
-    os.makedirs(dark_library_path, exist_ok=True)
-    master_dark_filename = f"{group_key}.fit"
-    master_dark_path = os.path.join(dark_library_path, master_dark_filename)
-
-    # Déplacer la génération de stack_line avant la vérification du master existant
-    cfa_param = "-cfa" if siril_cfa else ""
-    siril_output_name = "master_dark_temp.fit"
-
-    # Mapping Python -> Siril
-    SIRIL_REJECTION_METHOD_MAP = {
-        "winsorizedsigma": "w",   # Siril attend "w" ou "winsorized"
-        "sigma": "s",
-        "minmax": "minmax",
-        "percentile": "p",
-        "none": "n"
-    }
-    siril_rejection_method = SIRIL_REJECTION_METHOD_MAP.get(siril_rejection_method, siril_rejection_method)
-
-    if siril_stack_method == "average":
-        if siril_rejection_method != "none":
-            # Empilement par moyenne avec rejet
-            stack_line = (
-                f"stack dark rej {siril_rejection_method} {siril_rejection_param1} {siril_rejection_param2} "
-                f"-norm={siril_output_norm} {cfa_param} -out={siril_output_name}"
-            )
-        else:
-            # Empilement par moyenne sans rejet
-            stack_line = (
-                f"stack dark rej n -norm={siril_output_norm} {cfa_param} -out={siril_output_name}"
-            )
-    else:
-        # Empilement médian (ne prend pas de paramètres de rejet)
-        stack_line = (
-            f"stack dark median -norm={siril_output_norm} {cfa_param} -out={siril_output_name}"
-        )
-
-    # Mémoriser la ligne de commande pour la stocker dans l'en-tête
-    stack_command = stack_line
-    
-    # --- Check for existing master dark for overwrite logic ---
-    existing_master = None
-    if os.path.exists(master_dark_path):
-        info = FitsInfo(master_dark_path)
-        if info.validData():
-            existing_master = info
-        else:
-            logging.warning(f"Cannot read metadata from existing master dark {master_dark_path}. Will be treated as non-existent for comparison.")
-            existing_master = None
-
-    if existing_master:
-        # Vérification de la commande de stacking si elle est disponible
-        different_stack_cmd = (existing_master.stack_command() is None or 
-                             stack_command != existing_master.stack_command())
-        
-        # Si la commande de stacking est différente, toujours remplacer
-        if different_stack_cmd:
-            logging.getLogger().userinfo(
-                f"Existing master dark for {group_key} has different stacking command. Replacing."
-            )
-            # Pas de 'return' ici pour permettre le remplacement
-        # Si même commande mais date plus récente ou identique, ignorer
-        elif latest_infoFile.date_obs() <= existing_master.date_obs():
-            logging.getLogger().userinfo(
-                f"Master dark already exists and is newer or same date ({existing_master.date_obs().date()}). Update ignored."
-            )
-            return
-        # Même commande mais plus ancien, on remplace
-        else:
-            logging.getLogger().userinfo(
-                f"Existing master dark for {group_key} is older ({existing_master.date_obs().date()}). Overwriting with newer darks from {latest_infoFile.date_obs().date()}."
-            )
-    else:
-        logging.info(
-            f"No master dark found for {group_key} or unreadable date. Creating new one."
-        )
-
-    # Les fichiers dark_files sont déjà des liens dans process_dir, nommés dark_XXXX.fit
-    siril_file_list = [os.path.basename(info.filepath) for info in fitsinfo_list if os.path.exists(info.filepath)]
-
-    if not siril_file_list:
-        logging.warning(f"No dark files to stack for group {group_key}. Ignored.")
-        return
-
-    siril_script_content = f"""requires 1.2
-# Siril script generated by Python to stack darks
-cd "{link_dir}"
-convert dark -out={process_dir}
-cd {process_dir}
-{stack_line}
-"""
-    if not run_siril_script(siril_script_content, process_dir, siril_path, siril_mode):
-        logging.error(f"Erreur critique : l'exécution du script Siril a échoué pour le groupe {group_key}. Le répertoire de travail est conservé pour inspection : {process_dir}")
-        exit(1)
-
-    temp_master_dark_path = os.path.join(process_dir, siril_output_name)
-    if os.path.exists(temp_master_dark_path):
-        shutil.move(temp_master_dark_path, master_dark_path)
-        logging.info(f"Master dark successfully created/updated: {master_dark_path}")
-        masterDark=FitsInfo(master_dark_path)
-        try:
-            # Met à jour le header du master dark
-            masterDark.set_ndarks(len(fitsinfo_list))
-            masterDark.set_stack_command(stack_command)
-            masterDark.update_header(latest_infoFile)
-            logging.info(f"Header of {master_dark_path} updated with group metadata, stack command, and number of frames ({len(fitsinfo_list)}).")
-        except Exception as e:
-            logging.error(f"Failed to update FITS header for {master_dark_path}: {e}")
-    else:
-        logging.error(f"Siril script executed, but master dark '{siril_output_name}' not found in {process_dir}.")
 
 class DarkLib:
     """
@@ -892,11 +686,7 @@ def main() -> None:
         action='store_true',
         help="Mode test: analyse les fichiers mais n'exécute pas Siril"
     )
-    parser.add_argument(
-        '--create-dummy-data',
-        action='store_true',
-        help="Crée des fichiers FITS factices pour tester le script"
-    )
+
     parser.add_argument(
         '--log-level',
         choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL', 'USERINFO'],
@@ -983,57 +773,7 @@ def main() -> None:
     # Ces variables peuvent être locales car elles ne sont utilisées que dans main()
     dark_library_path = os.path.abspath(config.get("dark_library_path"))
     work_dir = os.path.abspath(args.work_dir)
-    os.makedirs(work_dir, exist_ok=True)
-    
-    input_dirs_to_use = args.input_dirs
-
-    # Handle dummy data creation
-    if args.create_dummy_data:
-        logging.info("Creating dummy FITS files for demonstration...")
-
-        # Nettoyer les anciens fichiers dans le répertoire de travail
-        if os.path.exists(work_dir):
-            shutil.rmtree(work_dir)
-        os.makedirs(work_dir, exist_ok=True)
-
-        # Créer deux sous-répertoires dans le répertoire de travail pour simuler deux sessions
-        session1 = os.path.join(work_dir, "darks_session1")
-        session2 = os.path.join(work_dir, "darks_session2")
-        os.makedirs(session1, exist_ok=True)
-        os.makedirs(session2, exist_ok=True)
-
-        # Fonction pour créer un dummy FITS
-        def create_dummy_fits(path, date_obs, exptime, ccd_temp, imagetyp='DARK'):
-            hdu = fits.PrimaryHDU()
-            hdu.header['DATE-OBS'] = date_obs.isoformat(timespec='seconds')
-            hdu.header['EXPTIME'] = exptime
-            hdu.header['CCD-TEMP'] = ccd_temp
-            hdu.header['IMAGETYP'] = imagetyp
-            hdu.writeto(path, overwrite=True)
-
-        # Création des fichiers dummy dans le répertoire de travail
-        create_dummy_fits(os.path.join(session1, "dark_27_1.fit"), datetime.datetime(2023, 10, 27, 20, 0, 0), 300, -15)
-        create_dummy_fits(os.path.join(session1, "dark_27_2.fit"), datetime.datetime(2023, 10, 27, 20, 5, 0), 300, -15)
-        create_dummy_fits(os.path.join(session1, "dark_27_3.fit"), datetime.datetime(2023, 10, 27, 20, 10, 0), 300, -15)
-        create_dummy_fits(os.path.join(session1, "dark_27_4.fit"), datetime.datetime(2023, 10, 27, 21, 0, 0), 600, -15)
-        create_dummy_fits(os.path.join(session1, "dark_27_5.fit"), datetime.datetime(2023, 10, 27, 21, 10, 0), 600, -15)
-        create_dummy_fits(os.path.join(session2, "dark_28_1.fit"), datetime.datetime(2023, 10, 28, 19, 0, 0), 300, -15)
-        create_dummy_fits(os.path.join(session2, "dark_28_2.fit"), datetime.datetime(2023, 10, 28, 19, 5, 0), 300, -15)
-        create_dummy_fits(os.path.join(session2, "dark_28_3.fit"), datetime.datetime(2023, 10, 28, 20, 0, 0), 300, -10)
-        create_dummy_fits(os.path.join(session2, "dark_28_4.fit"), datetime.datetime(2023, 10, 28, 20, 5, 0), 300, -10)
-        create_dummy_fits(os.path.join(session1, "dark_single.fit"), datetime.datetime(2023, 10, 29, 20, 0, 0), 300, -15)
-        create_dummy_fits(os.path.join(session1, "light_frame.fit"), datetime.datetime(2023, 10, 29, 21, 0, 0), 120, -15, imagetyp='LIGHT')
-        create_dummy_fits(os.path.join(session1, "dark_27_6.fit"), datetime.datetime(2023, 10, 27, 20, 15, 0), 300, -15)
-        create_dummy_fits(os.path.join(session1, "dark_27_7.fit"), datetime.datetime(2023, 10, 27, 20, 20, 0), 300, -15)
-        create_dummy_fits(os.path.join(session1, "dark_27_8.fit"), datetime.datetime(2023, 10, 27, 20, 25, 0), 300, -15)
-        logging.info("Dummy FITS files created.")
-
-        # Si --create-dummy-data est utilisé sans --input-dirs, utiliser les sous-répertoires du workdir comme entrées
-        if not input_dirs_to_use:
-            logging.info("Using dummy data directories as inputs.")
-            input_dirs_to_use = [session1, session2]
-
-
+    os.makedirs(work_dir, exist_ok=True)    
 
     logging.info("Starting Siril dark library creation script.")
 
@@ -1046,27 +786,28 @@ def main() -> None:
     if args.list_darks:
         darklib.list_master_darks()
         return
+
+    # Si l'option --input-dirs est présente traiter les darks
+    if args.input_dirs:
+        dark_groups = darklib.group_dark_files(
+            args.input_dirs, 
+            log_groups=True, 
+            log_skipped=args.log_skipped
+        )
     
-    # Regrouper les darks
-    dark_groups = darklib.group_dark_files(
-        input_dirs_to_use, 
-        log_groups=True, 
-        log_skipped=args.log_skipped
-    )
-    
-    if not dark_groups:
-        logging.info("No dark files found or processed. Script finished.")
-        return
+        if not dark_groups:
+            logging.info("No dark files found or processed. Script finished.")
+            return
 
-    logging.info(f"Found {len(dark_groups)} unique dark groups based on temperature, exposure time and gain.")
+        logging.info(f"Found {len(dark_groups)} unique dark groups based on temperature, exposure time and gain.")
 
-    # Arrêt anticipé si --dummy est activé
-    if args.dummy:
-        logging.info("Option --dummy activée : arrêt du script avant traitement Siril.")
-        return
+        # Arrêt anticipé si --dummy est activé
+        if args.dummy:
+            logging.info("Option --dummy activée : arrêt du script avant traitement Siril.")
+            return
 
-    # Traiter tous les groupes
-    darklib.process_all_groups(dark_groups)
+        # Traiter tous les groupes
+        darklib.process_all_groups(dark_groups)
     
     logging.info("Siril dark library creation script completed.")
 
