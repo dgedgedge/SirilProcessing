@@ -1,0 +1,6 @@
+# Optional dependencies for SirilProcessing
+# Core functionality works without these, but they enable additional features
+
+# FITS file reading (optional but recommended)
+# Uncomment to enable automatic FITS header extraction
+# astropy>=5.0
