@@ -29,11 +29,21 @@ Extracted reusable components from `darklib.py` into a new `lib/` directory:
   - Handles temporary script creation and cleanup
   - Provides detailed error logging
 
+#### `lib/darklib.py` (374 lines)
+- **DarkLib class**: Manages dark frame library operations (added later)
+  - Groups dark files by metadata
+  - Stacks dark frames using Siril
+  - Manages master dark library with smart overwrite logic
+  - Lists existing master darks with their characteristics
+  - Extracted from `bin/darklib.py` to separate business logic from CLI
+
 ### 2. Refactored darklib.py
-- Reduced from 1,594 lines to 1,075 lines (~33% reduction)
+- Reduced from 1,594 lines to 256 lines (~84% reduction)
 - Removed duplicate code (FitsInfo, Config classes were defined twice)
+- Moved DarkLib class to `lib/darklib.py` (further refactoring)
 - Now imports shared modules from `lib/`
 - Added proper logging configuration
+- Script now focuses on CLI argument parsing and orchestration
 - Maintained all original functionality
 
 ### 3. Created biaslib.py (1,075 lines)
@@ -73,11 +83,12 @@ All tests passed:
 ```
 SirilProcessing/
 ├── bin/
-│   ├── darklib.py      (1,075 lines, refactored)
+│   ├── darklib.py      (256 lines, refactored - CLI only)
 │   └── biaslib.py      (1,075 lines, new)
 ├── lib/
 │   ├── __init__.py     (3 lines)
 │   ├── config.py       (127 lines)
+│   ├── darklib.py      (374 lines, DarkLib class)
 │   ├── fits_info.py    (346 lines)
 │   ├── siril_utils.py  (62 lines)
 │   └── README.md
