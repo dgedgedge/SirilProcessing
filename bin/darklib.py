@@ -1,19 +1,19 @@
 #!/bin/env python3
 import os
-import subprocess
+import sys
 import datetime
 import shutil
-import tempfile
-from astropy.io import fits
-from astropy.time import Time
 import logging
-import argparse # Import argparse module
-import json
-import unicodedata
-import re
-import copy
+import argparse
+from astropy.io import fits
 
-# --- Configuration (Default values, can be overridden by command line) ---
+# Add the parent directory to the path to import the lib module
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from lib.fits_info import FitsInfo
+from lib.config import Config
+from lib.siril_utils import run_siril_script
+
 SIRIL_PATH = "siril"
 DARK_LIBRARY_PATH = os.path.expanduser("~/darkLib")  # Par défaut : ~/darkLib
 WORK_DIR = os.path.expanduser("~/tmp/sirilWorkDir")  # Ajout du workdir par défaut
@@ -27,7 +27,6 @@ SIRIL_REJECTION_PARAM1 = 3.0
 SIRIL_REJECTION_PARAM2 = 3.0
 SIRIL_MODE = "flatpak" # Default mode for Siril: flatpak
 MAX_AGE_DAYS = 182  # Période par défaut (6 mois)
-
 # --- Ajout du niveau USERINFO ---
 USERINFO_LEVEL = 25
 logging.addLevelName(USERINFO_LEVEL, "USERINFO")
@@ -36,454 +35,7 @@ def userinfo(self, message, *args, **kws):
     if self.isEnabledFor(USERINFO_LEVEL):
         self._log(USERINFO_LEVEL, message, args, **kws)
 logging.Logger.userinfo = userinfo
-
 # --- Script Functions ---
-class FitsInfo:
-    """
-    Objet pour lire et accéder facilement aux champs d'un fichier FITS dark.
-    """
-
-    def __init__(self, filepath: str, log_level: int = logging.WARNING):
-        self.filepath:str = filepath
-        self.header = None
-        self.valid:bool = False
-        self.log_level = log_level
-        self.fields = {}
-        # Attributs pour accès direct
-        self.date_obs_value:float = None
-        self.rawdate_obs_value = None
-        self.exptime_value:float= None
-        self.temperature_value:float = None
-        self.gain_value:float = None
-        self.imagetyp_value:str = None
-        self.camera_value:str = None
-        self.xbinning_value = None
-        self.ybinning_value = None
-        self.ndarks_value = None
-        self.history_values = []
-        self.stack_command_value = None
-        # Lecture des champs FITS
-        self._read_header()
-
-    def _log(self, msg: str, level: int = logging.INFO) -> None:
-        if level >= self.log_level:
-            logging.log(level, msg)
-
-    def _read_header(self) -> None:
-        try:
-            with fits.open(self.filepath) as hdul:
-                self.header = hdul[0].header
-            
-            # Auto-détection du mot-clé de température
-            temp_value = None
-            for keyword in ['CCD-TEMP', 'CCDTEMP', 'SET-TEMP', 'CCD_TEMP', 'SENSOR-TEMP', 'TEMP']:
-                if keyword in self.header:
-                    temp_value = self.header.get(keyword)
-                    break
-                    
-            camera_value = (
-                self.header.get('INSTRUME') or
-                self.header.get('INSTRUMENT') or
-                self.header.get('CAMERA', 'unknown')
-            )
-
-            # Attributs pour accès direct
-            self.rawdate_obs_value = self.header.get('DATE-OBS')
-            self.date_obs_value = self._parse_date(self.rawdate_obs_value)
-            self.exptime_value = float(self.header.get('EXPTIME')) if self.header.get('EXPTIME') is not None else None
-            self.temperature_value = float(temp_value) if temp_value is not None else None
-            self.gain_value = float(self.header.get('GAIN')) if self.header.get('GAIN') is not None else None
-            self.imagetyp_value = (self.header.get('IMAGETYP') or '').strip().lower() if self.header.get('IMAGETYP') else ''
-            self.camera_value = self._normalize_camera_name(camera_value)
-            
-            # Lecture des champs NDARKS et HISTORY
-            self.ndarks_value = self.header.get('NDARKS')
-            
-            # Pour HISTORY qui peut avoir plusieurs lignes, on les récupère toutes
-            self.history_values = []
-            if 'HISTORY' in self.header:
-                if isinstance(self.header['HISTORY'], str):
-                    self.history_values = [self.header['HISTORY']]
-                else:
-                    # Si multiple entrées HISTORY
-                    self.history_values = self.header['HISTORY']
-
-            # Lecture du binning (XBINNING/YBINNING ou BINNING)
-            self.xbinning_value = int(self.header.get('XBINNING', 1))
-            self.ybinning_value = int(self.header.get('YBINNING', 1))
-            
-            # Si XBINNING n'est pas disponible, essayez BINNING
-            if 'XBINNING' not in self.header and 'BINNING' in self.header:
-                binning = self.header.get('BINNING', '1x1')
-                if isinstance(binning, str) and 'x' in binning:
-                    parts = binning.split('x')
-                    if len(parts) == 2:
-                        self.xbinning_value = int(parts[0])
-                        self.ybinning_value = int(parts[1])
-
-            # Lecture du champ STACKCMD qui contient la commande de stacking
-            self.stack_command_value = self.header.get('STACKCMD')
-
-            # Validation stricte : tous les champs doivent être valides
-            self.valid = (
-                self.date_obs_value is not None and
-                self.exptime_value is not None and
-                self.temperature_value is not None and
-                self.gain_value is not None and
-                self.imagetyp_value != '' and
-                self.camera_value not in (None, '', 'unknown') and
-                self.xbinning_value is not None and
-                self.ybinning_value is not None
-            )
-
-        except Exception as e:
-            self._log(f"Erreur lecture FITS {self.filepath}: {e}", logging.WARNING)
-            self.header = None
-            self.valid = False
-            self.date_obs_value = None
-            self.exptime_value = None
-            self.temperature_value = None
-            self.gain_value = None
-            self.imagetyp_value = None
-            self.camera_value = None
-            self.xbinning_value = None
-            self.ybinning_value = None
-            self.stack_command_value = None
-
-    def _parse_date(self, date_obs_str: str) -> datetime.datetime | None:
-        if not date_obs_str:
-            return None
-        try:
-            return Time(date_obs_str, format='isot', scale='utc').to_datetime()
-        except Exception:
-            try:
-                return Time(date_obs_str, format='fits', scale='utc').to_datetime()
-            except Exception:
-                self._log(f"Cannot parse DATE-OBS '{date_obs_str}' in {self.filepath}", logging.WARNING)
-                return None
-
-    def is_dark(self) -> bool:
-        return "dark" in (self.imagetyp_value or '')
-
-    def rawdate_obs(self) -> str | None:
-        return self.rawdate_obs_value
-    
-    def date_obs(self) -> datetime.datetime | None:
-        return self.date_obs_value
-
-    def exptime(self) -> float | None:
-        return self.exptime_value
-
-    def temperature(self) -> float | None:
-        return self.temperature_value
-
-    def gain(self) -> float | None:
-        return self.gain_value
-
-    def camera(self) -> str:
-        return self.camera_value
-
-    def validData(self) -> bool:
-        """
-        Retourne True si tous les champs requis sont présents.
-        """
-        return self.valid
-    
-    def _normalize_camera_name(self, name: str) -> str:
-        # Supprime les accents
-        name = unicodedata.normalize('NFKD', name).encode('ASCII', 'ignore').decode()
-        # Remplace tout caractère non alphanumérique par '_'
-        name = re.sub(r'[^A-Za-z0-9]', '_', name)
-        # Supprime les '_' à la fin
-        name = name.rstrip('_')
-        return name
-    
-    def binning(self) -> str:
-        """
-        Retourne le binning sous forme de chaîne "XxY".
-        """
-        return f"{self.xbinning_value}x{self.ybinning_value}"
-    
-    def binning_value(self) -> tuple:
-        """
-        Retourne le tuple (xbinning, ybinning).
-        """
-        return (self.xbinning_value, self.ybinning_value)
-
-    def group_key(self) -> str:
-        """
-        Retourne la clé de groupement pour cet objet FitsInfo sous forme de chaîne.
-        Format: "TEMP_EXPTIME_GAIN_CAMERA_BINNING"
-        """
-        if self.validData():
-            rounded_temp = round(self.temperature())
-            rounded_gain = round(self.gain())
-            formatted_temp = str(rounded_temp)
-            formatted_exp = str(int(self.exptime()))
-            formatted_gain = str(rounded_gain)
-            formatted_camera = self.camera()
-            formatted_binning = self.binning()
-            
-            return f"{formatted_camera}_T{formatted_temp}_E{formatted_exp}_G{formatted_gain}_B{formatted_binning}"
-        else:
-            return None
-
-    def is_equivalent(self, other: "FitsInfo") -> bool:
-        """
-        Compare tous les attributs (sauf le nom de fichier) avec un autre FitsInfo.
-        Retourne True si tous les champs sont égaux, y compris la commande de stacking si disponible.
-        """
-        if not isinstance(other, FitsInfo):
-            return False
-        
-        # Vérification de base par group_key
-        if self.group_key() != other.group_key():
-            return False
-            
-        # Vérification supplémentaire de la commande de stacking si disponible
-        if (self.stack_command_value is not None and 
-            other.stack_command_value is not None and
-            self.stack_command_value != other.stack_command_value):
-            return False
-            
-        return True
-
-
-    def create_symlink(self, link_dir: str, index: int = None):
-        """
-        Crée un lien symbolique vers le fichier FITS dans link_dir.
-        Si index est fourni, le nom du lien sera dark_{index:04d}.fit, sinon le nom d'origine.
-        """
-        if not os.path.exists(link_dir):
-            os.makedirs(link_dir, exist_ok=True)
-        if index is not None:
-            link_name = f"dark_{index:04d}.fit"
-        else:
-            link_name = os.path.basename(self.filepath)
-        link_path = os.path.join(link_dir, link_name)
-        try:
-            if os.path.exists(link_path):
-                os.remove(link_path)
-            os.symlink(os.path.abspath(self.filepath), link_path)
-            return self.copy_with_filepath(link_path)
-        except Exception as e:
-            logging.warning(f"Impossible de créer le lien symbolique {link_path} -> {self.filepath}: {e}")
-            return None
-
-    def copy_with_filepath(self, new_filepath: str):
-        """
-        Retourne une copie de l'objet FitsInfo avec le filepath remplacé par new_filepath.
-        Les autres attributs sont copiés sans relecture du FITS.
-        """
-        new_info = copy.copy(self)
-        new_info.filepath = new_filepath
-        return new_info
-
-    def update_header(self, source_info: "FitsInfo" = None) -> None:
-        """
-        Met à jour l'entête FITS du fichier associé à cette instance (self.filepath)
-        avec les données d'un autre FitsInfo (source_info).
-        Si source_info est None, utilise les données de l'instance courante.
-        Si ndarks_value est défini, ajoute cette information à l'en-tête.
-        Log les différences et met à jour l'en-tête si nécessaire.
-        En cas d'erreur, log l'erreur et relance l'exception.
-        """
-        # Si aucune source fournie, utiliser self comme source
-        if source_info is None:
-            source_info = self
-            
-        try:
-            with fits.open(self.filepath, mode='update') as hdul:
-                header = hdul[0].header
-                updates = {
-                    'DATE-OBS': source_info.rawdate_obs(),
-                    'EXPTIME': source_info.exptime(),
-                    'CCD-TEMP': source_info.temperature(),
-                    'GAIN': source_info.gain(),
-                    'CAMERA': source_info.camera(),
-                    'XBINNING': source_info.xbinning_value,
-                    'YBINNING': source_info.ybinning_value,
-                    'BINNING': source_info.binning()
-                }
-                
-                # Ajouter le nombre de darks utilisés si défini
-                if self.ndarks_value is not None:
-                    updates['NDARKS'] = self.ndarks_value
-                    updates['HISTORY'] = f"Master dark created from {self.ndarks_value} frames"
-                
-                # Ajouter la commande de stacking si définie
-                if self.stack_command_value is not None:
-                    updates['STACKCMD'] = self.stack_command_value
-                
-                for key, value in updates.items():
-                    old_value = header.get(key)
-                    if old_value != value:
-                        logging.info(f"Updating {key}: {old_value} -> {value} in {self.filepath}")
-                        header[key] = value
-                hdul.flush()
-        except Exception as e:
-            logging.error(f"Failed to update FITS header for {self.filepath}: {e}")
-            raise
-
-    def set_date_obs(self, value: str | datetime.datetime) -> None:
-        self.rawdate_obs_value = value if isinstance(value, str) else value.isoformat()
-        self.date_obs_value = self._parse_date(self.rawdate_obs_value)
-
-    def set_exptime(self, value: float) -> None:
-        self.exptime_value = float(value)
-
-    def set_temperature(self, value: float) -> None:
-        self.temperature_value = float(value)
-
-    def set_gain(self, value: float) -> None:
-        self.gain_value = float(value)
-
-    def set_camera(self, value: str) -> None:
-        self.camera_value = self._normalize_camera_name(value)
-
-    def set_ndarks(self, value: int) -> None:
-        """
-        Définit le nombre de darks utilisés pour créer ce master dark.
-        """
-        self.ndarks_value = value
-
-    def ndarks(self) -> int | None:
-        """
-        Retourne le nombre de darks utilisés pour créer ce master dark.
-        """
-        return self.ndarks_value
-
-    def history(self) -> list[str]:
-        """
-        Retourne l'historique du fichier FITS.
-        """
-        return self.history_values
-
-    def stack_command(self) -> str | None:
-        """
-        Retourne la commande de stacking utilisée pour créer ce master dark.
-        """
-        return self.stack_command_value
-    
-    def set_stack_command(self, value: str) -> None:
-        """
-        Définit la commande de stacking utilisée pour créer ce master dark.
-        """
-        self.stack_command_value = value
-
-class Config:
-    """
-    Classe pour charger, sauvegarder et accéder à la configuration du script.
-    Gère la persistance des paramètres dans un fichier JSON.
-    """
-    # Valeurs par défaut pour chaque paramètre de configuration
-    DEFAULTS = {
-        "siril_path": "siril",
-        "dark_library_path": os.path.expanduser("~/darkLib"),
-        "work_dir": os.path.expanduser("~/tmp/sirilWorkDir"),
-        "siril_mode": "flatpak",
-        "cfa": False,
-        "output_norm": "noscale",
-        "rejection_method": "winsorizedsigma",
-        "rejection_param1": 3.0,
-        "rejection_param2": 3.0,
-        "max_age_days": 182,
-        "stack_method": "average"
-    }
-    
-    def __init__(self, config_file=None):
-        """
-        Initialise la configuration à partir d'un fichier.
-        Si le fichier n'est pas spécifié, utilise le chemin par défaut ~/.siril_darklib_config.json
-        """
-        self.config_file = config_file or os.path.expanduser("~/.siril_darklib_config.json")
-        self._config = {}
-        self.load()
-    
-    def load(self):
-        """
-        Charge la configuration depuis le fichier.
-        Si le fichier n'existe pas ou est invalide, utilise les valeurs par défaut.
-        """
-        if os.path.exists(self.config_file):
-            try:
-                with open(self.config_file, "r") as f:
-                    self._config = json.load(f)
-                logging.info(f"Configuration chargée depuis {self.config_file}")
-            except Exception as e:
-                logging.warning(f"Erreur lors du chargement de la configuration: {e}")
-                self._config = {}
-        else:
-            logging.info(f"Fichier de configuration {self.config_file} inexistant, utilisation des valeurs par défaut")
-            self._config = {}
-    
-    def save(self):
-        """
-        Sauvegarde la configuration dans le fichier.
-        Normalise les chemins avant la sauvegarde.
-        """
-        try:
-            # Normaliser les chemins
-            if "dark_library_path" in self._config:
-                self._config["dark_library_path"] = os.path.abspath(self._config["dark_library_path"])
-            if "work_dir" in self._config:
-                self._config["work_dir"] = os.path.abspath(self._config["work_dir"])
-            
-            with open(self.config_file, "w") as f:
-                json.dump(self._config, f, indent=2)
-            logging.info(f"Configuration sauvegardée dans {self.config_file}")
-            return True
-        except Exception as e:
-            logging.error(f"Erreur lors de la sauvegarde de la configuration: {e}")
-            return False
-    
-    def get(self, key, default=None):
-        """
-        Récupère une valeur de configuration.
-        Si la clé n'existe pas, renvoie la valeur par défaut spécifiée ou celle définie dans DEFAULTS.
-        """
-        if default is None and key in self.DEFAULTS:
-            default = self.DEFAULTS[key]
-        return self._config.get(key, default)
-    
-    def set(self, key, value):
-        """
-        Définit une valeur de configuration.
-        """
-        self._config[key] = value
-    
-    def update(self, **kwargs):
-        """
-        Met à jour plusieurs valeurs de configuration en une seule fois.
-        """
-        self._config.update(kwargs)
-    
-    def to_dict(self):
-        """
-        Retourne la configuration sous forme de dictionnaire.
-        """
-        return dict(self._config)
-    
-    def set_from_args(self, args):
-        """
-        Met à jour la configuration à partir des arguments de la ligne de commande.
-        """
-        # Mise à jour des valeurs à partir des arguments
-        updates = {
-            "siril_path": args.siril_path,
-            "dark_library_path": args.dark_library_path,
-            "work_dir": args.work_dir,
-            "siril_mode": args.siril_mode,
-            "cfa": args.cfa,
-            "output_norm": args.output_norm,
-            "rejection_method": args.rejection_method,
-            "rejection_param1": args.rejection_param1,
-            "rejection_param2": args.rejection_param2,
-            "max_age_days": args.max_age,
-            "stack_method": args.stack_method
-        }
-        self.update(**updates)
-
 def group_dark_files(input_dirs: list[str], log_groups: bool = True, log_skipped: bool = False, max_age_days: int = MAX_AGE_DAYS) -> dict[str, list[FitsInfo]]:
     """
     Groups dark files by temperature, exposure time, gain, and normalized camera name.
@@ -547,63 +99,15 @@ def group_dark_files(input_dirs: list[str], log_groups: bool = True, log_skipped
 
     return dark_groups
 
-def run_siril_script(siril_script_content: str, working_dir: str) -> bool:
-    """
-    Executes a temporary Siril script.
-    Uses the global variable SIRIL_PATH and SIRIL_MODE.
-    """
-    global SIRIL_PATH, SIRIL_MODE
-    script_path = os.path.join(working_dir, "siril_script.sps")
-    try:
-        with open(script_path, "w") as f:
-            f.write(siril_script_content)
-
-        logging.info(f"Executing Siril script {script_path} in {working_dir}:\n{siril_script_content}")
-
-        # --- Build command based on SIRIL_MODE ---
-        if SIRIL_MODE == "native":
-            cmd = [SIRIL_PATH, "-s", script_path]
-        elif SIRIL_MODE == "flatpak":
-            cmd = ["flatpak", "run", "org.siril.Siril", "-s", script_path]
-        elif SIRIL_MODE == "appimage":
-            cmd = [SIRIL_PATH, "-s", script_path]
-        else:
-            logging.error(f"Unknown SIRIL_MODE: {SIRIL_MODE}")
-            return False
-
-        result = subprocess.run(
-            cmd,
-            cwd=working_dir,
-            capture_output=True,
-            text=True,
-            check=False
-        )
-        if result.returncode != 0:
-            logging.error(f"Siril script failed with error code {result.returncode}.")
-            logging.error(f"Siril stdout:\n{result.stdout}")
-            logging.error(f"Siril stderr:\n{result.stderr}")
-            return False
-        else:
-            logging.info("Siril script executed successfully.")
-            logging.debug(f"Siril stdout:\n{result.stdout}")
-            return True
-    except FileNotFoundError:
-        logging.error(f"Siril executable not found at '{SIRIL_PATH}'. Please check the path.")
-        return False
-    except Exception as e:
-        logging.error(f"Error executing Siril script: {e}")
-        return False
-    finally:
-        if os.path.exists(script_path):
-            os.remove(script_path) # Clean up temporary script
-
 def stack_and_save_master_dark(group_key: str, fitsinfo_list: list[FitsInfo], process_dir: str, link_dir: str, 
                               dark_library_path: str, siril_cfa: bool = False,
                               siril_output_norm: str = "noscale",
                               siril_rejection_method: str = "winsorizedsigma",
                               siril_rejection_param1: float = 3.0,
                               siril_rejection_param2: float = 3.0,
-                              siril_stack_method: str = "average") -> None:
+                              siril_stack_method: str = "average",
+                              siril_path: str = "siril",
+                              siril_mode: str = "flatpak") -> None:
     """
     Stacks darks for a given group using Siril and saves the master dark
     in the library, handling overwrites based on date.
@@ -718,7 +222,7 @@ convert dark -out={process_dir}
 cd {process_dir}
 {stack_line}
 """
-    if not run_siril_script(siril_script_content, process_dir):
+    if not run_siril_script(siril_script_content, process_dir, siril_path, siril_mode):
         logging.error(f"Erreur critique : l'exécution du script Siril a échoué pour le groupe {group_key}. Le répertoire de travail est conservé pour inspection : {process_dir}")
         exit(1)
 
@@ -738,53 +242,20 @@ cd {process_dir}
     else:
         logging.error(f"Siril script executed, but master dark '{siril_output_name}' not found in {process_dir}.")
 
-CONFIG_FILE = os.path.expanduser("~/.siril_darklib_config.json")
-
-def load_config() -> dict:
-    if os.path.exists(CONFIG_FILE):
-        try:
-            with open(CONFIG_FILE, "r") as f:
-                return json.load(f)
-        except Exception as e:
-            logging.warning(f"Could not read config file {CONFIG_FILE}: {e}")
-    return {}
-
-def save_config(config: dict) -> None:
-    try:
-        # Options de chemin
-        if "dark_library_path" in config:
-            config["dark_library_path"] = os.path.abspath(config["dark_library_path"])
-        if "work_dir" in config:
-            config["work_dir"] = os.path.abspath(config["work_dir"])
-        if "siril_path" in config:
-            config["siril_path"] = config["siril_path"]  # Peut rester relatif si souhaité
-            
-        # Options de stacking et de traitement
-        for option in ["siril_mode", "cfa", "output_norm", "rejection_method", 
-                      "rejection_param1", "rejection_param2", "max_age_days",
-                      "stack_method"]:
-            if option in config:
-                # Enregistrer la valeur telle quelle
-                pass
-                
-        with open(CONFIG_FILE, "w") as f:
-            json.dump(config, f, indent=2)
-        logging.info(f"Configuration saved to {CONFIG_FILE}")
-    except Exception as e:
-        logging.error(f"Could not save config file {CONFIG_FILE}: {e}")
-
 class DarkLib:
     """
     Classe pour gérer une bibliothèque de master darks.
     Fournit des méthodes pour grouper, empiler et maintenir des master darks.
     """
-    def __init__(self, config):
+    def __init__(self, config, siril_path="siril", siril_mode="flatpak"):
         """
         Initialise la bibliothèque de master darks avec les paramètres de configuration.
         """
         # Configuration
         self.dark_library_path = config.get("dark_library_path")
         self.work_dir = config.get("work_dir")
+        self.siril_path = siril_path
+        self.siril_mode = siril_mode
         self.siril_cfa = config.get("cfa", False)
         self.siril_output_norm = config.get("output_norm", "noscale")
         self.siril_rejection_method = config.get("rejection_method", "winsorizedsigma")
@@ -972,7 +443,7 @@ convert dark -out={process_dir}
 cd {process_dir}
 {stack_line}
 """
-        if not run_siril_script(siril_script_content, process_dir):
+        if not run_siril_script(siril_script_content, process_dir, self.siril_path, self.siril_mode):
             logging.error(f"Erreur critique : l'exécution du script Siril a échoué pour le groupe {group_key}. Le répertoire de travail est conservé pour inspection : {process_dir}")
             exit(1)
 
@@ -1032,13 +503,15 @@ class DarkLib:
     Classe pour gérer une bibliothèque de master darks.
     Fournit des méthodes pour grouper, empiler et maintenir des master darks.
     """
-    def __init__(self, config):
+    def __init__(self, config, siril_path="siril", siril_mode="flatpak"):
         """
         Initialise la bibliothèque de master darks avec les paramètres de configuration.
         """
         # Configuration
         self.dark_library_path = config.get("dark_library_path")
         self.work_dir = config.get("work_dir")
+        self.siril_path = siril_path
+        self.siril_mode = siril_mode
         self.siril_cfa = config.get("cfa", False)
         self.siril_output_norm = config.get("output_norm", "noscale")
         self.siril_rejection_method = config.get("rejection_method", "winsorizedsigma")
@@ -1226,7 +699,7 @@ convert dark -out={process_dir}
 cd {process_dir}
 {stack_line}
 """
-        if not run_siril_script(siril_script_content, process_dir):
+        if not run_siril_script(siril_script_content, process_dir, self.siril_path, self.siril_mode):
             logging.error(f"Erreur critique : l'exécution du script Siril a échoué pour le groupe {group_key}. Le répertoire de travail est conservé pour inspection : {process_dir}")
             exit(1)
 
@@ -1559,7 +1032,7 @@ def main() -> None:
     os.makedirs(DARK_LIBRARY_PATH, exist_ok=True)
     
     # Créer l'instance DarkLib
-    darklib = DarkLib(config)
+    darklib = DarkLib(config, SIRIL_PATH, SIRIL_MODE)
     
     # Si l'option --list-darks est spécifiée, liste les master darks et termine
     if args.list_darks:
