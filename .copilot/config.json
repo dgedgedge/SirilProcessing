@@ -1,0 +1,23 @@
+{
+  "default": {
+    "instructions": [ 
+      "Toujours écrire du code Python clair et documenté.",
+      "Respecter PEP8, utiliser des noms de variables explicites en anglais, et ajouter des docstrings au format NumPy.",
+      "Quand tu génères du code lié à un traitement d'image d'astrophotographie, privilégie les librairies standard (subprocess, pathlib, logging, pysiril et astropi).",
+      "Si une solution est spécifique au matériel (I2C, GPIO, GPS, capteurs de température), documente les dépendances nécessaires dans les docstrings.",
+      "Améliorer la robustesse du code en ajoutant des vérifications d'erreurs et des exceptions appropriées.",
+      "Constituer des scripts struturés qui permettent de gérer une biblothèque de dark et de bias, et d'automatiser les traitements d'images.",
+      "En partant de la version initial darklib.py améliorer la structure en répartissant les objets dans plusieurs modules",
+      "Créer des tests dans un espace séparé et éliminer du script la génération d'un environnement de test.",
+      "Dériver la première version de darklib une version gérant une biblothèque de bias.",
+      "Offrir une option lancer une interface graphique en garnad la possibilité de dfonctionner sans GUI."
+    ]
+  },
+  "python": {
+    "instructions": ["Toujours ajouter des exemples d'utilisation simples dans les docstrings, et vérifier que le code est compatible Python 3.9+."]
+  },
+  "shell": {
+    "instructions": ["Écrire des scripts Bash portables, avec set -euo pipefail, et commenter chaque étape."]
+  }
+}
+
