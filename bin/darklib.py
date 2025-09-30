@@ -1,20 +1,15 @@
 #!/bin/env python3
 import os
 import sys
-import datetime
-import shutil
 import logging
 import argparse
 import json
-from astropy.io import fits
 
 # Add the parent directory to the path to import the lib module
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from lib.fits_info import FitsInfo
 from lib.config import Config
-from lib.siril_utils import run_siril_script
-from lib.darklib import DarkLib
+from lib.darkprocess import DarkLib
 
 SIRIL_PATH = "siril"
 DARK_LIBRARY_PATH = os.path.expanduser("~/darkLib")  # Par défaut : ~/darkLib
@@ -29,14 +24,6 @@ SIRIL_REJECTION_PARAM1 = 3.0
 SIRIL_REJECTION_PARAM2 = 3.0
 SIRIL_MODE = "flatpak" # Default mode for Siril: flatpak
 MAX_AGE_DAYS = 182  # Période par défaut (6 mois)
-# --- Ajout du niveau USERINFO ---
-USERINFO_LEVEL = 25
-logging.addLevelName(USERINFO_LEVEL, "USERINFO")
-
-def userinfo(self, message, *args, **kws):
-    if self.isEnabledFor(USERINFO_LEVEL):
-        self._log(USERINFO_LEVEL, message, args, **kws)
-logging.Logger.userinfo = userinfo
 
 CONFIG_FILE = os.path.expanduser("~/.siril_darklib_config.json")
 
@@ -129,7 +116,7 @@ def main() -> None:
 
     parser.add_argument(
         '--log-level',
-        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL', 'USERINFO'],
+        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
         default='INFO',
         help="Niveau de journalisation"
     )
@@ -192,12 +179,7 @@ def main() -> None:
     args = parser.parse_args()
 
     # Configuration de la journalisation
-    log_level = getattr(logging, args.log_level) if args.log_level != 'USERINFO' else USERINFO_LEVEL
-    logging.basicConfig(
-        level=log_level,
-        format='%(asctime)s - %(levelname)s - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
-    )
+    logging.getLogger().setLevel(args.log_level)
     
     # Configuration de la journalisation...
     

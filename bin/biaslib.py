@@ -5,6 +5,7 @@ import datetime
 import shutil
 import logging
 import argparse
+import json
 from astropy.io import fits
 
 # Add the parent directory to the path to import the lib module
@@ -13,6 +14,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from lib.fits_info import FitsInfo
 from lib.config import Config
 from lib.siril_utils import run_siril_script
+from lib.logging_config import setup_logging
 
 SIRIL_PATH = "siril"
 BIAS_LIBRARY_PATH = os.path.expanduser("~/biasLib")  # Par défaut : ~/biasLib
@@ -27,14 +29,6 @@ SIRIL_REJECTION_PARAM1 = 3.0
 SIRIL_REJECTION_PARAM2 = 3.0
 SIRIL_MODE = "flatpak" # Default mode for Siril: flatpak
 MAX_AGE_DAYS = 182  # Période par défaut (6 mois)
-# --- Ajout du niveau USERINFO ---
-USERINFO_LEVEL = 25
-logging.addLevelName(USERINFO_LEVEL, "USERINFO")
-
-def userinfo(self, message, *args, **kws):
-    if self.isEnabledFor(USERINFO_LEVEL):
-        self._log(USERINFO_LEVEL, message, args, **kws)
-logging.Logger.userinfo = userinfo
 # --- Script Functions ---
 def group_bias_files(input_dirs: list[str], log_groups: bool = True, log_skipped: bool = False, max_age_days: int = MAX_AGE_DAYS) -> dict[str, list[FitsInfo]]:
     """
@@ -85,11 +79,11 @@ def group_bias_files(input_dirs: list[str], log_groups: bool = True, log_skipped
     # Affichage des groupes et fichiers
     if log_groups:
         for group_key, infos in bias_groups.items():
-            logging.getLogger().userinfo(
+            logging.info(
                 f"GROUP: {group_key}"
             )
             for info in infos:
-                logging.getLogger().userinfo(
+                logging.info(
                     f"  FILE: {info.filepath} | DATE-OBS={info.date_obs()} | BINNING={info.binning()}"
                 )
     if log_skipped and skipped_files:
@@ -188,19 +182,19 @@ def stack_and_save_master_bias(group_key: str, fitsinfo_list: list[FitsInfo], pr
         
         # Si la commande de stacking est différente, toujours remplacer
         if different_stack_cmd:
-            logging.getLogger().userinfo(
+            logging.info(
                 f"Existing master bias for {group_key} has different stacking command. Replacing."
             )
             # Pas de 'return' ici pour permettre le remplacement
         # Si même commande mais date plus récente ou identique, ignorer
         elif latest_infoFile.date_obs() <= existing_master.date_obs():
-            logging.getLogger().userinfo(
+            logging.info(
                 f"Master bias already exists and is newer or same date ({existing_master.date_obs().date()}). Update ignored."
             )
             return
         # Même commande mais plus ancien, on remplace
         else:
-            logging.getLogger().userinfo(
+            logging.info(
                 f"Existing master bias for {group_key} is older ({existing_master.date_obs().date()}). Overwriting with newer biases from {latest_infoFile.date_obs().date()}."
             )
     else:
@@ -315,11 +309,11 @@ class BiasLib:
         # Affichage des groupes et fichiers
         if log_groups:
             for group_key, infos in bias_groups.items():
-                logging.getLogger().userinfo(
+                logging.info(
                     f"GROUP: {group_key}"
                 )
                 for info in infos:
-                    logging.getLogger().userinfo(
+                    logging.info(
                         f"  FILE: {info.filepath} | DATE-OBS={info.date_obs()} | BINNING={info.binning()}"
                     )
         if log_skipped and skipped_files:
@@ -409,19 +403,19 @@ class BiasLib:
             
             # Si la commande de stacking est différente, toujours remplacer
             if different_stack_cmd:
-                logging.getLogger().userinfo(
+                logging.info(
                     f"Existing master bias for {group_key} has different stacking command. Replacing."
                 )
                 # Pas de 'return' ici pour permettre le remplacement
             # Si même commande mais date plus récente ou identique, ignorer
             elif latest_infoFile.date_obs() <= existing_master.date_obs():
-                logging.getLogger().userinfo(
+                logging.info(
                     f"Master bias already exists and is newer or same date ({existing_master.date_obs().date()}). Update ignored."
                 )
                 return
             # Même commande mais plus ancien, on remplace
             else:
-                logging.getLogger().userinfo(
+                logging.info(
                     f"Existing master bias for {group_key} is older ({existing_master.date_obs().date()}). Overwriting with newer biases from {latest_infoFile.date_obs().date()}."
                 )
         else:
@@ -571,11 +565,11 @@ class BiasLib:
         # Affichage des groupes et fichiers
         if log_groups:
             for group_key, infos in bias_groups.items():
-                logging.getLogger().userinfo(
+                logging.info(
                     f"GROUP: {group_key}"
                 )
                 for info in infos:
-                    logging.getLogger().userinfo(
+                    logging.info(
                         f"  FILE: {info.filepath} | DATE-OBS={info.date_obs()} | BINNING={info.binning()}"
                     )
         if log_skipped and skipped_files:
@@ -665,19 +659,19 @@ class BiasLib:
             
             # Si la commande de stacking est différente, toujours remplacer
             if different_stack_cmd:
-                logging.getLogger().userinfo(
+                logging.info(
                     f"Existing master bias for {group_key} has different stacking command. Replacing."
                 )
                 # Pas de 'return' ici pour permettre le remplacement
             # Si même commande mais date plus récente ou identique, ignorer
             elif latest_infoFile.date_obs() <= existing_master.date_obs():
-                logging.getLogger().userinfo(
+                logging.info(
                     f"Master bias already exists and is newer or same date ({existing_master.date_obs().date()}). Update ignored."
                 )
                 return
             # Même commande mais plus ancien, on remplace
             else:
-                logging.getLogger().userinfo(
+                logging.info(
                     f"Existing master bias for {group_key} is older ({existing_master.date_obs().date()}). Overwriting with newer biases from {latest_infoFile.date_obs().date()}."
                 )
         else:
@@ -899,7 +893,7 @@ def main() -> None:
     )
     parser.add_argument(
         '--log-level',
-        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL', 'USERINFO'],
+        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
         default='INFO',
         help="Niveau de journalisation"
     )
@@ -962,12 +956,7 @@ def main() -> None:
     args = parser.parse_args()
 
     # Configuration de la journalisation
-    log_level = getattr(logging, args.log_level) if args.log_level != 'USERINFO' else USERINFO_LEVEL
-    logging.basicConfig(
-        level=log_level,
-        format='%(asctime)s - %(levelname)s - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
-    )
+    setup_logging(args.log_level)
     
     # Configuration de la journalisation...
     
