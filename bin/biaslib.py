@@ -15,7 +15,7 @@ from lib.config import Config
 from lib.siril_utils import run_siril_script
 
 SIRIL_PATH = "siril"
-DARK_LIBRARY_PATH = os.path.expanduser("~/darkLib")  # Par défaut : ~/darkLib
+BIAS_LIBRARY_PATH = os.path.expanduser("~/biasLib")  # Par défaut : ~/biasLib
 WORK_DIR = os.path.expanduser("~/tmp/sirilWorkDir")  # Ajout du workdir par défaut
 
 # --- Siril Stacking Parameters (Default values, can be overridden by command line) ---
@@ -36,14 +36,14 @@ def userinfo(self, message, *args, **kws):
         self._log(USERINFO_LEVEL, message, args, **kws)
 logging.Logger.userinfo = userinfo
 # --- Script Functions ---
-def group_dark_files(input_dirs: list[str], log_groups: bool = True, log_skipped: bool = False, max_age_days: int = MAX_AGE_DAYS) -> dict[str, list[FitsInfo]]:
+def group_bias_files(input_dirs: list[str], log_groups: bool = True, log_skipped: bool = False, max_age_days: int = MAX_AGE_DAYS) -> dict[str, list[FitsInfo]]:
     """
-    Groups dark files by temperature, exposure time, gain, and normalized camera name.
+    Groups bias files by temperature, exposure time, gain, and normalized camera name.
     Ne conserve que les fichiers FITS les plus récents dans chaque groupe, sur un intervalle de max_age_days jours.
     Retourne un dict {group_key: [FitsInfo, ...]} où chaque valeur est une liste d'objets FitsInfo.
     Les fichiers filtrés par la date sont déplacés dans une liste séparée et logués.
     """
-    dark_groups = {}
+    bias_groups = {}
     skipped_files = []
     filtered_by_date = []  # Liste des fichiers filtrés par la date
 
@@ -61,21 +61,21 @@ def group_dark_files(input_dirs: list[str], log_groups: bool = True, log_skipped
                     group_key = None
                     if info.validData():
                         group_key = info.group_key()
-                    if group_key and info.is_dark():
-                        dark_groups.setdefault(group_key, []).append(info)
+                    if group_key and info.is_bias():
+                        bias_groups.setdefault(group_key, []).append(info)
                     else:
                         skipped_files.append(filepath)
 
     # Tri des groupes par date décroissante et filtrage par intervalle de temps
-    for key in list(dark_groups.keys()):
-        infos = dark_groups[key]
+    for key in list(bias_groups.keys()):
+        infos = bias_groups[key]
         infos.sort(key=lambda x: x.date_obs(), reverse=True)
         if infos:
             latest_date = infos[0].date_obs()
             max_age = datetime.timedelta(days=max_age_days)
             filtered = [info for info in infos if (latest_date - info.date_obs()) <= max_age]
             removed = [info for info in infos if (latest_date - info.date_obs()) > max_age]
-            dark_groups[key] = filtered
+            bias_groups[key] = filtered
             if removed:
                 filtered_by_date.extend(removed)
                 logging.info(f"Fichiers filtrés par la date (>{max_age_days} jours du plus récent) pour le groupe {key}:")
@@ -84,7 +84,7 @@ def group_dark_files(input_dirs: list[str], log_groups: bool = True, log_skipped
 
     # Affichage des groupes et fichiers
     if log_groups:
-        for group_key, infos in dark_groups.items():
+        for group_key, infos in bias_groups.items():
             logging.getLogger().userinfo(
                 f"GROUP: {group_key}"
             )
@@ -93,14 +93,14 @@ def group_dark_files(input_dirs: list[str], log_groups: bool = True, log_skipped
                     f"  FILE: {info.filepath} | DATE-OBS={info.date_obs()} | BINNING={info.binning()}"
                 )
     if log_skipped and skipped_files:
-        logging.info("Fichiers ignorés (non conformes ou non DARK) :")
+        logging.info("Fichiers ignorés (non conformes ou non BIAS) :")
         for f in skipped_files:
             logging.info(f"  SKIPPED: {f}")
 
-    return dark_groups
+    return bias_groups
 
-def stack_and_save_master_dark(group_key: str, fitsinfo_list: list[FitsInfo], process_dir: str, link_dir: str, 
-                              dark_library_path: str, siril_cfa: bool = False,
+def stack_and_save_master_bias(group_key: str, fitsinfo_list: list[FitsInfo], process_dir: str, link_dir: str, 
+                              bias_library_path: str, siril_cfa: bool = False,
                               siril_output_norm: str = "noscale",
                               siril_rejection_method: str = "winsorizedsigma",
                               siril_rejection_param1: float = 3.0,
@@ -109,7 +109,7 @@ def stack_and_save_master_dark(group_key: str, fitsinfo_list: list[FitsInfo], pr
                               siril_path: str = "siril",
                               siril_mode: str = "flatpak") -> None:
     """
-    Stacks darks for a given group using Siril and saves the master dark
+    Stacks biases for a given group using Siril and saves the master bias
     in the library, handling overwrites based on date.
     """
     # Récupérer l'objet FitsInfo avec la date la plus récente
@@ -132,13 +132,13 @@ def stack_and_save_master_dark(group_key: str, fitsinfo_list: list[FitsInfo], pr
         return
 
     # Utilise directement group_key pour le nom du fichier
-    os.makedirs(dark_library_path, exist_ok=True)
-    master_dark_filename = f"{group_key}.fit"
-    master_dark_path = os.path.join(dark_library_path, master_dark_filename)
+    os.makedirs(bias_library_path, exist_ok=True)
+    master_bias_filename = f"{group_key}.fit"
+    master_bias_path = os.path.join(bias_library_path, master_bias_filename)
 
     # Déplacer la génération de stack_line avant la vérification du master existant
     cfa_param = "-cfa" if siril_cfa else ""
-    siril_output_name = "master_dark_temp.fit"
+    siril_output_name = "master_bias_temp.fit"
 
     # Mapping Python -> Siril
     SIRIL_REJECTION_METHOD_MAP = {
@@ -154,31 +154,31 @@ def stack_and_save_master_dark(group_key: str, fitsinfo_list: list[FitsInfo], pr
         if siril_rejection_method != "none":
             # Empilement par moyenne avec rejet
             stack_line = (
-                f"stack dark rej {siril_rejection_method} {siril_rejection_param1} {siril_rejection_param2} "
+                f"stack bias rej {siril_rejection_method} {siril_rejection_param1} {siril_rejection_param2} "
                 f"-norm={siril_output_norm} {cfa_param} -out={siril_output_name}"
             )
         else:
             # Empilement par moyenne sans rejet
             stack_line = (
-                f"stack dark rej n -norm={siril_output_norm} {cfa_param} -out={siril_output_name}"
+                f"stack bias rej n -norm={siril_output_norm} {cfa_param} -out={siril_output_name}"
             )
     else:
         # Empilement médian (ne prend pas de paramètres de rejet)
         stack_line = (
-            f"stack dark median -norm={siril_output_norm} {cfa_param} -out={siril_output_name}"
+            f"stack bias median -norm={siril_output_norm} {cfa_param} -out={siril_output_name}"
         )
 
     # Mémoriser la ligne de commande pour la stocker dans l'en-tête
     stack_command = stack_line
     
-    # --- Check for existing master dark for overwrite logic ---
+    # --- Check for existing master bias for overwrite logic ---
     existing_master = None
-    if os.path.exists(master_dark_path):
-        info = FitsInfo(master_dark_path)
+    if os.path.exists(master_bias_path):
+        info = FitsInfo(master_bias_path)
         if info.validData():
             existing_master = info
         else:
-            logging.warning(f"Cannot read metadata from existing master dark {master_dark_path}. Will be treated as non-existent for comparison.")
+            logging.warning(f"Cannot read metadata from existing master bias {master_bias_path}. Will be treated as non-existent for comparison.")
             existing_master = None
 
     if existing_master:
@@ -189,36 +189,36 @@ def stack_and_save_master_dark(group_key: str, fitsinfo_list: list[FitsInfo], pr
         # Si la commande de stacking est différente, toujours remplacer
         if different_stack_cmd:
             logging.getLogger().userinfo(
-                f"Existing master dark for {group_key} has different stacking command. Replacing."
+                f"Existing master bias for {group_key} has different stacking command. Replacing."
             )
             # Pas de 'return' ici pour permettre le remplacement
         # Si même commande mais date plus récente ou identique, ignorer
         elif latest_infoFile.date_obs() <= existing_master.date_obs():
             logging.getLogger().userinfo(
-                f"Master dark already exists and is newer or same date ({existing_master.date_obs().date()}). Update ignored."
+                f"Master bias already exists and is newer or same date ({existing_master.date_obs().date()}). Update ignored."
             )
             return
         # Même commande mais plus ancien, on remplace
         else:
             logging.getLogger().userinfo(
-                f"Existing master dark for {group_key} is older ({existing_master.date_obs().date()}). Overwriting with newer darks from {latest_infoFile.date_obs().date()}."
+                f"Existing master bias for {group_key} is older ({existing_master.date_obs().date()}). Overwriting with newer biases from {latest_infoFile.date_obs().date()}."
             )
     else:
         logging.info(
-            f"No master dark found for {group_key} or unreadable date. Creating new one."
+            f"No master bias found for {group_key} or unreadable date. Creating new one."
         )
 
     # Les fichiers dark_files sont déjà des liens dans process_dir, nommés dark_XXXX.fit
     siril_file_list = [os.path.basename(info.filepath) for info in fitsinfo_list if os.path.exists(info.filepath)]
 
     if not siril_file_list:
-        logging.warning(f"No dark files to stack for group {group_key}. Ignored.")
+        logging.warning(f"No bias files to stack for group {group_key}. Ignored.")
         return
 
     siril_script_content = f"""requires 1.2
-# Siril script generated by Python to stack darks
+# Siril script generated by Python to stack biases
 cd "{link_dir}"
-convert dark -out={process_dir}
+convert bias -out={process_dir}
 cd {process_dir}
 {stack_line}
 """
@@ -226,33 +226,33 @@ cd {process_dir}
         logging.error(f"Erreur critique : l'exécution du script Siril a échoué pour le groupe {group_key}. Le répertoire de travail est conservé pour inspection : {process_dir}")
         exit(1)
 
-    temp_master_dark_path = os.path.join(process_dir, siril_output_name)
-    if os.path.exists(temp_master_dark_path):
-        shutil.move(temp_master_dark_path, master_dark_path)
-        logging.info(f"Master dark successfully created/updated: {master_dark_path}")
-        masterDark=FitsInfo(master_dark_path)
+    temp_master_bias_path = os.path.join(process_dir, siril_output_name)
+    if os.path.exists(temp_master_bias_path):
+        shutil.move(temp_master_bias_path, master_bias_path)
+        logging.info(f"Master bias successfully created/updated: {master_bias_path}")
+        masterBias=FitsInfo(master_bias_path)
         try:
-            # Met à jour le header du master dark
-            masterDark.set_ndarks(len(fitsinfo_list))
-            masterDark.set_stack_command(stack_command)
-            masterDark.update_header(latest_infoFile)
-            logging.info(f"Header of {master_dark_path} updated with group metadata, stack command, and number of frames ({len(fitsinfo_list)}).")
+            # Met à jour le header du master bias
+            masterBias.set_nbiases(len(fitsinfo_list))
+            masterBias.set_stack_command(stack_command)
+            masterBias.update_header(latest_infoFile)
+            logging.info(f"Header of {master_bias_path} updated with group metadata, stack command, and number of frames ({len(fitsinfo_list)}).")
         except Exception as e:
-            logging.error(f"Failed to update FITS header for {master_dark_path}: {e}")
+            logging.error(f"Failed to update FITS header for {master_bias_path}: {e}")
     else:
-        logging.error(f"Siril script executed, but master dark '{siril_output_name}' not found in {process_dir}.")
+        logging.error(f"Siril script executed, but master bias '{siril_output_name}' not found in {process_dir}.")
 
-class DarkLib:
+class BiasLib:
     """
-    Classe pour gérer une bibliothèque de master darks.
-    Fournit des méthodes pour grouper, empiler et maintenir des master darks.
+    Classe pour gérer une bibliothèque de master bias.
+    Fournit des méthodes pour grouper, empiler et maintenir des master bias.
     """
     def __init__(self, config, siril_path="siril", siril_mode="flatpak"):
         """
-        Initialise la bibliothèque de master darks avec les paramètres de configuration.
+        Initialise la bibliothèque de master bias avec les paramètres de configuration.
         """
         # Configuration
-        self.dark_library_path = config.get("dark_library_path")
+        self.bias_library_path = config.get("bias_library_path")
         self.work_dir = config.get("work_dir")
         self.siril_path = siril_path
         self.siril_mode = siril_mode
@@ -265,15 +265,15 @@ class DarkLib:
         self.max_age_days = config.get("max_age_days", 182)
 
         # Créer les répertoires nécessaires
-        os.makedirs(self.dark_library_path, exist_ok=True)
+        os.makedirs(self.bias_library_path, exist_ok=True)
         os.makedirs(self.work_dir, exist_ok=True)
 
-    def group_dark_files(self, input_dirs: list[str], log_groups: bool = True, log_skipped: bool = False) -> dict[str, list[FitsInfo]]:
+    def group_bias_files(self, input_dirs: list[str], log_groups: bool = True, log_skipped: bool = False) -> dict[str, list[FitsInfo]]:
         """
         Groupe les fichiers dark par température, temps d'exposition, gain et nom de caméra.
         Ne conserve que les fichiers FITS les plus récents dans l'intervalle de temps spécifié.
         """
-        dark_groups = {}
+        bias_groups = {}
         skipped_files = []
         filtered_by_date = []  # Liste des fichiers filtrés par la date
 
@@ -291,21 +291,21 @@ class DarkLib:
                         group_key = None
                         if info.validData():
                             group_key = info.group_key()
-                        if group_key and info.is_dark():
-                            dark_groups.setdefault(group_key, []).append(info)
+                        if group_key and info.is_bias():
+                            bias_groups.setdefault(group_key, []).append(info)
                         else:
                             skipped_files.append(filepath)
 
         # Tri des groupes par date décroissante et filtrage par intervalle de temps
-        for key in list(dark_groups.keys()):
-            infos = dark_groups[key]
+        for key in list(bias_groups.keys()):
+            infos = bias_groups[key]
             infos.sort(key=lambda x: x.date_obs(), reverse=True)
             if infos:
                 latest_date = infos[0].date_obs()
                 max_age = datetime.timedelta(days=self.max_age_days)
                 filtered = [info for info in infos if (latest_date - info.date_obs()) <= max_age]
                 removed = [info for info in infos if (latest_date - info.date_obs()) > max_age]
-                dark_groups[key] = filtered
+                bias_groups[key] = filtered
                 if removed:
                     filtered_by_date.extend(removed)
                     logging.info(f"Fichiers filtrés par la date (>{self.max_age_days} jours du plus récent) pour le groupe {key}:")
@@ -314,7 +314,7 @@ class DarkLib:
 
         # Affichage des groupes et fichiers
         if log_groups:
-            for group_key, infos in dark_groups.items():
+            for group_key, infos in bias_groups.items():
                 logging.getLogger().userinfo(
                     f"GROUP: {group_key}"
                 )
@@ -323,15 +323,15 @@ class DarkLib:
                         f"  FILE: {info.filepath} | DATE-OBS={info.date_obs()} | BINNING={info.binning()}"
                     )
         if log_skipped and skipped_files:
-            logging.info("Fichiers ignorés (non conformes ou non DARK) :")
+            logging.info("Fichiers ignorés (non conformes ou non BIAS) :")
             for f in skipped_files:
                 logging.info(f"  SKIPPED: {f}")
 
-        return dark_groups
+        return bias_groups
 
-    def stack_and_save_master_dark(self, group_key: str, fitsinfo_list: list[FitsInfo], process_dir: str, link_dir: str) -> None:
+    def stack_and_save_master_bias(self, group_key: str, fitsinfo_list: list[FitsInfo], process_dir: str, link_dir: str) -> None:
         """
-        Empile les darks d'un groupe en utilisant Siril et enregistre le master dark
+        Empile les biases d'un groupe en utilisant Siril et enregistre le master bias
         dans la bibliothèque, en gérant les remplacements selon la date.
         """
         # Récupérer l'objet FitsInfo avec la date la plus récente
@@ -354,13 +354,13 @@ class DarkLib:
             return
 
         # Utilise directement group_key pour le nom du fichier
-        os.makedirs(self.dark_library_path, exist_ok=True)
-        master_dark_filename = f"{group_key}.fit"
-        master_dark_path = os.path.join(self.dark_library_path, master_dark_filename)
+        os.makedirs(self.bias_library_path, exist_ok=True)
+        master_bias_filename = f"{group_key}.fit"
+        master_bias_path = os.path.join(self.bias_library_path, master_bias_filename)
 
         # Déplacer la génération de stack_line avant la vérification du master existant
         cfa_param = "-cfa" if self.siril_cfa else ""
-        siril_output_name = "master_dark_temp.fit"
+        siril_output_name = "master_bias_temp.fit"
 
         # Mapping Python -> Siril
         SIRIL_REJECTION_METHOD_MAP = {
@@ -376,31 +376,31 @@ class DarkLib:
             if self.siril_rejection_method != "none":
                 # Empilement par moyenne avec rejet
                 stack_line = (
-                    f"stack dark rej {siril_rejection_method} {self.siril_rejection_param1} {self.siril_rejection_param2} "
+                    f"stack bias rej {siril_rejection_method} {self.siril_rejection_param1} {self.siril_rejection_param2} "
                     f"-norm={self.siril_output_norm} {cfa_param} -out={siril_output_name}"
                 )
             else:
                 # Empilement par moyenne sans rejet
                 stack_line = (
-                    f"stack dark rej n -norm={self.siril_output_norm} {cfa_param} -out={siril_output_name}"
+                    f"stack bias rej n -norm={self.siril_output_norm} {cfa_param} -out={siril_output_name}"
                 )
         else:
             # Empilement médian (ne prend pas de paramètres de rejet)
             stack_line = (
-                f"stack dark median -norm={self.siril_output_norm} {cfa_param} -out={siril_output_name}"
+                f"stack bias median -norm={self.siril_output_norm} {cfa_param} -out={siril_output_name}"
             )
 
         # Mémoriser la ligne de commande pour la stocker dans l'en-tête
         stack_command = stack_line
         
-        # --- Check for existing master dark for overwrite logic ---
+        # --- Check for existing master bias for overwrite logic ---
         existing_master = None
-        if os.path.exists(master_dark_path):
-            info = FitsInfo(master_dark_path)
+        if os.path.exists(master_bias_path):
+            info = FitsInfo(master_bias_path)
             if info.validData():
                 existing_master = info
             else:
-                logging.warning(f"Cannot read metadata from existing master dark {master_dark_path}. Will be treated as non-existent for comparison.")
+                logging.warning(f"Cannot read metadata from existing master bias {master_bias_path}. Will be treated as non-existent for comparison.")
 
         if existing_master:
             # Vérification de la commande de stacking si elle est disponible
@@ -410,36 +410,36 @@ class DarkLib:
             # Si la commande de stacking est différente, toujours remplacer
             if different_stack_cmd:
                 logging.getLogger().userinfo(
-                    f"Existing master dark for {group_key} has different stacking command. Replacing."
+                    f"Existing master bias for {group_key} has different stacking command. Replacing."
                 )
                 # Pas de 'return' ici pour permettre le remplacement
             # Si même commande mais date plus récente ou identique, ignorer
             elif latest_infoFile.date_obs() <= existing_master.date_obs():
                 logging.getLogger().userinfo(
-                    f"Master dark already exists and is newer or same date ({existing_master.date_obs().date()}). Update ignored."
+                    f"Master bias already exists and is newer or same date ({existing_master.date_obs().date()}). Update ignored."
                 )
                 return
             # Même commande mais plus ancien, on remplace
             else:
                 logging.getLogger().userinfo(
-                    f"Existing master dark for {group_key} is older ({existing_master.date_obs().date()}). Overwriting with newer darks from {latest_infoFile.date_obs().date()}."
+                    f"Existing master bias for {group_key} is older ({existing_master.date_obs().date()}). Overwriting with newer biases from {latest_infoFile.date_obs().date()}."
                 )
         else:
             logging.info(
-                f"No master dark found for {group_key} or unreadable date. Creating new one."
+                f"No master bias found for {group_key} or unreadable date. Creating new one."
             )
 
         # Les fichiers dark_files sont déjà des liens dans process_dir, nommés dark_XXXX.fit
         siril_file_list = [os.path.basename(info.filepath) for info in fitsinfo_list if os.path.exists(info.filepath)]
 
         if not siril_file_list:
-            logging.warning(f"No dark files to stack for group {group_key}. Ignored.")
+            logging.warning(f"No bias files to stack for group {group_key}. Ignored.")
             return
 
         siril_script_content = f"""requires 1.2
-# Siril script generated by Python to stack darks
+# Siril script generated by Python to stack biases
 cd "{link_dir}"
-convert dark -out={process_dir}
+convert bias -out={process_dir}
 cd {process_dir}
 {stack_line}
 """
@@ -447,23 +447,23 @@ cd {process_dir}
             logging.error(f"Erreur critique : l'exécution du script Siril a échoué pour le groupe {group_key}. Le répertoire de travail est conservé pour inspection : {process_dir}")
             exit(1)
 
-        temp_master_dark_path = os.path.join(process_dir, siril_output_name)
-        if os.path.exists(temp_master_dark_path):
-            shutil.move(temp_master_dark_path, master_dark_path)
-            logging.info(f"Master dark successfully created/updated: {master_dark_path}")
-            masterDark=FitsInfo(master_dark_path)
+        temp_master_bias_path = os.path.join(process_dir, siril_output_name)
+        if os.path.exists(temp_master_bias_path):
+            shutil.move(temp_master_bias_path, master_bias_path)
+            logging.info(f"Master bias successfully created/updated: {master_bias_path}")
+            masterBias=FitsInfo(master_bias_path)
             try:
-                # Met à jour le header du master dark
-                masterDark.set_ndarks(len(fitsinfo_list))
-                masterDark.set_stack_command(stack_command)
-                masterDark.update_header(latest_infoFile)
-                logging.info(f"Header of {master_dark_path} updated with group metadata, stack command, and number of frames ({len(fitsinfo_list)}).")
+                # Met à jour le header du master bias
+                masterBias.set_nbiases(len(fitsinfo_list))
+                masterBias.set_stack_command(stack_command)
+                masterBias.update_header(latest_infoFile)
+                logging.info(f"Header of {master_bias_path} updated with group metadata, stack command, and number of frames ({len(fitsinfo_list)}).")
             except Exception as e:
-                logging.error(f"Failed to update FITS header for {master_dark_path}: {e}")
+                logging.error(f"Failed to update FITS header for {master_bias_path}: {e}")
         else:
-            logging.error(f"Siril script executed, but master dark '{siril_output_name}' not found in {process_dir}.")
+            logging.error(f"Siril script executed, but master bias '{siril_output_name}' not found in {process_dir}.")
 
-CONFIG_FILE = os.path.expanduser("~/.siril_darklib_config.json")
+CONFIG_FILE = os.path.expanduser("~/.siril_biaslib_config.json")
 
 def load_config() -> dict:
     if os.path.exists(CONFIG_FILE):
@@ -477,8 +477,8 @@ def load_config() -> dict:
 def save_config(config: dict) -> None:
     try:
         # Options de chemin
-        if "dark_library_path" in config:
-            config["dark_library_path"] = os.path.abspath(config["dark_library_path"])
+        if "bias_library_path" in config:
+            config["bias_library_path"] = os.path.abspath(config["bias_library_path"])
         if "work_dir" in config:
             config["work_dir"] = os.path.abspath(config["work_dir"])
         if "siril_path" in config:
@@ -498,17 +498,17 @@ def save_config(config: dict) -> None:
     except Exception as e:
         logging.error(f"Could not save config file {CONFIG_FILE}: {e}")
 
-class DarkLib:
+class BiasLib:
     """
-    Classe pour gérer une bibliothèque de master darks.
-    Fournit des méthodes pour grouper, empiler et maintenir des master darks.
+    Classe pour gérer une bibliothèque de master bias.
+    Fournit des méthodes pour grouper, empiler et maintenir des master bias.
     """
     def __init__(self, config, siril_path="siril", siril_mode="flatpak"):
         """
-        Initialise la bibliothèque de master darks avec les paramètres de configuration.
+        Initialise la bibliothèque de master bias avec les paramètres de configuration.
         """
         # Configuration
-        self.dark_library_path = config.get("dark_library_path")
+        self.bias_library_path = config.get("bias_library_path")
         self.work_dir = config.get("work_dir")
         self.siril_path = siril_path
         self.siril_mode = siril_mode
@@ -521,15 +521,15 @@ class DarkLib:
         self.max_age_days = config.get("max_age_days", 182)
 
         # Créer les répertoires nécessaires
-        os.makedirs(self.dark_library_path, exist_ok=True)
+        os.makedirs(self.bias_library_path, exist_ok=True)
         os.makedirs(self.work_dir, exist_ok=True)
 
-    def group_dark_files(self, input_dirs: list[str], log_groups: bool = True, log_skipped: bool = False) -> dict[str, list[FitsInfo]]:
+    def group_bias_files(self, input_dirs: list[str], log_groups: bool = True, log_skipped: bool = False) -> dict[str, list[FitsInfo]]:
         """
         Groupe les fichiers dark par température, temps d'exposition, gain et nom de caméra.
         Ne conserve que les fichiers FITS les plus récents dans l'intervalle de temps spécifié.
         """
-        dark_groups = {}
+        bias_groups = {}
         skipped_files = []
         filtered_by_date = []  # Liste des fichiers filtrés par la date
 
@@ -547,21 +547,21 @@ class DarkLib:
                         group_key = None
                         if info.validData():
                             group_key = info.group_key()
-                        if group_key and info.is_dark():
-                            dark_groups.setdefault(group_key, []).append(info)
+                        if group_key and info.is_bias():
+                            bias_groups.setdefault(group_key, []).append(info)
                         else:
                             skipped_files.append(filepath)
 
         # Tri des groupes par date décroissante et filtrage par intervalle de temps
-        for key in list(dark_groups.keys()):
-            infos = dark_groups[key]
+        for key in list(bias_groups.keys()):
+            infos = bias_groups[key]
             infos.sort(key=lambda x: x.date_obs(), reverse=True)
             if infos:
                 latest_date = infos[0].date_obs()
                 max_age = datetime.timedelta(days=self.max_age_days)
                 filtered = [info for info in infos if (latest_date - info.date_obs()) <= max_age]
                 removed = [info for info in infos if (latest_date - info.date_obs()) > max_age]
-                dark_groups[key] = filtered
+                bias_groups[key] = filtered
                 if removed:
                     filtered_by_date.extend(removed)
                     logging.info(f"Fichiers filtrés par la date (>{self.max_age_days} jours du plus récent) pour le groupe {key}:")
@@ -570,7 +570,7 @@ class DarkLib:
 
         # Affichage des groupes et fichiers
         if log_groups:
-            for group_key, infos in dark_groups.items():
+            for group_key, infos in bias_groups.items():
                 logging.getLogger().userinfo(
                     f"GROUP: {group_key}"
                 )
@@ -579,15 +579,15 @@ class DarkLib:
                         f"  FILE: {info.filepath} | DATE-OBS={info.date_obs()} | BINNING={info.binning()}"
                     )
         if log_skipped and skipped_files:
-            logging.info("Fichiers ignorés (non conformes ou non DARK) :")
+            logging.info("Fichiers ignorés (non conformes ou non BIAS) :")
             for f in skipped_files:
                 logging.info(f"  SKIPPED: {f}")
 
-        return dark_groups
+        return bias_groups
 
-    def stack_and_save_master_dark(self, group_key: str, fitsinfo_list: list[FitsInfo], process_dir: str, link_dir: str) -> None:
+    def stack_and_save_master_bias(self, group_key: str, fitsinfo_list: list[FitsInfo], process_dir: str, link_dir: str) -> None:
         """
-        Empile les darks d'un groupe en utilisant Siril et enregistre le master dark
+        Empile les biases d'un groupe en utilisant Siril et enregistre le master bias
         dans la bibliothèque, en gérant les remplacements selon la date.
         """
         # Récupérer l'objet FitsInfo avec la date la plus récente
@@ -610,13 +610,13 @@ class DarkLib:
             return
 
         # Utilise directement group_key pour le nom du fichier
-        os.makedirs(self.dark_library_path, exist_ok=True)
-        master_dark_filename = f"{group_key}.fit"
-        master_dark_path = os.path.join(self.dark_library_path, master_dark_filename)
+        os.makedirs(self.bias_library_path, exist_ok=True)
+        master_bias_filename = f"{group_key}.fit"
+        master_bias_path = os.path.join(self.bias_library_path, master_bias_filename)
 
         # Déplacer la génération de stack_line avant la vérification du master existant
         cfa_param = "-cfa" if self.siril_cfa else ""
-        siril_output_name = "master_dark_temp.fit"
+        siril_output_name = "master_bias_temp.fit"
 
         # Mapping Python -> Siril
         SIRIL_REJECTION_METHOD_MAP = {
@@ -632,31 +632,31 @@ class DarkLib:
             if self.siril_rejection_method != "none":
                 # Empilement par moyenne avec rejet
                 stack_line = (
-                    f"stack dark rej {siril_rejection_method} {self.siril_rejection_param1} {self.siril_rejection_param2} "
+                    f"stack bias rej {siril_rejection_method} {self.siril_rejection_param1} {self.siril_rejection_param2} "
                     f"-norm={self.siril_output_norm} {cfa_param} -out={siril_output_name}"
                 )
             else:
                 # Empilement par moyenne sans rejet
                 stack_line = (
-                    f"stack dark rej n -norm={self.siril_output_norm} {cfa_param} -out={siril_output_name}"
+                    f"stack bias rej n -norm={self.siril_output_norm} {cfa_param} -out={siril_output_name}"
                 )
         else:
             # Empilement médian (ne prend pas de paramètres de rejet)
             stack_line = (
-                f"stack dark median -norm={self.siril_output_norm} {cfa_param} -out={siril_output_name}"
+                f"stack bias median -norm={self.siril_output_norm} {cfa_param} -out={siril_output_name}"
             )
 
         # Mémoriser la ligne de commande pour la stocker dans l'en-tête
         stack_command = stack_line
         
-        # --- Check for existing master dark for overwrite logic ---
+        # --- Check for existing master bias for overwrite logic ---
         existing_master = None
-        if os.path.exists(master_dark_path):
-            info = FitsInfo(master_dark_path)
+        if os.path.exists(master_bias_path):
+            info = FitsInfo(master_bias_path)
             if info.validData():
                 existing_master = info
             else:
-                logging.warning(f"Cannot read metadata from existing master dark {master_dark_path}. Will be treated as non-existent for comparison.")
+                logging.warning(f"Cannot read metadata from existing master bias {master_bias_path}. Will be treated as non-existent for comparison.")
 
         if existing_master:
             # Vérification de la commande de stacking si elle est disponible
@@ -666,36 +666,36 @@ class DarkLib:
             # Si la commande de stacking est différente, toujours remplacer
             if different_stack_cmd:
                 logging.getLogger().userinfo(
-                    f"Existing master dark for {group_key} has different stacking command. Replacing."
+                    f"Existing master bias for {group_key} has different stacking command. Replacing."
                 )
                 # Pas de 'return' ici pour permettre le remplacement
             # Si même commande mais date plus récente ou identique, ignorer
             elif latest_infoFile.date_obs() <= existing_master.date_obs():
                 logging.getLogger().userinfo(
-                    f"Master dark already exists and is newer or same date ({existing_master.date_obs().date()}). Update ignored."
+                    f"Master bias already exists and is newer or same date ({existing_master.date_obs().date()}). Update ignored."
                 )
                 return
             # Même commande mais plus ancien, on remplace
             else:
                 logging.getLogger().userinfo(
-                    f"Existing master dark for {group_key} is older ({existing_master.date_obs().date()}). Overwriting with newer darks from {latest_infoFile.date_obs().date()}."
+                    f"Existing master bias for {group_key} is older ({existing_master.date_obs().date()}). Overwriting with newer biases from {latest_infoFile.date_obs().date()}."
                 )
         else:
             logging.info(
-                f"No master dark found for {group_key} or unreadable date. Creating new one."
+                f"No master bias found for {group_key} or unreadable date. Creating new one."
             )
 
         # Les fichiers dark_files sont déjà des liens dans process_dir, nommés dark_XXXX.fit
         siril_file_list = [os.path.basename(info.filepath) for info in fitsinfo_list if os.path.exists(info.filepath)]
 
         if not siril_file_list:
-            logging.warning(f"No dark files to stack for group {group_key}. Ignored.")
+            logging.warning(f"No bias files to stack for group {group_key}. Ignored.")
             return
 
         siril_script_content = f"""requires 1.2
-# Siril script generated by Python to stack darks
+# Siril script generated by Python to stack biases
 cd "{link_dir}"
-convert dark -out={process_dir}
+convert bias -out={process_dir}
 cd {process_dir}
 {stack_line}
 """
@@ -703,52 +703,52 @@ cd {process_dir}
             logging.error(f"Erreur critique : l'exécution du script Siril a échoué pour le groupe {group_key}. Le répertoire de travail est conservé pour inspection : {process_dir}")
             exit(1)
 
-        temp_master_dark_path = os.path.join(process_dir, siril_output_name)
-        if os.path.exists(temp_master_dark_path):
-            shutil.move(temp_master_dark_path, master_dark_path)
-            logging.info(f"Master dark successfully created/updated: {master_dark_path}")
-            masterDark=FitsInfo(master_dark_path)
+        temp_master_bias_path = os.path.join(process_dir, siril_output_name)
+        if os.path.exists(temp_master_bias_path):
+            shutil.move(temp_master_bias_path, master_bias_path)
+            logging.info(f"Master bias successfully created/updated: {master_bias_path}")
+            masterBias=FitsInfo(master_bias_path)
             try:
-                # Met à jour le header du master dark
-                masterDark.set_ndarks(len(fitsinfo_list))
-                masterDark.set_stack_command(stack_command)
-                masterDark.update_header(latest_infoFile)
-                logging.info(f"Header of {master_dark_path} updated with group metadata, stack command, and number of frames ({len(fitsinfo_list)}).")
+                # Met à jour le header du master bias
+                masterBias.set_nbiases(len(fitsinfo_list))
+                masterBias.set_stack_command(stack_command)
+                masterBias.update_header(latest_infoFile)
+                logging.info(f"Header of {master_bias_path} updated with group metadata, stack command, and number of frames ({len(fitsinfo_list)}).")
             except Exception as e:
-                logging.error(f"Failed to update FITS header for {master_dark_path}: {e}")
+                logging.error(f"Failed to update FITS header for {master_bias_path}: {e}")
         else:
-            logging.error(f"Siril script executed, but master dark '{siril_output_name}' not found in {process_dir}.")
+            logging.error(f"Siril script executed, but master bias '{siril_output_name}' not found in {process_dir}.")
 
-    def read_existing_master_darks(self) -> list[FitsInfo]:
+    def read_existing_master_biass(self) -> list[FitsInfo]:
         """
-        Parcourt le répertoire de la dark library et lit les entêtes FITS de chaque master dark.
-        Retourne une liste d'objets FitsInfo représentant les master darks existants.
+        Parcourt le répertoire de la dark library et lit les entêtes FITS de chaque master bias.
+        Retourne une liste d'objets FitsInfo représentant les master bias existants.
         """
-        existing_darks = []
-        if not os.path.isdir(self.dark_library_path):
-            return existing_darks
+        existing_biases = []
+        if not os.path.isdir(self.bias_library_path):
+            return existing_biases
 
-        for fname in os.listdir(self.dark_library_path):
+        for fname in os.listdir(self.bias_library_path):
             if fname.lower().endswith(('.fit', '.fits')):
-                fpath = os.path.join(self.dark_library_path, fname)
+                fpath = os.path.join(self.bias_library_path, fname)
                 try:
                     info = FitsInfo(fpath)
-                    if info.validData() and info.is_dark():
-                        existing_darks.append(info)
+                    if info.validData() and info.is_bias():
+                        existing_biases.append(info)
                 except Exception as e:
                     logging.warning(f"Impossible de lire l'entête FITS de {fpath}: {e}")
-        return existing_darks
+        return existing_biases
 
-    def list_master_darks(self) -> None:
+    def list_master_biass(self) -> None:
         """
-        Liste tous les master darks de la bibliothèque avec leurs caractéristiques
+        Liste tous les master bias de la bibliothèque avec leurs caractéristiques
         lues directement depuis les en-têtes FITS.
         """
-        logging.info(f"Lecture des master darks dans : {self.dark_library_path}")
-        existing_darks = self.read_existing_master_darks()
+        logging.info(f"Lecture des master bias dans : {self.bias_library_path}")
+        existing_biases = self.read_existing_master_biass()
         
-        if not existing_darks:
-            logging.info("Aucun master dark trouvé dans la bibliothèque.")
+        if not existing_biases:
+            logging.info("Aucun master bias trouvé dans la bibliothèque.")
             return
         
         # Calculate base length (sum of fixed width columns and spaces)
@@ -756,7 +756,7 @@ cd {process_dir}
         
         # Calculate the maximum length needed for the variable part (command and filename)
         max_variable_length = len("Commande/Fichier")  # Start with header length
-        for dark in existing_darks:
+        for dark in existing_biases:
             filename = os.path.basename(dark.filepath)
             stack_cmd = dark.stack_command() if hasattr(dark, 'stack_command_value') and dark.stack_command() else "N/A"
             
@@ -771,19 +771,19 @@ cd {process_dir}
         
         # Affiche un en-tête pour le tableau avec colonne combinée
         header = "{:<25} {:<10} {:<10} {:<8} {:<10} {:<20} {:<8} {:<}".format(
-            "Caméra", "Temp (°C)", "Exp (s)", "Gain", "Binning", "Date d'observation", "N darks", "Commande/Fichier"
+            "Caméra", "Temp (°C)", "Exp (s)", "Gain", "Binning", "Date d'observation", "N biases", "Commande/Fichier"
         )
         
-        print(f"\nListe des {len(existing_darks)} master darks disponibles :")
+        print(f"\nListe des {len(existing_biases)} master bias disponibles :")
         print(separator)
         print(header)
         print(separator)
         
-        for dark in sorted(existing_darks, key=lambda x: (x.camera(), x.temperature(), x.exptime())):
+        for dark in sorted(existing_biases, key=lambda x: (x.camera(), x.temperature(), x.exptime())):
             # Format des valeurs pour l'affichage
             filename = os.path.basename(dark.filepath)
             date_str = dark.date_obs().strftime("%Y-%m-%d %H:%M:%S") if dark.date_obs() else "N/A"
-            n_darks = dark.ndarks() if hasattr(dark, 'ndarks_value') and dark.ndarks() is not None else "N/A"
+            n_biases = dark.nbiases() if hasattr(dark, 'nbiases_value') and dark.nbiases() is not None else "N/A"
             
             # Récupérer la commande de stacking (ou N/A)
             stack_cmd = dark.stack_command() if hasattr(dark, 'stack_command_value') and dark.stack_command() else "N/A"
@@ -796,7 +796,7 @@ cd {process_dir}
                 dark.gain() if dark.gain() is not None else float('nan'),
                 dark.binning(),
                 date_str,
-                n_darks,
+                n_biases,
                 stack_cmd
             )
             print(main_row)
@@ -810,11 +810,11 @@ cd {process_dir}
         print(separator)
         print()  # Ligne vide à la fin pour améliorer la lisibilité
 
-    def process_all_groups(self, dark_groups):
+    def process_all_groups(self, bias_groups):
         """
-        Traite tous les groupes de darks pour créer des master darks.
+        Traite tous les groupes de biases pour créer des master bias.
         """
-        for group_key, files in dark_groups.items():
+        for group_key, files in bias_groups.items():
             logging.info(f"Processing group: {group_key}")
             if len(files) < 2:
                 logging.warning(f"Group {group_key} contains only {len(files)} file(s). Stacking ignored (Siril requires at least 2).")
@@ -835,7 +835,7 @@ cd {process_dir}
                     linked_infos.append(newInfo)
 
             # Passer la liste des liens au stacking
-            self.stack_and_save_master_dark(group_key, linked_infos, process_dir, link_dir)
+            self.stack_and_save_master_bias(group_key, linked_infos, process_dir, link_dir)
 
             # Nettoyer le répertoire process après traitement
             shutil.rmtree(process_dir, ignore_errors=True)
@@ -848,7 +848,7 @@ def main() -> None:
     
     # Création du parser d'arguments
     parser = argparse.ArgumentParser(
-        description="Création d'une bibliothèque de master darks pour Siril",
+        description="Création d'une bibliothèque de master bias pour Siril",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
 
@@ -856,13 +856,13 @@ def main() -> None:
     parser.add_argument(
         '--input-dirs',
         nargs='+',
-        help="Liste des répertoires contenant les fichiers dark à traiter"
+        help="Liste des répertoires contenant les fichiers bias à traiter"
     )
     parser.add_argument(
-        '--dark-library-path',
+        '--bias-library-path',
         type=str,
-        default=config.get("dark_library_path"),
-        help=f"Répertoire où sont stockés les master darks. (Défaut: '{config.get('dark_library_path')}')"
+        default=config.get("bias_library_path"),
+        help=f"Répertoire où sont stockés les master bias. (Défaut: '{config.get('bias_library_path')}')"
     )
     parser.add_argument(
         '--work-dir',
@@ -905,20 +905,20 @@ def main() -> None:
     )
     
     parser.add_argument(
-        '--list-darks',
+        '--list-biases',
         action='store_true',
-        help="Liste tous les master darks disponibles dans la bibliothèque avec leurs caractéristiques"
+        help="Liste tous les master bias disponibles dans la bibliothèque avec leurs caractéristiques"
     )
     parser.add_argument(
         '--log-skipped',
         action='store_true',
-        help="Log les fichiers ignorés (non-DARK ou FITS invalides)"
+        help="Log les fichiers ignorés (non-BIAS ou FITS invalides)"
     )
     parser.add_argument(
         '--max-age',
         type=int,
         default=config.get("max_age_days"),
-        help=f"Nombre maximum de jours d'écart entre le dark le plus récent et le plus ancien d'un groupe. (Défaut: {config.get('max_age_days')} jours)"
+        help=f"Nombre maximum de jours d'écart entre le bias le plus récent et le plus ancien d'un groupe. (Défaut: {config.get('max_age_days')} jours)"
     )
     parser.add_argument(
         '--cfa',
@@ -981,7 +981,7 @@ def main() -> None:
     SIRIL_MODE = args.siril_mode
     
     # Ces variables peuvent être locales car elles ne sont utilisées que dans main()
-    dark_library_path = os.path.abspath(config.get("dark_library_path"))
+    bias_library_path = os.path.abspath(config.get("bias_library_path"))
     work_dir = os.path.abspath(args.work_dir)
     os.makedirs(work_dir, exist_ok=True)
     
@@ -997,13 +997,13 @@ def main() -> None:
         os.makedirs(work_dir, exist_ok=True)
 
         # Créer deux sous-répertoires dans le répertoire de travail pour simuler deux sessions
-        session1 = os.path.join(work_dir, "darks_session1")
-        session2 = os.path.join(work_dir, "darks_session2")
+        session1 = os.path.join(work_dir, "biases_session1")
+        session2 = os.path.join(work_dir, "biases_session2")
         os.makedirs(session1, exist_ok=True)
         os.makedirs(session2, exist_ok=True)
 
         # Fonction pour créer un dummy FITS
-        def create_dummy_fits(path, date_obs, exptime, ccd_temp, imagetyp='DARK'):
+        def create_dummy_fits(path, date_obs, exptime, ccd_temp, imagetyp='BIAS'):
             hdu = fits.PrimaryHDU()
             hdu.header['DATE-OBS'] = date_obs.isoformat(timespec='seconds')
             hdu.header['EXPTIME'] = exptime
@@ -1022,7 +1022,7 @@ def main() -> None:
         create_dummy_fits(os.path.join(session2, "dark_28_3.fit"), datetime.datetime(2023, 10, 28, 20, 0, 0), 300, -10)
         create_dummy_fits(os.path.join(session2, "dark_28_4.fit"), datetime.datetime(2023, 10, 28, 20, 5, 0), 300, -10)
         create_dummy_fits(os.path.join(session1, "dark_single.fit"), datetime.datetime(2023, 10, 29, 20, 0, 0), 300, -15)
-        create_dummy_fits(os.path.join(session1, "light_frame.fit"), datetime.datetime(2023, 10, 29, 21, 0, 0), 120, -15, imagetyp='LIGHT')
+        # Not used in biaslib - bias frames only
         create_dummy_fits(os.path.join(session1, "dark_27_6.fit"), datetime.datetime(2023, 10, 27, 20, 15, 0), 300, -15)
         create_dummy_fits(os.path.join(session1, "dark_27_7.fit"), datetime.datetime(2023, 10, 27, 20, 20, 0), 300, -15)
         create_dummy_fits(os.path.join(session1, "dark_27_8.fit"), datetime.datetime(2023, 10, 27, 20, 25, 0), 300, -15)
@@ -1037,28 +1037,28 @@ def main() -> None:
 
     logging.info("Starting Siril dark library creation script.")
 
-    os.makedirs(DARK_LIBRARY_PATH, exist_ok=True)
+    os.makedirs(BIAS_LIBRARY_PATH, exist_ok=True)
     
-    # Créer l'instance DarkLib
-    darklib = DarkLib(config, SIRIL_PATH, SIRIL_MODE)
+    # Créer l'instance BiasLib
+    biaslib = BiasLib(config, SIRIL_PATH, SIRIL_MODE)
     
-    # Si l'option --list-darks est spécifiée, liste les master darks et termine
-    if args.list_darks:
-        darklib.list_master_darks()
+    # Si l'option --list-biases est spécifiée, liste les master bias et termine
+    if args.list_biases:
+        biaslib.list_master_biass()
         return
     
-    # Regrouper les darks
-    dark_groups = darklib.group_dark_files(
+    # Regrouper les biases
+    bias_groups = biaslib.group_bias_files(
         input_dirs_to_use, 
         log_groups=True, 
         log_skipped=args.log_skipped
     )
     
-    if not dark_groups:
-        logging.info("No dark files found or processed. Script finished.")
+    if not bias_groups:
+        logging.info("No bias files found or processed. Script finished.")
         return
 
-    logging.info(f"Found {len(dark_groups)} unique dark groups based on temperature, exposure time and gain.")
+    logging.info(f"Found {len(bias_groups)} unique dark groups based on temperature, gain and binning.")
 
     # Arrêt anticipé si --dummy est activé
     if args.dummy:
@@ -1066,11 +1066,11 @@ def main() -> None:
         return
 
     # Traiter tous les groupes
-    darklib.process_all_groups(dark_groups)
+    biaslib.process_all_groups(bias_groups)
     
     logging.info("Siril dark library creation script completed.")
 
 if __name__ == "__main__":
     main()
 
-# End of darklib.py script
+# End of biaslib.py script
