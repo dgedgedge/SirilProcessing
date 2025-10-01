@@ -1,12 +1,12 @@
-# Refactoring Summary: darklib.py Organization and biaslib.py Creation
+# Refactoring Summary: darklibupdate.py Organization and biaslib.py Creation
 
 ## Problem Statement
-Improve organization of the darklib script by extracting objects from the script. Reuse them and take as example darklib.py to create a similar script for bias.
+Improve organization of the darklib script by extracting objects from the script. Reuse them and take as example darklibupdate.py to create a similar script for bias.
 
 ## Solution Implemented
 
 ### 1. Created Shared Library (`lib/`)
-Extracted reusable components from `darklib.py` into a new `lib/` directory:
+Extracted reusable components from `darklibupdate.py` into a new `lib/` directory:
 
 #### `lib/fits_info.py` (346 lines)
 - **FitsInfo class**: Handles FITS file metadata reading and manipulation
@@ -29,25 +29,25 @@ Extracted reusable components from `darklib.py` into a new `lib/` directory:
   - Handles temporary script creation and cleanup
   - Provides detailed error logging
 
-#### `lib/darklib.py` (374 lines)
+#### `lib/darklibupdate.py` (374 lines)
 - **DarkLib class**: Manages dark frame library operations (added later)
   - Groups dark files by metadata
   - Stacks dark frames using Siril
   - Manages master dark library with smart overwrite logic
   - Lists existing master darks with their characteristics
-  - Extracted from `bin/darklib.py` to separate business logic from CLI
+  - Extracted from `bin/darklibupdate.py` to separate business logic from CLI
 
-### 2. Refactored darklib.py
+### 2. Refactored darklibupdate.py
 - Reduced from 1,594 lines to 256 lines (~84% reduction)
 - Removed duplicate code (FitsInfo, Config classes were defined twice)
-- Moved DarkLib class to `lib/darklib.py` (further refactoring)
+- Moved DarkLib class to `lib/darklibupdate.py` (further refactoring)
 - Now imports shared modules from `lib/`
 - Added proper logging configuration
 - Script now focuses on CLI argument parsing and orchestration
 - Maintained all original functionality
 
 ### 3. Created biaslib.py (1,075 lines)
-- Created from refactored darklib.py with minimal changes
+- Created from refactored darklibupdate.py with minimal changes
 - Replaced "dark" terminology with "bias" throughout
 - Updated to use `is_bias()` method instead of `is_dark()`
 - Changed default library path to `~/biasLib`
@@ -83,12 +83,12 @@ All tests passed:
 ```
 SirilProcessing/
 ├── bin/
-│   ├── darklib.py      (256 lines, refactored - CLI only)
+│   ├── darklibupdate.py      (256 lines, refactored - CLI only)
 │   └── biaslib.py      (1,075 lines, new)
 ├── lib/
 │   ├── __init__.py     (3 lines)
 │   ├── config.py       (127 lines)
-│   ├── darklib.py      (374 lines, DarkLib class)
+│   ├── darkprocess.py  (374 lines, DarkLib class)
 │   ├── fits_info.py    (346 lines)
 │   ├── siril_utils.py  (62 lines)
 │   └── README.md
@@ -100,13 +100,13 @@ SirilProcessing/
 
 ## Usage Examples
 
-### darklib.py
+### darklibupdate.py
 ```bash
 # Create master darks
-python3 bin/darklib.py --input-dirs /path/to/darks
+python3 bin/darklibupdate.py --input-dirs /path/to/darks
 
 # List existing master darks  
-python3 bin/darklib.py --list-darks
+python3 bin/darklibupdate.py --list-darks
 ```
 
 ### biaslib.py
@@ -120,12 +120,12 @@ python3 bin/biaslib.py --list-biases
 
 ## Commits
 
-1. **Refactor darklib.py: extract FitsInfo, Config, and siril_utils to lib/**
+1. **Refactor darklibupdate.py: extract FitsInfo, Config, and siril_utils to lib/**
    - Created lib/ directory structure
    - Extracted shared classes and functions
-   - Updated darklib.py imports
+   - Updated darklibupdate.py imports
 
-2. **Create biaslib.py based on refactored darklib.py and add logging configuration**
+2. **Create biaslib.py based on refactored darklibupdate.py and add logging configuration**
    - Created biaslib.py
    - Added logging configuration to both scripts
    - Created requirements.txt

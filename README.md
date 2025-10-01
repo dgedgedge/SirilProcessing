@@ -3,7 +3,7 @@ The aim of the scripts I develop is to ease my processing with Siril.
 
 ## Scripts
 
-### darklib.py
+### darklibupdate.py
 A script to create and maintain a library of master dark frames. It groups dark frames by camera, temperature, exposure time, gain, and binning, then stacks them using Siril to create master darks.
 
 #### Features:
@@ -14,7 +14,7 @@ A script to create and maintain a library of master dark frames. It groups dark 
 - Age-based filtering
 
 ### biaslib.py
-A script similar to darklib.py but for bias frames. It creates and maintains a library of master bias frames grouped by camera, temperature, gain, and binning.
+A script similar to darklibupdate.py but for bias frames. It creates and maintains a library of master bias frames grouped by camera, temperature, gain, and binning.
 
 ## Library
 
@@ -39,13 +39,13 @@ Main dependencies:
 ### Dark Library
 ```bash
 # Create master darks from input directories
-python3 bin/darklib.py --input-dirs /path/to/darks1 /path/to/darks2
+python3 bin/darklibupdate.py --input-dirs /path/to/darks1 /path/to/darks2
 
 # List existing master darks
-python3 bin/darklib.py --list-darks
+python3 bin/darklibupdate.py --list-darks
 
 # Test mode (no Siril execution)
-python3 bin/darklib.py --input-dirs /path/to/darks --dummy
+python3 bin/darklibupdate.py --input-dirs /path/to/darks --dummy
 ```
 
 ### Bias Library
