@@ -14,7 +14,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from lib.fits_info import FitsInfo
 from lib.config import Config
 from lib.siril_utils import run_siril_script
-from lib.logging_config import setup_logging
 
 SIRIL_PATH = "siril"
 BIAS_LIBRARY_PATH = os.path.expanduser("~/biasLib")  # Par défaut : ~/biasLib
@@ -956,7 +955,7 @@ def main() -> None:
     args = parser.parse_args()
 
     # Configuration de la journalisation
-    setup_logging(args.log_level)
+    logging.basicConfig(level=args.log_level)
     
     # Configuration de la journalisation...
     

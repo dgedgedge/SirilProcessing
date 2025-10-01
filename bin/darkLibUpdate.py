@@ -179,7 +179,7 @@ def main() -> None:
     args = parser.parse_args()
 
     # Configuration de la journalisation
-    logging.getLogger().setLevel(args.log_level)
+    logging.basicConfig(level=args.log_level, format='%(asctime)s [%(levelname)s] %(name)s: %(message)s')
     
     # Configuration de la journalisation...
     
