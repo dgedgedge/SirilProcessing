@@ -18,9 +18,15 @@ class DarkLib:
     Classe pour gérer une bibliothèque de master darks.
     Fournit des méthodes pour grouper, empiler et maintenir des master darks.
     """
-    def __init__(self, config, siril_path="siril", siril_mode="flatpak", log_level=logging.INFO):
+    def __init__(self, config, siril_path="siril", siril_mode="flatpak", force_recalc=False):
         """
         Initialise la bibliothèque de master darks avec les paramètres de configuration.
+        
+        Args:
+            config: Configuration object
+            siril_path: Path to Siril executable
+            siril_mode: Siril execution mode
+            force_recalc: Force recalculation of all master darks regardless of age
         """
 
         logging.info("Initializing DarkLib instance.")
@@ -37,13 +43,15 @@ class DarkLib:
         self.siril_rejection_param2 = config.get("rejection_param2", 3.0)
         self.siril_stack_method = config.get("stack_method", "average")
         self.max_age_days = config.get("max_age_days", 182)
+        self.temperature_precision = config.get("temperature_precision", 0.2)
+        self.force_recalc = force_recalc
 
         # Créer les répertoires nécessaires
         os.makedirs(self.dark_library_path, exist_ok=True)
         os.makedirs(self.work_dir, exist_ok=True)
 
 
-    def group_dark_files(self, input_dirs: list[str], log_groups: bool = True, log_skipped: bool = False) -> dict[str, list[FitsInfo]]:
+    def group_dark_files(self, input_dirs: list[str], log_groups: bool = True, log_skipped: bool = False, validate_darks: bool = False) -> dict[str, list[FitsInfo]]:
         """
         Groupe les fichiers dark par température, temps d'exposition, gain et nom de caméra.
         Ne conserve que les fichiers FITS les plus récents dans l'intervalle de temps spécifié.
@@ -65,8 +73,15 @@ class DarkLib:
                         info = FitsInfo(filepath)
                         group_key = None
                         if info.validData():
-                            group_key = info.group_key()
+                            group_key = info.group_key(self.temperature_precision)
                         if group_key and info.is_dark():
+                            # Validation optionnelle des darks
+                            if validate_darks:
+                                is_valid, reason = info.is_valid_dark()
+                                if not is_valid:
+                                    logging.warning(f"Invalid dark rejected: {filepath} - {reason}")
+                                    skipped_files.append(filepath)
+                                    continue
                             dark_groups.setdefault(group_key, []).append(info)
                         else:
                             skipped_files.append(filepath)
@@ -116,7 +131,7 @@ class DarkLib:
                 if latest_infoFile is None:
                     latest_infoFile = info
                 else:
-                    if latest_infoFile.is_equivalent(info):
+                    if latest_infoFile.is_equivalent(info, self.temperature_precision):
                         if info.date_obs() > latest_infoFile.date_obs():
                             latest_infoFile = info
                     else:
@@ -177,7 +192,7 @@ class DarkLib:
             else:
                 logging.warning(f"Cannot read metadata from existing master dark {master_dark_path}. Will be treated as non-existent for comparison.")
 
-        if existing_master:
+        if existing_master and not self.force_recalc:
             # Vérification de la commande de stacking si elle est disponible
             different_stack_cmd = (existing_master.stack_command() is None or 
                                 stack_command != existing_master.stack_command())
@@ -199,6 +214,10 @@ class DarkLib:
                 logging.info(
                     f"Existing master dark for {group_key} is older ({existing_master.date_obs().date()}). Overwriting with newer darks from {latest_infoFile.date_obs().date()}."
                 )
+        elif existing_master and self.force_recalc:
+            logging.info(
+                f"Force recalculation enabled: recreating master dark for {group_key}."
+            )
         else:
             logging.info(
                 f"No master dark found for {group_key} or unreadable date. Creating new one."
@@ -231,7 +250,7 @@ cd {process_dir}
                 # Met à jour le header du master dark
                 masterDark.set_ndarks(len(fitsinfo_list))
                 masterDark.set_stack_command(stack_command)
-                masterDark.update_header(latest_infoFile)
+                masterDark.update_header(latest_infoFile, self.temperature_precision)
                 logging.info(f"Header of {master_dark_path} updated with group metadata, stack command, and number of frames ({len(fitsinfo_list)}).")
             except Exception as e:
                 logging.error(f"Failed to update FITS header for {master_dark_path}: {e}")
@@ -299,7 +318,7 @@ cd {process_dir}
         print(header)
         print(separator)
         
-        for dark in sorted(existing_darks, key=lambda x: (x.camera(), x.temperature(), x.exptime())):
+        for dark in sorted(existing_darks, key=lambda x: (x.exptime(), -x.temperature())):
             # Format des valeurs pour l'affichage
             filename = os.path.basename(dark.filepath)
             date_str = dark.date_obs().strftime("%Y-%m-%d %H:%M:%S") if dark.date_obs() else "N/A"
@@ -359,4 +378,67 @@ cd {process_dir}
 
             # Nettoyer le répertoire process après traitement
             shutil.rmtree(process_dir, ignore_errors=True)
+
+    def generate_validation_report(self, input_dirs: list[str]) -> None:
+        """
+        Génère un rapport détaillé de validation pour tous les fichiers darks.
+        """
+        logging.info("Generating dark validation report...")
+        
+        all_reports = []
+        valid_count = 0
+        invalid_count = 0
+        
+        for input_dir in input_dirs:
+            if not os.path.isdir(input_dir):
+                logging.warning(f"Input directory not found: {input_dir}. Ignored.")
+                continue
+                
+            logging.info(f"Validating darks in directory: {input_dir}")
+            for root, _, files in os.walk(input_dir):
+                for filename in files:
+                    if filename.lower().endswith(('.fit', '.fits')):
+                        filepath = os.path.join(root, filename)
+                        info = FitsInfo(filepath)
+                        
+                        if info.is_dark():
+                            report = info.get_validation_report()
+                            all_reports.append(report)
+                            
+                            if report['is_valid']:
+                                valid_count += 1
+                            else:
+                                invalid_count += 1
+        
+        # Affichage du rapport
+        print(f"\n=== RAPPORT DE VALIDATION DES DARKS ===")
+        print(f"Total des darks analysés: {len(all_reports)}")
+        print(f"Darks valides: {valid_count}")
+        print(f"Darks suspects: {invalid_count}")
+        
+        if invalid_count > 0:
+            print(f"\n--- DARKS SUSPECTS (probablement capot ouvert) ---")
+            for report in all_reports:
+                if not report['is_valid']:
+                    filepath = report['filepath']  # Chemin complet au lieu de basename
+                    print(f"❌ {filepath}")
+                    print(f"   Raison: {report['reason']}")
+                    if report['statistics']:
+                        stats = report['statistics']
+                        print(f"   Médiane: {stats['median']:.1f} ADU, Écart-type: {stats['std']:.1f}")
+                        print(f"   Pixels chauds: {stats['hot_pixels_percent']:.2f}%")
+                    print()
+        
+        if valid_count > 0:
+            print(f"\n--- EXEMPLES DE DARKS VALIDES ---")
+            valid_reports = [r for r in all_reports if r['is_valid']]
+            for report in valid_reports[:5]:  # Afficher les 5 premiers
+                filepath = report['filepath']  # Chemin complet au lieu de basename
+                print(f"✅ {filepath}")
+                if report['statistics']:
+                    stats = report['statistics']
+                    print(f"   Médiane: {stats['median']:.1f} ADU, Écart-type: {stats['std']:.1f}")
+                print()
+        
+        print("=== FIN DU RAPPORT ===\n")
 

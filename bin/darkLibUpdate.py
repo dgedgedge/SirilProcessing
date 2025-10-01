@@ -117,7 +117,7 @@ def main() -> None:
     parser.add_argument(
         '--log-level',
         choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
-        default='INFO',
+        default='WARNING',
         help="Niveau de journalisation"
     )
     
@@ -173,6 +173,27 @@ def main() -> None:
         default=config.get("stack_method"),
         help=f"Méthode d'empilement: 'average' (Empilement par moyenne avec rejet) ou 'median' (Empilement médian). (Défaut: '{config.get('stack_method')}')"
     )
+    parser.add_argument(
+        '--temperature-precision',
+        type=float,
+        default=config.get("temperature_precision"),
+        help=f"Précision d'arrondi pour la température en degrés Celsius. (Défaut: {config.get('temperature_precision')}°C)"
+    )
+    parser.add_argument(
+        '--force-recalc',
+        action='store_true',
+        help="Force le recalcul de tous les master darks existants, même s'ils sont plus récents que les fichiers sources. Utile pour tester de nouveaux paramètres de regroupement."
+    )
+    parser.add_argument(
+        '--validate-darks',
+        action='store_true',
+        help="Valide les fichiers darks en analysant leurs statistiques pour détecter ceux pris avec le capot ouvert (présence de lumière parasite)."
+    )
+    parser.add_argument(
+        '--validation-report',
+        action='store_true',
+        help="Génère un rapport détaillé de validation pour tous les fichiers darks trouvés."
+    )
 
 
     # Code d'analyse des arguments inchangé...
@@ -203,36 +224,41 @@ def main() -> None:
     os.makedirs(DARK_LIBRARY_PATH, exist_ok=True)
     
     # Créer l'instance DarkLib
-    darklib = DarkLib(config, SIRIL_PATH, SIRIL_MODE)
+    darklib = DarkLib(config, SIRIL_PATH, SIRIL_MODE, force_recalc=args.force_recalc)
     
-    # Si l'option --list-darks est spécifiée, liste les master darks et termine
-    if args.list_darks:
-        darklib.list_master_darks()
-        return
+
 
     # Si l'option --input-dirs est présente traiter les darks
     if args.input_dirs:
+        # Générer un rapport de validation si demandé
+        if args.validation_report:
+            darklib.generate_validation_report(args.input_dirs)
+            
         dark_groups = darklib.group_dark_files(
             args.input_dirs, 
             log_groups=True, 
-            log_skipped=args.log_skipped
+            log_skipped=args.log_skipped,
+            validate_darks=args.validate_darks
         )
     
-        if not dark_groups:
+        if dark_groups:
+            logging.info(f"Found {len(dark_groups)} unique dark groups based on temperature, exposure time and gain.")
+            # Arrêt anticipé si --dummy est activé
+            if args.dummy:
+                logging.info("Option --dummy activée : arrêt du script avant traitement Siril.")
+            else:
+                # Traiter tous les groupes
+                darklib.process_all_groups(dark_groups)
+        else:
             logging.warning("No dark files found or processed. Script finished.")
-            return
 
-        logging.info(f"Found {len(dark_groups)} unique dark groups based on temperature, exposure time and gain.")
+    # Si l'option --list-darks est spécifiée, liste les master darks et termine
+    if args.list_darks:
+        darklib.list_master_darks()
 
-        # Arrêt anticipé si --dummy est activé
-        if args.dummy:
-            logging.info("Option --dummy activée : arrêt du script avant traitement Siril.")
-            return
-
-        # Traiter tous les groupes
-        darklib.process_all_groups(dark_groups)
-    
     logging.info("Siril dark library creation script completed.")
+
+
 
 if __name__ == "__main__":
     main()

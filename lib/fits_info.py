@@ -5,6 +5,7 @@ import logging
 import unicodedata
 import re
 import copy
+import numpy as np
 from astropy.io import fits
 from astropy.time import Time
 
@@ -184,13 +185,16 @@ class FitsInfo:
         """
         return (self.xbinning_value, self.ybinning_value)
 
-    def group_key(self) -> str:
+    def group_key(self, temperature_precision: float = 0.2) -> str:
         """
         Retourne la clé de groupement pour cet objet FitsInfo sous forme de chaîne.
         Format: "TEMP_EXPTIME_GAIN_CAMERA_BINNING"
+        
+        Args:
+            temperature_precision: Précision d'arrondi pour la température (par défaut 0.2°C)
         """
         if self.validData():
-            rounded_temp = round(self.temperature())
+            rounded_temp = round(round(self.temperature() / temperature_precision) * temperature_precision, 1)
             rounded_gain = round(self.gain())
             formatted_temp = str(rounded_temp)
             formatted_exp = str(int(self.exptime()))
@@ -202,16 +206,19 @@ class FitsInfo:
         else:
             return None
 
-    def is_equivalent(self, other: "FitsInfo") -> bool:
+    def is_equivalent(self, other: "FitsInfo", temperature_precision: float = 0.2) -> bool:
         """
         Compare tous les attributs (sauf le nom de fichier) avec un autre FitsInfo.
         Retourne True si tous les champs sont égaux, y compris la commande de stacking si disponible.
+        
+        Args:
+            temperature_precision: Précision d'arrondi pour la température (par défaut 0.2°C)
         """
         if not isinstance(other, FitsInfo):
             return False
         
         # Vérification de base par group_key
-        if self.group_key() != other.group_key():
+        if self.group_key(temperature_precision) != other.group_key(temperature_precision):
             return False
             
         # Vérification supplémentaire de la commande de stacking si disponible
@@ -253,7 +260,7 @@ class FitsInfo:
         new_info.filepath = new_filepath
         return new_info
 
-    def update_header(self, source_info: "FitsInfo" = None) -> None:
+    def update_header(self, source_info: "FitsInfo" = None, temperature_precision: float = 0.2) -> None:
         """
         Met à jour l'entête FITS du fichier associé à cette instance (self.filepath)
         avec les données d'un autre FitsInfo (source_info).
@@ -261,10 +268,17 @@ class FitsInfo:
         Si ndarks_value est défini, ajoute cette information à l'en-tête.
         Log les différences et met à jour l'en-tête si nécessaire.
         En cas d'erreur, log l'erreur et relance l'exception.
+        
+        Args:
+            source_info: FitsInfo source pour les métadonnées (None = utiliser self)
+            temperature_precision: Précision d'arrondi pour la température (par défaut 0.2°C)
         """
         # Si aucune source fournie, utiliser self comme source
         if source_info is None:
             source_info = self
+            
+        # Calculer la température arrondie selon la précision configurée
+        rounded_temp = round(round(source_info.temperature() / temperature_precision) * temperature_precision, 1)
             
         try:
             with fits.open(self.filepath, mode='update') as hdul:
@@ -272,7 +286,7 @@ class FitsInfo:
                 updates = {
                     'DATE-OBS': source_info.rawdate_obs(),
                     'EXPTIME': source_info.exptime(),
-                    'CCD-TEMP': source_info.temperature(),
+                    'CCD-TEMP': rounded_temp,
                     'GAIN': source_info.gain(),
                     'CAMERA': source_info.camera(),
                     'XBINNING': source_info.xbinning_value,
@@ -344,3 +358,217 @@ class FitsInfo:
         Définit la commande de stacking utilisée pour créer ce master dark.
         """
         self.stack_command_value = value
+
+    def analyze_image_statistics(self) -> dict:
+        """
+        Analyse les statistiques de l'image FITS pour détecter des anomalies.
+        Retourne un dictionnaire avec les statistiques clés.
+        
+        Returns:
+            dict: Statistiques de l'image (médiane, écart-type, percentiles, etc.)
+        """
+        try:
+            with fits.open(self.filepath) as hdul:
+                data = hdul[0].data
+                if data is None:
+                    logging.warning(f"No image data found in {self.filepath}")
+                    return None
+                
+                # Convertir en float pour éviter les débordements
+                data = data.astype(np.float64)
+                
+                # Calculer les statistiques de base
+                stats = {
+                    'median': float(np.median(data)),
+                    'mean': float(np.mean(data)),
+                    'std': float(np.std(data)),
+                    'min': float(np.min(data)),
+                    'max': float(np.max(data)),
+                    'p10': float(np.percentile(data, 10)),
+                    'p90': float(np.percentile(data, 90)),
+                    'p95': float(np.percentile(data, 95)),
+                    'p99': float(np.percentile(data, 99)),
+                    'pixels_total': int(data.size)
+                }
+                
+                # Calculer le pourcentage de pixels "chauds" (> médiane + 5*std)
+                hot_threshold = stats['median'] + 5 * stats['std']
+                hot_pixels = np.sum(data > hot_threshold)
+                stats['hot_pixels_count'] = int(hot_pixels)
+                stats['hot_pixels_percent'] = float(hot_pixels / data.size * 100)
+                
+                return stats
+                
+        except Exception as e:
+            logging.error(f"Error analyzing image statistics for {self.filepath}: {e}")
+            return None
+
+    def calculate_plane_regression(self, data: np.ndarray, sample_fraction: float = 0.1) -> dict:
+        """
+        Calcule une régression plane sur l'image pour détecter des gradients d'illumination.
+        
+        Args:
+            data: Données de l'image 2D
+            sample_fraction: Fraction de pixels à échantillonner pour le calcul (défaut: 10%)
+            
+        Returns:
+            dict: Coefficients de la régression plane et statistiques
+        """
+        try:
+            height, width = data.shape
+            
+            # Échantillonnage aléatoire pour accélérer le calcul sur de grandes images
+            n_samples = int(data.size * sample_fraction)
+            if n_samples > 10000:  # Limite raisonnable
+                n_samples = 10000
+                
+            # Créer les grilles de coordonnées
+            y_coords, x_coords = np.mgrid[0:height, 0:width]
+            
+            # Échantillonnage aléatoire
+            if n_samples < data.size:
+                indices = np.random.choice(data.size, n_samples, replace=False)
+                x_flat = x_coords.flat[indices]
+                y_flat = y_coords.flat[indices]
+                z_flat = data.flat[indices]
+            else:
+                x_flat = x_coords.flatten()
+                y_flat = y_coords.flatten()
+                z_flat = data.flatten()
+            
+            # Normaliser les coordonnées pour améliorer la stabilité numérique
+            x_norm = (x_flat - width/2) / width
+            y_norm = (y_flat - height/2) / height
+            
+            # Construire la matrice pour la régression plane: z = a*x + b*y + c
+            A = np.column_stack([x_norm, y_norm, np.ones(len(x_norm))])
+            
+            # Résolution par moindres carrés
+            coeffs, residuals, rank, s = np.linalg.lstsq(A, z_flat, rcond=None)
+            
+            # Calculer les statistiques
+            if len(residuals) > 0:
+                mse = residuals[0] / len(z_flat)
+                rmse = np.sqrt(mse)
+            else:
+                # Calcul manuel si residuals est vide
+                z_pred = A @ coeffs
+                mse = np.mean((z_flat - z_pred) ** 2)
+                rmse = np.sqrt(mse)
+            
+            # Gradients en ADU par pixel
+            x_gradient = coeffs[0] * width  # Coefficient X dénormalisé
+            y_gradient = coeffs[1] * height  # Coefficient Y dénormalisé
+            
+            return {
+                'x_coefficient': float(coeffs[0]),  # Normalisé
+                'y_coefficient': float(coeffs[1]),  # Normalisé
+                'constant': float(coeffs[2]),
+                'x_gradient_adu_per_pixel': float(x_gradient),
+                'y_gradient_adu_per_pixel': float(y_gradient),
+                'gradient_magnitude': float(np.sqrt(x_gradient**2 + y_gradient**2)),
+                'rmse': float(rmse),
+                'r_squared': float(1 - (mse / np.var(z_flat))) if np.var(z_flat) > 0 else 0.0,
+                'samples_used': len(z_flat)
+            }
+            
+        except Exception as e:
+            logging.error(f"Error calculating plane regression: {e}")
+            return None
+
+    def is_valid_dark(self, 
+                     max_median_adu: float = 200.0,
+                     max_hot_pixels_percent: float = 0.01,
+                     max_std_factor: float = 0.5,
+                     max_gradient_adu_per_pixel: float = 0.1) -> tuple[bool, str]:
+        """
+        Vérifie si l'image est un dark valide (capot fermé) en analysant ses statistiques.
+        
+        Args:
+            max_median_adu: Médiane maximale acceptable (ADU)
+            max_hot_pixels_percent: Pourcentage maximal de pixels chauds acceptables
+            max_std_factor: Facteur maximal acceptable pour std/median
+            max_gradient_adu_per_pixel: Gradient maximal acceptable (ADU/pixel)
+            
+        Returns:
+            tuple: (is_valid, reason) - True si valide, sinon False avec raison
+        """
+        if not self.is_dark():
+            return False, "Not a dark frame"
+            
+        stats = self.analyze_image_statistics()
+        if stats is None:
+            return False, "Cannot analyze image statistics"
+            
+        # Test 1: Médiane trop élevée (probable lumière résiduelle)
+        if stats['median'] > max_median_adu:
+            return False, f"Median too high: {stats['median']:.1f} > {max_median_adu} ADU (probable light leak)"
+            
+        # Test 2: Trop de pixels chauds (étoiles ou lumière)
+        if stats['hot_pixels_percent'] > max_hot_pixels_percent:
+            return False, f"Too many hot pixels: {stats['hot_pixels_percent']:.2f}% > {max_hot_pixels_percent}% (probable stars/light)"
+            
+        # Test 3: Écart-type trop important par rapport à la médiane
+        if stats['median'] > 0 and (stats['std'] / stats['median']) > max_std_factor:
+            std_ratio = stats['std'] / stats['median']
+            
+            # Test 3b: Régression plane pour distinguer gradient vs bruit thermique
+            try:
+                with fits.open(self.filepath) as hdul:
+                    data = hdul[0].data
+                    if data is not None:
+                        data = data.astype(np.float64)
+                        regression = self.calculate_plane_regression(data)
+                        
+                        if regression is not None:
+                            gradient_magnitude = regression['gradient_magnitude']
+                            
+                            # Si le gradient est significatif, c'est probablement une illumination non-uniforme
+                            if gradient_magnitude > max_gradient_adu_per_pixel:
+                                return False, f"Standard deviation too high (std/median = {std_ratio:.2f}) with significant gradient ({gradient_magnitude:.3f} ADU/pixel > {max_gradient_adu_per_pixel}) - probable illumination gradient"
+                            else:
+                                # Gradient faible : probablement du bruit thermique normal, on accepte
+                                logging.info(f"High std/median ratio ({std_ratio:.2f}) but low gradient ({gradient_magnitude:.3f} ADU/pixel) - likely thermal noise, accepted")
+                        else:
+                            # Si on ne peut pas calculer la régression, on applique le test original
+                            return False, f"Standard deviation too high: std/median = {std_ratio:.2f} > {max_std_factor} (non-uniform illumination)"
+                            
+            except Exception as e:
+                logging.warning(f"Could not perform gradient analysis for {self.filepath}: {e}")
+                # En cas d'erreur, on applique le test original
+                return False, f"Standard deviation too high: std/median = {std_ratio:.2f} > {max_std_factor} (non-uniform illumination)"
+            
+        # Test 4: Valeurs max/p99 anormalement élevées
+        expected_max = stats['median'] + 10 * stats['std']
+        if stats['p99'] > expected_max:
+            return False, f"99th percentile too high: {stats['p99']:.1f} > {expected_max:.1f} ADU (bright spots detected)"
+            
+        return True, "Valid dark frame"
+
+    def get_validation_report(self) -> dict:
+        """
+        Génère un rapport complet de validation du dark.
+        
+        Returns:
+            dict: Rapport contenant les statistiques et le résultat de validation
+        """
+        stats = self.analyze_image_statistics()
+        if stats is None:
+            return {
+                'filepath': self.filepath,
+                'is_valid': False,
+                'reason': 'Cannot analyze image',
+                'statistics': None
+            }
+            
+        is_valid, reason = self.is_valid_dark()
+        
+        return {
+            'filepath': self.filepath,
+            'is_valid': is_valid,
+            'reason': reason,
+            'statistics': stats,
+            'exposure_time': self.exptime(),
+            'temperature': self.temperature(),
+            'camera': self.camera()
+        }

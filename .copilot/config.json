@@ -6,6 +6,7 @@
       "Quand tu génères du code lié à un traitement d'image d'astrophotographie, privilégie les librairies standard (subprocess, pathlib, logging, pysiril et astropi).",
       "Si une solution est spécifique au matériel (I2C, GPIO, GPS, capteurs de température), documente les dépendances nécessaires dans les docstrings.",
       "Améliorer la robustesse du code en ajoutant des vérifications d'erreurs et des exceptions appropriées.",
+      "IMPORTANT: Développer systématiquement des tests unitaires pour toute nouvelle fonctionnalité et les stocker dans le répertoire 'tests/' à la racine du projet. Utiliser pytest comme framework de test et créer des tests complets couvrant les cas normaux, les cas d'erreur et les cas limites."
     ]
   },
   "python": {
@@ -13,6 +14,16 @@
   },
   "shell": {
     "instructions": ["Écrire des scripts Bash portables, avec set -euo pipefail, et commenter chaque étape."]
+  },
+  "testing": {
+    "instructions": [
+      "Créer des tests unitaires avec pytest pour chaque module dans tests/test_<nom_module>.py",
+      "Utiliser des fixtures pour les données de test et les mocks",
+      "Tester les cas normaux, les cas d'erreur et les cas limites",
+      "Inclure des tests d'intégration pour les workflows complets",
+      "Maintenir une couverture de test élevée (>80%)",
+      "Documenter les stratégies de test dans tests/README.md"
+    ]
   }
 }
 

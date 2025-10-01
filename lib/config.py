@@ -22,7 +22,8 @@ class Config:
         "rejection_param1": 3.0,
         "rejection_param2": 3.0,
         "max_age_days": 182,
-        "stack_method": "average"
+        "stack_method": "average",
+        "temperature_precision": 0.2
     }
     
     def __init__(self, config_file=None):
@@ -117,6 +118,10 @@ class Config:
             "max_age_days": args.max_age,
             "stack_method": args.stack_method
         }
+        
+        # Add temperature precision if available
+        if hasattr(args, 'temperature_precision'):
+            updates["temperature_precision"] = args.temperature_precision
         
         # Add library path based on which script is being used
         if hasattr(args, 'dark_library_path'):
