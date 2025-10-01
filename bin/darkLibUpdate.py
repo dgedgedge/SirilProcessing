@@ -64,9 +64,9 @@ def save_config(config: dict) -> None:
 def main() -> None:
     # Seules les variables utilisées dans run_siril_script() doivent rester globales
     global SIRIL_PATH, SIRIL_MODE
-    
+
     config = Config()
-    
+
     # Création du parser d'arguments
     parser = argparse.ArgumentParser(
         description="Création d'une bibliothèque de master darks pour Siril",
@@ -179,8 +179,9 @@ def main() -> None:
     args = parser.parse_args()
 
     # Configuration de la journalisation
-    logging.basicConfig(level=args.log_level, format='%(asctime)s [%(levelname)s] %(name)s: %(message)s')
-    
+    logging.basicConfig(level=args.log_level, format='%(asctime)s [%(levelname)s] %(name)s: %(message)s', force=True)
+    logging.info(f"Log level set to {args.log_level}")
+
     # Configuration de la journalisation...
     
     # Sauvegarde de la configuration si demandé
@@ -218,7 +219,7 @@ def main() -> None:
         )
     
         if not dark_groups:
-            logging.info("No dark files found or processed. Script finished.")
+            logging.warning("No dark files found or processed. Script finished.")
             return
 
         logging.info(f"Found {len(dark_groups)} unique dark groups based on temperature, exposure time and gain.")

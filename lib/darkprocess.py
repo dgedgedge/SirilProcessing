@@ -11,17 +11,20 @@ import logging
 from lib.fits_info import FitsInfo
 from lib.siril_utils import run_siril_script
 
-logger = logging.getLogger(__name__)
+
 
 class DarkLib:
     """
     Classe pour gérer une bibliothèque de master darks.
     Fournit des méthodes pour grouper, empiler et maintenir des master darks.
     """
-    def __init__(self, config, siril_path="siril", siril_mode="flatpak"):
+    def __init__(self, config, siril_path="siril", siril_mode="flatpak", log_level=logging.INFO):
         """
         Initialise la bibliothèque de master darks avec les paramètres de configuration.
         """
+
+        logging.info("Initializing DarkLib instance.")
+
         # Configuration
         self.dark_library_path = config.get("dark_library_path")
         self.work_dir = config.get("work_dir")
@@ -39,6 +42,7 @@ class DarkLib:
         os.makedirs(self.dark_library_path, exist_ok=True)
         os.makedirs(self.work_dir, exist_ok=True)
 
+
     def group_dark_files(self, input_dirs: list[str], log_groups: bool = True, log_skipped: bool = False) -> dict[str, list[FitsInfo]]:
         """
         Groupe les fichiers dark par température, temps d'exposition, gain et nom de caméra.
@@ -50,10 +54,10 @@ class DarkLib:
 
         for input_dir in input_dirs:
             if not os.path.isdir(input_dir):
-                logger.warning(f"Input directory not found: {input_dir}. Ignored.")
+                logging.warning(f"Input directory not found: {input_dir}. Ignored.")
                 continue
 
-            logger.info(f"Scanning directory: {input_dir}")
+            logging.info(f"Scanning directory: {input_dir}")
             for root, _, files in os.walk(input_dir):
                 for filename in files:
                     if filename.lower().endswith(('.fit', '.fits')):
@@ -79,24 +83,24 @@ class DarkLib:
                 dark_groups[key] = filtered
                 if removed:
                     filtered_by_date.extend(removed)
-                    logger.info(f"Fichiers filtrés par la date (>{self.max_age_days} jours du plus récent) pour le groupe {key}:")
+                    logging.info(f"Fichiers filtrés par la date (>{self.max_age_days} jours du plus récent) pour le groupe {key}:")
                     for info in removed:
-                        logger.info(f"  FILTERED: {info.filepath} | DATE-OBS={info.date_obs()}")
+                        logging.info(f"  FILTERED: {info.filepath} | DATE-OBS={info.date_obs()}")
 
         # Affichage des groupes et fichiers
         if log_groups:
             for group_key, infos in dark_groups.items():
-                logger.info(
+                logging.info(
                     f"GROUP: {group_key}"
                 )
                 for info in infos:
-                    logger.info(
+                    logging.info(
                         f"  FILE: {info.filepath} | DATE-OBS={info.date_obs()} | BINNING={info.binning()}"
                     )
         if log_skipped and skipped_files:
-            logger.info("Fichiers ignorés (non conformes ou non DARK) :")
+            logging.info("Fichiers ignorés (non conformes ou non DARK) :")
             for f in skipped_files:
-                logger.info(f"  SKIPPED: {f}")
+                logging.info(f"  SKIPPED: {f}")
 
         return dark_groups
 
@@ -116,12 +120,12 @@ class DarkLib:
                         if info.date_obs() > latest_infoFile.date_obs():
                             latest_infoFile = info
                     else:
-                        logger.error(f"Inconsistent in group {group_key}. File {info.filepath} has GAIN={info.gain()}, CAMERA={info.camera()}. Skipping group.")
+                        logging.error(f"Inconsistent in group {group_key}. File {info.filepath} has GAIN={info.gain()}, CAMERA={info.camera()}. Skipping group.")
                         return
             else:
-                logger.warning(f"Invalid FITS data in {info.filepath}, skipping for date comparison.")
+                logging.warning(f"Invalid FITS data in {info.filepath}, skipping for date comparison.")
         if latest_infoFile is None:
-            logger.warning("No valid DATE-OBS found in group, skipping stacking.")
+            logging.warning("No valid DATE-OBS found in group, skipping stacking.")
             return
 
         # Utilise directement group_key pour le nom du fichier
@@ -171,7 +175,7 @@ class DarkLib:
             if info.validData():
                 existing_master = info
             else:
-                logger.warning(f"Cannot read metadata from existing master dark {master_dark_path}. Will be treated as non-existent for comparison.")
+                logging.warning(f"Cannot read metadata from existing master dark {master_dark_path}. Will be treated as non-existent for comparison.")
 
         if existing_master:
             # Vérification de la commande de stacking si elle est disponible
@@ -180,23 +184,23 @@ class DarkLib:
             
             # Si la commande de stacking est différente, toujours remplacer
             if different_stack_cmd:
-                logger.info(
+                logging.info(
                     f"Existing master dark for {group_key} has different stacking command. Replacing."
                 )
                 # Pas de 'return' ici pour permettre le remplacement
             # Si même commande mais date plus récente ou identique, ignorer
             elif latest_infoFile.date_obs() <= existing_master.date_obs():
-                logger.info(
+                logging.info(
                     f"Master dark already exists and is newer or same date ({existing_master.date_obs().date()}). Update ignored."
                 )
                 return
             # Même commande mais plus ancien, on remplace
             else:
-                logger.info(
+                logging.info(
                     f"Existing master dark for {group_key} is older ({existing_master.date_obs().date()}). Overwriting with newer darks from {latest_infoFile.date_obs().date()}."
                 )
         else:
-            logger.info(
+            logging.info(
                 f"No master dark found for {group_key} or unreadable date. Creating new one."
             )
 
@@ -204,7 +208,7 @@ class DarkLib:
         siril_file_list = [os.path.basename(info.filepath) for info in fitsinfo_list if os.path.exists(info.filepath)]
 
         if not siril_file_list:
-            logger.warning(f"No dark files to stack for group {group_key}. Ignored.")
+            logging.warning(f"No dark files to stack for group {group_key}. Ignored.")
             return
 
         siril_script_content = f"""requires 1.2
@@ -215,24 +219,24 @@ cd {process_dir}
 {stack_line}
 """
         if not run_siril_script(siril_script_content, process_dir, self.siril_path, self.siril_mode):
-            logger.error(f"Erreur critique : l'exécution du script Siril a échoué pour le groupe {group_key}. Le répertoire de travail est conservé pour inspection : {process_dir}")
+            logging.error(f"Erreur critique : l'exécution du script Siril a échoué pour le groupe {group_key}. Le répertoire de travail est conservé pour inspection : {process_dir}")
             exit(1)
 
         temp_master_dark_path = os.path.join(process_dir, siril_output_name)
         if os.path.exists(temp_master_dark_path):
             shutil.move(temp_master_dark_path, master_dark_path)
-            logger.info(f"Master dark successfully created/updated: {master_dark_path}")
+            logging.info(f"Master dark successfully created/updated: {master_dark_path}")
             masterDark=FitsInfo(master_dark_path)
             try:
                 # Met à jour le header du master dark
                 masterDark.set_ndarks(len(fitsinfo_list))
                 masterDark.set_stack_command(stack_command)
                 masterDark.update_header(latest_infoFile)
-                logger.info(f"Header of {master_dark_path} updated with group metadata, stack command, and number of frames ({len(fitsinfo_list)}).")
+                logging.info(f"Header of {master_dark_path} updated with group metadata, stack command, and number of frames ({len(fitsinfo_list)}).")
             except Exception as e:
-                logger.error(f"Failed to update FITS header for {master_dark_path}: {e}")
+                logging.error(f"Failed to update FITS header for {master_dark_path}: {e}")
         else:
-            logger.error(f"Siril script executed, but master dark '{siril_output_name}' not found in {process_dir}.")
+            logging.error(f"Siril script executed, but master dark '{siril_output_name}' not found in {process_dir}.")
 
 
     def read_existing_master_darks(self) -> list[FitsInfo]:
@@ -252,7 +256,7 @@ cd {process_dir}
                     if info.validData() and info.is_dark():
                         existing_darks.append(info)
                 except Exception as e:
-                    logger.warning(f"Impossible de lire l'entête FITS de {fpath}: {e}")
+                    logging.warning(f"Impossible de lire l'entête FITS de {fpath}: {e}")
         return existing_darks
 
     def list_master_darks(self) -> None:
@@ -260,11 +264,11 @@ cd {process_dir}
         Liste tous les master darks de la bibliothèque avec leurs caractéristiques
         lues directement depuis les en-têtes FITS.
         """
-        logger.info(f"Lecture des master darks dans : {self.dark_library_path}")
+        logging.info(f"Lecture des master darks dans : {self.dark_library_path}")
         existing_darks = self.read_existing_master_darks()
         
         if not existing_darks:
-            logger.info("Aucun master dark trouvé dans la bibliothèque.")
+            logging.info("Aucun master dark trouvé dans la bibliothèque.")
             return
         
         # Calculate base length (sum of fixed width columns and spaces)
@@ -331,9 +335,9 @@ cd {process_dir}
         Traite tous les groupes de darks pour créer des master darks.
         """
         for group_key, files in dark_groups.items():
-            logger.info(f"Processing group: {group_key}")
+            logging.info(f"Processing group: {group_key}")
             if len(files) < 2:
-                logger.warning(f"Group {group_key} contains only {len(files)} file(s). Stacking ignored (Siril requires at least 2).")
+                logging.warning(f"Group {group_key} contains only {len(files)} file(s). Stacking ignored (Siril requires at least 2).")
                 continue
 
             # Utiliser un sous-répertoire 'process' dans WORK_DIR pour le traitement Siril
