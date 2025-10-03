@@ -23,7 +23,10 @@ class Config:
         "rejection_param2": 3.0,
         "max_age_days": 182,
         "stack_method": "average",
-        "temperature_precision": 0.2
+        "temperature_precision": 0.2,
+        "validate_darks": False,
+        "report": False,
+        "input_dirs": None
     }
     
     def __init__(self, config_file=None):
@@ -122,6 +125,14 @@ class Config:
         # Add temperature precision if available
         if hasattr(args, 'temperature_precision'):
             updates["temperature_precision"] = args.temperature_precision
+        
+        # Add validation options if available
+        if hasattr(args, 'validate_darks'):
+            updates["validate_darks"] = args.validate_darks
+        if hasattr(args, 'report'):
+            updates["report"] = args.report
+        if hasattr(args, 'input_dirs') and args.input_dirs is not None:
+            updates["input_dirs"] = args.input_dirs
         
         # Add library path based on which script is being used
         if hasattr(args, 'dark_library_path'):

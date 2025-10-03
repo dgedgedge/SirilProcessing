@@ -46,12 +46,19 @@ class DarkLib:
         self.temperature_precision = config.get("temperature_precision", 0.5)
         self.force_recalc = force_recalc
 
+        # Structure pour collecter les données de validation et de traitement
+        self.validation_data = {
+            'updated_masters': [],  # Liste des master darks mis à jour
+            'rejected_files': {},   # Dict[group_key, list[rejected_files_info]]
+            'validation_stats': {}  # Dict[group_key, validation_summary]
+        }
+
         # Créer les répertoires nécessaires
         os.makedirs(self.dark_library_path, exist_ok=True)
         os.makedirs(self.work_dir, exist_ok=True)
 
 
-    def group_dark_files(self, input_dirs: list[str], log_groups: bool = True, log_skipped: bool = False, validate_darks: bool = False) -> dict[str, list[FitsInfo]]:
+    def group_dark_files(self, input_dirs: list[str], log_groups: bool = True, log_skipped: bool = False) -> dict[str, list[FitsInfo]]:
         """
         Groupe les fichiers dark par température, temps d'exposition, gain et nom de caméra.
         Ne conserve que les fichiers FITS les plus récents dans l'intervalle de temps spécifié.
@@ -75,13 +82,6 @@ class DarkLib:
                         if info.validData():
                             group_key = info.group_key(self.temperature_precision)
                         if group_key and info.is_dark():
-                            # Validation optionnelle des darks
-                            if validate_darks:
-                                is_valid, reason = info.is_valid_dark()
-                                if not is_valid:
-                                    logging.warning(f"Invalid dark rejected: {filepath} - {reason}")
-                                    skipped_files.append(filepath)
-                                    continue
                             dark_groups.setdefault(group_key, []).append(info)
                         else:
                             skipped_files.append(filepath)
@@ -119,7 +119,7 @@ class DarkLib:
 
         return dark_groups
 
-    def stack_and_save_master_dark(self, group_key: str, fitsinfo_list: list[FitsInfo], process_dir: str, link_dir: str) -> None:
+    def stack_and_save_master_dark(self, group_key: str, fitsinfo_list: list[FitsInfo], process_dir: str, link_dir: str, validate_darks: bool = False) -> None:
         """
         Empile les darks d'un groupe en utilisant Siril et enregistre le master dark
         dans la bibliothèque, en gérant les remplacements selon la date.
@@ -223,8 +223,49 @@ class DarkLib:
                 f"No master dark found for {group_key} or unreadable date. Creating new one."
             )
 
-        # Les fichiers dark_files sont déjà des liens dans process_dir, nommés dark_XXXX.fit
-        siril_file_list = [os.path.basename(info.filepath) for info in fitsinfo_list if os.path.exists(info.filepath)]
+        # Validation des darks seulement si le master dark doit être mis à jour
+        rejected_files = []
+        if validate_darks:
+            logging.info(f"Validating dark files for group {group_key} before stacking...")
+            valid_files = []
+            for info in fitsinfo_list:
+                is_valid, reason = info.is_valid_dark()
+                if not is_valid:
+                    logging.warning(f"Invalid dark rejected: {info.filepath} - {reason}")
+                    rejected_files.append({
+                        'filepath': info.filepath,
+                        'reason': reason,
+                        'statistics': info.get_validation_report()['statistics'] if hasattr(info, 'get_validation_report') else None
+                    })
+                else:
+                    valid_files.append(info)
+            
+            if len(valid_files) < len(fitsinfo_list):
+                logging.info(f"Group {group_key}: {len(fitsinfo_list) - len(valid_files)} invalid dark(s) rejected, {len(valid_files)} valid dark(s) remaining.")
+            
+            if len(valid_files) < 2:
+                logging.warning(f"Group {group_key} contains only {len(valid_files)} valid file(s) after validation. Stacking ignored (Siril requires at least 2).")
+                # Enregistrer les données même si le stacking est annulé
+                if rejected_files:
+                    self.validation_data['rejected_files'][group_key] = rejected_files
+                return
+            
+            # Remplacer la liste originale par les fichiers validés
+            fitsinfo_list = valid_files
+
+        # Créer les liens symboliques après la validation (ou directement si pas de validation)
+        linked_infos = []
+        for i, info in enumerate(fitsinfo_list):
+            newInfo = info.create_symlink(link_dir, index=i)
+            if newInfo:
+                linked_infos.append(newInfo)
+
+        if not linked_infos:
+            logging.warning(f"No dark files to stack for group {group_key}. Ignored.")
+            return
+
+        # Les fichiers dark_files sont maintenant des liens dans link_dir, nommés dark_XXXX.fit
+        siril_file_list = [os.path.basename(info.filepath) for info in linked_infos if os.path.exists(info.filepath)]
 
         if not siril_file_list:
             logging.warning(f"No dark files to stack for group {group_key}. Ignored.")
@@ -245,13 +286,27 @@ cd {process_dir}
         if os.path.exists(temp_master_dark_path):
             shutil.move(temp_master_dark_path, master_dark_path)
             logging.info(f"Master dark successfully created/updated: {master_dark_path}")
+            
+            # Enregistrer les données de traitement pour le rapport
+            master_info = {
+                'group_key': group_key,
+                'master_path': master_dark_path,
+                'total_files': len(fitsinfo_list) + len(rejected_files),
+                'used_files': len(fitsinfo_list),
+                'rejected_files': len(rejected_files)
+            }
+            self.validation_data['updated_masters'].append(master_info)
+            
+            if rejected_files:
+                self.validation_data['rejected_files'][group_key] = rejected_files
+            
             masterDark=FitsInfo(master_dark_path)
             try:
-                # Met à jour le header du master dark
-                masterDark.set_ndarks(len(fitsinfo_list))
+                # Met à jour le header du master dark avec le nombre de fichiers réellement utilisés
+                masterDark.set_ndarks(len(linked_infos))
                 masterDark.set_stack_command(stack_command)
                 masterDark.update_header(latest_infoFile, self.temperature_precision)
-                logging.info(f"Header of {master_dark_path} updated with group metadata, stack command, and number of frames ({len(fitsinfo_list)}).")
+                logging.info(f"Header of {master_dark_path} updated with group metadata, stack command, and number of frames ({len(linked_infos)}).")
             except Exception as e:
                 logging.error(f"Failed to update FITS header for {master_dark_path}: {e}")
         else:
@@ -283,7 +338,7 @@ cd {process_dir}
         Liste tous les master darks de la bibliothèque avec leurs caractéristiques
         lues directement depuis les en-têtes FITS.
         """
-        logging.info(f"Lecture des master darks dans : {self.dark_library_path}")
+        print(f"Lecture des master darks dans : {self.dark_library_path}")
         existing_darks = self.read_existing_master_darks()
         
         if not existing_darks:
@@ -349,98 +404,102 @@ cd {process_dir}
         print(separator)
         print()  # Ligne vide à la fin pour améliorer la lisibilité
 
-    def process_all_groups(self, dark_groups):
+    def process_all_groups(self, dark_groups, validate_darks: bool = False):
         """
         Traite tous les groupes de darks pour créer des master darks.
         """
-        for group_key, files in dark_groups.items():
-            logging.info(f"Processing group: {group_key}")
-            if len(files) < 2:
-                logging.warning(f"Group {group_key} contains only {len(files)} file(s). Stacking ignored (Siril requires at least 2).")
-                continue
-
-            # Utiliser un sous-répertoire 'process' dans WORK_DIR pour le traitement Siril
-            process_dir = os.path.join(self.work_dir, "processs")
-            link_dir = os.path.join(process_dir, "link")
-            if os.path.exists(process_dir):
-                shutil.rmtree(process_dir)
-            os.makedirs(link_dir, exist_ok=True)
-
-            # Lier les fichiers originaux dans le sous-répertoire 'link'
-            linked_infos = []
-            for i, info in enumerate(files):
-                newInfo = info.create_symlink(link_dir, index=i)
-                if newInfo:
-                    linked_infos.append(newInfo)
-
-            # Passer la liste des liens au stacking
-            self.stack_and_save_master_dark(group_key, linked_infos, process_dir, link_dir)
-
-            # Nettoyer le répertoire process après traitement
-            shutil.rmtree(process_dir, ignore_errors=True)
-
-    def generate_validation_report(self, input_dirs: list[str]) -> None:
-        """
-        Génère un rapport détaillé de validation pour tous les fichiers darks.
-        """
-        logging.info("Generating dark validation report...")
+        total_groups = len(dark_groups)
+        processed_groups = 0
         
-        all_reports = []
-        valid_count = 0
-        invalid_count = 0
-        
-        for input_dir in input_dirs:
-            if not os.path.isdir(input_dir):
-                logging.warning(f"Input directory not found: {input_dir}. Ignored.")
-                continue
+        try:
+            for group_key, files in dark_groups.items():
+                processed_groups += 1
+                logging.info(f"Processing group {processed_groups}/{total_groups}: {group_key}")
                 
-            logging.info(f"Validating darks in directory: {input_dir}")
-            for root, _, files in os.walk(input_dir):
-                for filename in files:
-                    if filename.lower().endswith(('.fit', '.fits')):
-                        filepath = os.path.join(root, filename)
-                        info = FitsInfo(filepath)
-                        
-                        if info.is_dark():
-                            report = info.get_validation_report()
-                            all_reports.append(report)
-                            
-                            if report['is_valid']:
-                                valid_count += 1
-                            else:
-                                invalid_count += 1
+                if len(files) < 2:
+                    logging.warning(f"Group {group_key} contains only {len(files)} file(s). Stacking ignored (Siril requires at least 2).")
+                    continue
+
+                # Utiliser un sous-répertoire 'process' dans WORK_DIR pour le traitement Siril
+                process_dir = os.path.join(self.work_dir, "processs")
+                link_dir = os.path.join(process_dir, "link")
+                if os.path.exists(process_dir):
+                    shutil.rmtree(process_dir)
+                os.makedirs(link_dir, exist_ok=True)
+
+                # Passer les fichiers originaux au stacking (les liens seront créés après validation)
+                self.stack_and_save_master_dark(group_key, files, process_dir, link_dir, validate_darks)
+
+                # Nettoyer le répertoire process après traitement
+                shutil.rmtree(process_dir, ignore_errors=True)
+                
+        except KeyboardInterrupt:
+            logging.warning(f"Traitement interrompu après {processed_groups}/{total_groups} groupes.")
+            # Nettoyer le répertoire process en cours si il existe
+            process_dir = os.path.join(self.work_dir, "processs")
+            if os.path.exists(process_dir):
+                shutil.rmtree(process_dir, ignore_errors=True)
+            raise  # Re-lancer l'exception pour la gestion au niveau supérieur
+
+    def generate_processing_report(self) -> None:
+        """
+        Génère un rapport détaillé basé sur les données collectées pendant le traitement.
+        """
+        print(f"\n=== RAPPORT DE TRAITEMENT ET VALIDATION ===")
         
-        # Affichage du rapport
-        print(f"\n=== RAPPORT DE VALIDATION DES DARKS ===")
-        print(f"Total des darks analysés: {len(all_reports)}")
-        print(f"Darks valides: {valid_count}")
-        print(f"Darks suspects: {invalid_count}")
+        updated_masters = self.validation_data['updated_masters']
+        rejected_files = self.validation_data['rejected_files']
         
-        if invalid_count > 0:
-            print(f"\n--- DARKS SUSPECTS (probablement capot ouvert) ---")
-            for report in all_reports:
-                if not report['is_valid']:
-                    filepath = report['filepath']  # Chemin complet au lieu de basename
-                    print(f"❌ {filepath}")
-                    print(f"   Raison: {report['reason']}")
-                    if report['statistics']:
-                        stats = report['statistics']
-                        print(f"   Médiane: {stats['median']:.1f} ADU, MAD: {stats['mad']:.1f}")
-                        print(f"   Pixels chauds (mean+3σ): {stats['hot_pixels_percent_std']:.2f}%")
-                        print(f"   MAD/median: {stats['mad_ratio']:.3f}, (p90-p10)/median: {stats['central_dispersion']:.3f}")
-                    print()
+        if not updated_masters and not rejected_files:
+            print("Aucun master dark mis à jour et aucun fichier rejeté.")
+            # Afficher quand même l'état de la bibliothèque
+            self._display_library_status()
+            print("=== FIN DU RAPPORT ===\n")
+            return
         
-        if valid_count > 0:
-            print(f"\n--- EXEMPLES DE DARKS VALIDES ---")
-            valid_reports = [r for r in all_reports if r['is_valid']]
-            for report in valid_reports[:5]:  # Afficher les 5 premiers
-                filepath = report['filepath']  # Chemin complet au lieu de basename
-                print(f"✅ {filepath}")
-                if report['statistics']:
-                    stats = report['statistics']
-                    print(f"   Médiane: {stats['median']:.1f} ADU, MAD: {stats['mad']:.1f}")
-                    print(f"   MAD/median: {stats['mad_ratio']:.3f}, (p90-p10)/median: {stats['central_dispersion']:.3f}")
+        # Section master darks mis à jour
+        if updated_masters:
+            print(f"\n--- MASTER DARKS MIS À JOUR ({len(updated_masters)}) ---")
+            for master in updated_masters:
+                print(f"✅ {master['group_key']}")
+                print(f"   Fichier: {os.path.basename(master['master_path'])}")
+                print(f"   Fichiers utilisés: {master['used_files']}/{master['total_files']}")
+                if master['rejected_files'] > 0:
+                    print(f"   Fichiers rejetés: {master['rejected_files']}")
                 print()
+        
+        # Section fichiers rejetés
+        if rejected_files:
+            total_rejected = sum(len(files) for files in rejected_files.values())
+            print(f"\n--- FICHIERS REJETÉS PAR VALIDATION ({total_rejected}) ---")
+            
+            for group_key, files in rejected_files.items():
+                print(f"\nGroupe: {group_key}")
+                for file_info in files:
+                    print(f"  ❌ {os.path.basename(file_info['filepath'])}")
+                    print(f"     Raison: {file_info['reason']}")
+                    if file_info['statistics']:
+                        stats = file_info['statistics']
+                        print(f"     Médiane: {stats['median']:.1f} ADU, MAD: {stats['mad']:.1f}")
+                        print(f"     MAD/median: {stats['mad_ratio']:.3f}, Pixels chauds: {stats['hot_pixels_percent_std']:.2f}%")
+        
+        # Statistiques globales
+        total_masters = len(updated_masters)
+        total_rejected = sum(len(files) for files in rejected_files.values())
+        total_used = sum(master['used_files'] for master in updated_masters)
+        total_processed = sum(master['total_files'] for master in updated_masters)
+        
+        print(f"\n--- STATISTIQUES GLOBALES ---")
+        print(f"Master darks créés/mis à jour: {total_masters}")
+        print(f"Fichiers darks traités: {total_processed}")
+        print(f"Fichiers darks utilisés: {total_used}")
+        print(f"Fichiers darks rejetés: {total_rejected}")
+        if total_processed > 0:
+            success_rate = (total_used / total_processed) * 100
+            print(f"Taux de réussite: {success_rate:.1f}%")
+        
+        # Section bibliothèque de master darks
+        self.list_master_darks()
         
         print("=== FIN DU RAPPORT ===\n")
 

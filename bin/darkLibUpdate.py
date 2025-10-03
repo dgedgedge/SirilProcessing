@@ -75,124 +75,160 @@ def main() -> None:
 
     # Configuration des arguments
     parser.add_argument(
-        '--input-dirs',
+        '-i', '--input-dirs',
+        dest='input_dirs',
         nargs='+',
+        default=config.get("input_dirs"),
         help="Liste des répertoires contenant les fichiers dark à traiter"
     )
     parser.add_argument(
-        '--dark-library-path',
+        '-d', '--dark-library-path',
+        dest='dark_library_path',
         type=str,
         default=config.get("dark_library_path"),
         help=f"Répertoire où sont stockés les master darks. (Défaut: '{config.get('dark_library_path')}')"
     )
     parser.add_argument(
-        '--work-dir',
+        '-w', '--work-dir',
+        dest='work_dir',
         type=str,
         default=config.get("work_dir"),
         help=f"Répertoire de travail temporaire. (Défaut: '{config.get('work_dir')}')"
     )
     parser.add_argument(
-        '--siril-path',
+        '-s', '--siril-path',
+        dest='siril_path',
         type=str,
         default=config.get("siril_path"),
         help=f"Chemin vers l'exécutable Siril. (Défaut: '{config.get('siril_path')}')"
     )
     parser.add_argument(
-        '--siril-mode',
+        '-m', '--siril-mode',
+        dest='siril_mode',
         choices=['native', 'flatpak', 'appimage'],
         default=config.get("siril_mode"),
         help=f"Mode d'exécution de Siril. (Défaut: '{config.get('siril_mode')}')"
     )
     parser.add_argument(
-        '--save-config',
+        '-S', '--save-config',
+        dest='save_config',
         action='store_true',
         help="Sauvegarde la configuration actuelle pour une utilisation future"
     )
     parser.add_argument(
-        '--dummy',
+        '-D', '--dummy',
+        dest='dummy',
         action='store_true',
         help="Mode test: analyse les fichiers mais n'exécute pas Siril"
     )
 
     parser.add_argument(
-        '--log-level',
+        '-l', '--log-level',
+        dest='log_level',
         choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
         default='WARNING',
         help="Niveau de journalisation"
     )
     
     parser.add_argument(
-        '--list-darks',
+        '-L', '--list-darks',
+        dest='list_darks',
         action='store_true',
         help="Liste tous les master darks disponibles dans la bibliothèque avec leurs caractéristiques"
     )
     parser.add_argument(
         '--log-skipped',
+        dest='log_skipped',
         action='store_true',
         help="Log les fichiers ignorés (non-DARK ou FITS invalides)"
     )
     parser.add_argument(
-        '--max-age',
+        '-a', '--max-age',
+        dest='max_age',
         type=int,
         default=config.get("max_age_days"),
         help=f"Nombre maximum de jours d'écart entre le dark le plus récent et le plus ancien d'un groupe. (Défaut: {config.get('max_age_days')} jours)"
     )
     parser.add_argument(
-        '--cfa',
+        '-c', '--cfa',
+        dest='cfa',
         action='store_true',
         default=config.get("cfa", False),
         help="Indique que les images sont en couleur (CFA). Par défaut, les images sont considérées monochromes."
     )
     parser.add_argument(
-        '--output-norm',
+        '-o', '--output-norm',
+        dest='output_norm',
         choices=['addscale', 'noscale', 'rejection'],
         default=config.get("output_norm"),
         help=f"Méthode de normalisation pour Siril. (Défaut: '{config.get('output_norm')}')"
     )
     parser.add_argument(
-        '--rejection-method',
+        '-r', '--rejection-method',
+        dest='rejection_method',
         choices=['winsorizedsigma', 'sigma', 'minmax', 'percentile', 'none'],
         default=config.get("rejection_method"),
         help=f"Méthode de rejet pour Siril. (Défaut: '{config.get('rejection_method')}')"
     )
     parser.add_argument(
         '--rejection-param1',
+        dest='rejection_param1',
         type=float,
         default=config.get("rejection_param1"),
         help=f"Premier paramètre de rejet pour Siril. (Défaut: {config.get('rejection_param1')})"
     )
     parser.add_argument(
         '--rejection-param2',
+        dest='rejection_param2',
         type=float,
         default=config.get("rejection_param2"),
         help=f"Second paramètre de rejet pour Siril. (Défaut: {config.get('rejection_param2')})"
     )
     parser.add_argument(
         '--stack-method',
+        dest='stack_method',
         choices=['average', 'median'],
         default=config.get("stack_method"),
         help=f"Méthode d'empilement: 'average' (Empilement par moyenne avec rejet) ou 'median' (Empilement médian). (Défaut: '{config.get('stack_method')}')"
     )
     parser.add_argument(
-        '--temperature-precision',
+        '-t', '--temperature-precision',
+        dest='temperature_precision',
         type=float,
         default=config.get("temperature_precision"),
         help=f"Précision d'arrondi pour la température en degrés Celsius. (Défaut: {config.get('temperature_precision')}°C)"
     )
     parser.add_argument(
-        '--force-recalc',
+        '-f', '--force-recalc',
+        dest='force_recalc',
         action='store_true',
         help="Force le recalcul de tous les master darks existants, même s'ils sont plus récents que les fichiers sources. Utile pour tester de nouveaux paramètres de regroupement."
     )
     parser.add_argument(
-        '--validate-darks',
+        '-v', '--validate-darks',
+        dest='validate_darks',
         action='store_true',
+        default=config.get("validate_darks", False),
         help="Valide les fichiers darks en analysant leurs statistiques pour détecter ceux pris avec le capot ouvert (présence de lumière parasite)."
     )
     parser.add_argument(
-        '--validation-report',
+        '--no-validate-darks',
+        dest='validate_darks',
+        action='store_false',
+        help="Désactive la validation des fichiers darks."
+    )
+    parser.add_argument(
+        '-R', '--report',
+        dest='report',
         action='store_true',
-        help="Génère un rapport détaillé de validation pour tous les fichiers darks trouvés."
+        default=config.get("report", False),
+        help="Génère un rapport détaillé du traitement et de la validation effectués."
+    )
+    parser.add_argument(
+        '--no-report',
+        dest='report',
+        action='store_false',
+        help="Désactive la génération du rapport de traitement."
     )
 
 
@@ -219,6 +255,8 @@ def main() -> None:
     work_dir = os.path.abspath(args.work_dir)
     os.makedirs(work_dir, exist_ok=True)    
 
+
+
     logging.info("Starting Siril dark library creation script.")
 
     os.makedirs(DARK_LIBRARY_PATH, exist_ok=True)
@@ -227,18 +265,15 @@ def main() -> None:
     darklib = DarkLib(config, SIRIL_PATH, SIRIL_MODE, force_recalc=args.force_recalc)
     
 
-
+    # Si l'option --list-darks est spécifiée, liste les master darks et termine
+    if args.list_darks:
+        darklib.list_master_darks()
     # Si l'option --input-dirs est présente traiter les darks
-    if args.input_dirs:
-        # Générer un rapport de validation si demandé
-        if args.validation_report:
-            darklib.generate_validation_report(args.input_dirs)
-            
+    elif args.input_dirs:
         dark_groups = darklib.group_dark_files(
             args.input_dirs, 
             log_groups=True, 
-            log_skipped=args.log_skipped,
-            validate_darks=args.validate_darks
+            log_skipped=args.log_skipped
         )
     
         if dark_groups:
@@ -248,19 +283,28 @@ def main() -> None:
                 logging.info("Option --dummy activée : arrêt du script avant traitement Siril.")
             else:
                 # Traiter tous les groupes
-                darklib.process_all_groups(dark_groups)
+                darklib.process_all_groups(dark_groups, validate_darks=args.validate_darks)
+                
+                # Générer le rapport de traitement si demandé
+                if args.report:
+                    darklib.generate_processing_report()
         else:
             logging.warning("No dark files found or processed. Script finished.")
 
-    # Si l'option --list-darks est spécifiée, liste les master darks et termine
-    if args.list_darks:
-        darklib.list_master_darks()
 
     logging.info("Siril dark library creation script completed.")
 
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\n⚠️  Traitement interrompu par l'utilisateur.")
+        print("   Les fichiers temporaires peuvent être conservés dans le répertoire de travail.")
+        sys.exit(1)
+    except Exception as e:
+        logging.error(f"Erreur inattendue: {e}")
+        sys.exit(1)
 
 # End of darklib.py script
