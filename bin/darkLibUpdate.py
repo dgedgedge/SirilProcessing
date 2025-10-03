@@ -27,40 +27,6 @@ MAX_AGE_DAYS = 182  # Période par défaut (6 mois)
 
 CONFIG_FILE = os.path.expanduser("~/.siril_darklib_config.json")
 
-def load_config() -> dict:
-    if os.path.exists(CONFIG_FILE):
-        try:
-            with open(CONFIG_FILE, "r") as f:
-                return json.load(f)
-        except Exception as e:
-            logging.warning(f"Could not read config file {CONFIG_FILE}: {e}")
-    return {}
-
-def save_config(config: dict) -> None:
-    try:
-        # Options de chemin
-        if "dark_library_path" in config:
-            config["dark_library_path"] = os.path.abspath(config["dark_library_path"])
-        if "work_dir" in config:
-            config["work_dir"] = os.path.abspath(config["work_dir"])
-        if "siril_path" in config:
-            config["siril_path"] = config["siril_path"]  # Peut rester relatif si souhaité
-            
-        # Options de stacking et de traitement
-        for option in ["siril_mode", "cfa", "output_norm", "rejection_method", 
-                      "rejection_param1", "rejection_param2", "max_age_days",
-                      "stack_method"]:
-            if option in config:
-                # Enregistrer la valeur telle quelle
-                pass
-                
-        with open(CONFIG_FILE, "w") as f:
-            json.dump(config, f, indent=2)
-        logging.info(f"Configuration saved to {CONFIG_FILE}")
-    except Exception as e:
-        logging.error(f"Could not save config file {CONFIG_FILE}: {e}")
-
-
 def main() -> None:
     # Seules les variables utilisées dans run_siril_script() doivent rester globales
     global SIRIL_PATH, SIRIL_MODE

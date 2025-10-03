@@ -12,9 +12,9 @@ class Config:
     # Valeurs par défaut pour chaque paramètre de configuration
     DEFAULTS = {
         "siril_path": "siril",
-        "dark_library_path": os.path.expanduser("~/darkLib"),
-        "bias_library_path": os.path.expanduser("~/biasLib"),
-        "work_dir": os.path.expanduser("~/tmp/sirilWorkDir"),
+        "dark_library_path": os.path.abspath(os.path.expanduser("~/darkLib")),
+        "bias_library_path": os.path.abspath(os.path.expanduser("~/biasLib")),
+        "work_dir": os.path.abspath(os.path.expanduser("~/tmp/sirilWorkDir")),
         "siril_mode": "flatpak",
         "cfa": False,
         "output_norm": "noscale",
@@ -108,11 +108,12 @@ class Config:
     def set_from_args(self, args):
         """
         Met à jour la configuration à partir des arguments de la ligne de commande.
+        Convertit automatiquement tous les chemins de répertoires en chemins absolus.
         """
         # Mise à jour des valeurs à partir des arguments
         updates = {
             "siril_path": args.siril_path,
-            "work_dir": args.work_dir,
+            "work_dir": os.path.abspath(args.work_dir),
             "siril_mode": args.siril_mode,
             "cfa": args.cfa,
             "output_norm": args.output_norm,
@@ -137,12 +138,13 @@ class Config:
         if hasattr(args, 'report'):
             updates["report"] = args.report
         if hasattr(args, 'input_dirs') and args.input_dirs is not None:
-            updates["input_dirs"] = args.input_dirs
+            # Convertir tous les répertoires d'entrée en chemins absolus
+            updates["input_dirs"] = [os.path.abspath(d) for d in args.input_dirs]
         
         # Add library path based on which script is being used
         if hasattr(args, 'dark_library_path'):
-            updates["dark_library_path"] = args.dark_library_path
+            updates["dark_library_path"] = os.path.abspath(args.dark_library_path)
         if hasattr(args, 'bias_library_path'):
-            updates["bias_library_path"] = args.bias_library_path
+            updates["bias_library_path"] = os.path.abspath(args.bias_library_path)
             
         self.update(**updates)
