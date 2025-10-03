@@ -24,6 +24,7 @@ class Config:
         "max_age_days": 182,
         "stack_method": "average",
         "temperature_precision": 0.2,
+        "min_darks_threshold": 0,
         "validate_darks": False,
         "report": False,
         "input_dirs": None
@@ -125,6 +126,10 @@ class Config:
         # Add temperature precision if available
         if hasattr(args, 'temperature_precision'):
             updates["temperature_precision"] = args.temperature_precision
+        
+        # Add min darks threshold if available
+        if hasattr(args, 'min_darks_threshold'):
+            updates["min_darks_threshold"] = args.min_darks_threshold
         
         # Add validation options if available
         if hasattr(args, 'validate_darks'):

@@ -44,6 +44,7 @@ class DarkLib:
         self.siril_stack_method = config.get("stack_method", "average")
         self.max_age_days = config.get("max_age_days", 182)
         self.temperature_precision = config.get("temperature_precision", 0.5)
+        self.min_darks_threshold = config.get("min_darks_threshold", 0)
         self.force_recalc = force_recalc
 
         # Structure pour collecter les données de validation et de traitement
@@ -203,17 +204,53 @@ class DarkLib:
                     f"Existing master dark for {group_key} has different stacking command. Replacing."
                 )
                 # Pas de 'return' ici pour permettre le remplacement
-            # Si même commande mais date plus récente ou identique, ignorer
-            elif latest_infoFile.date_obs() <= existing_master.date_obs():
-                logging.info(
-                    f"Master dark already exists and is newer or same date ({existing_master.date_obs().date()}). Update ignored."
-                )
-                return
-            # Même commande mais plus ancien, on remplace
             else:
-                logging.info(
-                    f"Existing master dark for {group_key} is older ({existing_master.date_obs().date()}). Overwriting with newer darks from {latest_infoFile.date_obs().date()}."
-                )
+                # Évaluation des critères de mise à jour
+                current_dark_count = len(fitsinfo_list)
+                existing_dark_count = existing_master.ndarks() if existing_master.ndarks() is not None else 0
+                
+                # Critère 1: Nombre de darks supérieur ou égal au seuil configuré
+                meets_threshold = current_dark_count >= self.min_darks_threshold
+                
+                # Critère 2: Nombre de darks supérieur à celui du master dark existant
+                more_darks_than_existing = current_dark_count > existing_dark_count
+                
+                # Critère 3: Date plus récente (critère obligatoire)
+                newer_date = latest_infoFile.date_obs() > existing_master.date_obs()
+                
+                # Décision de mise à jour: date plus récente ET au moins un critère de nombre satisfait
+                should_update = (meets_threshold or more_darks_than_existing) and newer_date
+                
+                if not should_update:
+                    if not newer_date:
+                        logging.info(
+                            f"Master dark for {group_key} kept unchanged: "
+                            f"current darks={current_dark_count}, existing darks={existing_dark_count}, "
+                            f"threshold={self.min_darks_threshold}, "
+                            f"existing date={existing_master.date_obs().date()}, "
+                            f"latest date={latest_infoFile.date_obs().date()}. "
+                            f"Date not newer."
+                        )
+                    else:
+                        logging.info(
+                            f"Master dark for {group_key} kept unchanged: "
+                            f"current darks={current_dark_count}, existing darks={existing_dark_count}, "
+                            f"threshold={self.min_darks_threshold}, "
+                            f"existing date={existing_master.date_obs().date()}, "
+                            f"latest date={latest_infoFile.date_obs().date()}. "
+                            f"Date is newer but no dark count criteria met."
+                        )
+                    return
+                else:
+                    reasons = []
+                    if meets_threshold:
+                        reasons.append(f"meets threshold ({current_dark_count} >= {self.min_darks_threshold})")
+                    if more_darks_than_existing:
+                        reasons.append(f"more darks than existing ({current_dark_count} > {existing_dark_count})")
+                    
+                    logging.info(
+                        f"Updating master dark for {group_key}: newer date ({latest_infoFile.date_obs().date()} > {existing_master.date_obs().date()}) and {', '.join(reasons)}."
+                    )
         elif existing_master and self.force_recalc:
             logging.info(
                 f"Force recalculation enabled: recreating master dark for {group_key}."

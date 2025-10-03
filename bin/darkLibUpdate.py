@@ -199,6 +199,13 @@ def main() -> None:
         help=f"Précision d'arrondi pour la température en degrés Celsius. (Défaut: {config.get('temperature_precision')}°C)"
     )
     parser.add_argument(
+        '-n', '--min-darks-threshold',
+        dest='min_darks_threshold',
+        type=int,
+        default=config.get("min_darks_threshold", 10),
+        help=f"Seuil minimum de darks pour mettre à jour un master dark existant. Un master dark sera remplacé si le nombre de darks disponibles dépasse ce seuil OU s'il dépasse le nombre de darks utilisés dans le master dark précédent. (Défaut: {config.get('min_darks_threshold', 0)})"
+    )
+    parser.add_argument(
         '-f', '--force-recalc',
         dest='force_recalc',
         action='store_true',
