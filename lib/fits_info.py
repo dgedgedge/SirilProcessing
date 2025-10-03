@@ -185,7 +185,7 @@ class FitsInfo:
         """
         return (self.xbinning_value, self.ybinning_value)
 
-    def group_key(self, temperature_precision: float = 0.2) -> str:
+    def group_key(self, temperature_precision: float = 0.5) -> str:
         """
         Retourne la clé de groupement pour cet objet FitsInfo sous forme de chaîne.
         Format: "TEMP_EXPTIME_GAIN_CAMERA_BINNING"
@@ -385,13 +385,50 @@ class FitsInfo:
                     'min': float(np.min(data)),
                     'max': float(np.max(data)),
                     'p10': float(np.percentile(data, 10)),
+                    'p25': float(np.percentile(data, 25)),
+                    'p75': float(np.percentile(data, 75)),
                     'p90': float(np.percentile(data, 90)),
                     'p95': float(np.percentile(data, 95)),
                     'p99': float(np.percentile(data, 99)),
                     'pixels_total': int(data.size)
                 }
                 
-                # Calculer le pourcentage de pixels "chauds" (> médiane + 5*std)
+                # Calculer la MAD (Median Absolute Deviation) - statistique robuste
+                mad = float(np.median(np.abs(data - stats['median'])))
+                stats['mad'] = mad
+                
+                # Calculer l'IQR (Interquartile Range) - autre mesure robuste de dispersion
+                iqr = stats['p75'] - stats['p25']
+                stats['iqr'] = float(iqr)
+                
+                # Calculer les ratios robustes pour validation
+                if stats['median'] > 0:
+                    stats['mad_ratio'] = float(mad / stats['median'])  # Bruit relatif robuste
+                    stats['central_dispersion'] = float((stats['p90'] - stats['p10']) / stats['median'])  # Dispersion centrale robuste
+                else:
+                    stats['mad_ratio'] = 0.0
+                    stats['central_dispersion'] = 0.0
+                
+                # Calculer le pourcentage de pixels "chauds" basé sur mean + n×std (méthode classique)
+                # Seuil : mean + 3×std (détection standard des outliers en traitement d'image)
+                hot_threshold_std = stats['mean'] + 3 * stats['std']
+                hot_pixels_std = np.sum(data > hot_threshold_std)
+                stats['hot_pixels_count_std'] = int(hot_pixels_std)
+                stats['hot_pixels_percent_std'] = float(hot_pixels_std / data.size * 100)
+                
+                # Alternative plus stricte : mean + 4×std  
+                hot_threshold_4std = stats['mean'] + 4 * stats['std']
+                hot_pixels_4std = np.sum(data > hot_threshold_4std)
+                stats['hot_pixels_count_4std'] = int(hot_pixels_4std)
+                stats['hot_pixels_percent_4std'] = float(hot_pixels_4std / data.size * 100)
+                
+                # Seuil basé sur IQR pour comparaison (méthode robuste alternative)
+                hot_threshold_iqr = stats['p75'] + 1.5 * iqr
+                hot_pixels_iqr = np.sum(data > hot_threshold_iqr)
+                stats['hot_pixels_count_iqr'] = int(hot_pixels_iqr)
+                stats['hot_pixels_percent_iqr'] = float(hot_pixels_iqr / data.size * 100)
+                
+                # Ancien calcul basé sur median + 5×std pour compatibilité
                 hot_threshold = stats['median'] + 5 * stats['std']
                 hot_pixels = np.sum(data > hot_threshold)
                 stats['hot_pixels_count'] = int(hot_pixels)
@@ -403,7 +440,7 @@ class FitsInfo:
             logging.error(f"Error analyzing image statistics for {self.filepath}: {e}")
             return None
 
-    def calculate_plane_regression(self, data: np.ndarray, sample_fraction: float = 0.1) -> dict:
+    def calculate_plane_regression(self, data: np.ndarray, sample_fraction: float = 0.3) -> dict:
         """
         Calcule une régression plane sur l'image pour détecter des gradients d'illumination.
         
@@ -478,17 +515,17 @@ class FitsInfo:
 
     def is_valid_dark(self, 
                      max_median_adu: float = 200.0,
-                     max_hot_pixels_percent: float = 0.01,
-                     max_std_factor: float = 0.5,
-                     max_gradient_adu_per_pixel: float = 0.1) -> tuple[bool, str]:
+                     max_hot_pixels_percent: float = 0.2,
+                     max_mad_factor: float = 0.15,  # MAD/median pour bruit relatif robuste
+                     max_central_dispersion: float = 0.4) -> tuple[bool, str]:  # (p90-p10)/median pour dispersion centrale
         """
         Vérifie si l'image est un dark valide (capot fermé) en analysant ses statistiques.
         
         Args:
             max_median_adu: Médiane maximale acceptable (ADU)
-            max_hot_pixels_percent: Pourcentage maximal de pixels chauds acceptables
-            max_std_factor: Facteur maximal acceptable pour std/median
-            max_gradient_adu_per_pixel: Gradient maximal acceptable (ADU/pixel)
+            max_hot_pixels_percent: Pourcentage maximal de pixels chauds acceptables (mean + 3×std)
+            max_mad_factor: Facteur maximal acceptable pour MAD/median (bruit relatif robuste)
+            max_central_dispersion: Facteur maximal pour (p90-p10)/median (dispersion centrale robuste)
             
         Returns:
             tuple: (is_valid, reason) - True si valide, sinon False avec raison
@@ -504,44 +541,21 @@ class FitsInfo:
         if stats['median'] > max_median_adu:
             return False, f"Median too high: {stats['median']:.1f} > {max_median_adu} ADU (probable light leak)"
             
-        # Test 2: Trop de pixels chauds (étoiles ou lumière)
-        if stats['hot_pixels_percent'] > max_hot_pixels_percent:
-            return False, f"Too many hot pixels: {stats['hot_pixels_percent']:.2f}% > {max_hot_pixels_percent}% (probable stars/light)"
+        # Test 2: Trop de pixels chauds (étoiles ou lumière) - utilise mean + 3×std
+        if stats['hot_pixels_percent_std'] > max_hot_pixels_percent:
+            return False, f"Too many hot pixels: {stats['hot_pixels_percent_std']:.2f}% > {max_hot_pixels_percent}% (probable stars/light)"
             
-        # Test 3: Écart-type trop important par rapport à la médiane
-        if stats['median'] > 0 and (stats['std'] / stats['median']) > max_std_factor:
-            std_ratio = stats['std'] / stats['median']
+        # Test 3: Bruit relatif robuste - MAD/median
+        if stats['median'] > 0 and stats['mad'] > 0:
+            mad_ratio = stats['mad'] / stats['median']
+            if mad_ratio > max_mad_factor:
+                return False, f"High relative noise: MAD/median = {mad_ratio:.3f} > {max_mad_factor} (non-uniform illumination or gradient)"
             
-            # Test 3b: Régression plane pour distinguer gradient vs bruit thermique
-            try:
-                with fits.open(self.filepath) as hdul:
-                    data = hdul[0].data
-                    if data is not None:
-                        data = data.astype(np.float64)
-                        regression = self.calculate_plane_regression(data)
-                        
-                        if regression is not None:
-                            gradient_magnitude = regression['gradient_magnitude']
-                            
-                            # Si le gradient est significatif, c'est probablement une illumination non-uniforme
-                            if gradient_magnitude > max_gradient_adu_per_pixel:
-                                return False, f"Standard deviation too high (std/median = {std_ratio:.2f}) with significant gradient ({gradient_magnitude:.3f} ADU/pixel > {max_gradient_adu_per_pixel}) - probable illumination gradient"
-                            else:
-                                # Gradient faible : probablement du bruit thermique normal, on accepte
-                                logging.info(f"High std/median ratio ({std_ratio:.2f}) but low gradient ({gradient_magnitude:.3f} ADU/pixel) - likely thermal noise, accepted")
-                        else:
-                            # Si on ne peut pas calculer la régression, on applique le test original
-                            return False, f"Standard deviation too high: std/median = {std_ratio:.2f} > {max_std_factor} (non-uniform illumination)"
-                            
-            except Exception as e:
-                logging.warning(f"Could not perform gradient analysis for {self.filepath}: {e}")
-                # En cas d'erreur, on applique le test original
-                return False, f"Standard deviation too high: std/median = {std_ratio:.2f} > {max_std_factor} (non-uniform illumination)"
-            
-        # Test 4: Valeurs max/p99 anormalement élevées
-        expected_max = stats['median'] + 10 * stats['std']
-        if stats['p99'] > expected_max:
-            return False, f"99th percentile too high: {stats['p99']:.1f} > {expected_max:.1f} ADU (bright spots detected)"
+        # Test 4: Dispersion centrale robuste - (p90-p10)/median
+        if stats['median'] > 0:
+            central_dispersion = (stats['p90'] - stats['p10']) / stats['median']
+            if central_dispersion > max_central_dispersion:
+                return False, f"High central dispersion: (p90-p10)/median = {central_dispersion:.3f} > {max_central_dispersion} (variable illumination)"
             
         return True, "Valid dark frame"
 

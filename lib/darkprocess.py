@@ -43,7 +43,7 @@ class DarkLib:
         self.siril_rejection_param2 = config.get("rejection_param2", 3.0)
         self.siril_stack_method = config.get("stack_method", "average")
         self.max_age_days = config.get("max_age_days", 182)
-        self.temperature_precision = config.get("temperature_precision", 0.2)
+        self.temperature_precision = config.get("temperature_precision", 0.5)
         self.force_recalc = force_recalc
 
         # Créer les répertoires nécessaires
@@ -425,8 +425,9 @@ cd {process_dir}
                     print(f"   Raison: {report['reason']}")
                     if report['statistics']:
                         stats = report['statistics']
-                        print(f"   Médiane: {stats['median']:.1f} ADU, Écart-type: {stats['std']:.1f}")
-                        print(f"   Pixels chauds: {stats['hot_pixels_percent']:.2f}%")
+                        print(f"   Médiane: {stats['median']:.1f} ADU, MAD: {stats['mad']:.1f}")
+                        print(f"   Pixels chauds (mean+3σ): {stats['hot_pixels_percent_std']:.2f}%")
+                        print(f"   MAD/median: {stats['mad_ratio']:.3f}, (p90-p10)/median: {stats['central_dispersion']:.3f}")
                     print()
         
         if valid_count > 0:
@@ -437,7 +438,8 @@ cd {process_dir}
                 print(f"✅ {filepath}")
                 if report['statistics']:
                     stats = report['statistics']
-                    print(f"   Médiane: {stats['median']:.1f} ADU, Écart-type: {stats['std']:.1f}")
+                    print(f"   Médiane: {stats['median']:.1f} ADU, MAD: {stats['mad']:.1f}")
+                    print(f"   MAD/median: {stats['mad_ratio']:.3f}, (p90-p10)/median: {stats['central_dispersion']:.3f}")
                 print()
         
         print("=== FIN DU RAPPORT ===\n")
