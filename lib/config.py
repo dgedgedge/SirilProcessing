@@ -113,16 +113,32 @@ class Config:
         # Mise à jour des valeurs à partir des arguments
         updates = {
             "siril_path": args.siril_path,
-            "work_dir": os.path.abspath(args.work_dir),
             "siril_mode": args.siril_mode,
-            "cfa": args.cfa,
-            "output_norm": args.output_norm,
-            "rejection_method": args.rejection_method,
-            "rejection_param1": args.rejection_param1,
-            "rejection_param2": args.rejection_param2,
-            "max_age_days": args.max_age,
-            "stack_method": args.stack_method
         }
+        
+        # Add work_dir if available
+        if hasattr(args, 'work_dir') and args.work_dir:
+            updates["work_dir"] = os.path.abspath(args.work_dir)
+        
+        # Add parameters for darkLibUpdate.py
+        if hasattr(args, 'cfa'):
+            updates["cfa"] = args.cfa
+        if hasattr(args, 'output_norm'):
+            updates["output_norm"] = args.output_norm
+        if hasattr(args, 'max_age'):
+            updates["max_age_days"] = args.max_age
+        
+        # Add rejection parameters
+        if hasattr(args, 'rejection_method'):
+            updates["rejection_method"] = args.rejection_method
+        if hasattr(args, 'rejection_param1'):
+            updates["rejection_param1"] = args.rejection_param1
+        if hasattr(args, 'rejection_param2'):
+            updates["rejection_param2"] = args.rejection_param2
+        
+        # Add stacking method
+        if hasattr(args, 'stack_method'):
+            updates["stack_method"] = args.stack_method
         
         # Add temperature precision if available
         if hasattr(args, 'temperature_precision'):
@@ -141,10 +157,10 @@ class Config:
             # Convertir tous les répertoires d'entrée en chemins absolus
             updates["input_dirs"] = [os.path.abspath(d) for d in args.input_dirs]
         
-        # Add library path based on which script is being used
-        if hasattr(args, 'dark_library_path'):
+        # Add library paths based on which script is being used
+        if hasattr(args, 'dark_library_path') and args.dark_library_path:
             updates["dark_library_path"] = os.path.abspath(args.dark_library_path)
-        if hasattr(args, 'bias_library_path'):
+        if hasattr(args, 'bias_library_path') and args.bias_library_path:
             updates["bias_library_path"] = os.path.abspath(args.bias_library_path)
             
         self.update(**updates)
