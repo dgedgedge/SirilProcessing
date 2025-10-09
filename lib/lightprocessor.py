@@ -12,8 +12,10 @@ import logging
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
 import glob
+import shutil
+import os
 from lib.fits_info import FitsInfo
-from lib.siril_utils import Sequence
+from lib.siril_utils import run_siril_script
 
 
 class LightProcessor:
@@ -237,6 +239,138 @@ class LightProcessor:
                        f"Binning={light_info.binning()}")
         return None
     
+    def _prepare_sequence(self, sequence_name: str, light_files: List[str]) -> bool:
+        """
+        Prépare une séquence en créant les liens symboliques.
+        
+        Args:
+            sequence_name: Nom de la séquence
+            light_files: Liste des chemins vers les fichiers light
+            
+        Returns:
+            True si la préparation a réussi, False sinon
+        """
+        sequence_dir = self.work_dir / sequence_name
+        
+        try:
+            # Créer le répertoire de la séquence
+            sequence_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Créer les liens symboliques avec la convention Siril
+            for i, file_path in enumerate(light_files):
+                source_path = Path(file_path).resolve()
+                if not source_path.exists():
+                    logging.error(f"Fichier source inexistant: {source_path}")
+                    return False
+                
+                # Nom du lien selon la convention Siril
+                link_name = f"{sequence_name}_{i:04d}.fit"
+                link_path = sequence_dir / link_name
+                
+                # Supprimer le lien existant s'il y en a un
+                if link_path.exists():
+                    link_path.unlink()
+                
+                # Créer le lien symbolique
+                link_path.symlink_to(source_path)
+                logging.debug(f"Lien créé: {link_path} -> {source_path}")
+            
+            logging.info(f"Séquence '{sequence_name}' préparée avec {len(light_files)} fichiers")
+            return True
+            
+        except Exception as e:
+            logging.error(f"Erreur lors de la préparation de la séquence {sequence_name}: {e}")
+            return False
+    
+    def _cleanup_sequence(self, sequence_name: str) -> None:
+        """
+        Nettoie les fichiers temporaires de la séquence.
+        
+        Args:
+            sequence_name: Nom de la séquence à nettoyer
+        """
+        sequence_dir = self.work_dir / sequence_name
+        if sequence_dir.exists():
+            try:
+                shutil.rmtree(sequence_dir)
+                logging.debug(f"Répertoire de séquence nettoyé: {sequence_dir}")
+            except Exception as e:
+                logging.warning(f"Erreur lors du nettoyage de {sequence_dir}: {e}")
+    
+    def _generate_siril_script(self, sequence_name: str, group_key: str, dark_path: str, stack_params: dict = None) -> str:
+        """
+        Génère le script Siril pour le traitement complet.
+        
+        Args:
+            sequence_name: Nom de la séquence
+            group_key: Clé du groupe pour le nom de fichier final
+            dark_path: Chemin vers le fichier master dark
+            stack_params: Paramètres de stacking
+            
+        Returns:
+            Contenu du script Siril
+        """
+        # Paramètres par défaut si non spécifiés
+        if stack_params is None:
+            stack_params = {
+                "method": "average",
+                "rejection": "sigma", 
+                "rejection_low": 3.0,
+                "rejection_high": 3.0
+            }
+        
+        # Construire la commande stack avec les paramètres de rejection
+        rejection_method = stack_params.get("rejection", "sigma")
+        rejection_low = stack_params.get("rejection_low", 3.0)
+        rejection_high = stack_params.get("rejection_high", 3.0)
+        
+        # Créer le répertoire de traitement
+        process_dir = self.work_dir / "process"
+        sequence_dir = self.work_dir / sequence_name
+        
+        # Nom de base du fichier de sortie basé sur le nom de session
+        session_basename = self.session_dir.name
+        
+        # Chemin vers les scripts Python
+        script_dir = Path(__file__).parent.parent / "bin"
+        pyecho_path = script_dir / "pyecho.py"
+        pydir_path = script_dir / "pydir.py"
+        
+        # Script Siril pour le traitement complet
+        script_content = f"""requires 1.2
+cd {sequence_dir}
+pyscript {pyecho_path} "====================================================================="
+pyscript {pyecho_path} "Convert Light Frames to .fit files"
+pyscript {pyecho_path} "Convert files to sequence."
+pyscript {pyecho_path} "cmd:========> convert {sequence_name} -out={process_dir}"
+convert {sequence_name} -out={process_dir}
+cd {process_dir}
+pyscript {pydir_path}
+pyscript {pyecho_path} "====================================================================="
+pyscript {pyecho_path} "Pre-process Light Frames (calibration with dark subtraction)"
+pyscript {pyecho_path} "cmd:========> calibrate {sequence_name} -dark={dark_path} -cc=dark -cfa -debayer"
+calibrate {sequence_name} -dark={dark_path} -cc=dark -cfa -debayer
+pyscript {pydir_path}
+
+pyscript {pyecho_path} "====================================================================="
+pyscript {pyecho_path} "Align lights"
+pyscript {pyecho_path} "cmd:========> register pp_{sequence_name}  -2pass -transf=homography"
+register pp_{sequence_name} -2pass -transf=homography
+seqapplyreg pp_{sequence_name} -filter-wfwhm=2k -filter-round=2k 
+pyscript {pydir_path}
+
+pyscript {pyecho_path} "====================================================================="
+pyscript {pyecho_path} "Stack calibrated lights to result.fit"
+pyscript {pyecho_path} "cmd:========> stack r_pp_{sequence_name} mean {rejection_method} {rejection_low} {rejection_high} -output_norm -out={self.output_dir}/{session_basename}_{group_key}_stacked"
+stack r_pp_{sequence_name} mean {rejection_method} {rejection_low} {rejection_high} -output_norm -out={self.output_dir}/{session_basename}_{group_key}_stacked
+cd {self.work_dir}
+pyscript {pydir_path}
+pyscript {pyecho_path} "====================================================================="
+
+close"""
+        
+        return script_content
+    
     def process_light_group(self, 
                            group_key: str, 
                            light_infos: List[FitsInfo],
@@ -273,16 +407,18 @@ class LightProcessor:
         # Nom de la séquence basé sur le group_key
         sequence_name = f"light_{group_key}"
         
-        # Répertoire de sortie pour ce groupe
-        group_output_dir = self.output_dir / group_key
-        if not self.dry_run:
-            group_output_dir.mkdir(parents=True, exist_ok=True)
+        # Nom de base du fichier de sortie basé sur le nom de session
+        session_basename = self.session_dir.name
         
         # Vérifier si le fichier de sortie existe déjà
-        final_output = group_output_dir / f"{sequence_name}_stacked.fit"
+        final_output = self.output_dir / f"{session_basename}_{group_key}_stacked.fits"
         if final_output.exists() and not self.force_reprocess:
             logging.info(f"Fichier de sortie existant, passage: {final_output}")
             return True
+        
+        # Créer le répertoire de sortie si nécessaire
+        if not self.dry_run:
+            self.output_dir.mkdir(parents=True, exist_ok=True)
         
         if self.dry_run:
             logging.info(f"[DRY-RUN] Traiterait {len(light_files)} lights avec dark {master_dark_path}")
@@ -290,47 +426,64 @@ class LightProcessor:
             
             # Générer et afficher le script Siril en mode dry-run
             try:
-                with Sequence(sequence_name, light_files, self.work_dir, str(self.session_dir)) as sequence:
-                    script_content = sequence._generate_siril_script(str(master_dark_path), stack_params)
-                    logging.info(f"[DRY-RUN] Script Siril qui serait généré:")
-                    for i, line in enumerate(script_content.split('\n'), 1):
-                        if line.strip():
-                            logging.info(f"[DRY-RUN]   {i:2d}: {line}")
+                script_content = self._generate_siril_script(sequence_name, group_key, str(master_dark_path), stack_params)
+                logging.info(f"[DRY-RUN] Script Siril qui serait généré:")
+                for i, line in enumerate(script_content.split('\n'), 1):
+                    if line.strip():
+                        logging.info(f"[DRY-RUN]   {i:2d}: {line}")
             except Exception as e:
                 logging.warning(f"[DRY-RUN] Impossible de générer le script Siril: {e}")
             
             return True
         
         try:
-            # Créer la séquence pour le traitement complet
-            with Sequence(sequence_name, light_files, self.work_dir, str(self.session_dir)) as sequence:
-                # Préparer la séquence (créer les liens symboliques)
-                if not sequence.prepare():
-                    logging.error(f"Échec de la préparation de la séquence {sequence_name}")
-                    return False
+            # Préparer la séquence (créer les liens symboliques)
+            if not self._prepare_sequence(sequence_name, light_files):
+                logging.error(f"Échec de la préparation de la séquence {sequence_name}")
+                return False
+            
+            try:
+                # Nettoyer le répertoire de traitement existant pour un démarrage propre
+                process_dir = self.work_dir / "process"
+                if process_dir.exists():
+                    try:
+                        shutil.rmtree(process_dir)
+                        logging.debug(f"Répertoire de traitement nettoyé: {process_dir}")
+                    except Exception as e:
+                        logging.warning(f"Impossible de nettoyer le répertoire de traitement {process_dir}: {e}")
+                        # Continuer quand même, les fichiers seront écrasés si possible
                 
-                # Effectuer le traitement complet (conversion, calibration, alignement, stacking)
-                if not sequence.convert_with_dark_subtraction(
-                    dark_path=str(master_dark_path),
-                    siril_path=self.siril_path,
-                    siril_mode=self.siril_mode,
-                    stack_params=stack_params
-                ):
+                # Créer le répertoire de traitement
+                process_dir.mkdir(parents=True, exist_ok=True)
+                
+                # Générer et exécuter le script Siril
+                script_content = self._generate_siril_script(sequence_name, group_key, str(master_dark_path), stack_params)
+                
+                logging.info(f"Executing complete light processing workflow for sequence {sequence_name}")
+                if stack_params:
+                    method = stack_params.get("method", "average")
+                    rejection = stack_params.get("rejection", "sigma")
+                    rejection_low = stack_params.get("rejection_low", 3.0)
+                    rejection_high = stack_params.get("rejection_high", 3.0)
+                    logging.info(f"Stack parameters: method={method}, rejection={rejection} {rejection_low} {rejection_high}")
+                
+                success = run_siril_script(script_content, str(self.work_dir), self.siril_path, self.siril_mode)
+                
+                if success:
+                    # Vérifier que le fichier final a été créé directement dans output_dir
+                    if final_output.exists():
+                        logging.info(f"Traitement complet réussi: {final_output}")
+                        return True
+                    else:
+                        logging.error(f"Fichier de résultat non trouvé: {final_output}")
+                        return False
+                else:
                     logging.error(f"Échec du traitement complet de la séquence {sequence_name}")
                     return False
-                
-                # Vérifier que le fichier final a été créé
-                expected_result = self.work_dir / f"{sequence_name}_stacked.fits"
-                if expected_result.exists():
-                    # Déplacer le résultat vers le répertoire de sortie final
-                    if expected_result != final_output:
-                        import shutil
-                        shutil.move(str(expected_result), str(final_output))
-                    logging.info(f"Traitement complet réussi: {final_output}")
-                    return True
-                else:
-                    logging.error(f"Fichier de résultat non trouvé: {expected_result}")
-                    return False
+            
+            finally:
+                # Nettoyer la séquence dans tous les cas
+                self._cleanup_sequence(sequence_name)
         
         except Exception as e:
             logging.error(f"Erreur lors du traitement du groupe '{group_key}': {e}")

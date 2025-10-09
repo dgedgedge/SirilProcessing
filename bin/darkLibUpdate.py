@@ -93,7 +93,7 @@ def main() -> None:
         dest='log_level',
         choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
         default='WARNING',
-        help="Niveau de journalisation"
+        help=f"Niveau de journalisation. (Défaut: 'WARNING')"
     )
     
     parser.add_argument(

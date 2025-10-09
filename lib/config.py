@@ -15,6 +15,7 @@ class Config:
         "dark_library_path": os.path.abspath(os.path.expanduser("~/darkLib")),
         "bias_library_path": os.path.abspath(os.path.expanduser("~/biasLib")),
         "work_dir": os.path.abspath(os.path.expanduser("~/tmp/sirilWorkDir")),
+        "output_dir": os.path.abspath(os.path.expanduser("~/SirilProcessed")),
         "siril_mode": "flatpak",
         "cfa": False,
         "output_norm": "noscale",
@@ -69,6 +70,8 @@ class Config:
                 self._config["bias_library_path"] = os.path.abspath(self._config["bias_library_path"])
             if "work_dir" in self._config:
                 self._config["work_dir"] = os.path.abspath(self._config["work_dir"])
+            if "output_dir" in self._config:
+                self._config["output_dir"] = os.path.abspath(self._config["output_dir"])
             
             with open(self.config_file, "w") as f:
                 json.dump(self._config, f, indent=2)
@@ -162,5 +165,7 @@ class Config:
             updates["dark_library_path"] = os.path.abspath(args.dark_library_path)
         if hasattr(args, 'bias_library_path') and args.bias_library_path:
             updates["bias_library_path"] = os.path.abspath(args.bias_library_path)
+        if hasattr(args, 'output_dir') and args.output_dir:
+            updates["output_dir"] = os.path.abspath(args.output_dir)
             
         self.update(**updates)
