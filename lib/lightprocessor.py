@@ -15,7 +15,7 @@ import glob
 import shutil
 import os
 from lib.fits_info import FitsInfo
-from lib.siril_utils import run_siril_script
+from lib.siril_utils import Siril
 
 
 class LightProcessor:
@@ -33,8 +33,6 @@ class LightProcessor:
                  output_dir: Path,
                  work_dir: Path,
                  temp_precision: float = 0.2,
-                 siril_path: str = "siril",
-                 siril_mode: str = "flatpak",
                  force_reprocess: bool = False,
                  dry_run: bool = False):
         """
@@ -46,8 +44,6 @@ class LightProcessor:
             output_dir: Répertoire de sortie pour les résultats
             work_dir: Répertoire de travail temporaire
             temp_precision: Précision de correspondance des températures
-            siril_path: Chemin vers l'exécutable Siril
-            siril_mode: Mode d'exécution de Siril
             force_reprocess: Force le retraitement même si les fichiers existent
             dry_run: Simule le traitement sans l'exécuter
         """
@@ -56,10 +52,11 @@ class LightProcessor:
         self.output_dir = Path(output_dir)
         self.work_dir = Path(work_dir)
         self.temp_precision = temp_precision
-        self.siril_path = siril_path
-        self.siril_mode = siril_mode
         self.force_reprocess = force_reprocess
         self.dry_run = dry_run
+        
+        # Initialisation de l'instance Siril avec la configuration par défaut
+        self.siril = Siril.create_with_defaults()
         
         # Validation des répertoires
         self._validate_directories()
@@ -87,6 +84,7 @@ class LightProcessor:
         
         if self.dark_library_path and not Path(self.dark_library_path).exists():
             raise ValueError(f"La librairie de darks n'existe pas: {self.dark_library_path}")
+    
     
     def find_light_files(self) -> List[Path]:
         """
@@ -467,7 +465,7 @@ close"""
                     rejection_high = stack_params.get("rejection_high", 3.0)
                     logging.info(f"Stack parameters: method={method}, rejection={rejection} {rejection_low} {rejection_high}")
                 
-                success = run_siril_script(script_content, str(self.work_dir), self.siril_path, self.siril_mode)
+                success = self.siril.run_siril_script(script_content, str(self.work_dir))
                 
                 if success:
                     # Vérifier que le fichier final a été créé directement dans output_dir

@@ -30,6 +30,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from lib.lightprocessor import LightProcessor
+from lib.siril_utils import Siril
 from lib.config import Config
 
 
@@ -217,6 +218,15 @@ def main():
     if not args.work_dir:
         args.work_dir = config.get("work_dir")
     
+    # Configuration globale de Siril
+    try:
+        Siril.configure_defaults(siril_path=args.siril_path, siril_mode=args.siril_mode)
+        logging.info(f"Configuration Siril validée: path={args.siril_path}, mode={args.siril_mode}")
+    except ValueError as e:
+        logging.error(f"Erreur de configuration Siril: {e}")
+        logging.error("Vérifiez que Siril est installé et accessible avec les paramètres spécifiés")
+        return 1
+    
     # Configuration des paramètres de stacking
     stack_params = {
         "method": args.stack_method,
@@ -243,8 +253,6 @@ def main():
                 output_dir=Path(args.output_dir),
                 work_dir=Path(args.work_dir),
                 temp_precision=args.temperature_precision,
-                siril_path=args.siril_path,
-                siril_mode=args.siril_mode,
                 force_reprocess=args.force_reprocess,
                 dry_run=args.dry_run
             )

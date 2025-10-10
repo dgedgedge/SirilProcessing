@@ -9,7 +9,7 @@ import shutil
 import logging
 
 from lib.fits_info import FitsInfo
-from lib.siril_utils import run_siril_script
+from lib.siril_utils import Siril
 
 
 
@@ -18,14 +18,12 @@ class DarkLib:
     Classe pour gérer une bibliothèque de master darks.
     Fournit des méthodes pour grouper, empiler et maintenir des master darks.
     """
-    def __init__(self, config, siril_path="siril", siril_mode="flatpak", force_recalc=False):
+    def __init__(self, config, force_recalc=False):
         """
         Initialise la bibliothèque de master darks avec les paramètres de configuration.
         
         Args:
             config: Configuration object
-            siril_path: Path to Siril executable
-            siril_mode: Siril execution mode
             force_recalc: Force recalculation of all master darks regardless of age
         """
 
@@ -34,8 +32,6 @@ class DarkLib:
         # Configuration
         self.dark_library_path = config.get("dark_library_path")
         self.work_dir = config.get("work_dir")
-        self.siril_path = siril_path
-        self.siril_mode = siril_mode
         self.siril_cfa = config.get("cfa", False)
         self.siril_output_norm = config.get("output_norm", "noscale")
         self.siril_rejection_method = config.get("rejection_method", "winsorizedsigma")
@@ -43,6 +39,9 @@ class DarkLib:
         self.siril_rejection_param2 = config.get("rejection_param2", 3.0)
         self.siril_stack_method = config.get("stack_method", "average")
         self.max_age_days = config.get("max_age_days", 182)
+        
+        # Initialisation de l'instance Siril avec la configuration par défaut
+        self.siril = Siril.create_with_defaults()
         self.temperature_precision = config.get("temperature_precision", 0.5)
         self.min_darks_threshold = config.get("min_darks_threshold", 0)
         self.force_recalc = force_recalc
@@ -57,7 +56,6 @@ class DarkLib:
         # Créer les répertoires nécessaires
         os.makedirs(self.dark_library_path, exist_ok=True)
         os.makedirs(self.work_dir, exist_ok=True)
-
 
     def group_dark_files(self, input_dirs: list[str], log_groups: bool = True, log_skipped: bool = False) -> dict[str, list[FitsInfo]]:
         """
@@ -315,7 +313,7 @@ convert dark -out={process_dir}
 cd {process_dir}
 {stack_line}
 """
-        if not run_siril_script(siril_script_content, process_dir, self.siril_path, self.siril_mode):
+        if not self.siril.run_siril_script(siril_script_content, process_dir):
             logging.error(f"Erreur critique : l'exécution du script Siril a échoué pour le groupe {group_key}. Le répertoire de travail est conservé pour inspection : {process_dir}")
             exit(1)
 

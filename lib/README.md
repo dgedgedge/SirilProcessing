@@ -21,7 +21,7 @@ Contains the `Config` class which manages configuration persistence. It provides
 
 ### siril_utils.py
 Contains utility functions for running Siril scripts. It provides:
-- `run_siril_script()`: Execute Siril scripts with support for different execution modes (native, flatpak, appimage)
+- `Siril`: Class for managing Siril execution with configuration validation and caching
 
 ### darkprocess.py
 Contains the `DarkLib` class which manages dark frame library operations. It provides methods to:
@@ -35,10 +35,18 @@ Contains the `DarkLib` class which manages dark frame library operations. It pro
 These modules are imported by the scripts in `bin/`:
 
 ```python
+```python
 from lib.fits_info import FitsInfo
 from lib.config import Config
-from lib.siril_utils import run_siril_script
+from lib.siril_utils import Siril
 from lib.darkprocess import DarkLib
+
+# Configure Siril globally
+Siril.configure_defaults(siril_path="/path/to/siril", siril_mode="native")
+
+# Create instance without Siril parameters
+darklib = DarkLib(config)
+```
 ```
 
 The `bin/darklibupdate.py` script uses the `DarkLib` class:

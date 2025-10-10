@@ -10,8 +10,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from lib.config import Config
 from lib.darkprocess import DarkLib
+from lib.siril_utils import Siril
 
-SIRIL_PATH = "siril"
 DARK_LIBRARY_PATH = os.path.expanduser("~/darkLib")  # Par défaut : ~/darkLib
 WORK_DIR = os.path.expanduser("~/tmp/sirilWorkDir")  # Ajout du workdir par défaut
 
@@ -22,15 +22,12 @@ SIRIL_CFA = False # By default, images are considered monochrome
 SIRIL_REJECTION_METHOD = "winsorizedsigma"
 SIRIL_REJECTION_PARAM1 = 3.0
 SIRIL_REJECTION_PARAM2 = 3.0
-SIRIL_MODE = "flatpak" # Default mode for Siril: flatpak
+# --- Global Variables ---
 MAX_AGE_DAYS = 182  # Période par défaut (6 mois)
 
 CONFIG_FILE = os.path.expanduser("~/.siril_darklib_config.json")
 
 def main() -> None:
-    # Seules les variables utilisées dans run_siril_script() doivent rester globales
-    global SIRIL_PATH, SIRIL_MODE
-
     config = Config()
 
     # Création du parser d'arguments
@@ -219,9 +216,17 @@ def main() -> None:
         config.set_from_args(args)
         config.save()
 
-    # Mise à jour des variables globales nécessaires au run_siril_script
-    SIRIL_PATH = config.get("siril_path")
-    SIRIL_MODE = args.siril_mode
+    # Configuration globale de Siril
+    siril_path = config.get("siril_path")
+    siril_mode = args.siril_mode
+    try:
+        Siril.configure_defaults(siril_path=siril_path, siril_mode=siril_mode)
+        logging.info(f"Configuration Siril validée: path={siril_path}, mode={siril_mode}")
+    except ValueError as e:
+        logging.error(f"Erreur de configuration Siril: {e}")
+        logging.error("Vérifiez que Siril est installé et accessible avec les paramètres spécifiés")
+        print(f"Erreur: {e}")
+        return 1
     
     # Ces variables peuvent être locales car elles ne sont utilisées que dans main()
     dark_library_path = os.path.abspath(config.get("dark_library_path"))
@@ -235,7 +240,7 @@ def main() -> None:
     os.makedirs(DARK_LIBRARY_PATH, exist_ok=True)
     
     # Créer l'instance DarkLib
-    darklib = DarkLib(config, SIRIL_PATH, SIRIL_MODE, force_recalc=args.force_recalc)
+    darklib = DarkLib(config, force_recalc=args.force_recalc)
     
 
     # Si l'option --list-darks est spécifiée, liste les master darks et termine
