@@ -1,12 +1,13 @@
 #!/bin/env python3
 """
-Script pour traiter automatiquement les images light.
+Script pour traiter automatiquement les images light avec option de mosaïque.
 
 Ce script :
 1. Analyse un ou plusieurs répertoires contenant des sous-répertoires 'light' et éventuellement 'flat'
 2. Détecte automatiquement les caractéristiques des images light
 3. Trouve le master dark correspondant dans la librairie
 4. Effectue le prétraitement (soustraction du dark) et le stacking
+5. Optionnellement, assemble les sessions en mosaïque
 
 Usage:
     python lightProcessor.py <répertoire_session> [options]
@@ -18,6 +19,12 @@ Exemples:
     
     # Traitement de plusieurs sessions en séquence
     python lightProcessor.py /path/to/session_M31 /path/to/session_M42 /path/to/session_NGC7000
+    
+    # Traitement avec création de mosaïque automatique
+    python lightProcessor.py /path/to/session_M31_nord /path/to/session_M31_sud --mosaic
+    
+    # Mosaïque avec nom personnalisé
+    python lightProcessor.py session1 session2 session3 --mosaic --mosaic-name "M31_complete"
 """
 
 import os
@@ -31,6 +38,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from lib.lightprocessor import LightProcessor
 from lib.siril_utils import Siril
+from lib.mosaic import Mosaic, calculate_common_basename
 from lib.config import Config
 
 
@@ -148,6 +156,21 @@ def main():
         help=f"Second paramètre de rejet pour Siril. (Défaut: {config.get('rejection_param2')})"
     )
     
+    # Arguments pour la mosaïque
+    parser.add_argument(
+        '--mosaic',
+        dest='create_mosaic',
+        action='store_true',
+        help="Créer une mosaïque après traitement de toutes les sessions"
+    )
+    
+    parser.add_argument(
+        '--mosaic-name',
+        dest='mosaic_name',
+        type=str,
+        help="Nom personnalisé pour la mosaïque (obligatoire si le nom automatique fait moins de 3 caractères)"
+    )
+    
     # Arguments de configuration
     parser.add_argument(
         '-S', '--save-config',
@@ -211,6 +234,22 @@ def main():
     
     logging.info(f"Validation réussie pour {len(session_dirs)} répertoires de session")
     
+    # Validation spécifique pour la mosaïque
+    if args.create_mosaic:
+        if len(session_dirs) < 2:
+            logging.error("La mosaïque nécessite au moins 2 sessions de traitement")
+            return 1
+        
+        # Vérifier le nom de la mosaïque si pas fourni explicitement
+        if not args.mosaic_name:
+            auto_name = calculate_common_basename(session_dirs)
+            if len(auto_name) < 3:
+                logging.error(f"Le nom automatique '{auto_name}' est trop court (< 3 caractères)")
+                logging.error("Veuillez spécifier un nom explicite avec --mosaic-name")
+                return 1
+        
+        logging.info(f"Mosaïque activée: {len(session_dirs)} sessions")
+    
     # Définition des répertoires par défaut
     if not args.output_dir:
         args.output_dir = config.get("output_dir")
@@ -239,6 +278,7 @@ def main():
     total_sessions = len(session_dirs)
     successful_sessions = 0
     failed_sessions = []
+    successful_processors = []  # Garder les références des processors réussis
     
     for i, session_dir in enumerate(session_dirs, 1):
         logging.info(f"{'='*60}")
@@ -283,6 +323,7 @@ def main():
             if success:
                 logging.info(f"✅ Session {session_dir} traitée avec succès")
                 successful_sessions += 1
+                successful_processors.append(processor)  # Sauvegarder le processor réussi
             else:
                 logging.error(f"❌ Échec du traitement de la session {session_dir}")
                 failed_sessions.append(session_dir)
@@ -310,8 +351,75 @@ def main():
         for failed_session in failed_sessions:
             logging.error(f"  - {failed_session}")
     
+    # Traitement de la mosaïque si demandé et si suffisamment de sessions ont réussi
+    if args.create_mosaic and successful_sessions >= 2:
+        logging.info(f"{'='*60}")
+        logging.info(f"CRÉATION DE LA MOSAÏQUE")
+        logging.info(f"{'='*60}")
+        
+        try:
+            # Filtrer les sessions qui ont réussi
+            successful_session_dirs = [session_dirs[i] for i, session_dir in enumerate(session_dirs) 
+                                     if session_dir not in failed_sessions]
+            
+            # Collecter tous les fichiers de sortie des processors réussis
+            all_output_files = []
+            for processor in successful_processors:
+                output_files = processor.get_output_files()
+                all_output_files.extend(output_files)
+                logging.info(f"Fichiers récupérés du processor {processor.session_dir.name}: {len(output_files)} fichiers")
+            
+            logging.info(f"Total des fichiers pour la mosaïque: {len(all_output_files)}")
+            for file in all_output_files:
+                logging.info(f"  - {file}")
+            
+            # Calculer le nom de la mosaïque
+            if args.mosaic_name:
+                mosaic_name = args.mosaic_name
+            else:
+                auto_name = calculate_common_basename(successful_session_dirs)
+                if len(auto_name) < 3:
+                    logging.error(f"Le nom automatique '{auto_name}' est trop court (< 3 caractères)")
+                    logging.error("Veuillez spécifier un nom explicite avec --mosaic-name")
+                    return 1
+                mosaic_name = auto_name
+            
+            # Créer l'instance de mosaïque avec les fichiers explicites
+            mosaic = Mosaic(
+                output_dir=Path(args.output_dir),
+                work_dir=Path(args.work_dir),
+                mosaic_name=mosaic_name,
+                input_files=all_output_files
+            )
+            
+            # Créer la mosaïque
+            if not args.dry_run:
+                mosaic_result = mosaic.create_mosaic()
+                if mosaic_result:
+                    logging.info(f"🌟 Mosaïque créée avec succès: {mosaic_result}")
+                else:
+                    logging.error("❌ Échec de la création de la mosaïque")
+                    
+                # Nettoyer les fichiers temporaires
+                mosaic.cleanup()
+            else:
+                logging.info("🔍 Mode simulation: mosaïque non créée")
+                
+        except Exception as e:
+            logging.error(f"Erreur lors de la création de la mosaïque: {e}")
+            if args.log_level == "DEBUG":
+                import traceback
+                traceback.print_exc()
+    
+    elif args.create_mosaic and successful_sessions < 2:
+        logging.warning("Mosaïque demandée mais moins de 2 sessions traitées avec succès")
+    
+    # Retour final
     if successful_sessions == total_sessions:
-        logging.info("🎉 Toutes les sessions ont été traitées avec succès")
+        if args.create_mosaic:
+            logging.info("🎉 Toutes les sessions traitées et mosaïque créée avec succès")
+        else:
+            logging.info("🎉 Toutes les sessions ont été traitées avec succès")
         return 0
     elif successful_sessions > 0:
         logging.warning(f"⚠️  Traitement partiel: {successful_sessions}/{total_sessions} sessions réussies")

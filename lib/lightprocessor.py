@@ -58,6 +58,9 @@ class LightProcessor:
         # Initialisation de l'instance Siril avec la configuration par défaut
         self.siril = Siril.create_with_defaults()
         
+        # Liste des fichiers de sortie créés durant le traitement
+        self.output_files = []
+        
         # Validation des répertoires
         self._validate_directories()
         
@@ -412,6 +415,8 @@ close"""
         final_output = self.output_dir / f"{session_basename}_{group_key}_stacked.fits"
         if final_output.exists() and not self.force_reprocess:
             logging.info(f"Fichier de sortie existant, passage: {final_output}")
+            # Enregistrer le fichier existant dans la liste des sorties
+            self.output_files.append(final_output)
             return True
         
         # Créer le répertoire de sortie si nécessaire
@@ -471,6 +476,8 @@ close"""
                     # Vérifier que le fichier final a été créé directement dans output_dir
                     if final_output.exists():
                         logging.info(f"Traitement complet réussi: {final_output}")
+                        # Enregistrer le fichier de sortie créé
+                        self.output_files.append(final_output)
                         return True
                     else:
                         logging.error(f"Fichier de résultat non trouvé: {final_output}")
@@ -537,3 +544,12 @@ close"""
         else:
             logging.error("Aucun groupe n'a pu être traité")
             return False
+    
+    def get_output_files(self) -> List[Path]:
+        """
+        Récupère la liste des fichiers de sortie créés pendant le traitement.
+        
+        Returns:
+            Liste des chemins vers les fichiers de sortie créés ou utilisés
+        """
+        return self.output_files.copy()  # Copie pour éviter les modifications externes
