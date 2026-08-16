@@ -190,6 +190,10 @@ pyscript {pyecho_path} "========================================================
 pyscript {pyecho_path} "============Empilement (mosaïque finale)..."
 pyscript {pyecho_path} "cmd:========> stack r_mosaic_ rej 3 3 -norm=addscale -output_norm -rgb_equal -maximize -overlap_norm -feather=5 -out={self.mosaic_name}_mosaic "
 stack r_mosaic_ rej 3 3 -norm=addscale -output_norm -rgb_equal -maximize -overlap_norm -feather=5 -out={self.mosaic_name}_mosaic 
+
+pyscript {pyecho_path} "====================================================================="
+
+
 pyscript {pyecho_path} "============Sauvegarde du résultat final"
 pyscript {pydir_path}
 

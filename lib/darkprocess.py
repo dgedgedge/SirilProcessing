@@ -44,6 +44,14 @@ class DarkLib:
         self.siril = Siril.create_with_defaults()
         self.temperature_precision = config.get("temperature_precision", 0.5)
         self.min_darks_threshold = config.get("min_darks_threshold", 0)
+        
+        # Paramètres de validation des darks
+        self.min_median_for_tests = config.get("min_median_for_tests", 10.0)
+        self.max_median_adu = config.get("max_median_adu", 200.0)
+        self.max_hot_pixels_percent = config.get("max_hot_pixels_percent", 0.2)
+        self.max_mad_factor = config.get("max_mad_factor", 0.15)
+        self.max_central_dispersion = config.get("max_central_dispersion", 0.4)
+        
         self.force_recalc = force_recalc
 
         # Structure pour collecter les données de validation et de traitement
@@ -264,7 +272,13 @@ class DarkLib:
             logging.info(f"Validating dark files for group {group_key} before stacking...")
             valid_files = []
             for info in fitsinfo_list:
-                is_valid, reason = info.is_valid_dark()
+                is_valid, reason = info.is_valid_dark(
+                    max_median_adu=self.max_median_adu,
+                    max_hot_pixels_percent=self.max_hot_pixels_percent,
+                    max_mad_factor=self.max_mad_factor,
+                    max_central_dispersion=self.max_central_dispersion,
+                    min_median_for_tests=self.min_median_for_tests
+                )
                 if not is_valid:
                     logging.warning(f"Invalid dark rejected: {info.filepath} - {reason}")
                     rejected_files.append({
@@ -280,6 +294,17 @@ class DarkLib:
             
             if len(valid_files) < 2:
                 logging.warning(f"Group {group_key} contains only {len(valid_files)} valid file(s) after validation. Stacking ignored (Siril requires at least 2).")
+                logging.warning(f"Files in group {group_key}:")
+                for info in fitsinfo_list:
+                    # Vérifier si ce fichier a été rejeté
+                    is_rejected = any(rf['filepath'] == info.filepath for rf in rejected_files)
+                    status = "❌ REJECTED" if is_rejected else "✅ VALID"
+                    logging.warning(f"  {status}: {info.filepath}")
+                    if is_rejected:
+                        # Afficher la raison du rejet
+                        reason = next((rf['reason'] for rf in rejected_files if rf['filepath'] == info.filepath), "Unknown")
+                        logging.warning(f"           Reason: {reason}")
+                
                 # Enregistrer les données même si le stacking est annulé
                 if rejected_files:
                     self.validation_data['rejected_files'][group_key] = rejected_files
@@ -453,6 +478,11 @@ cd {process_dir}
                 
                 if len(files) < 2:
                     logging.warning(f"Group {group_key} contains only {len(files)} file(s). Stacking ignored (Siril requires at least 2).")
+                    logging.warning(f"File(s) in group {group_key}:")
+                    for info in files:
+                        logging.warning(f"  - {info.filepath}")
+                        if info.date_obs():
+                            logging.warning(f"    Date: {info.date_obs().strftime('%Y-%m-%d %H:%M:%S')}")
                     continue
 
                 # Utiliser un sous-répertoire 'process' dans WORK_DIR pour le traitement Siril
@@ -487,8 +517,6 @@ cd {process_dir}
         
         if not updated_masters and not rejected_files:
             print("Aucun master dark mis à jour et aucun fichier rejeté.")
-            # Afficher quand même l'état de la bibliothèque
-            self._display_library_status()
             print("=== FIN DU RAPPORT ===\n")
             return
         

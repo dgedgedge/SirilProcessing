@@ -156,6 +156,16 @@ class Config:
             updates["validate_darks"] = args.validate_darks
         if hasattr(args, 'report'):
             updates["report"] = args.report
+        if hasattr(args, 'min_median_for_tests'):
+            updates["min_median_for_tests"] = args.min_median_for_tests
+        if hasattr(args, 'max_median_adu'):
+            updates["max_median_adu"] = args.max_median_adu
+        if hasattr(args, 'max_hot_pixels_percent'):
+            updates["max_hot_pixels_percent"] = args.max_hot_pixels_percent
+        if hasattr(args, 'max_mad_factor'):
+            updates["max_mad_factor"] = args.max_mad_factor
+        if hasattr(args, 'max_central_dispersion'):
+            updates["max_central_dispersion"] = args.max_central_dispersion
         if hasattr(args, 'input_dirs') and args.input_dirs is not None:
             # Convertir tous les répertoires d'entrée en chemins absolus
             updates["input_dirs"] = [os.path.abspath(d) for d in args.input_dirs]

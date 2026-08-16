@@ -517,7 +517,8 @@ class FitsInfo:
                      max_median_adu: float = 200.0,
                      max_hot_pixels_percent: float = 0.2,
                      max_mad_factor: float = 0.15,  # MAD/median pour bruit relatif robuste
-                     max_central_dispersion: float = 0.4) -> tuple[bool, str]:  # (p90-p10)/median pour dispersion centrale
+                     max_central_dispersion: float = 0.4,  # (p90-p10)/median pour dispersion centrale robuste
+                     min_median_for_tests: float = 10.0) -> tuple[bool, str]:  # Seuil minimal de médiane pour activer les tests robustes
         """
         Vérifie si l'image est un dark valide (capot fermé) en analysant ses statistiques.
         
@@ -526,6 +527,7 @@ class FitsInfo:
             max_hot_pixels_percent: Pourcentage maximal de pixels chauds acceptables (mean + 3×std)
             max_mad_factor: Facteur maximal acceptable pour MAD/median (bruit relatif robuste)
             max_central_dispersion: Facteur maximal pour (p90-p10)/median (dispersion centrale robuste)
+            min_median_for_tests: Seuil minimal de médiane au-dessus duquel les tests de robustesse sont effectués (défaut: 10.0 ADU)
             
         Returns:
             tuple: (is_valid, reason) - True si valide, sinon False avec raison
@@ -546,16 +548,16 @@ class FitsInfo:
             return False, f"Too many hot pixels: {stats['hot_pixels_percent_std']:.2f}% > {max_hot_pixels_percent}% (probable stars/light)"
             
         # Test 3: Bruit relatif robuste - MAD/median
-        if stats['median'] > 0 and stats['mad'] > 0:
+        if stats['median'] > min_median_for_tests and stats['mad'] > 0:
             mad_ratio = stats['mad'] / stats['median']
             if mad_ratio > max_mad_factor:
-                return False, f"High relative noise: MAD/median = {mad_ratio:.3f} > {max_mad_factor} (non-uniform illumination or gradient)"
+                return False, f"High relative noise: MAD/median ({stats['median']}) = {mad_ratio:.3f} > {max_mad_factor} (non-uniform illumination or gradient)"
             
         # Test 4: Dispersion centrale robuste - (p90-p10)/median
-        if stats['median'] > 0:
+        if stats['median'] > min_median_for_tests:
             central_dispersion = (stats['p90'] - stats['p10']) / stats['median']
             if central_dispersion > max_central_dispersion:
-                return False, f"High central dispersion: (p90-p10)/median = {central_dispersion:.3f} > {max_central_dispersion} (variable illumination)"
+                return False, f"High central dispersion: (p90-p10)/median ({stats['median']}) = {central_dispersion:.3f} > {max_central_dispersion} (variable illumination)"
             
         return True, "Valid dark frame"
 

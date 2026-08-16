@@ -198,7 +198,42 @@ def main() -> None:
         '--no-report',
         dest='report',
         action='store_false',
-        help="Désactive la génération du rapport de traitement."
+        help="Désactive la génération du rapport détaillé."
+    )
+    parser.add_argument(
+        '--min-median-for-tests',
+        dest='min_median_for_tests',
+        type=float,
+        default=10.0,
+        help="Seuil minimal de médiane (en ADU) au-dessus duquel les tests de robustesse (MAD/median et dispersion centrale) sont effectués lors de la validation des darks. (Défaut: 10.0 ADU)"
+    )
+    parser.add_argument(
+        '--max-median-adu',
+        dest='max_median_adu',
+        type=float,
+        default=200.0,
+        help="TEST 1: Médiane maximale acceptable (en ADU) pour un dark valide. Au-delà de ce seuil, le dark est rejeté car il contient probablement de la lumière parasite (capot mal fermé, pollution lumineuse). (Défaut: 200.0 ADU)"
+    )
+    parser.add_argument(
+        '--max-hot-pixels-percent',
+        dest='max_hot_pixels_percent',
+        type=float,
+        default=0.2,
+        help="TEST 2: Pourcentage maximal acceptable de pixels chauds (définis comme mean + 3×std). Au-delà de ce seuil, le dark est rejeté car il contient probablement des étoiles ou de la lumière. (Défaut: 0.2%%)"
+    )
+    parser.add_argument(
+        '--max-mad-factor',
+        dest='max_mad_factor',
+        type=float,
+        default=0.15,
+        help="TEST 3: Facteur maximal acceptable pour le ratio MAD/médiane (bruit relatif robuste). Ce test n'est effectué que si médiane > min_median_for_tests. Un ratio élevé indique une illumination non uniforme ou un gradient. (Défaut: 0.15)"
+    )
+    parser.add_argument(
+        '--max-central-dispersion',
+        dest='max_central_dispersion',
+        type=float,
+        default=0.4,
+        help="TEST 4: Dispersion centrale maximale acceptable, calculée comme (p90-p10)/médiane. Ce test n'est effectué que si médiane > min_median_for_tests. Une dispersion élevée indique une illumination variable. (Défaut: 0.4)"
     )
 
 
