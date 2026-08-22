@@ -20,6 +20,61 @@ A script to create and maintain a library of master dark frames. It groups dark 
 - **Temperature precision control** for grouping similar temperatures
 - **Interrupt handling** for clean cancellation with Ctrl+C
 
+### solarEclipseGif.py
+A script to build an animated GIF from monochrome solar eclipse FITS frames.
+
+Detailed documentation is available in
+[`docs/SOLAR_ECLIPSE_GIF.md`](docs/SOLAR_ECLIPSE_GIF.md).
+
+#### Features:
+- **Sky-background threshold calibration** from manual value or dark frames
+- **Full-sun session model** from selected full-sun frames or first nearly-full-sun frames
+- **Centering by detected solar circle** with mask-correlation fallback
+- **Optional NVIDIA/CUDA acceleration** for correlation steps when CuPy is available
+- **Fixed-size centered crops** with zero padding outside source boundaries
+- **Timestamp slotting** with at most 10 fps and stacking inside slots
+- **Full-sun debug panels** for calibration inspection
+- **Shift/centering debug panels** for mask and circle inspection
+
+#### Usage:
+```bash
+# With explicit full-sun and dark calibration frames
+bin/solarEclipseGif.sh \
+  --input-dir ~/Images/AstroDirect/sun/Light \
+  --full-sun-frames 1-10 \
+  --dark-calib-frames 180-190 \
+  --target-duration 30 \
+  --output ~/Images/AstroDirect/sun/eclipse.gif
+
+# With first nearly-full-sun frames as model source
+bin/solarEclipseGif.sh \
+  --input-dir ~/Images/AstroDirect/sun/Light \
+  --first-nearly-full-sun-frames 10 \
+  --target-duration 30 \
+  --output ~/Images/AstroDirect/sun/eclipse.gif
+
+# Full-sun model debug
+bin/solarEclipseGif.sh \
+  --input-dir ~/Images/AstroDirect/sun/Light \
+  --full-sun-frames 1-10 \
+  --debug-full-sun \
+  --output ~/Images/AstroDirect/sun/eclipse.gif
+```
+
+#### Useful options:
+- `--manual-seuil-fond-du-ciel`: Manual sky-background threshold
+- `--dark-calib-frames`: 1-based dark calibration selection
+- `--full-sun-frames`: 1-based full-sun model selection
+- `--first-nearly-full-sun-frames`: Fallback model frame count when no full-sun selection is provided
+- `--exclude-frames`: 1-based frames to exclude
+- `--debug-dir`: Debug output directory (default: `<input-dir>/debug`)
+- `--debug-full-sun`: Write full-sun model debug images
+- `--debug-shifts`: Write shift/centering debug images
+- `--debug-gif-frames`: Write the frames actually included in the GIF
+- `--debug-watershed`: Compute and show watershed contours in mask debug images
+- `--rotate-clockwise-deg`: Clockwise crop rotation
+- `--target-duration`: Target GIF duration in seconds
+
 ## Library
 
 The `lib/` directory contains shared modules used by both scripts:
@@ -37,6 +92,24 @@ pip install -r requirements.txt
 
 Main dependencies:
 - astropy: For FITS file handling
+
+## Documentation HTML
+
+Generate a browsable HTML copy of the Markdown documentation:
+
+```bash
+bin/generate_docs_html.py
+```
+
+The generated site is written to `generated_doc/`, which is ignored by git.
+Open `generated_doc/index.html` in a browser to browse it.
+
+The generator also writes `generated_doc/all_docs.html`, a single-page version
+suited for printing. If WeasyPrint is installed, a PDF can be generated with:
+
+```bash
+bin/generate_docs_html.py --pdf
+```
 
 ## Usage
 

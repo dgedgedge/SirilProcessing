@@ -1,16 +1,18 @@
 # Documentation Technique - SirilProcessing
 
-Ce répertoire contient la documentation technique détaillée du système de traitement des master darks.
+Ce répertoire contient la documentation technique détaillée des scripts de traitement.
 
 ## 📚 Guide d'orientation
 
 ### 📖 Pour les utilisateurs
 - **[`../GUIDE_COMPLET.md`](../GUIDE_COMPLET.md)** - Documentation principale et complète
 - **[`../README.md`](../README.md)** - Introduction générale du projet
+- **[`SOLAR_ECLIPSE_GIF.md`](SOLAR_ECLIPSE_GIF.md)** - GIF d'éclipse solaire et lecture des images de debug
 
 ### 🔧 Pour les développeurs et maintenance
 
 #### Fonctionnalités principales
+- **[`SOLAR_ECLIPSE_GIF.md`](SOLAR_ECLIPSE_GIF.md)** - Pipeline `solarEclipseGif.py`, modèle solaire et debug plein Soleil
 - **[`VALIDATION_OPTIMIZATION.md`](VALIDATION_OPTIMIZATION.md)** - Validation conditionnelle optimisée
 - **[`RAPPORT_OPTIMISE.md`](RAPPORT_OPTIMISE.md)** - Système de rapport intégré
 - **[`LINK_CREATION_OPTIMIZATION.md`](LINK_CREATION_OPTIMIZATION.md)** - Optimisation création liens symboliques
@@ -64,6 +66,7 @@ Interface Utilisateur
 
 | Document | Objectif | Audience |
 |----------|----------|----------|
+| `SOLAR_ECLIPSE_GIF.md` | GIF d'éclipse, pipeline de détection, images de debug | Utilisateurs avancés / Développeurs |
 | `VALIDATION_OPTIMIZATION.md` | Validation conditionnelle vs systématique | Développeurs |
 | `RAPPORT_OPTIMISE.md` | Rapport intégré vs séparé | Développeurs |
 | `LINK_CREATION_OPTIMIZATION.md` | Ordre création liens/validation | Développeurs |
