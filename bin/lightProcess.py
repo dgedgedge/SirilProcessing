@@ -16,6 +16,9 @@ Usage:
 Exemples:
     # Traitement d'une seule session
     python lightProcessor.py /path/to/session_M31 --dark-lib /path/to/dark_library
+
+    # Traitement sans utiliser de master dark
+    python lightProcessor.py /path/to/session_M31 --no-dark
     
     # Traitement de plusieurs sessions en séquence
     python lightProcessor.py /path/to/session_M31 /path/to/session_M42 /path/to/session_NGC7000
@@ -36,10 +39,11 @@ from pathlib import Path
 # Add the parent directory to the path to import the lib module
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from lib.lightprocessor import LightProcessor
-from lib.siril_utils import Siril
-from lib.mosaic import Mosaic, calculate_common_basename
 from lib.config import Config
+
+
+class HelpFormatter(argparse.ArgumentDefaultsHelpFormatter, argparse.RawDescriptionHelpFormatter):
+    """Formatter d'aide qui conserve les sauts de ligne et affiche les valeurs par défaut."""
 
 
 def setup_logging(log_level: str) -> None:
@@ -55,10 +59,31 @@ def setup_logging(log_level: str) -> None:
 
 def main():
     config = Config()
+
+    siril_pipeline_epilog = """
+Traitements Siril executes pour chaque groupe de lights:
+    1) convert <sequence_name> -out=<work_dir>/process
+    2) calibrate <sequence_name> -dark=<master_dark> -cc=dark -cfa -debayer
+         (ou calibrate <sequence_name> -cfa -debayer avec --no-dark)
+    3) register pp_<sequence_name> -2pass -transf=homography
+    4) seqapplyreg pp_<sequence_name> -filter-wfwhm=2k -filter-round=2k
+    5) stack r_pp_<sequence_name> mean <rejection> <low> <high> -output_norm -out=<result>
+
+Sorties:
+    - Un fichier FITS empile par groupe
+    - Un JPG de previsualisation genere automatiquement a partir du FITS
+
+Traitement Siril de mosaique (si --mosaic):
+    1) convert mosaic_ -out=<mosaic_output_dir>
+    2) seqplatesolve mosaic_ -force -nocache -disto=ps_distortion
+    3) seqapplyreg mosaic_ -framing=max
+    4) stack r_mosaic_ rej 3 3 -norm=addscale -output_norm -rgb_equal -maximize -overlap_norm -feather=5 -out=<mosaic_name>_mosaic
+"""
     
     parser = argparse.ArgumentParser(
         description="Traitement automatique des images light avec prétraitement et stacking",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+        formatter_class=HelpFormatter,
+        epilog=siril_pipeline_epilog
     )
     
     # Arguments positionnels
@@ -74,6 +99,13 @@ def main():
         dest="dark_library_path",
         default=config.get("dark_library_path"),
         help=f"Répertoire où sont stockés les master darks. (Défaut: '{config.get('dark_library_path')}')"
+    )
+
+    parser.add_argument(
+        '--no-dark',
+        dest='no_dark',
+        action='store_true',
+        help="Désactive l'utilisation des master darks (calibration sans soustraction de dark)"
     )
     
     parser.add_argument(
@@ -195,6 +227,11 @@ def main():
     )
     
     args = parser.parse_args()
+
+    # Imports différés pour permettre l'affichage de l'aide sans dépendances complètes.
+    from lib.lightprocessor import LightProcessor
+    from lib.siril_utils import Siril
+    from lib.mosaic import Mosaic, calculate_common_basename
     
     # Configuration du logging
     setup_logging(args.log_level)
@@ -273,6 +310,9 @@ def main():
         "rejection_low": args.rejection_param1,
         "rejection_high": args.rejection_param2
     }
+
+    if args.no_dark:
+        logging.warning("Mode sans dark activé: la soustraction de dark sera ignorée")
     
     # Traitement des images pour chaque répertoire de session
     total_sessions = len(session_dirs)
@@ -289,12 +329,13 @@ def main():
             # Création du processeur pour cette session
             processor = LightProcessor(
                 session_dir=session_dir,
-                dark_library_path=config.get("dark_library_path"),
+                dark_library_path=args.dark_library_path,
                 output_dir=Path(args.output_dir),
                 work_dir=Path(args.work_dir),
                 temp_precision=args.temperature_precision,
                 force_reprocess=args.force_reprocess,
-                dry_run=args.dry_run
+                dry_run=args.dry_run,
+                use_dark=not args.no_dark
             )
         except Exception as e:
             logging.error(f"Erreur lors de l'initialisation du processeur pour {session_dir}: {e}")

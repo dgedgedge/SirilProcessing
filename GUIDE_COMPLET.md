@@ -1,5 +1,16 @@
 # Guide Complet - darkLibUpdate.py
 
+## Sommaire rapide
+
+- [Vue d'ensemble](#vue-densemble)
+- [Options principales](#options-principales)
+- [Exemples d'utilisation](#exemples-dutilisation)
+- [Workflow recommandé](#workflow-recommandé)
+- [Options courtes (raccourcis)](#options-courtes-raccourcis)
+- [Configuration par défaut](#configuration-par-défaut)
+- [Codes de sortie](#codes-de-sortie)
+- [Annexe - lightProcess.py](#annexe---lightprocesspy)
+
 ## Vue d'ensemble
 
 `darkLibUpdate.py` est un outil complet pour créer et maintenir une bibliothèque de master darks pour Siril. Il automatise le regroupement, la validation, l'empilement et la gestion des fichiers dark frames avec des fonctionnalités avancées de validation et de rapport.
@@ -364,3 +375,43 @@ Le fichier `~/.siril_darklib_config.json` contient :
 - **1** : Erreur d'exécution
 
 Cette documentation couvre toutes les fonctionnalités avancées ajoutées au système de gestion des master darks ! 🎯
+
+---
+
+## Annexe - lightProcess.py
+
+Le script lightProcess.py traite automatiquement les sessions light (détection, calibration, alignement, empilement) et peut créer une mosaïque multi-sessions.
+
+### Utilisation rapide
+
+```bash
+# Traitement standard avec darks
+python3 bin/lightProcess.py /path/to/session_M31 --dark-lib /path/to/dark_library
+
+# Traitement sans dark
+python3 bin/lightProcess.py /path/to/session_M31 --no-dark
+
+# Traitement multi-sessions avec mosaïque
+python3 bin/lightProcess.py /path/to/session1 /path/to/session2 --mosaic
+```
+
+### Traitements Siril exécutés (par groupe light)
+
+1. `convert <sequence_name> -out=<work_dir>/process`
+2. `calibrate <sequence_name> -dark=<master_dark> -cc=dark -cfa -debayer`
+  - Avec `--no-dark` : `calibrate <sequence_name> -cfa -debayer`
+3. `register pp_<sequence_name> -2pass -transf=homography`
+4. `seqapplyreg pp_<sequence_name> -filter-wfwhm=2k -filter-round=2k`
+5. `stack r_pp_<sequence_name> mean <rejection> <low> <high> -output_norm -out=<result>`
+
+### Sorties générées
+
+- Un FITS empilé par groupe
+- Un JPG de prévisualisation généré automatiquement depuis chaque FITS
+
+### Traitements Siril mosaïque (option --mosaic)
+
+1. `convert mosaic_ -out=<mosaic_output_dir>`
+2. `seqplatesolve mosaic_ -force -nocache -disto=ps_distortion`
+3. `seqapplyreg mosaic_ -framing=max`
+4. `stack r_mosaic_ rej 3 3 -norm=addscale -output_norm -rgb_equal -maximize -overlap_norm -feather=5 -out=<mosaic_name>_mosaic`

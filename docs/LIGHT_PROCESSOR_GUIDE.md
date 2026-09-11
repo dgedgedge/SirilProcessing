@@ -31,12 +31,16 @@ python3 bin/lightProcessor.py /path/to/session_M31
 
 # Avec spécification de la librairie de darks
 python3 bin/lightProcessor.py /path/to/session_M31 --dark-lib /path/to/dark_library
+
+# Sans utilisation de master dark
+python3 bin/lightProcessor.py /path/to/session_M31 --no-dark
 ```
 
 ## Options principales
 
 ### Répertoires
 - `--dark-lib` : Chemin vers la librairie de master darks
+- `--no-dark` : Désactive l'utilisation des master darks pendant la calibration
 - `--output` : Répertoire de sortie (défaut: `session_dir/processed`)
 - `--work-dir` : Répertoire de travail temporaire (défaut: `session_dir/work`)
 
@@ -54,6 +58,28 @@ python3 bin/lightProcessor.py /path/to/session_M31 --dark-lib /path/to/dark_libr
 - `--rejection` : Méthode de rejet (`none`, `sigma`, `linear`, `winsor`, `percentile`)
 - `--rejection-low` : Seuil bas de rejet (défaut: 3.0)
 - `--rejection-high` : Seuil haut de rejet (défaut: 3.0)
+
+## Traitements Siril exécutés
+
+Pour chaque groupe d'images light, le script exécute cette séquence Siril :
+
+1. `convert <sequence_name> -out=<work_dir>/process`
+2. `calibrate <sequence_name> -dark=<master_dark> -cc=dark -cfa -debayer`
+   - Avec `--no-dark` : `calibrate <sequence_name> -cfa -debayer`
+3. `register pp_<sequence_name> -2pass -transf=homography`
+4. `seqapplyreg pp_<sequence_name> -filter-wfwhm=2k -filter-round=2k`
+5. `stack r_pp_<sequence_name> mean <rejection> <low> <high> -output_norm -out=<result>`
+
+En sortie, chaque groupe produit :
+- Un FITS empilé
+- Un JPG de prévisualisation généré automatiquement à partir du FITS
+
+Si `--mosaic` est activé, le script exécute ensuite pour la mosaïque :
+
+1. `convert mosaic_ -out=<mosaic_output_dir>`
+2. `seqplatesolve mosaic_ -force -nocache -disto=ps_distortion`
+3. `seqapplyreg mosaic_ -framing=max`
+4. `stack r_mosaic_ rej 3 3 -norm=addscale -output_norm -rgb_equal -maximize -overlap_norm -feather=5 -out=<mosaic_name>_mosaic`
 
 ## Exemples d'utilisation
 
@@ -95,12 +121,16 @@ Le script recherche automatiquement le master dark correspondant selon ces crit�
 session_directory/
 ├── processed/                         # Répertoire de sortie
 │   ├── Group1_T-10.0_E300_G100_B1x1/
-│   │   └── light_Group1_T-10.0_E300_G100_B1x1_stacked.fit
+│   │   ├── light_Group1_T-10.0_E300_G100_B1x1_stacked.fit
+│   │   └── light_Group1_T-10.0_E300_G100_B1x1_stacked.jpg
 │   └── Group2_T-10.2_E120_G100_B1x1/
-│       └── light_Group2_T-10.2_E120_G100_B1x1_stacked.fit
+│       ├── light_Group2_T-10.2_E120_G100_B1x1_stacked.fit
+│       └── light_Group2_T-10.2_E120_G100_B1x1_stacked.jpg
 └── work/                              # Répertoire de travail (temporaire)
     └── ...
 ```
+
+Le JPG est une prévisualisation auto-étirée pour lecture rapide.
 
 ## Gestion des erreurs
 
@@ -110,6 +140,7 @@ session_directory/
    - Vérifiez que votre session contient un sous-répertoire `light/`
 
 2. **"Aucun master dark correspondant trouvé"**
+   - Cette erreur ne s'applique pas si `--no-dark` est activé
    - Vérifiez que votre librairie de darks contient des masters avec les bonnes caractéristiques
    - Ajustez `--temp-precision` si nécessaire
 

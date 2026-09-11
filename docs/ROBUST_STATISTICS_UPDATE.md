@@ -35,7 +35,7 @@ hot_pixels_percent = 100 * np.sum(data > hot_threshold) / data.size
 - **Méthode classique** : standard en traitement d'image
 - **Sensible aux outliers** : détecte efficacement les pixels anormaux
 - **Usage spécifique** : comptage des étoiles, défauts capteur
-- **Seuil recommandé** : < 0.2%
+- **Seuil recommandé** : < 1.0%
 
 ## Modifications apportées
 
@@ -87,7 +87,7 @@ python3 bin/darkLibUpdate.py --validation-report --input-dirs /path/to/darks
 ```python
 is_valid, reason = fits_info.is_valid_dark(
     max_median_adu=200.0,               # Médiane max
-    max_hot_pixels_percent=0.2,         # % pixels chauds max (mean+3σ)
+    max_hot_pixels_percent=1.0,         # % pixels chauds max (mean+3σ)
     max_mad_factor=0.15,                # MAD/median max (bruit relatif)
     max_central_dispersion=0.4          # (p90-p10)/median max (dispersion centrale)
 )
@@ -100,7 +100,7 @@ is_valid, reason = fits_info.is_valid_dark(
 - **Détecte** : lumière parasite, capot mal fermé
 
 ### 2. Pixels chauds
-- **Critère** : `hot_pixels_percent_std ≤ 0.2%`
+- **Critère** : `hot_pixels_percent_std ≤ 1.0%`
 - **Méthode** : `mean + 3×std`
 - **Détecte** : étoiles, défauts capteur
 
@@ -123,7 +123,7 @@ is_valid, reason = fits_info.is_valid_dark(
 
 1. **Dark valide** : MAD/median=0.041, (p90-p10)/median=0.143 → ✅ Accepté
 2. **Dark gradient** : MAD/median=0.247 > 0.15 → ❌ Rejeté (illumination non-uniforme)
-3. **Dark pixels chauds** : 1.00% > 0.2% → ❌ Rejeté (probable étoiles)
+3. **Dark pixels chauds** : 1.20% > 1.0% → ❌ Rejeté (probable étoiles)
 4. **Dark p99 élevé** : Ancien Test 5 supprimé, autres tests suffisants → ✅ Validation cohérente
 
 La validation est maintenant **rapide, robuste et optimale**.

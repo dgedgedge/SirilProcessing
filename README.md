@@ -82,6 +82,45 @@ bin/solarEclipseGif.sh \
 - `--rotate-clockwise-deg`: Clockwise crop rotation
 - `--target-duration`: Target GIF duration in seconds
 
+### lightProcess.py
+A script to process light sessions automatically (grouping by metadata, calibration, registration, stacking), with optional mosaic creation for multiple sessions.
+
+Each stacked FITS result now also produces a JPG preview with the same basename.
+
+#### Quick usage:
+```bash
+# Standard processing with dark matching
+python3 bin/lightProcess.py /path/to/session_M31 --dark-lib /path/to/dark_library
+
+# Processing without using master darks
+python3 bin/lightProcess.py /path/to/session_M31 --no-dark
+```
+
+#### Key options:
+- `--dark-lib`: Path to the master dark library
+- `--no-dark`: Disable master dark usage for calibration
+- `--mosaic`: Build a mosaic after processing multiple sessions
+- `--mosaic-name`: Override auto-generated mosaic name
+- `--dry-run`: Simulate processing without running Siril
+
+#### Siril pipeline executed (per light group):
+1. `convert <sequence_name> -out=<work_dir>/process`
+2. `calibrate <sequence_name> -dark=<master_dark> -cc=dark -cfa -debayer`
+  - With `--no-dark`: `calibrate <sequence_name> -cfa -debayer`
+3. `register pp_<sequence_name> -2pass -transf=homography`
+4. `seqapplyreg pp_<sequence_name> -filter-wfwhm=2k -filter-round=2k`
+5. `stack r_pp_<sequence_name> mean <rejection> <low> <high> -output_norm -out=<result>`
+
+Outputs:
+- One stacked FITS result per group
+- One JPG preview generated from each stacked FITS
+
+#### Siril mosaic pipeline (with `--mosaic`):
+1. `convert mosaic_ -out=<mosaic_output_dir>`
+2. `seqplatesolve mosaic_ -force -nocache -disto=ps_distortion`
+3. `seqapplyreg mosaic_ -framing=max`
+4. `stack r_mosaic_ rej 3 3 -norm=addscale -output_norm -rgb_equal -maximize -overlap_norm -feather=5 -out=<mosaic_name>_mosaic`
+
 ## Library
 
 The `lib/` directory contains shared modules used by both scripts:

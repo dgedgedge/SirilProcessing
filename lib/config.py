@@ -28,6 +28,7 @@ class Config:
         "min_darks_threshold": 0,
         "validate_darks": False,
         "report": False,
+        "max_hot_pixels_percent": 1.0,
         "input_dirs": None
     }
     

@@ -48,7 +48,7 @@ class DarkLib:
         # Paramètres de validation des darks
         self.min_median_for_tests = config.get("min_median_for_tests", 10.0)
         self.max_median_adu = config.get("max_median_adu", 200.0)
-        self.max_hot_pixels_percent = config.get("max_hot_pixels_percent", 0.2)
+        self.max_hot_pixels_percent = config.get("max_hot_pixels_percent", 1.0)
         self.max_mad_factor = config.get("max_mad_factor", 0.15)
         self.max_central_dispersion = config.get("max_central_dispersion", 0.4)
         

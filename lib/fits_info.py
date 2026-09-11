@@ -515,7 +515,7 @@ class FitsInfo:
 
     def is_valid_dark(self, 
                      max_median_adu: float = 200.0,
-                     max_hot_pixels_percent: float = 0.2,
+                     max_hot_pixels_percent: float = 1.0,
                      max_mad_factor: float = 0.15,  # MAD/median pour bruit relatif robuste
                      max_central_dispersion: float = 0.4,  # (p90-p10)/median pour dispersion centrale robuste
                      min_median_for_tests: float = 10.0) -> tuple[bool, str]:  # Seuil minimal de médiane pour activer les tests robustes

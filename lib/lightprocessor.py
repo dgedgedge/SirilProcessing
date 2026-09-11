@@ -14,6 +14,9 @@ from typing import List, Dict, Optional, Tuple
 import glob
 import shutil
 import os
+import numpy as np
+from astropy.io import fits
+from PIL import Image
 from lib.fits_info import FitsInfo
 from lib.siril_utils import Siril
 
@@ -34,7 +37,8 @@ class LightProcessor:
                  work_dir: Path,
                  temp_precision: float = 0.2,
                  force_reprocess: bool = False,
-                 dry_run: bool = False):
+                 dry_run: bool = False,
+                 use_dark: bool = True):
         """
         Initialise le processeur de light.
         
@@ -46,6 +50,7 @@ class LightProcessor:
             temp_precision: Précision de correspondance des températures
             force_reprocess: Force le retraitement même si les fichiers existent
             dry_run: Simule le traitement sans l'exécuter
+            use_dark: Utilise les master darks pour la calibration si True
         """
         self.session_dir = Path(session_dir)
         self.dark_library_path = dark_library_path
@@ -54,6 +59,7 @@ class LightProcessor:
         self.temp_precision = temp_precision
         self.force_reprocess = force_reprocess
         self.dry_run = dry_run
+        self.use_dark = use_dark
         
         # Initialisation de l'instance Siril avec la configuration par défaut
         self.siril = Siril.create_with_defaults()
@@ -85,7 +91,7 @@ class LightProcessor:
         if not light_found:
             raise ValueError(f"Aucun répertoire 'light' ou 'Light' trouvé dans: {self.session_dir}")
         
-        if self.dark_library_path and not Path(self.dark_library_path).exists():
+        if self.use_dark and self.dark_library_path and not Path(self.dark_library_path).exists():
             raise ValueError(f"La librairie de darks n'existe pas: {self.dark_library_path}")
     
     
@@ -186,6 +192,10 @@ class LightProcessor:
         Returns:
             Chemin vers le master dark correspondant ou None si non trouvé
         """
+        if not self.use_dark:
+            logging.info("Mode sans dark: recherche de master dark ignorée")
+            return None
+
         if not self.dark_library_path:
             logging.warning("Aucune librairie de darks spécifiée")
             return None
@@ -297,15 +307,79 @@ class LightProcessor:
                 logging.debug(f"Répertoire de séquence nettoyé: {sequence_dir}")
             except Exception as e:
                 logging.warning(f"Erreur lors du nettoyage de {sequence_dir}: {e}")
+
+    def _normalize_to_uint8(self, data: np.ndarray) -> np.ndarray:
+        """Normalise un tableau d'image en uint8 avec un étirement robuste par percentiles."""
+        finite = np.isfinite(data)
+        if not finite.any():
+            return np.zeros(data.shape, dtype=np.uint8)
+
+        valid = data[finite]
+        low = np.percentile(valid, 1)
+        high = np.percentile(valid, 99)
+        if high <= low:
+            high = low + 1.0
+
+        scaled = (data - low) / (high - low)
+        scaled = np.clip(scaled, 0.0, 1.0)
+        scaled[~finite] = 0.0
+        return (scaled * 255.0).astype(np.uint8)
+
+    def _export_jpg_from_fits(self, fits_path: Path) -> Optional[Path]:
+        """Exporte un FITS en JPG (étirement simple) et retourne le chemin créé."""
+        try:
+            if not fits_path.exists():
+                logging.warning(f"Conversion JPG ignorée, FITS introuvable: {fits_path}")
+                return None
+
+            with fits.open(fits_path, memmap=False) as hdul:
+                image_data = None
+                for hdu in hdul:
+                    if hdu.data is not None:
+                        image_data = np.array(hdu.data, dtype=np.float64)
+                        break
+
+            if image_data is None:
+                logging.warning(f"Conversion JPG ignorée, aucune donnée image dans: {fits_path}")
+                return None
+
+            if image_data.ndim == 2:
+                img_u8 = self._normalize_to_uint8(image_data)
+                image = Image.fromarray(img_u8, mode="L")
+            elif image_data.ndim == 3:
+                if image_data.shape[0] in (3, 4) and image_data.shape[-1] not in (3, 4):
+                    image_data = np.transpose(image_data, (1, 2, 0))
+                if image_data.shape[-1] not in (3, 4):
+                    logging.warning(f"Conversion JPG ignorée, format 3D non supporté: {image_data.shape} ({fits_path})")
+                    return None
+
+                if image_data.shape[-1] == 4:
+                    image_data = image_data[..., :3]
+
+                channels = [self._normalize_to_uint8(image_data[..., i]) for i in range(3)]
+                rgb_u8 = np.stack(channels, axis=-1)
+                image = Image.fromarray(rgb_u8, mode="RGB")
+            else:
+                logging.warning(f"Conversion JPG ignorée, dimension non supportée: {image_data.ndim} ({fits_path})")
+                return None
+
+            jpg_path = fits_path.with_suffix(".jpg")
+            image.save(jpg_path, format="JPEG", quality=95)
+            logging.info(f"JPG exporté: {jpg_path}")
+            return jpg_path
+
+        except Exception as e:
+            logging.warning(f"Impossible d'exporter le JPG depuis {fits_path}: {e}")
+            return None
     
-    def _generate_siril_script(self, sequence_name: str, group_key: str, dark_path: str, stack_params: dict = None) -> str:
+    def _generate_siril_script(self, sequence_name: str, group_key: str, dark_path: Optional[str], stack_params: dict = None) -> str:
         """
         Génère le script Siril pour le traitement complet.
         
         Args:
             sequence_name: Nom de la séquence
             group_key: Clé du groupe pour le nom de fichier final
-            dark_path: Chemin vers le fichier master dark
+            dark_path: Chemin vers le fichier master dark (None en mode sans dark)
             stack_params: Paramètres de stacking
             
         Returns:
@@ -336,6 +410,17 @@ class LightProcessor:
         script_dir = Path(__file__).parent.parent / "bin"
         pyecho_path = script_dir / "pyecho.py"
         pydir_path = script_dir / "pydir.py"
+
+        if self.use_dark:
+            if not dark_path:
+                raise ValueError("dark_path est requis quand use_dark est activé")
+            preprocess_title = "Pre-process Light Frames (calibration with dark subtraction)"
+            preprocess_message = f"cmd:========> calibrate {sequence_name} -dark={dark_path} -cc=dark -cfa -debayer"
+            preprocess_command = f"calibrate {sequence_name} -dark={dark_path} -cc=dark -cfa -debayer"
+        else:
+            preprocess_title = "Pre-process Light Frames (calibration without dark subtraction)"
+            preprocess_message = f"cmd:========> calibrate {sequence_name} -cfa -debayer"
+            preprocess_command = f"calibrate {sequence_name} -cfa -debayer"
         
         # Script Siril pour le traitement complet
         script_content = f"""requires 1.2
@@ -348,9 +433,9 @@ convert {sequence_name} -out={process_dir}
 cd {process_dir}
 pyscript {pydir_path}
 pyscript {pyecho_path} "====================================================================="
-pyscript {pyecho_path} "Pre-process Light Frames (calibration with dark subtraction)"
-pyscript {pyecho_path} "cmd:========> calibrate {sequence_name} -dark={dark_path} -cc=dark -cfa -debayer"
-calibrate {sequence_name} -dark={dark_path} -cc=dark -cfa -debayer
+pyscript {pyecho_path} "{preprocess_title}"
+pyscript {pyecho_path} "{preprocess_message}"
+{preprocess_command}
 pyscript {pydir_path}
 
 pyscript {pyecho_path} "====================================================================="
@@ -396,11 +481,13 @@ close"""
         # Prendre le premier light comme référence pour les caractéristiques
         reference_light = light_infos[0]
         
-        # Chercher le master dark correspondant
-        master_dark_path = self.find_matching_master_dark(reference_light)
-        if not master_dark_path:
-            logging.error(f"Impossible de traiter le groupe '{group_key}': aucun master dark correspondant")
-            return False
+        master_dark_path = None
+        if self.use_dark:
+            # Chercher le master dark correspondant
+            master_dark_path = self.find_matching_master_dark(reference_light)
+            if not master_dark_path:
+                logging.error(f"Impossible de traiter le groupe '{group_key}': aucun master dark correspondant")
+                return False
         
         # Préparer les chemins de fichiers
         light_files = [Path(info.filepath) for info in light_infos]
@@ -412,11 +499,21 @@ close"""
         session_basename = self.session_dir.name
         
         # Vérifier si le fichier de sortie existe déjà
-        final_output = self.output_dir / f"{session_basename}_{group_key}_stacked.fits"
-        if final_output.exists() and not self.force_reprocess:
-            logging.info(f"Fichier de sortie existant, passage: {final_output}")
+        preferred_final_output = self.output_dir / f"{session_basename}_{group_key}_stacked.fits"
+        alternate_final_output = self.output_dir / f"{session_basename}_{group_key}_stacked.fit"
+
+        existing_output = None
+        if preferred_final_output.exists():
+            existing_output = preferred_final_output
+        elif alternate_final_output.exists():
+            existing_output = alternate_final_output
+
+        if existing_output and not self.force_reprocess:
+            logging.info(f"Fichier de sortie existant, passage: {existing_output}")
             # Enregistrer le fichier existant dans la liste des sorties
-            self.output_files.append(final_output)
+            self.output_files.append(existing_output)
+            if not self.dry_run:
+                self._export_jpg_from_fits(existing_output)
             return True
         
         # Créer le répertoire de sortie si nécessaire
@@ -424,8 +521,12 @@ close"""
             self.output_dir.mkdir(parents=True, exist_ok=True)
         
         if self.dry_run:
-            logging.info(f"[DRY-RUN] Traiterait {len(light_files)} lights avec dark {master_dark_path}")
-            logging.info(f"[DRY-RUN] Sortie: {final_output}")
+            if self.use_dark:
+                logging.info(f"[DRY-RUN] Traiterait {len(light_files)} lights avec dark {master_dark_path}")
+            else:
+                logging.info(f"[DRY-RUN] Traiterait {len(light_files)} lights sans dark")
+            logging.info(f"[DRY-RUN] Sortie FITS attendue: {preferred_final_output} (ou {alternate_final_output})")
+            logging.info(f"[DRY-RUN] Sortie JPG attendue: {preferred_final_output.with_suffix('.jpg')}")
             
             # Générer et afficher le script Siril en mode dry-run
             try:
@@ -474,13 +575,22 @@ close"""
                 
                 if success:
                     # Vérifier que le fichier final a été créé directement dans output_dir
-                    if final_output.exists():
+                    final_output = None
+                    if preferred_final_output.exists():
+                        final_output = preferred_final_output
+                    elif alternate_final_output.exists():
+                        final_output = alternate_final_output
+
+                    if final_output is not None:
                         logging.info(f"Traitement complet réussi: {final_output}")
                         # Enregistrer le fichier de sortie créé
                         self.output_files.append(final_output)
+                        self._export_jpg_from_fits(final_output)
                         return True
                     else:
-                        logging.error(f"Fichier de résultat non trouvé: {final_output}")
+                        logging.error(
+                            f"Fichier de résultat non trouvé: {preferred_final_output} ou {alternate_final_output}"
+                        )
                         return False
                 else:
                     logging.error(f"Échec du traitement complet de la séquence {sequence_name}")

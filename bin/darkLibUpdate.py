@@ -218,8 +218,8 @@ def main() -> None:
         '--max-hot-pixels-percent',
         dest='max_hot_pixels_percent',
         type=float,
-        default=0.2,
-        help="TEST 2: Pourcentage maximal acceptable de pixels chauds (définis comme mean + 3×std). Au-delà de ce seuil, le dark est rejeté car il contient probablement des étoiles ou de la lumière. (Défaut: 0.2%%)"
+        default=1.0,
+        help="TEST 2: Pourcentage maximal acceptable de pixels chauds (définis comme mean + 3×std). Au-delà de ce seuil, le dark est rejeté car il contient probablement des étoiles ou de la lumière. (Défaut: 1.0%%)"
     )
     parser.add_argument(
         '--max-mad-factor',
