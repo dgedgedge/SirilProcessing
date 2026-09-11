@@ -24,6 +24,13 @@ Options from docs/SOLAR_ECLIPSE_GIF.md:
   --debug-shifts
   --debug-gif-frames
   --debug-watershed
+  --debug-luminosity
+  --background-outside-mask-scale NUMBER
+  --background-mask-dilate-fraction NUMBER
+  --background-s-curve-sigma NUMBER
+  --background-s-curve-target-fraction NUMBER
+  --enable-background-filter
+  --disable-background-filter
   --rotate-clockwise-deg DEG
   --target-duration SECONDS
   --output PATH

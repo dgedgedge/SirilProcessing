@@ -72,6 +72,13 @@ bin/solarEclipseGif.sh \
 - `--debug-shifts`: Write shift/centering debug images
 - `--debug-gif-frames`: Write the frames actually included in the GIF
 - `--debug-watershed`: Compute and show watershed contours in mask debug images
+- `--debug-luminosity`: Write before/after luminosity-normalization debug images
+- `--background-outside-mask-scale`: Attenuation factor for background outside the dilated solar mask
+- `--background-mask-dilate-fraction`: Relative dilation applied before background attenuation
+- `--background-s-curve-sigma`: Sky sigma threshold used by the background S-curve
+- `--background-s-curve-target-fraction`: Target low sky level for the background S-curve
+- `--enable-background-filter`: Enable selective background attenuation
+- `--disable-background-filter`: Disable selective background attenuation
 - `--rotate-clockwise-deg`: Clockwise crop rotation
 - `--target-duration`: Target GIF duration in seconds
 

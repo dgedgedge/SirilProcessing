@@ -27,6 +27,21 @@ Les parametres sont :
   effectivement incluses dans le GIF final.
 - `--debug-watershed` : calcule et affiche le watershed dans les images de
   debug de `MasqueSolairePrincipal`. Par defaut, le watershed n'est pas calcule.
+- `--debug-luminosity` : cree et alimente le repertoire de debug de la
+  normalisation de luminosite avant/apres correction.
+- `--background-outside-mask-scale` : facteur applique au signal hors masque
+  solaire dilate avant la courbe en S. `1` conserve le fond pour laisser la
+  courbe en S travailler, `0` ramene d'abord le fond au niveau du ciel.
+- `--background-mask-dilate-fraction` : dilatation relative du masque solaire
+  courant avant attenuation du fond hors masque.
+- `--background-s-curve-sigma` : nombre d'ecarts-types du fond utilise pour
+  definir le seuil bas de la courbe en S du filtre de fond.
+- `--background-s-curve-target-fraction` : niveau relatif vise pour le fond
+  apres courbe en S, en fraction du contraste solaire courant.
+- `--enable-background-filter` : active explicitement le filtrage selectif du
+  fond hors masque solaire. Par defaut, ce filtrage est desactive.
+- `--disable-background-filter` : desactive completement le filtrage selectif du
+  fond hors masque solaire.
 - `--rotate-clockwise-deg`.
 - `--target-duration`.
 - `--output`.
@@ -67,7 +82,8 @@ Le nettoyage est limite aux sorties connues du script :
 - `<debug-dir>/full_sun_frames/` et `<debug-dir>/full_sun_model.png` si
   `--debug-full-sun` est actif ;
 - `<debug-dir>/shifts/` si `--debug-shifts` est actif ;
-- `<debug-dir>/gif_frames/` si `--debug-gif-frames` est actif.
+- `<debug-dir>/gif_frames/` si `--debug-gif-frames` est actif ;
+- `<debug-dir>/luminosity/` si `--debug-luminosity` est actif.
 
 Le repertoire `--debug-dir` lui-meme n'est pas supprime.
 
@@ -291,6 +307,9 @@ Pour chaque image :
 5. Decouper l'image selon un carre centre sur le centre retenu, de cote
    `taille_cote_image`.
 6. Si le decoupage sort de l'image a decouper, remplir avec des zeros.
+7. Mesurer la luminosite solaire de l'image recadree dans le disque solaire,
+   puis appliquer une normalisation multiplicative pour que cette luminosite
+   corresponde a celle du modele solaire de reference.
 
 La premiere image du film initialise le centre precedent avec le centre renvoye
 par `MasqueSolairePrincipal`, meme si son rayon n'est pas coherent avec
@@ -309,6 +328,110 @@ Quand `--debug-shifts` est actif, les images de debug produites sont les sorties
 standard de `MasqueSolairePrincipal` pour chaque image analysee. Les valeurs de
 centre retenu, rayon mesure, rayon de reference et methode utilisee sont
 journalisees dans les logs.
+
+###### 1.3.3. Normalisation De Luminosite
+
+La luminosite du modele solaire de session est consideree comme la reference,
+mais elle ne doit pas etre mesuree globalement sur tout le disque du modele.
+Apres decoupage/recadrage et avant le groupement des images GIF, chaque crop est
+corrige par multiplication.
+
+Pour chaque image courante, le masque solaire principal calcule sur l'image
+brute est recadre et tourne avec exactement les memes parametres que l'image.
+Ce masque courant recadre definit la zone solaire visible a utiliser pour la
+normalisation.
+
+La mesure de luminosite doit etre faite avec ce masque courant, et non sur toute
+l'image recadree. Le meme masque courant est applique :
+
+- a l'image courante recadree, pour mesurer la luminosite a corriger ;
+- a l'image du modele solaire de reference, pour mesurer la luminosite de
+  reference sur la meme portion solaire visible.
+
+Pour eviter que le fond du ciel, les zeros de padding ou les pixels hors Soleil
+ne biaisent la mesure, seuls les pixels masques strictement superieurs a
+`Seuil_fond_du_ciel` sont utilises. Si trop peu de pixels sont disponibles, le
+calcul revient a l'ensemble des pixels du masque courant.
+
+Pour chaque image, le script calcule :
+
+- la moyenne des pixels utiles du masque courant ;
+- la mediane des pixels utiles du masque courant ;
+- la moyenne et la mediane de reference mesurees sur le modele solaire avec ce
+  meme masque courant ;
+- le facteur multiplicatif :
+
+```text
+facteur_luminosite = mediane_reference / mediane_image
+```
+
+La correction appliquee est :
+
+```text
+image_corrigee = image_recadree * facteur_luminosite
+```
+
+Apres cette correction de luminosite, un filtrage selectif optionnel du fond
+peut etre applique sur la base du masque courant. Ce filtrage est desactive par
+defaut, car un masque imparfait peut creer une decoupe visible et artificielle
+dans le fond du ciel. Il ne doit etre applique que si `--enable-background-filter`
+est actif.
+
+Quand il est actif, le masque courant est dilate pour conserver une marge autour
+du Soleil. Le filtre applique d'abord une attenuation du signal hors masque
+dilate selon :
+
+```text
+pixel_filtre = Seuil_fond_du_ciel
+             + (pixel_corrige - Seuil_fond_du_ciel)
+               * background_outside_mask_scale
+```
+
+Avec la valeur par defaut `background_outside_mask_scale=1`, l'attenuation dure
+hors masque est neutre et la reduction du fond repose sur la courbe en S. Avec
+`0`, le fond hors masque dilate est ramene au niveau du fond du ciel avant la
+courbe, ce qui peut produire une decoupe visible si le masque est imparfait.
+Ce filtrage a pour objectif d'experimenter une reduction du bruit de fond, mais
+il ne fait pas partie du chemin standard.
+
+Ensuite, une courbe en S est calculee par image a partir de l'histogramme du
+fond hors masque dilate. Le fond est caracterise par sa moyenne et son ecart
+type. Le seuil bas de la courbe vaut :
+
+```text
+s_low = moyenne_fond + background_s_curve_sigma * ecart_type_fond
+```
+
+Le seuil haut vaut la mediane de la zone protegee. La courbe en S utilise un
+smoothstep entre `s_low` et `s_high`, puis ramene progressivement les faibles
+niveaux vers un niveau cible proche du fond :
+
+```text
+fond_cible = Seuil_fond_du_ciel
+           + background_s_curve_target_fraction
+             * (s_high - Seuil_fond_du_ciel)
+```
+
+La zone protegee par le masque dilate est restauree apres application de la
+courbe, afin de ne pas modifier directement la surface solaire conservee.
+
+Si `--disable-background-filter` est actif, cette etape est ignoree meme si
+`--enable-background-filter` est aussi fourni. Quand le filtre est inactif,
+l'image apres normalisation de luminosite est transmise telle quelle aux etapes
+suivantes.
+
+Les logs doivent afficher, pour chaque image, la moyenne, la mediane, la mediane
+de reference, le nombre de pixels du masque courant, le facteur applique, la
+moyenne et la mediane apres correction, le facteur d'attenuation hors masque, et
+le nombre de pixels proteges / attenues, ainsi que les statistiques du fond et
+les seuils de la courbe en S.
+
+Si `--debug-luminosity` est actif, le script ecrit dans
+`<debug-dir>/luminosity/` une image avant/apres correction pour chaque crop. Le
+debug contient trois panneaux : avant correction, apres normalisation de
+luminosite, puis apres filtrage du fond. Les informations de frame, exposition,
+gain, luminosites mesurees, facteur applique et attenuation hors masque sont
+affichees sous forme texte.
 
 ##### 1.4. Nombre D'Images GIF
 
@@ -359,7 +482,9 @@ flowchart TD
     K --> L
     R --> L
     L --> M["Rotation optionnelle"]
-    M --> N["Slots temporels max 10 fps"]
+    M --> T["Normalisation luminosite<br/>sur masque courant"]
+    T --> U["Filtrage fond<br/>hors masque dilate"]
+    U --> N["Slots temporels max 10 fps"]
     N --> O["Stacking par slot"]
     O --> P["Normalisation globale"]
     P --> Q["Ecriture GIF"]
@@ -410,6 +535,8 @@ bin/solarEclipseGif.sh \
   `--debug-shifts`.
 - `<debug-dir>/gif_frames/*.png` : images effectivement incluses dans le GIF,
   seulement avec `--debug-gif-frames`.
+- `<debug-dir>/luminosity/*.png` : images avant/apres normalisation de
+  luminosite, seulement avec `--debug-luminosity`.
 
 ## Acceleration GPU
 
