@@ -2,18 +2,49 @@
 
 ## Overview
 
-The `lightProcess.py` script now supports processing multiple session directories in sequence. This feature allows batch processing of several observation sessions with a single command.
+The `lightProcess.py` script supports processing either a single session directory or a target directory that contains several sub-sessions. This allows one command to process a full observation block such as a target captured over several nights or several subfields.
+
+## Supported layouts
+
+### Single session
+```text
+/path/to/session_M31/
+  light/
+  flat/
+```
+
+### Target with several sub-sessions
+```text
+/path/to/
+  M_33/
+    session_01/
+      light/
+      flat/
+    session_02/
+      light/
+      flat/
+    session_03/
+      light/
+      flat/
+```
+
+When such a structure is detected, the script treats each `session_x` as an independent processing unit, then combines their calibrated outputs into a single result for the parent target directory.
 
 ## Usage
 
-### Single Session (existing behavior)
+### Single Session
 ```bash
 python3 bin/lightProcess.py /path/to/session_M31 [options]
 ```
 
-### Multiple Sessions (new feature)
+### Multiple independent sessions passed explicitly
 ```bash
 python3 bin/lightProcess.py /path/to/session_M31 /path/to/session_M42 /path/to/session_NGC7000 [options]
+```
+
+### Target root with sub-sessions
+```bash
+python3 bin/lightProcess.py /path/to/M_33 --log-level INFO
 ```
 
 ## Features
@@ -22,6 +53,16 @@ python3 bin/lightProcess.py /path/to/session_M31 /path/to/session_M42 /path/to/s
 - Each session is processed one after another
 - Progress indicator shows current session (e.g., "2/5")
 - Clear separation between sessions in logs
+
+### ✅ **Target-root auto-detection**
+- If a directory contains immediate child folders with `light`/`Light`, each child is processed as its own session.
+- The parent target is then stacked from the resulting session outputs.
+- This is the mode used for structures like `M_33/session_01`, `M_33/session_02`.
+
+### ✅ **Combined output stacking**
+- The combined stack is created from the outputs of the successful child sessions.
+- The generated Siril script uses the converted sequence name `session_` rather than a stale `r_session_` name.
+- This avoids the invalid sequence error during the final stack command.
 
 ### ✅ **Robust Error Handling**
 - If one session fails, processing continues with the next

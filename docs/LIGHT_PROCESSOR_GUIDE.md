@@ -1,14 +1,16 @@
-# Guide d'utilisation de lightProcessor.py
+# Guide d'utilisation de lightProcess.sh
 
 ## Description
 
-Le script `lightProcessor.py` permet de traiter automatiquement des images light en effectuant :
+Le script `bin/lightProcess.sh` active le venv du projet puis appelle `bin/lightProcess.py`.
+Il permet de traiter automatiquement des images light en effectuant :
 
 1. **Détection automatique** des images light dans un répertoire de session
 2. **Groupement** des images par caractéristiques communes (température, exposition, gain, caméra, binning)
 3. **Recherche automatique** du master dark correspondant dans la librairie
-4. **Prétraitement** avec soustraction du dark
-5. **Stacking** automatique des images prétraitées
+4. **Prétraitement** avec soustraction du dark et application optionnelle d'un master flat
+5. **Export des images calibrées** par sous-session
+6. **Stacking final** des images calibrées quand une cible contient plusieurs sous-sessions
 
 ## Structure des répertoires attendue
 
@@ -18,7 +20,7 @@ session_directory/
 │   ├── image_001.fit
 │   ├── image_002.fit
 │   └── ...
-└── flat/                   # OPTIONNEL - Sera ignoré pour l'instant
+└── flat/                   # OPTIONNEL - Utilisé pour créer un master flat
     ├── flat_001.fit
     └── ...
 ```
@@ -27,13 +29,13 @@ session_directory/
 
 ```bash
 # Traitement d'une session avec configuration par défaut
-python3 bin/lightProcessor.py /path/to/session_M31
+./bin/lightProcess.sh /path/to/session_M31
 
 # Avec spécification de la librairie de darks
-python3 bin/lightProcessor.py /path/to/session_M31 --dark-lib /path/to/dark_library
+./bin/lightProcess.sh /path/to/session_M31 --dark-lib /path/to/dark_library
 
 # Sans utilisation de master dark
-python3 bin/lightProcessor.py /path/to/session_M31 --no-dark
+./bin/lightProcess.sh /path/to/session_M31 --no-dark
 ```
 
 ## Options principales
@@ -41,11 +43,11 @@ python3 bin/lightProcessor.py /path/to/session_M31 --no-dark
 ### Répertoires
 - `--dark-lib` : Chemin vers la librairie de master darks
 - `--no-dark` : Désactive l'utilisation des master darks pendant la calibration
-- `--output` : Répertoire de sortie (défaut: `session_dir/processed`)
-- `--work-dir` : Répertoire de travail temporaire (défaut: `session_dir/work`)
+- `--output` : Répertoire de sortie (défaut: `~/SirilProcessed`)
+- `--work-dir` : Répertoire de travail temporaire (défaut: `~/tmp/sirilWorkDir`)
 
 ### Traitement
-- `--temp-precision` : Précision de correspondance des températures en °C (défaut: 0.2)
+- `--temperature-precision` : Précision de correspondance des températures en °C (défaut: 0.2)
 - `--force` : Force le retraitement même si les fichiers de sortie existent
 - `--dry-run` : Simule le traitement sans l'exécuter
 
@@ -55,24 +57,78 @@ python3 bin/lightProcessor.py /path/to/session_M31 --no-dark
 
 ### Stacking
 - `--stack-method` : Méthode de stacking (`average`, `median`, `sum`)
-- `--rejection` : Méthode de rejet (`none`, `sigma`, `linear`, `winsor`, `percentile`)
-- `--rejection-low` : Seuil bas de rejet (défaut: 3.0)
-- `--rejection-high` : Seuil haut de rejet (défaut: 3.0)
+- `--rejection-method` : Méthode de rejet (`none`, `sigma`, `linear`, `winsor`, `percentile`)
+- `--rejection-param1` : Seuil bas de rejet (défaut: 3.0)
+- `--rejection-param2` : Seuil haut de rejet (défaut: 3.0)
+
+## Schéma du processus
+
+```mermaid
+flowchart TD
+    A["Entrée utilisateur<br/>session ou cible"] --> B{"Contient des sous-sessions ?"}
+    B -->|Non| C["Session unique<br/>session/light et session/flat"]
+    B -->|Oui| D["Cible multi-sessions<br/>cible/session_x/light et flat"]
+    C --> E["Détection des lights<br/>groupement caméra/température/exposition/gain/binning"]
+    D --> E
+    E --> F["Recherche master dark light<br/>dark_library_path"]
+    F --> G{"Flats compatibles ?"}
+    G -->|Oui| H["work/<cible>/sessions/<session>/flat_<groupe><br/>liens vers flats source"]
+    H --> I["work/<cible>/sessions/<session>/flat_process<br/>convert flat_<groupe>"]
+    I --> J["calibrate flat_<groupe><br/>dark adapté au flat"]
+    J --> K["master_flat_<groupe>.fit(s)<br/>stack pp_flat_<groupe>"]
+    G -->|Non| L["Pas de master flat"]
+    K --> M["work/<cible>/sessions/<session>/light_<groupe><br/>liens vers lights source"]
+    L --> M
+    M --> N["work/<cible>/sessions/<session>/process<br/>convert light_<groupe>"]
+    N --> O["calibrate light_<groupe><br/>dark et master flat si disponible"]
+    O --> P["Copie Python des seuls process/pp_light_*<br/>vers output/<cible>/sessions/<session>/<session>_<groupe>_calibrated"]
+    P --> Q{"Cible multi-sessions ?"}
+    Q -->|Non| V["Fin<br/>FITS calibrés disponibles"]
+    Q -->|Oui| R["output/<cible>/stack<br/>stack final de tous les pp_*.fit(s)"]
+    R --> S["<cible>_combined.fit(s)<br/>prévisualisation JPG si produite"]
+    S --> T{"Option --mosaic ?"}
+    T -->|Oui| U["mosaic_<nom><br/>assemblage des résultats"]
+    T -->|Non| V["Fin"]
+    U --> V
+```
 
 ## Traitements Siril exécutés
 
 Pour chaque groupe d'images light, le script exécute cette séquence Siril :
 
 1. `convert <sequence_name> -out=<work_dir>/process`
-2. `calibrate <sequence_name> -dark=<master_dark> -cc=dark -cfa -debayer`
-   - Avec `--no-dark` : `calibrate <sequence_name> -cfa -debayer`
-3. `register pp_<sequence_name> -2pass -transf=homography`
-4. `seqapplyreg pp_<sequence_name> -filter-wfwhm=2k -filter-round=2k`
-5. `stack r_pp_<sequence_name> mean <rejection> <low> <high> -output_norm -out=<result>`
+2. Si des flats compatibles sont disponibles:
+   - `convert <flat_sequence_name> -out=<work_dir>/flat_process`
+   - `calibrate <flat_sequence_name> -dark=<master_dark_pour_flat> -cc=dark -cfa`
+     - Avec `--no-dark` : les flats ne sont pas calibrés par dark
+   - `stack pp_<flat_sequence_name> median -norm=mul -out=<master_flat>`
+3. `calibrate <sequence_name> -dark=<master_dark> -flat=<master_flat> -cc=dark -cfa -equalize_cfa -debayer`
+   - Avec `--no-dark` : `calibrate <sequence_name> -flat=<master_flat> -cfa -equalize_cfa -debayer`
+4. Copie Python des fichiers `process/pp_<sequence_name>_*.fit(s)` vers `<output>/<cible>/sessions/<session>/<session>_<group>_calibrated`
 
-En sortie, chaque groupe produit :
-- Un FITS empilé
-- Un JPG de prévisualisation généré automatiquement à partir du FITS
+En sortie de sous-session, chaque groupe produit des FITS calibrés `pp_*.fit` ou `pp_*.fits`.
+Cette copie est volontairement faite hors de Siril pour éviter que `convert pp_<sequence_name>` ne réexporte aussi les fichiers sources non calibrés.
+
+Le stack final d'une cible multi-sessions utilise ensuite :
+
+1. `convert <target>_ -out=<work_dir>/<target>/stacking/output`
+2. `seqfindstar <target>_`
+3. `seqplatesolve <target>_ -force -nocache -disto=ps_distortion` si activé
+4. `register <target>_ -2pass -transf=<align_transform>`
+5. `seqapplyreg <target>_ -filter-round=<roundness_filter> -filter-wfwhm=<fwhm_filter> -framing=<max|min>`
+6. `register r_<target>_ -2pass -transf=<align_transform>` si le réalignement robuste est activé
+7. `seqapplyreg r_<target>_ -framing=<max|min>`
+8. `stack r_r_<target>_ rej <low> <high> -output_norm -out=<target>_combined`
+
+Avant chaque stack final, les sous-répertoires temporaires `<cible>/stacking/input` et
+`<cible>/stacking/output` sont reconstruits à zéro. Cela évite de mélanger les liens
+préparés pour la séquence courante avec d'anciens FITS `M33_*.fit(s)`, `r_M33_*.fit(s)`
+ou `r_r_M33_*.fit(s)` produits par une exécution précédente. Le log de stacking et le
+script Siril `.sps`, placés directement dans `<cible>/stacking/`, sont conservés.
+
+Le cadrage vaut `max` pour les stacks de type moyenne/rejet. Pour `--stack-method median`,
+le cadrage passe automatiquement à `min`, car Siril ne peut pas empiler en médiane des
+images alignées de tailles différentes produites par `-framing=max`.
 
 Si `--mosaic` est activé, le script exécute ensuite pour la mosaïque :
 
@@ -85,22 +141,22 @@ Si `--mosaic` est activé, le script exécute ensuite pour la mosaïque :
 
 ### Exemple 1 : Traitement simple
 ```bash
-python3 bin/lightProcessor.py /home/user/astrophoto/session_M31
+./bin/lightProcess.sh /home/user/astrophoto/session_M31
 ```
 
 ### Exemple 2 : Avec personnalisation
 ```bash
-python3 bin/lightProcessor.py /home/user/astrophoto/session_M31 \
+./bin/lightProcess.sh /home/user/astrophoto/session_M31 \
     --dark-lib /home/user/dark_library \
     --output /home/user/results \
     --stack-method median \
-    --rejection sigma \
-    --temp-precision 0.5
+    --rejection-method sigma \
+    --temperature-precision 0.5
 ```
 
 ### Exemple 3 : Mode dry-run pour tester
 ```bash
-python3 bin/lightProcessor.py /home/user/astrophoto/session_M31 \
+./bin/lightProcess.sh /home/user/astrophoto/session_M31 \
     --dry-run \
     --log-level DEBUG
 ```
@@ -109,28 +165,65 @@ python3 bin/lightProcessor.py /home/user/astrophoto/session_M31 \
 
 Le script recherche automatiquement le master dark correspondant selon ces critères :
 
-- **Température** : À ±0.2°C près (configurable avec `--temp-precision`)
+- **Température** : À ±0.2°C près (configurable avec `--temperature-precision`)
 - **Temps d'exposition** : Exact
 - **Gain** : Exact  
 - **Caméra** : Exact
 - **Binning** : Exact
 
+Cette logique s'applique aussi aux flats quand `--no-dark` n'est pas activé :
+- les darks de la librairie sont utilisés comme darkflats,
+- la correspondance est faite sur les métadonnées (dont exposition et gain),
+- ce dark est appliqué avant l'empilement du master flat.
+
 ## Structure de sortie
 
 ```
-session_directory/
-├── processed/                         # Répertoire de sortie
-│   ├── Group1_T-10.0_E300_G100_B1x1/
-│   │   ├── light_Group1_T-10.0_E300_G100_B1x1_stacked.fit
-│   │   └── light_Group1_T-10.0_E300_G100_B1x1_stacked.jpg
-│   └── Group2_T-10.2_E120_G100_B1x1/
-│       ├── light_Group2_T-10.2_E120_G100_B1x1_stacked.fit
-│       └── light_Group2_T-10.2_E120_G100_B1x1_stacked.jpg
-└── work/                              # Répertoire de travail (temporaire)
-    └── ...
+<output_dir>/
+└── <cible>/
+    ├── sessions/
+    │   └── <session>/
+    │       └── <session>_<group_key>_calibrated/
+    │           ├── pp_light_<group_key>_00001.fit(s)
+    │           ├── pp_light_<group_key>_00002.fit(s)
+    │           └── ...
+    └── stack/
+        ├── <cible>_combined.fit(s)
+        └── <cible>_combined.jpg       # Prévisualisation si générée
+
+<work_dir>/
+└── <cible>/
+    ├── sessions/
+    │   └── <session>/
+    │       ├── flat_<group_key>/       # Liens vers flats source
+    │       ├── flat_process/           # Flats convertis et pp_flat calibrés
+    │       ├── master_flat_<group_key>.fit(s)
+    │       ├── master_flat_<group_key>.sps
+    │       ├── calibrate_light_<group_key>.sps
+    │       ├── <session>_lightProcess.log
+    │       ├── light_<group_key>/      # Liens vers lights source
+    │       └── process/                # Lights convertis et pp_light calibrés
+    └── stacking/
+        ├── <cible>_stacking.log
+        ├── stack_<cible>.sps
+        ├── input/                      # Liens/copies vers FITS calibrés, reconstruit à chaque stack
+        └── output/                     # Séquence Siril temporaire, reconstruit à chaque stack
 ```
 
-Le JPG est une prévisualisation auto-étirée pour lecture rapide.
+Les répertoires `flat_<group_key>`, `light_<group_key>`, `flat_process`, `process` et
+`<cible>/stacking` sont des zones de travail. Ils peuvent être supprimés entre deux
+traitements, sauf si `--keep-intermediate` est utilisé pour inspection.
+
+Chaque sous-session écrit aussi un fichier `<session>_lightProcess.log` dans son répertoire
+de travail. Le stack final, qui agrège une cible plutôt qu'une sous-session unique, écrit
+`<cible>_stacking.log` dans `<work_dir>/<cible>/stacking/` et `<session>_stacking.log`
+dans chaque répertoire de sous-session concerné. Ces logs reprennent les messages de la
+console pour faciliter le diagnostic après un traitement long ou interrompu.
+
+Les fichiers de commandes Siril `.sps` sont conservés systématiquement :
+- `master_flat_<group_key>.sps` pour la création du master flat,
+- `calibrate_light_<group_key>.sps` pour la calibration des lights,
+- `stack_<cible>.sps` pour le stack final de la cible.
 
 ## Gestion des erreurs
 
@@ -142,7 +235,7 @@ Le JPG est une prévisualisation auto-étirée pour lecture rapide.
 2. **"Aucun master dark correspondant trouvé"**
    - Cette erreur ne s'applique pas si `--no-dark` est activé
    - Vérifiez que votre librairie de darks contient des masters avec les bonnes caractéristiques
-   - Ajustez `--temp-precision` si nécessaire
+   - Ajustez `--temperature-precision` si nécessaire
 
 3. **"Aucun fichier light trouvé"**
    - Vérifiez que le répertoire `light/` contient des fichiers `.fit` ou `.fits`
@@ -151,17 +244,14 @@ Le JPG est une prévisualisation auto-étirée pour lecture rapide.
 
 Pour obtenir plus d'informations en cas de problème :
 ```bash
-python3 bin/lightProcessor.py /path/to/session --log-level DEBUG
+./bin/lightProcess.sh /path/to/session --log-level DEBUG
 ```
 
 ## Configuration
 
 Le script utilise le fichier de configuration `~/.siril_darklib_config.json` pour les paramètres par défaut (notamment le chemin vers la librairie de darks).
 
-Vous pouvez utiliser un fichier de configuration personnalisé avec :
-```bash
-python3 bin/lightProcessor.py /path/to/session --config /path/to/custom_config.json
-```
+Vous pouvez sauvegarder les options courantes dans ce fichier avec `--save-config`.
 
 ## Workflow complet
 
@@ -169,7 +259,8 @@ python3 bin/lightProcessor.py /path/to/session --config /path/to/custom_config.j
 2. **Vérifier la librairie** : S'assurer que les master darks correspondants existent
 3. **Tester** : Utiliser `--dry-run` pour vérifier la détection
 4. **Traiter** : Lancer le traitement complet
-5. **Vérifier** : Contrôler les résultats dans `session_dir/processed/`
+5. **Vérifier** : Contrôler les FITS calibrés dans `<output_dir>/<cible>/sessions/`
+6. **Empiler la cible** : Pour une cible multi-sessions, contrôler le résultat dans `<output_dir>/<cible>/stack/`
 
 ## Intégration avec darkLibUpdate.py
 
@@ -182,7 +273,24 @@ Pour un workflow complet :
 
 2. **Traiter les lights** :
    ```bash
-   python3 bin/lightProcessor.py /path/to/session
+   ./bin/lightProcess.sh /path/to/session
    ```
 
 Cette approche garantit que vous avez les master darks nécessaires avant de traiter vos images light.
+
+## Drizzle et analyse du dithering
+
+Le mode `--drizzle auto` analyse l’alignement avant de choisir le rééchantillonnage.
+Le rapport JSON adjacent au FITS conserve les mesures pour comparer les nuits et
+les réglages Ekos. Voir la [spécification complète](DRIZZLE_SPECIFICATION.md),
+les modes `off/auto/force`, les seuils et les conditions du CFA Drizzle natif.
+
+### Qualité des poses avant Drizzle
+
+Les filtres de rondeur, de FWHM et de nombre d’étoiles s’appliquent avant
+l’analyse et le rééchantillonnage Drizzle. `--nbstars-filter` accepte un seuil,
+un pourcentage, un coefficient MAD (`1.8k` par défaut), ou `none`.
+La pondération de rondeur, active par défaut, est configurable avec
+`--roundness-weight-max-extra` et désactivable avec `--no-roundness-weighted`.
+Elle complète la pondération FWHM existante. Voir les détails et les limites dans
+[la spécification Drizzle](DRIZZLE_SPECIFICATION.md#ordre-des-controles-de-qualite-et-ponderation).

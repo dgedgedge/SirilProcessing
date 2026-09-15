@@ -34,7 +34,7 @@ except Exception:
     HtmlFormatter = None
 
 
-DEFAULT_OUTPUT_DIR = "generated_doc"
+DEFAULT_OUTPUT_DIR = "out"
 MARKDOWN_EXTENSIONS = {".md", ".markdown"}
 
 

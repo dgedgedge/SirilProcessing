@@ -79,3 +79,7 @@ Interface Utilisateur
 ---
 
 **Note** : Cette documentation technique complète le guide utilisateur principal. Consultez d'abord [`GUIDE_COMPLET.md`](../GUIDE_COMPLET.md) pour l'usage général.
+
+## Drizzle
+
+[Spécification, diagnostic JSON et options du Drizzle](DRIZZLE_SPECIFICATION.md).

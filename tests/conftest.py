@@ -19,6 +19,40 @@ from fits_info import FitsInfo
 
 
 @pytest.fixture
+def project_root():
+    """Racine du projet."""
+    return Path(__file__).parent.parent
+
+
+@pytest.fixture
+def light_process_sh(project_root):
+    """Wrapper shell officiel de lightProcess."""
+    wrapper = project_root / "bin" / "lightProcess.sh"
+    if not wrapper.exists():
+        pytest.fail(f"Wrapper lightProcess introuvable: {wrapper}")
+    return wrapper
+
+
+@pytest.fixture
+def light_process_env(project_root):
+    """Environnement de test forçant lightProcess.sh à utiliser le venv courant."""
+    env = os.environ.copy()
+
+    current_venv = Path(sys.prefix)
+    activate = current_venv / "bin" / "activate"
+    if activate.exists():
+        env["VENV_DIR"] = str(current_venv)
+        return env
+
+    repo_venv = project_root / ".venv"
+    if (repo_venv / "bin" / "activate").exists():
+        env["VENV_DIR"] = str(repo_venv)
+        return env
+
+    pytest.skip("Aucun venv activable trouve pour tester lightProcess.sh")
+
+
+@pytest.fixture
 def temp_dir():
     """Répertoire temporaire pour les tests"""
     with tempfile.TemporaryDirectory() as temp_dir:

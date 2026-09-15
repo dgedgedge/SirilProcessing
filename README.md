@@ -94,7 +94,27 @@ python3 bin/lightProcess.py /path/to/session_M31 --dark-lib /path/to/dark_librar
 
 # Processing without using master darks
 python3 bin/lightProcess.py /path/to/session_M31 --no-dark
+
+# Target directory containing several session folders
+python3 bin/lightProcess.py /path/to/M_33 --log-level INFO
 ```
+
+#### Multi-session target structure:
+If the input path contains immediate child folders such as `session_01`, `session_02`, etc., each sub-session is processed independently and then stacked together under the common target name.
+
+Example structure:
+```text
+/path/to/
+  M_33/
+    session_01/
+      light/
+      flat/
+    session_02/
+      light/
+      flat/
+```
+
+The script detects the child sessions automatically and eventually creates a combined result for the parent target, for example `M_33_combined.fit`.
 
 #### Key options:
 - `--dark-lib`: Path to the master dark library
@@ -105,11 +125,16 @@ python3 bin/lightProcess.py /path/to/session_M31 --no-dark
 
 #### Siril pipeline executed (per light group):
 1. `convert <sequence_name> -out=<work_dir>/process`
-2. `calibrate <sequence_name> -dark=<master_dark> -cc=dark -cfa -debayer`
-  - With `--no-dark`: `calibrate <sequence_name> -cfa -debayer`
-3. `register pp_<sequence_name> -2pass -transf=homography`
-4. `seqapplyreg pp_<sequence_name> -filter-wfwhm=2k -filter-round=2k`
-5. `stack r_pp_<sequence_name> mean <rejection> <low> <high> -output_norm -out=<result>`
+2. Optional if a session `flat/` (or `Flat/`) directory exists:
+  - `convert <flat_sequence_name> -out=<work_dir>/flat_process`
+  - `calibrate <flat_sequence_name> -dark=<master_dark_for_flat> -cc=dark -cfa`
+    - With `--no-dark`: no dark calibration is applied to flats
+  - `stack pp_<flat_sequence_name> median -norm=mul -out=<master_flat>`
+3. `calibrate <sequence_name> -dark=<master_dark> -flat=<master_flat> -cc=dark -cfa -equalize_cfa -debayer`
+  - With `--no-dark`: `calibrate <sequence_name> -flat=<master_flat> -cfa -equalize_cfa -debayer`
+4. `register pp_<sequence_name> -2pass -transf=homography`
+5. `seqapplyreg pp_<sequence_name> -filter-wfwhm=2k -filter-round=2k`
+6. `stack r_pp_<sequence_name> mean <rejection> <low> <high> -output_norm -out=<result>`
 
 Outputs:
 - One stacked FITS result per group
@@ -219,3 +244,9 @@ For more options, use `--help`.
 - **[Validation Optimization](docs/VALIDATION_OPTIMIZATION.md)** - Conditional validation logic
 - **[Robust Statistics](docs/ROBUST_STATISTICS_UPDATE.md)** - MAD-based validation methods
 - **[Configuration Guide](docs/VALIDATION_CONFIG_GUIDE.md)** - Persistent configuration options
+
+### Drizzle automatique
+
+Le stacking propose `--drizzle auto` (défaut), `off` et `force`, avec conservation
+du diagnostic dans `<cible>_combined.drizzle.json` à côté du FITS final.
+Voir la [spécification et le guide Drizzle](docs/DRIZZLE_SPECIFICATION.md).
