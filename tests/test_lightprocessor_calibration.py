@@ -184,7 +184,7 @@ def test_export_calibrated_outputs_from_process_copies_only_pp_sequence(tmp_path
     process_dir.mkdir(parents=True)
     for index in range(1, 4):
         (process_dir / f"light_seq_{index:05d}.fits").write_bytes(b"raw")
-        (process_dir / f"pp_light_seq_{index:05d}.fits").write_bytes(f"pp-{index}".encode("ascii"))
+        fits.writeto(process_dir / f"pp_light_seq_{index:05d}.fits", np.full((4,4), index, dtype=np.float32))
     (process_dir / "pp_other_seq_00001.fits").write_bytes(b"other")
 
     calibrated_output_dir = tmp_path / "calibrated"
@@ -197,7 +197,13 @@ def test_export_calibrated_outputs_from_process_copies_only_pp_sequence(tmp_path
         "pp_light_seq_00002.fits",
         "pp_light_seq_00003.fits",
     ]
-    assert all((calibrated_output_dir / name).read_bytes().startswith(b"pp-") for name in exported)
+    assert all(not (calibrated_output_dir / name).is_symlink() for name in exported)
+    seq = calibrated_output_dir / "pp_light_seq_.seq"
+    assert seq.exists()
+    assert "I 3 1" in seq.read_text()
+    import shutil
+    shutil.rmtree(process_dir)
+    assert all(fits.getdata(calibrated_output_dir / name).shape == (4,4) for name in exported)
 
 
 def test_light_process_wrapper_runs_dry_run_pipeline(
@@ -628,3 +634,25 @@ def test_stack_session_outputs_always_rebuilds_transient_stack_dirs(tmp_path):
         assert result is None
     finally:
         lightprocessor_module.Siril = original
+
+
+def test_calibrated_sequence_preserves_siril_selection(tmp_path):
+    from lib.lightprocessor import save_calibrated_sequence
+    source=tmp_path/'process';source.mkdir()
+    output=tmp_path/'export';output.mkdir()
+    original="S 'pp_light_' 1 2 1 5 0 4 0\nL 1\nI 1 1\nI 2 0\n"
+    (source/'pp_light_.seq').write_text(original)
+    result=save_calibrated_sequence('light',output,source)
+    assert result.read_text()==original
+    assert not result.is_symlink()
+    (source/'pp_light_.seq').unlink()
+    assert result.read_text()==original
+
+
+def test_calibrated_sequence_uses_actual_indices_and_rgb_layers(tmp_path):
+    from lib.lightprocessor import save_calibrated_sequence
+    for index in (2,5):
+        fits.writeto(tmp_path/f'pp_light_{index:05d}.fit', np.ones((3,4,4), dtype=np.float32))
+    result=save_calibrated_sequence('light',tmp_path)
+    assert "S 'pp_light_' 2 2 2 5 0 4 0" in result.read_text()
+    assert 'L 3\nI 2 1\nI 5 1\n' in result.read_text()

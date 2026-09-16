@@ -257,3 +257,26 @@ def test_reset_numbered_stage_cleans_previous_outputs_and_unlinks_alias(tmp_path
     reset_stage(alias)
     assert not alias.is_symlink()
     assert (elsewhere/'keep').read_text()=='preserve'
+
+
+def test_memory_budget_counts_reclaimable_ram_not_swap(tmp_path):
+    from lib.drizzle import memory_resources
+    meminfo=tmp_path/'meminfo'
+    meminfo.write_text('MemTotal: 64000 kB\nMemFree: 1000 kB\nMemAvailable: 50000 kB\nSwapTotal: 8000 kB\nSwapFree: 6000 kB\n')
+    result=memory_resources(meminfo)
+    assert result['available_memory_bytes']==50000*1024
+    assert result['free_memory_bytes']==1000*1024
+    assert result['free_swap_bytes']==6000*1024
+    assert not result['swap_included_in_memory_budget']
+    assert result['memory_available_source']=='/proc/meminfo:MemAvailable'
+    meminfo.write_text('MemAvailable: 0 kB\n')
+    assert memory_resources(meminfo)['available_memory_bytes']==0
+
+
+def test_memory_budget_fallback(tmp_path, monkeypatch):
+    from lib.drizzle import memory_resources
+    monkeypatch.setattr('lib.drizzle.os.sysconf', lambda key: {'SC_AVPHYS_PAGES':10, 'SC_PAGE_SIZE':4096}[key])
+    result=memory_resources(tmp_path/'missing')
+    assert result['available_memory_bytes']==40960
+    assert result['free_swap_bytes'] is None
+    assert result['memory_available_source'].startswith('sysconf:')

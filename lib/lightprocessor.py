@@ -15,11 +15,54 @@ import glob
 import shutil
 import os
 import math
+import re
 import numpy as np
 from astropy.io import fits
 from PIL import Image
 from lib.fits_info import FitsInfo
 from lib.siril_utils import Siril
+
+
+def save_calibrated_sequence(sequence_name, output_dir, source_dir=None):
+    """Preserve Siril's sequence, or describe the exported FITS when none exists."""
+    output_dir = Path(output_dir)
+    names = [f'pp_{sequence_name}_.seq', f'pp_{sequence_name}.seq']
+    if source_dir is not None:
+        for name in names:
+            source = Path(source_dir) / name
+            if source.is_file():
+                destination = output_dir / name
+                temporary = destination.with_suffix('.seq.tmp')
+                shutil.copy2(source, temporary)
+                temporary.replace(destination)
+                logging.info('Séquence calibrée conservée : %s', destination)
+                return destination
+    prefix = f'pp_{sequence_name}_'
+    pattern = re.compile(re.escape(prefix) + r'(\d+)\.(?:fit|fits)$')
+    frames = []
+    for path in output_dir.iterdir():
+        match = pattern.fullmatch(path.name)
+        if match:
+            frames.append((int(match[1]), len(match[1]), path))
+    frames.sort()
+    if not frames:
+        raise ValueError(f'Aucun FITS calibré pour la séquence {sequence_name}')
+    indices = [frame[0] for frame in frames]
+    widths = {frame[1] for frame in frames}
+    if len(set(indices)) != len(indices) or len(widths) != 1:
+        raise ValueError('Numérotation ambiguë des FITS calibrés')
+    layers = int(fits.getheader(frames[0][2]).get('NAXIS3', 1))
+    # Siril sequence v4: no registration or statistics are invented.
+    content = ["# Séquence des FITS calibrés exportés",
+               f"S '{prefix}' {indices[0]} {len(frames)} {len(frames)} {frames[0][1]} 0 4 0",
+               f'L {layers}']
+    content.extend(f'I {index} 1' for index in indices)
+    destination = output_dir / names[0]
+    temporary = destination.with_suffix('.seq.tmp')
+    temporary.write_text('\n'.join(content)+'\n', encoding='utf-8')
+    temporary.replace(destination)
+    logging.info('Séquence calibrée conservée : %s', destination)
+    return destination
 
 
 def discover_session_roots(root_dir: Path) -> List[Path]:
@@ -830,6 +873,9 @@ close"""
             logging.info("Recalibration nécessaire pour préserver le CFA natif avant décision Drizzle")
 
         if existing_output and not self.force_reprocess and not needs_native_cfa:
+            if not self.dry_run and not any((calibrated_output_dir / name).exists() for name in
+                                           (f"pp_{sequence_name}_.seq", f"pp_{sequence_name}.seq")):
+                save_calibrated_sequence(sequence_name, calibrated_output_dir)
             logging.info(f"Fichier de sortie existant, passage: {existing_output}")
             # Enregistrer le fichier existant dans la liste des sorties
             self.output_files.append(existing_output)
@@ -1154,6 +1200,8 @@ close"""
         for stale_file in self._list_calibrated_outputs(calibrated_output_dir):
             stale_file.unlink()
 
+        for name in (f"pp_{sequence_name}_.seq", f"pp_{sequence_name}.seq"):
+            (calibrated_output_dir / name).unlink(missing_ok=True)
         copied_count = 0
         for source_file in sources:
             if source_file.name.endswith(".seq"):
@@ -1168,6 +1216,7 @@ close"""
             temp_copy.rename(destination)
             copied_count += 1
 
+        save_calibrated_sequence(sequence_name, calibrated_output_dir, process_dir)
         logging.info(
             "Sorties calibrées exportées depuis process/: %d fichier(s) vers %s",
             copied_count,

@@ -12,6 +12,31 @@ import numpy as np
 from astropy.io import fits
 
 
+def memory_resources(meminfo_path=Path('/proc/meminfo')):
+    """Use Linux's reclaim-aware RAM estimate; report swap separately."""
+    values = {}
+    try:
+        for line in Path(meminfo_path).read_text().splitlines():
+            key, _, raw = line.partition(':')
+            if key in ('MemTotal', 'MemFree', 'MemAvailable', 'SwapTotal', 'SwapFree'):
+                fields = raw.split()
+                if len(fields) == 2 and fields[1] == 'kB':
+                    value = int(fields[0]) * 1024
+                    if value >= 0:
+                        values[key] = value
+    except (OSError, ValueError):
+        values = {}
+    available = values.get('MemAvailable')
+    source = '/proc/meminfo:MemAvailable'
+    if available is None:
+        available = os.sysconf('SC_AVPHYS_PAGES') * os.sysconf('SC_PAGE_SIZE')
+        source = 'sysconf:SC_AVPHYS_PAGES (RAM libre, repli conservateur)'
+    return dict(available_memory_bytes=available, memory_available_source=source,
+                total_memory_bytes=values.get('MemTotal'), free_memory_bytes=values.get('MemFree'),
+                total_swap_bytes=values.get('SwapTotal'), free_swap_bytes=values.get('SwapFree'),
+                swap_included_in_memory_budget=False)
+
+
 def validate_settings(cfg):
     if cfg.get('drizzle_kernel', 'auto') not in ('auto', 'square', 'gaussian', 'turbo', 'point'):
         raise ValueError('Kernel Drizzle invalide')
@@ -420,9 +445,13 @@ def run_stack(siril, files, cfg, input_dir, work_dir, sequence, output_path, pre
     scale = cfg.get('drizzle_scale', 'auto')
     scale = 2 if scale == 'auto' else float(scale)
     frame_bytes = int(first['NAXIS1']*first['NAXIS2']* (3 if native else first.get('NAXIS3',1))*4*scale**2)
-    available = os.sysconf('SC_AVPHYS_PAGES')*os.sysconf('SC_PAGE_SIZE')
+    memory = memory_resources()
+    available = memory['available_memory_bytes']
+    logging.info('RAM disponible pour Drizzle : %.2f Gio (source : %s) ; swap libre : %s, non ajouté au budget RAM.',
+                 available / 2**30, memory['memory_available_source'],
+                 f"{memory['free_swap_bytes'] / 2**30:.2f} Gio" if memory['free_swap_bytes'] is not None else 'inconnu')
     resources = dict(pixel_multiplier=scale**2, estimated_disk_bytes=frame_bytes*(max(len(files), effective_entries)+2)*2,
-                     estimated_memory_bytes=frame_bytes*8, available_memory_bytes=available,
+                     estimated_memory_bytes=frame_bytes*8, **memory,
                      free_disk_bytes=shutil.disk_usage(input_dir).free)
     resources['estimated_output_bytes'] = frame_bytes*2
     resources['free_output_disk_bytes'] = shutil.disk_usage(Path(output_path).parent).free
@@ -493,7 +522,13 @@ def run_stack(siril, files, cfg, input_dir, work_dir, sequence, output_path, pre
         save()
         logging.error('Sélection qualité impossible, empilement interrompu : %s', error or 'aucune pose retenue')
         return False
-    logging.info('Sélection AVANT Drizzle : %d poses indépendantes, %d entrées pondérées', len(records), effective_entries)
+    logging.info(
+        'Sélection AVANT Drizzle\n'
+        'Images distinctes retenues      : %d\n'
+        'Entrées après pondération       : %d\n'
+        'Dont répétitions pour pondération : %d',
+        len(records), effective_entries, effective_entries - len(records),
+    )
     copy_stage_inputs(quality_dir, stacking_dir)
     input_dir = stacking_dir
     filters = '-filter-included'

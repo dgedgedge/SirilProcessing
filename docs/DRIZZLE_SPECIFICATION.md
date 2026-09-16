@@ -461,3 +461,15 @@ Le JSON indique les chemins dans `stages` et l’exécution effective du contrô
 
 Le [graphique du dataflow](LIGHT_PROCESSOR_GUIDE.md#schéma-du-processus) indique
 les répertoires, scripts, transferts de données et branches optionnelles.
+
+### RAM disponible sous Linux
+
+Le budget automatique utilise `MemAvailable` de `/proc/meminfo`, qui estime la
+RAM utilisable sans swap, en tenant compte des caches récupérables. `MemFree` et
+`SC_AVPHYS_PAGES` ne reflètent que la RAM libre et peuvent sous-estimer fortement
+la capacité disponible. `sysconf` reste un repli conservateur si `MemAvailable`
+n’est pas accessible. La source du compteur, la RAM totale, la RAM libre et le
+swap total/libre sont enregistrés dans le JSON. Le swap est indiqué séparément,
+sans être ajouté au budget RAM du traitement automatique. Ce budget décrit la
+mémoire de l’hôte ; il ne mesure pas une éventuelle limite propre au processus
+Siril ou à son conteneur.

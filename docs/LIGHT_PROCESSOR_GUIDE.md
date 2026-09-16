@@ -310,3 +310,19 @@ La pondération de rondeur, active par défaut, est configurable avec
 `--roundness-weight-max-extra` et désactivable avec `--no-roundness-weighted`.
 Elle complète la pondération FWHM existante. Voir les détails et les limites dans
 [la spécification Drizzle](DRIZZLE_SPECIFICATION.md#ordre-des-controles-de-qualite-et-ponderation).
+
+### Réouverture des calibrations dans Siril
+
+Chaque dossier `<session>_<groupe>_calibrated` contient maintenant un fichier
+`pp_<séquence>_.seq` (ou le nom équivalent produit par Siril), à côté des FITS.
+La séquence native est copiée lorsqu’elle existe ; sinon une séquence descriptive
+est créée avec les numéros réellement présents et le nombre de canaux des FITS.
+Aucune mesure d’alignement n’est inventée. Les anciennes calibrations réutilisées
+reçoivent aussi une séquence si elle manque, sauf en simulation (`--dry-run`).
+
+Pour l’ouvrir, sélectionner ce dossier de travail dans Siril puis charger sa
+séquence. Conserver ensemble le `.seq` et les FITS : le `.seq` ne contient pas les
+pixels. Ces FITS sont des copies indépendantes du répertoire de travail ; son
+nettoyage ne casse donc pas la séquence exportée. Seule une reconstruction ou une
+suppression des calibrations elles-mêmes remplace ces fichiers. Le surcoût disque
+est celui du petit fichier texte `.seq`, sans nouvelle copie des images.
