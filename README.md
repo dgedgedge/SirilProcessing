@@ -83,6 +83,10 @@ bin/solarEclipseGif.sh \
 - `--target-duration`: Target GIF duration in seconds
 
 ### lightProcess.py
+
+Les critères de sélection des images, leurs valeurs par défaut et les limites
+face aux étoiles dédoublées sont décrits dans
+[Sélection des images pour le stacking](docs/IMAGE_SELECTION.md).
 A script to process light sessions automatically (grouping by metadata, calibration, registration, stacking), with optional mosaic creation for multiple sessions.
 
 Each stacked FITS result now also produces a JPG preview with the same basename.

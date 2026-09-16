@@ -356,7 +356,7 @@ Traitement Siril de mosaique (si --mosaic):
     )
 
     parser.add_argument('--nbstars-filter', default=config.get('nbstars_filter'),
-                        help="Minimum d'étoiles avant Drizzle : seuil, pourcentage ou k MAD ; none désactive")
+                        help="Tolérance bilatérale autour du nombre médian d'étoiles : écart absolu (30), relatif (20%%), ou MAD (1.8k par défaut) ; none désactive")
     parser.add_argument('--no-roundness-weighted', dest='roundness_weighted', action='store_false',
                         default=config.get('roundness_weighted'), help="Désactive la pondération de rondeur avant Drizzle")
     parser.add_argument('--roundness-weight-max-extra', type=int, choices=range(0, 9),
@@ -718,7 +718,11 @@ Traitement Siril de mosaique (si --mosaic):
     
     # Montage des sorties d’une même cible à partir des sous-sessions
     # Si un répertoire cible contient plusieurs sous-sessions, on les empile ensuite en un seul résultat.
+
     for root_dir in input_roots:
+        logging.info(f"{'='*60}")
+        logging.info(f"Start Stacking process for session directory: {root_dir}")
+        logging.info(f"{'='*60}")
         discovered = discover_session_roots(root_dir)
         if len(discovered) <= 1:
             continue

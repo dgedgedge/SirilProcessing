@@ -303,9 +303,14 @@ les modes `off/auto/force`, les seuils et les conditions du CFA Drizzle natif.
 
 ### Qualité des poses avant Drizzle
 
+La référence [Sélection des images pour le stacking](IMAGE_SELECTION.md)
+décrit l’ordre des contrôles, les formules, les valeurs par défaut, les rapports
+et les limites actuelles face aux étoiles dédoublées.
+
 Les filtres de rondeur, de FWHM et de nombre d’étoiles s’appliquent avant
-l’analyse et le rééchantillonnage Drizzle. `--nbstars-filter` accepte un seuil,
-un pourcentage, un coefficient MAD (`1.8k` par défaut), ou `none`.
+l’analyse et le rééchantillonnage Drizzle. `--nbstars-filter` accepte
+un écart absolu, un écart relatif en pourcentage ou un coefficient MAD (`1.8k`
+par défaut), autour de la médiane dans les deux sens ; `none` désactive le filtre.
 La pondération de rondeur, active par défaut, est configurable avec
 `--roundness-weight-max-extra` et désactivable avec `--no-roundness-weighted`.
 Elle complète la pondération FWHM existante. Voir les détails et les limites dans

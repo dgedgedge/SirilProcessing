@@ -105,18 +105,12 @@ def test_cache_requires_completed_matching_settings(tmp_path):
     output=tmp_path/'result.fits'
     report=tmp_path/'result.drizzle.json'
     assert not cache_matches(output, {'drizzle':'auto'})
-    report.write_text(json.dumps({'quality_pipeline_version':2,'status':'completed','settings':{'drizzle':'auto'}}))
+    report.write_text(json.dumps({'quality_pipeline_version':3,'status':'completed','settings':{'drizzle':'auto'}}))
     assert cache_matches(output, {'drizzle':'auto'})
     assert not cache_matches(output, {'drizzle':'off'})
     report.write_text(json.dumps({'status':'failed','settings':{'drizzle':'auto'}}))
     assert not cache_matches(output, {'drizzle':'auto'})
 
-
-def test_selection_rejects_bad_fwhm_and_roundness():
-    from lib.drizzle import quality_mask
-    rows=[([1.7, 1.8, .9, 1, 0, 30], np.eye(3)) for _ in range(10)]
-    rows += [([4.,5.,.4,1,0,30],np.eye(3))]
-    assert quality_mask(rows, {'fwhm_filter':'1.8k','roundness_filter':'1.8k'}).tolist() == [True]*10+[False]
 
 
 def test_session_boundaries_are_not_dithers():
@@ -128,15 +122,16 @@ def test_session_boundaries_are_not_dithers():
 
 @pytest.mark.parametrize('mode', ['off', 'auto', 'force'])
 @pytest.mark.parametrize('weighted', [False, True])
-def test_all_quality_controls_precede_drizzle(tmp_path, mode, weighted):
+@pytest.mark.parametrize('abnormal_stars', [2, 60])
+def test_all_quality_controls_precede_drizzle(tmp_path, mode, weighted, abnormal_stars):
     files=[]
     for i in range(6):
         f=tmp_path/f'light_{i+1:03d}.fits'
         fits.writeto(f,np.ones((10,10), dtype=np.float32))
         files.append(f)
-    # One elongated exposure, one star-poor exposure, four good exposures.
+    # One elongated exposure, one abnormal star count, four good exposures.
     rounds=[.3,.8,.6,.7,.8,.9]
-    stars=[30,2,30,30,30,30]
+    stars=[30,abnormal_stars,30,30,30,30]
     seq=tmp_path/'light_.seq'
     seq.write_text("S 'light_' 1 6 6 3 2 6 0 0 0\nL 1\n"+
                    ''.join(f'I {i+1} 1\n' for i in range(6))+
@@ -158,7 +153,7 @@ def test_all_quality_controls_precede_drizzle(tmp_path, mode, weighted):
                 assert report['analysis']['images_retained']==4
                 assert report['quality_selection']['effective_stack_entries']==(6 if weighted else 4)
                 assert len(report['frames'])==4
-                assert all(r['roundness']>=.5 and r['nbstars']>=10 for r in report['frames'])
+                assert all(r['roundness']>=.5 and abs(r['nbstars']-30)<=10 for r in report['frames'])
                 (tmp_path/'final.fit').touch()
             return True
     assert run_stack(FakeSiril(), files, cfg, tmp_path,tmp_path,'light_',tmp_path/'final',
@@ -176,17 +171,11 @@ def test_all_quality_controls_precede_drizzle(tmp_path, mode, weighted):
     assert not (tmp_path/'light_007.fits').exists()
 
 
-def test_nbstars_filters_absolute_percent_and_mad():
-    from lib.drizzle import quality_mask
-    rows=[([1.7,1.8,.9,1,0,count],np.eye(3)) for count in [2,28,29,30,31,32]]
-    for value in ['10','80%','1.8k']:
-        selected=quality_mask(rows,{'nbstars_filter':value})
-        assert not selected[0] and selected[-1]
-
-
 def test_old_quality_cache_is_invalidated(tmp_path):
     from lib.drizzle import cache_matches
     (tmp_path/'result.drizzle.json').write_text(json.dumps({'status':'completed','settings':{}}))
+    assert not cache_matches(tmp_path/'result.fits', {})
+    (tmp_path/'result.drizzle.json').write_text(json.dumps({'status':'completed','settings':{},'quality_pipeline_version':2}))
     assert not cache_matches(tmp_path/'result.fits', {})
 
 

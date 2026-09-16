@@ -391,11 +391,13 @@ Le parcours commun aux modes `off`, `auto` et `force` respecte cet ordre :
 5. Analyse du dithering et choix du Drizzle sur les poses indépendantes retenues.
 6. Application des transformations, avec Drizzle si activé, puis empilement pondéré.
 
-Le filtre `--nbstars-filter` utilise par défaut `1.8k`. Une valeur numérique fixe
-un minimum d’étoiles ; `80%` retient les poses dans les 80 % supérieurs (les ex æquo
-au seuil sont conservés) ; `1.8k` utilise médiane − 1.8 × 1.4826 MAD. `none` le
-désactive. Les seuils de sélection sont calculés sans compter plusieurs fois
-les poses répétées par la pondération FWHM.
+Le filtre `--nbstars-filter` rejette les nombres aberrants dans les deux sens
+par rapport à la médiane : `1.8k` (défaut) autorise ±1,8 × 1,4826 MAD ; `30`
+autorise ±30 étoiles ; `20%` autorise ±20 % de la médiane. `none` le désactive.
+Les seuils sont calculés sur les poses indépendantes restantes après les filtres
+FWHM et rondeur. Ces formats remplacent les anciens seuils inférieurs et quotas.
+Voir [la référence de sélection](IMAGE_SELECTION.md) pour les limites,
+notamment face aux étoiles dédoublées et aux nuages.
 
 La pondération de rondeur est active par défaut. Elle suit la convention de
 pondération discrète déjà utilisée pour la FWHM : les meilleures poses ont
