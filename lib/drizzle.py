@@ -10,7 +10,7 @@ from pathlib import Path
 
 import numpy as np
 from astropy.io import fits
-from lib.quality_filter import quality_mask, apply_roundness_weights
+from lib.quality_filter import quality_mask, apply_quality_weights
 
 
 def memory_resources(meminfo_path=Path('/proc/meminfo')):
@@ -56,7 +56,7 @@ def validate_settings(cfg):
 def cache_matches(output, cfg):
     try:
         report = json.loads(Path(output).with_suffix('.drizzle.json').read_text())
-        return report.get('quality_pipeline_version') == 3 and report['status'] == 'completed' and report['settings'] == cfg
+        return report.get('quality_pipeline_version') == 4 and report['status'] == 'completed' and report['settings'] == cfg
     except (OSError, ValueError, KeyError):
         return False
 
@@ -326,7 +326,10 @@ def run_stack(siril, files, cfg, input_dir, work_dir, sequence, output_path, pre
         for i, path in enumerate(files):
             unique_by_source.setdefault(str(Path(path).resolve()), i)
         unique_indices = list(unique_by_source.values())
-        unique_selection = quality_mask([rows[i] for i in unique_indices], cfg)
+        valid_registration = [images[i][2] == '1' and np.isfinite(rows[i][1]).all()
+                              and abs(np.linalg.det(rows[i][1])) > 1e-8
+                              and abs(rows[i][1][2, 2]) >= 1e-8 for i in unique_indices]
+        unique_selection = quality_mask([rows[i] for i in unique_indices], cfg, valid_registration)
         selected_sources = {str(Path(files[i]).resolve()) for i,keep in zip(unique_indices, unique_selection) if keep}
         selected = [str(Path(p).resolve()) in selected_sources for p in files]
         seen = set()
@@ -339,7 +342,7 @@ def run_stack(siril, files, cfg, input_dir, work_dir, sequence, output_path, pre
                                 dx=float(h[0,2]/h[2,2]), dy=float(h[1,2]/h[2,2]), fwhm=values[0], roundness=values[2], nbstars=int(values[5]), homography=h.tolist(),
                                 dithering_headers={key: headers[i][key] for key in headers[i] if 'DITH' in key.upper()}))
         records.sort(key=lambda r: (r['date_obs'] or '', r['source']))
-        effective_entries = apply_roundness_weights(lines, images, rows, records, files, seqpath, cfg)
+        effective_entries = apply_quality_weights(lines, images, rows, records, files, seqpath, cfg)
     except (OSError, ValueError, IndexError, StopIteration) as exc:
         error = str(exc)
         records = []
@@ -375,7 +378,7 @@ def run_stack(siril, files, cfg, input_dir, work_dir, sequence, output_path, pre
         decision['decision'] = 'Drizzle désactivé'
         decision['sampling_out'] = sampling
     decision['siril_drizzle_supported'] = supported
-    report = dict(schema_version=1, quality_pipeline_version=3,
+    report = dict(schema_version=1, quality_pipeline_version=4,
                   stages=dict(registration=str(registration_dir), quality=str(quality_dir), stacking=str(stacking_dir),
                               capability=str(capability_path), capability_executed=capability_dir is not None),
                   quality_selection=dict(independent_retained=len(records), effective_stack_entries=effective_entries,

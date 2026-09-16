@@ -84,9 +84,9 @@ flowchart TD
     O --> P["Copie Python des seuls process/pp_light_*<br/>vers output/<cible>/sessions/<session>/<session>_<groupe>_calibrated"]
     P --> R0
     subgraph STACK["work/&lt;cible&gt;/stacking — étapes fixes"]
-        R0["00_inputs/<br/>Liens vers les FITS calibrés<br/>Préfiltrage et pondération FWHM"]
+        R0["00_inputs/<br/>Liens vers les FITS calibrés<br/>Toutes les poses compatibles, sans pondération"]
         R0 --> R1["01_registration/<br/>01_registration.sps<br/>Conversion, détection des étoiles, alignement<br/>FITS natifs et transformations .seq"]
-        R1 -->|Copie des métadonnées, liens FITS| R2["02_quality/<br/>Sélection FWHM, rondeur, nombre d’étoiles<br/>Pondération rondeur et diagnostic Drizzle<br/>Séquence sélectionnée, sans script Siril"]
+        R1 -->|Copie des métadonnées, liens FITS| R2["02_quality/<br/>Sélection FWHM, rondeur, nombre d’étoiles<br/>Pondérations FWHM/rondeur et diagnostic Drizzle<br/>Séquence sélectionnée, sans script Siril"]
         R2 --> CHOICE{"Drizzle sélectionné ?"}
         CHOICE -->|Oui| R3["03_capability/<br/>03_capability.sps<br/>Contrôle de compatibilité Siril"]
         CHOICE -->|Non| SKIP["03_capability/SKIPPED.txt<br/>Motif de non-exécution"]

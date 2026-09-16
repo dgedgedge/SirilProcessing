@@ -384,10 +384,10 @@ sur le fonctionnement ; les gains scientifiques restent à évaluer sur les nuit
 
 Le parcours commun aux modes `off`, `auto` et `force` respecte cet ordre :
 
-1. Préfiltrage FWHM et pondération FWHM existants.
+1. Préparation des FITS compatibles, sans rejet FWHM ni pondération.
 2. Calcul des transformations et mesures des étoiles sur les poses natives.
 3. Filtrage FWHM, rondeur et nombre d’étoiles sur les poses indépendantes.
-4. Détermination de la pondération de rondeur sur les poses retenues.
+4. Pondérations FWHM et rondeur sur les poses retenues, dans `quality_filter.py`.
 5. Analyse du dithering et choix du Drizzle sur les poses indépendantes retenues.
 6. Application des transformations, avec Drizzle si activé, puis empilement pondéré.
 

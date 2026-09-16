@@ -336,15 +336,15 @@ Traitement Siril de mosaique (si --mosaic):
         dest='fwhm_filter',
         type=str,
         default=config.get("fwhm_filter"),
-        help=f"Filtre de FWHM appliqué avant le stack final via seqapplyreg -filter-wfwhm (ex: '1.8k'). Utiliser 'none' pour désactiver. (Défaut: '{config.get('fwhm_filter')}')"
+        help=f"Filtre FWHM unique sur les mesures Siril, après alignement (ex: '1.8k'). Utiliser 'none' pour désactiver. (Défaut: '{config.get('fwhm_filter')}')"
     )
 
     parser.add_argument(
         '--fwhm-reject-percent',
         dest='fwhm_reject_percent',
         type=float,
-        default=config.get("fwhm_reject_percent", 10.0),
-        help="Pourcentage des images les moins bonnes en FWHM à exclure avant le stack final (0 à 95). Défaut safe: 10%%."
+        default=config.get("fwhm_reject_percent", 0.0),
+        help="Rejet proportionnel FWHM après alignement (0 à 95), uniquement si --fwhm-filter none. Défaut : 0%%."
     )
 
     parser.add_argument(
@@ -837,13 +837,12 @@ Traitement Siril de mosaique (si --mosaic):
                     stack_report=stack_report,
                 )
                 logging.info(
-                    "Stack stats [%s] - total=%d | rejets: layout_incompatible=%d, layout_illisible=%d, fwhm_proportion=%d, fwhm_non_mesurable=%d | conservées uniques=%d | entrées effectives=%d",
+                    "Stack stats [%s] - total=%d | rejets: layout_incompatible=%d, layout_illisible=%d, alignement_qualité=%d | conservées uniques=%d | entrées effectives=%d",
                     root_dir.name,
                     stack_report.get("total_input", 0),
                     stack_report.get("rejected_incompatible_layout", 0),
                     stack_report.get("rejected_unreadable_layout", 0),
-                    stack_report.get("rejected_fwhm_proportion", 0),
-                    stack_report.get("rejected_fwhm_unmeasurable", 0),
+                    stack_report.get("rejected_registration_quality", 0),
                     stack_report.get("kept_unique_for_stack", 0),
                     stack_report.get("kept_effective_for_stack", 0),
                 )

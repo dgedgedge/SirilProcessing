@@ -2,6 +2,7 @@ from pathlib import Path
 import subprocess
 import sys
 
+import pytest
 import numpy as np
 from astropy.io import fits
 
@@ -255,57 +256,24 @@ def test_light_process_wrapper_runs_dry_run_pipeline(
     assert "Début du traitement de la session" in session_log.read_text(encoding="utf-8")
 
 
-def test_stack_session_outputs_uses_converted_sequence_name(tmp_path):
-    source_a = tmp_path / "source_a.fits"
-    source_b = tmp_path / "source_b.fits"
-    source_a.write_bytes(b"dummy-a")
-    source_b.write_bytes(b"dummy-b")
+@pytest.mark.parametrize('method,roundness,platesolve', [
+    ('average', '1.8k', None), ('average', 'none', True), ('median', '1.8k', False),
+])
+def test_stack_selection_only_after_registration(tmp_path, monkeypatch, method, roundness, platesolve):
+    import json
+    import lib.lightprocessor as processor
+    import lib.drizzle as drizzle
+    from lib.quality_filter import quality_mask
 
-    output_dir = tmp_path / "out"
-    work_dir = tmp_path / "work"
-
-    class DummySiril:
-        @staticmethod
-        def create_with_defaults():
-            return DummySiril()
-
-        def run_siril_script(self, script_content, working_dir, script_name=None):
-            assert "convert target_name_ -out=" in script_content
-            assert "seqfindstar target_name_" in script_content
-            assert "register target_name_ -2pass -transf=affine" in script_content
-            assert "seqapplyreg target_name_ -filter-round=1.8k -filter-wfwhm=1.8k -framing=max" in script_content
-            assert "register r_target_name_ -2pass -transf=affine" in script_content
-            assert "seqapplyreg r_target_name_ -framing=max" in script_content
-            assert "stack r_r_target_name_ rej 3.0 3.0 -output_norm -out=" in script_content
-            assert '"' not in script_content
-            assert "session_*.fits" not in script_content
-            assert "r_session_" not in script_content
-            return True
-
-    import lib.lightprocessor as lightprocessor_module
-    original = lightprocessor_module.Siril
-    lightprocessor_module.Siril = DummySiril
-    try:
-        result = stack_session_outputs(
-            [source_a, source_b],
-            output_dir,
-            work_dir,
-            "target_name",
-            {"method": "average", "rejection": "sigma", "rejection_low": 3.0, "rejection_high": 3.0},
-        )
-        assert result is None
-    finally:
-        lightprocessor_module.Siril = original
-
-
-def test_stack_session_outputs_can_disable_roundness_filter(tmp_path):
-    source_a = tmp_path / "source_a.fits"
-    source_b = tmp_path / "source_b.fits"
-    source_a.write_bytes(b"dummy-a")
-    source_b.write_bytes(b"dummy-b")
-
-    output_dir = tmp_path / "out"
-    work_dir = tmp_path / "work"
+    sources = [tmp_path / f'source_{i}.fits' for i in range(4)]
+    for source in sources:
+        _write_fits_frame(source, 'Light')
+    calls = []
+    selections = []
+    def observed_selection(rows, cfg, included=None):
+        selections.append(len(rows))
+        return quality_mask(rows, cfg, included)
+    monkeypatch.setattr(drizzle, 'quality_mask', observed_selection)
 
     class DummySiril:
         @staticmethod
@@ -313,229 +281,57 @@ def test_stack_session_outputs_can_disable_roundness_filter(tmp_path):
             return DummySiril()
 
         def run_siril_script(self, script_content, working_dir, script_name=None):
-            assert "register target_name_ -2pass -transf=affine" in script_content
-            assert "seqapplyreg target_name_ -filter-wfwhm=1.8k -framing=max" in script_content
-            assert "-filter-round=" not in script_content
+            directory = Path(working_dir)
+            calls.append(script_name)
+            assert '-filter-wfwhm' not in script_content
+            assert '-filter-round' not in script_content
+            if script_name == '01_registration.sps':
+                assert not selections
+                inputs = sorted((directory.parent/'00_inputs').glob('target_name_*.fits'))
+                assert len(inputs) == 4  # No rejection or duplication before registration.
+                assert 'convert target_name_ -out=' in script_content
+                assert 'seqfindstar target_name_' in script_content
+                assert 'register target_name_ -2pass -transf=affine' in script_content
+                assert ('seqplatesolve target_name_' in script_content) == (platesolve is not False)
+                assert 'seqapplyreg' not in script_content and '\nstack ' not in script_content
+                for source in inputs:
+                    (directory/source.name).symlink_to(source.resolve())
+                (directory/'target_name_.seq').write_text(
+                    "S 'target_name_' 1 4 4 3 0 6 0 0 0\n"
+                    + ''.join(f'I {i+1} 1\n' for i in range(4))
+                    + ''.join(f'R0 {f} {f} .9 1 0 200 H 1 0 {i*.2} 0 1 0 0 0 1\n'
+                              for i, f in enumerate([2,3,4,20])))
+            elif script_name == '04_stacking.sps':
+                assert selections == [4]
+                framing = 'min' if method == 'median' else 'max'
+                assert f'seqapplyreg target_name_ -filter-included -framing={framing}' in script_content
+                assert 'register r_target_name_ -2pass -transf=affine' in script_content
+                assert f'seqapplyreg r_target_name_ -framing={framing}' in script_content
+                stack_method = 'median' if method == 'median' else 'rej 3.0 3.0'
+                assert f'stack r_r_target_name_ {stack_method} -output_norm -out=' in script_content
+                report = json.loads((tmp_path/'out/target_name_combined.drizzle.json').read_text())
+                assert report['quality_selection']['independent_retained'] == 3
+                assert report['quality_selection']['effective_stack_entries'] == 6
+                assert [r['fwhm_multiplicity'] for r in report['frames']] == [3,2,1]
+                (tmp_path/'out/target_name_combined.fit').touch()
+            else:
+                raise AssertionError(script_name)
             return True
 
-    import lib.lightprocessor as lightprocessor_module
-    original = lightprocessor_module.Siril
-    lightprocessor_module.Siril = DummySiril
-    try:
-        result = stack_session_outputs(
-            [source_a, source_b],
-            output_dir,
-            work_dir,
-            "target_name",
-            {
-                "method": "average",
-                "rejection": "sigma",
-                "rejection_low": 3.0,
-                "rejection_high": 3.0,
-                "roundness_filter": "none",
-            },
-        )
-        assert result is None
-    finally:
-        lightprocessor_module.Siril = original
-
-
-def test_stack_session_outputs_uses_min_framing_for_median_stack(tmp_path):
-    source_a = tmp_path / "source_a.fits"
-    source_b = tmp_path / "source_b.fits"
-    source_a.write_bytes(b"dummy-a")
-    source_b.write_bytes(b"dummy-b")
-
-    output_dir = tmp_path / "out"
-    work_dir = tmp_path / "work"
-
-    class DummySiril:
-        @staticmethod
-        def create_with_defaults():
-            return DummySiril()
-
-        def run_siril_script(self, script_content, working_dir, script_name=None):
-            assert "seqapplyreg target_name_ -filter-round=1.8k -filter-wfwhm=1.8k -framing=min" in script_content
-            assert "seqapplyreg r_target_name_ -framing=min" in script_content
-            assert "stack r_r_target_name_ median -output_norm -out=" in script_content
-            assert "-framing=max" not in script_content
-            return True
-
-    import lib.lightprocessor as lightprocessor_module
-    original = lightprocessor_module.Siril
-    lightprocessor_module.Siril = DummySiril
-    try:
-        result = stack_session_outputs(
-            [source_a, source_b],
-            output_dir,
-            work_dir,
-            "target_name",
-            {
-                "method": "median",
-                "rejection": "none",
-                "rejection_low": 3.0,
-                "rejection_high": 3.0,
-            },
-        )
-        assert result is None
-    finally:
-        lightprocessor_module.Siril = original
-
-
-def test_stack_session_outputs_platesolve_enabled_by_default(tmp_path):
-    source_a = tmp_path / "source_a.fits"
-    source_b = tmp_path / "source_b.fits"
-    source_a.write_bytes(b"dummy-a")
-    source_b.write_bytes(b"dummy-b")
-
-    output_dir = tmp_path / "out"
-    work_dir = tmp_path / "work"
-
-    class DummySiril:
-        @staticmethod
-        def create_with_defaults():
-            return DummySiril()
-
-        def run_siril_script(self, script_content, working_dir, script_name=None):
-            assert "seqfindstar target_name_" in script_content
-            assert "seqplatesolve target_name_ -force -nocache -disto=ps_distortion" in script_content
-            assert "register target_name_ -2pass -transf=affine" in script_content
-            return True
-
-    import lib.lightprocessor as lightprocessor_module
-    original = lightprocessor_module.Siril
-    lightprocessor_module.Siril = DummySiril
-    try:
-        result = stack_session_outputs(
-            [source_a, source_b],
-            output_dir,
-            work_dir,
-            "target_name",
-            {
-                "method": "average",
-                "rejection": "sigma",
-                "rejection_low": 3.0,
-                "rejection_high": 3.0,
-            },
-        )
-        assert result is None
-    finally:
-        lightprocessor_module.Siril = original
-
-
-def test_stack_session_outputs_can_enable_platesolve(tmp_path):
-    source_a = tmp_path / "source_a.fits"
-    source_b = tmp_path / "source_b.fits"
-    source_a.write_bytes(b"dummy-a")
-    source_b.write_bytes(b"dummy-b")
-
-    output_dir = tmp_path / "out"
-    work_dir = tmp_path / "work"
-
-    class DummySiril:
-        @staticmethod
-        def create_with_defaults():
-            return DummySiril()
-
-        def run_siril_script(self, script_content, working_dir, script_name=None):
-            assert "seqfindstar target_name_" in script_content
-            assert "seqplatesolve target_name_ -force -nocache -disto=ps_distortion" in script_content
-            assert "register target_name_ -2pass -transf=affine" in script_content
-            return True
-
-    import lib.lightprocessor as lightprocessor_module
-    original = lightprocessor_module.Siril
-    lightprocessor_module.Siril = DummySiril
-    try:
-        result = stack_session_outputs(
-            [source_a, source_b],
-            output_dir,
-            work_dir,
-            "target_name",
-            {
-                "method": "average",
-                "rejection": "sigma",
-                "rejection_low": 3.0,
-                "rejection_high": 3.0,
-                "enable_stack_platesolve": True,
-            },
-        )
-        assert result is None
-    finally:
-        lightprocessor_module.Siril = original
-
-
-def test_stack_session_outputs_applies_fwhm_rejection_and_weighting(tmp_path):
-    source_a = tmp_path / "source_a.fits"
-    source_b = tmp_path / "source_b.fits"
-    source_c = tmp_path / "source_c.fits"
-    source_d = tmp_path / "source_d.fits"
-    for source_file, payload in [
-        (source_a, b"a"),
-        (source_b, b"b"),
-        (source_c, b"c"),
-        (source_d, b"d"),
-    ]:
-        source_file.write_bytes(payload)
-
-    output_dir = tmp_path / "out"
-    work_dir = tmp_path / "work"
-
-    class DummySiril:
-        @staticmethod
-        def create_with_defaults():
-            return DummySiril()
-
-        def run_siril_script(self, script_content, working_dir, script_name=None):
-            return True
-
-    import lib.lightprocessor as lightprocessor_module
-    original_siril = lightprocessor_module.Siril
-    original_rank = lightprocessor_module._rank_files_by_fwhm
-    lightprocessor_module.Siril = DummySiril
-
-    try:
-        lightprocessor_module._rank_files_by_fwhm = lambda files: [
-            (source_a.resolve(), 2.0),
-            (source_b.resolve(), 3.0),
-            (source_c.resolve(), 4.0),
-            (source_d.resolve(), 6.0),
-        ]
-
-        stack_report = {}
-
-        result = stack_session_outputs(
-            [source_a, source_b, source_c, source_d],
-            output_dir,
-            work_dir,
-            "target_name",
-            {
-                "method": "average",
-                "rejection": "sigma",
-                "rejection_low": 3.0,
-                "rejection_high": 3.0,
-                "fwhm_reject_percent": 25.0,
-                "fwhm_weighted": True,
-                "fwhm_weight_max_extra": 2,
-            },
-            stack_report=stack_report,
-        )
-        assert result is None
-
-        # 4 images avec 25% de rejet => 3 conservées,
-        # puis pondération (3 + 2 + 1 répétitions) => 6 entrées effectives.
-        input_dir = work_dir / "target_name" / "stacking" / "input"
-        prepared_inputs = sorted(input_dir.glob("target_name_*.fits"))
-        assert len(prepared_inputs) == 6
-        assert stack_report["total_input"] == 4
-        assert stack_report["rejected_fwhm_proportion"] == 1
-        assert stack_report["rejected_fwhm_unmeasurable"] == 0
-        assert stack_report["kept_unique_for_stack"] == 3
-        assert stack_report["kept_effective_for_stack"] == 6
-
-    finally:
-        lightprocessor_module.Siril = original_siril
-        lightprocessor_module._rank_files_by_fwhm = original_rank
+    monkeypatch.setattr(processor, 'Siril', DummySiril)
+    cfg = dict(method=method, roundness_filter=roundness, fwhm_filter='1.8k',
+               fwhm_reject_percent=50, fwhm_weighted=True, fwhm_weight_max_extra=2,
+               drizzle='off')
+    if platesolve is not None:
+        cfg['enable_stack_platesolve'] = platesolve
+    report = {}
+    result = stack_session_outputs(sources, tmp_path/'out', tmp_path/'work', 'target_name', cfg, stack_report=report)
+    assert result == tmp_path/'out/target_name_combined.fit'
+    assert calls == ['01_registration.sps', '04_stacking.sps']
+    assert selections == [4]
+    assert report['total_input'] == 4
+    assert report['kept_unique_for_stack'] == 3
+    assert report['kept_effective_for_stack'] == 6
 
 
 def test_stack_session_outputs_force_stacking_cleans_previous_artifacts(tmp_path):
@@ -565,7 +361,7 @@ def test_stack_session_outputs_force_stacking_cleans_previous_artifacts(tmp_path
         def run_siril_script(self, script_content, working_dir, script_name=None):
             assert not stale_file.exists()
             assert not stale_output_fit.exists()
-            return True
+            return False
 
     import lib.lightprocessor as lightprocessor_module
     original = lightprocessor_module.Siril
@@ -611,14 +407,14 @@ def test_stack_session_outputs_always_rebuilds_transient_stack_dirs(tmp_path):
             return DummySiril()
 
         def run_siril_script(self, script_content, working_dir, script_name=None):
-            assert script_name == "stack_M33.sps"
+            assert script_name == "01_registration.sps"
             assert not (input_dir / "M33_999.fits").exists()
             assert not (output_stack_dir / "M33_999.fits").exists()
             assert not (output_stack_dir / "r_M33_999.fits").exists()
             assert (session_stack_dir / "M33_stacking.log").exists()
-            prepared_inputs = sorted(path.name for path in input_dir.glob("M33_*.fits"))
+            prepared_inputs = sorted(path.name for path in (session_stack_dir / "00_inputs").glob("M33_*.fits"))
             assert prepared_inputs == ["M33_001.fits", "M33_002.fits"]
-            return True
+            return False
 
     import lib.lightprocessor as lightprocessor_module
     original = lightprocessor_module.Siril

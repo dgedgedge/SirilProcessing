@@ -27,7 +27,7 @@ class Config:
         "roundness_weighted": True,
         "roundness_weight_max_extra": 1,
         "fwhm_filter": "1.8k",
-        "fwhm_reject_percent": 10.0,
+        "fwhm_reject_percent": 0.0,
         "fwhm_weighted": True,
         "fwhm_weight_max_extra": 1,
         "align_transform": "affine",

@@ -14,7 +14,6 @@ from typing import List, Dict, Optional, Tuple
 import glob
 import shutil
 import os
-import math
 import re
 import numpy as np
 from astropy.io import fits
@@ -1271,6 +1270,7 @@ def stack_session_outputs(
         shutil.rmtree(session_stack_dir)
 
     output_path = Path(output_dir) / f"{target_name}_combined"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     if force_stacking:
         for candidate in [output_path.with_suffix(".fit"), output_path.with_suffix(".fits")]:
             if candidate.exists():
@@ -1280,26 +1280,22 @@ def stack_session_outputs(
         if transient_dir.exists():
             shutil.rmtree(transient_dir)
 
-    stack_cfg = stack_params or {}
-    if any(key in stack_cfg for key in ("drizzle", "nbstars_filter", "roundness_weighted")):
-        from lib.drizzle import STACK_STAGES, reset_stage
-        run_dir = session_stack_dir
-        for stage in STACK_STAGES:
-            reset_stage(run_dir / stage)
-        input_dir = run_dir / "00_inputs"
-        output_stack_dir = run_dir / "01_registration"
-    else:
-        run_dir = session_stack_dir
-        input_dir.mkdir(parents=True, exist_ok=True)
-        output_stack_dir.mkdir(parents=True, exist_ok=True)
+    stack_cfg = dict(stack_params or {})
+    stack_cfg.setdefault('fwhm_filter', '1.8k')
+    stack_cfg.setdefault('roundness_filter', '1.8k')
+    from lib.drizzle import STACK_STAGES, reset_stage
+    run_dir = session_stack_dir
+    for stage in STACK_STAGES:
+        reset_stage(run_dir / stage)
+    input_dir = run_dir / "00_inputs"
+    output_stack_dir = run_dir / "01_registration"
 
     local_report = {
         "target_name": target_name,
         "total_input": len(valid_files),
         "rejected_incompatible_layout": 0,
         "rejected_unreadable_layout": 0,
-        "rejected_fwhm_proportion": 0,
-        "rejected_fwhm_unmeasurable": 0,
+        "rejected_registration_quality": 0,
         "kept_unique_for_stack": len(valid_files),
         "kept_effective_for_stack": len(valid_files),
         "weighted_extra_entries": 0,
@@ -1333,74 +1329,8 @@ def stack_session_outputs(
             stack_report.update(local_report)
         return valid_files[0]
 
-    fwhm_reject_percent = float(stack_cfg.get("fwhm_reject_percent", 0.0) or 0.0)
-    fwhm_weighted = bool(stack_cfg.get("fwhm_weighted", False))
-    fwhm_weight_max_extra = int(stack_cfg.get("fwhm_weight_max_extra", 2) or 2)
-
-    fwhm_reject_percent = max(0.0, min(95.0, fwhm_reject_percent))
-    fwhm_weight_max_extra = max(0, min(8, fwhm_weight_max_extra))
-
+    # All compatible exposures are measured once; selection and weighting follow registration.
     files_for_stack = valid_files
-    if fwhm_reject_percent > 0.0 or (fwhm_weighted and len(valid_files) > 2):
-        ranked_files = _rank_files_by_fwhm(valid_files)
-        ranked_set = {file_path for file_path, _ in ranked_files}
-        unranked_files = [file_path for file_path in valid_files if file_path not in ranked_set]
-        local_report["rejected_fwhm_unmeasurable"] = len(unranked_files)
-
-        if ranked_files:
-            keep_count = max(2, int(math.ceil(len(ranked_files) * (1.0 - (fwhm_reject_percent / 100.0)))))
-            keep_count = min(keep_count, len(ranked_files))
-            kept_ranked = ranked_files[:keep_count]
-            removed_ranked = ranked_files[keep_count:]
-            local_report["rejected_fwhm_proportion"] = len(removed_ranked)
-            base_kept_files = [file_path for file_path, _ in kept_ranked]
-
-            if removed_ranked:
-                logging.info(
-                    "Rejet FWHM: %d image(s) exclue(s) sur %d (%.1f%%)",
-                    len(removed_ranked),
-                    len(ranked_files),
-                    fwhm_reject_percent,
-                )
-                for removed_file, removed_fwhm in removed_ranked:
-                    logging.debug("  Exclue (FWHM %.3f): %s", removed_fwhm, removed_file)
-
-            files_for_stack = base_kept_files + unranked_files
-            local_report["kept_unique_for_stack"] = len(files_for_stack)
-
-            if fwhm_weighted and len(base_kept_files) > 2 and fwhm_weight_max_extra > 0:
-                best_fwhm = min(fwhm for _, fwhm in kept_ranked)
-                worst_fwhm = max(fwhm for _, fwhm in kept_ranked)
-
-                if worst_fwhm > best_fwhm:
-                    weighted_files: List[Path] = []
-                    for file_path, fwhm_value in kept_ranked:
-                        normalized_quality = (worst_fwhm - fwhm_value) / (worst_fwhm - best_fwhm)
-                        extra_repeats = int(round(normalized_quality * fwhm_weight_max_extra))
-                        repeats = 1 + extra_repeats
-                        weighted_files.extend([file_path] * repeats)
-                        logging.debug(
-                            "Pondération FWHM: %s (FWHM %.3f) répété %d fois",
-                            file_path,
-                            fwhm_value,
-                            repeats,
-                        )
-
-                    files_for_stack = weighted_files + unranked_files
-                    local_report["weighted_extra_entries"] = len(weighted_files) - len(base_kept_files)
-                    logging.info(
-                        "Pondération FWHM activée: %d images de base -> %d entrées effectives pour le stack",
-                        len(base_kept_files),
-                        len(files_for_stack),
-                    )
-                else:
-                    logging.info("Pondération FWHM ignorée: FWHM quasi identiques sur les images conservées")
-        else:
-            logging.warning(
-                "Impossible d'estimer la FWHM des entrées: rejet/pondération FWHM ignorés pour ce stack"
-            )
-
-    local_report["kept_effective_for_stack"] = len(files_for_stack)
 
     if stack_report is not None:
         stack_report.clear()
@@ -1420,41 +1350,10 @@ def stack_session_outputs(
     rejection = str(stack_cfg.get("rejection", "sigma")).lower()
     rejection_low = stack_cfg.get("rejection_low", 3.0)
     rejection_high = stack_cfg.get("rejection_high", 3.0)
-    roundness_filter = stack_cfg.get("roundness_filter", "1.8k")
-    fwhm_filter = stack_cfg.get("fwhm_filter", "1.8k")
-    robust_realign = bool(stack_cfg.get("robust_realign", True))
     align_transform = str(stack_cfg.get("align_transform", "affine")).lower()
     enable_stack_platesolve = bool(stack_cfg.get("enable_stack_platesolve", True))
     framing = "min" if method in {"median", "med"} else "max"
-    if framing == "min":
-        logging.info(
-            "Stack médian demandé: utilisation de seqapplyreg -framing=min pour produire des images de même taille."
-        )
-
-    registered_sequence_prefix = f"r_{sequence_prefix}"
-
-    roundness_filter_value = "" if roundness_filter is None else str(roundness_filter).strip()
-    fwhm_filter_value = "" if fwhm_filter is None else str(fwhm_filter).strip()
-
-    seqapply_filters = []
-    if roundness_filter_value.lower() not in {"", "none", "off", "false", "0"}:
-        seqapply_filters.append(f"-filter-round={roundness_filter_value}")
-    if fwhm_filter_value.lower() not in {"", "none", "off", "false", "0"}:
-        seqapply_filters.append(f"-filter-wfwhm={fwhm_filter_value}")
-
-    if seqapply_filters:
-        seqapplyreg_line = f"seqapplyreg {sequence_prefix} {' '.join(seqapply_filters)} -framing={framing}"
-    else:
-        seqapplyreg_line = f"seqapplyreg {sequence_prefix} -framing={framing}"
-
-    if robust_realign:
-        second_register_line = f"register {registered_sequence_prefix} -2pass -transf={align_transform}"
-        second_seqapplyreg_line = f"seqapplyreg {registered_sequence_prefix} -framing={framing}"
-        stack_sequence_prefix = f"r_{registered_sequence_prefix}"
-    else:
-        second_register_line = ""
-        second_seqapplyreg_line = ""
-        stack_sequence_prefix = registered_sequence_prefix
+    stack_sequence_prefix = f"r_{sequence_prefix}"
 
     if method in {"median", "med"}:
         stack_line = (
@@ -1471,35 +1370,24 @@ def stack_session_outputs(
             f"-output_norm -out={output_path}"
         )
 
-    robust_lines = ""
-    if robust_realign:
-        robust_lines = f"{second_register_line}\n{second_seqapplyreg_line}\n"
-
     platesolve_lines = ""
     if enable_stack_platesolve:
         platesolve_lines = (
             f"seqplatesolve {sequence_prefix} -force -nocache -disto=ps_distortion\n"
         )
 
-    script = f'''requires 1.2
+    prepare = f'''requires 1.2
 cd {input_dir}
 convert {sequence_prefix} -out={output_stack_dir}
 cd {output_stack_dir}
 seqfindstar {sequence_prefix}
-{platesolve_lines}register {sequence_prefix} -2pass -transf={align_transform}
-{seqapplyreg_line}
-{robust_lines}{stack_line}
-close'''
+{platesolve_lines}register {sequence_prefix} -2pass -transf={align_transform}'''
 
     siril = Siril.create_with_defaults()
-    if any(key in stack_cfg for key in ("drizzle", "nbstars_filter", "roundness_weighted")):
-        from lib.drizzle import run_stack
-        prepare = script.split(seqapplyreg_line)[0].rstrip()
-        success = run_stack(siril, files_for_stack, stack_cfg, output_stack_dir,
-                            run_dir, sequence_prefix, output_path,
-                            prepare, stack_line, framing, stack_report=stack_report)
-    else:
-        success = siril.run_siril_script(script, str(output_stack_dir), script_name=f"stack_{target_name}.sps")
+    from lib.drizzle import run_stack
+    success = run_stack(siril, files_for_stack, stack_cfg, output_stack_dir,
+                        run_dir, sequence_prefix, output_path,
+                        prepare, stack_line, framing, stack_report=stack_report)
     if not success:
         return None
 
@@ -1511,107 +1399,6 @@ close'''
         if candidate.exists():
             return candidate
     return None
-
-
-def _estimate_frame_fwhm(file_path: Path) -> Optional[float]:
-    """Estime une FWHM moyenne en pixels pour une image FITS (approximation robuste)."""
-    try:
-        with fits.open(file_path, memmap=False) as hdul:
-            data = hdul[0].data
-
-        if data is None:
-            return None
-
-        image = np.asarray(data, dtype=np.float64)
-        if image.ndim > 2:
-            image = image[0]
-        if image.ndim != 2 or image.size == 0:
-            return None
-
-        finite = np.isfinite(image)
-        if not np.any(finite):
-            return None
-
-        valid_values = image[finite]
-        background = float(np.median(valid_values))
-        mad = float(np.median(np.abs(valid_values - background)))
-        sigma = 1.4826 * mad if mad > 0 else float(np.std(valid_values))
-        if sigma <= 0:
-            return None
-
-        threshold = background + 5.0 * sigma
-        work_image = np.where(finite, image, background)
-
-        c = work_image[1:-1, 1:-1]
-        local_max_mask = (
-            (c > threshold)
-            & (c >= work_image[:-2, 1:-1])
-            & (c >= work_image[2:, 1:-1])
-            & (c >= work_image[1:-1, :-2])
-            & (c >= work_image[1:-1, 2:])
-            & (c >= work_image[:-2, :-2])
-            & (c >= work_image[:-2, 2:])
-            & (c >= work_image[2:, :-2])
-            & (c >= work_image[2:, 2:])
-        )
-
-        peak_positions = np.argwhere(local_max_mask)
-        if len(peak_positions) == 0:
-            return None
-
-        peak_values = c[local_max_mask]
-        order = np.argsort(peak_values)[::-1]
-        selected_peaks = peak_positions[order[:40]]
-
-        fwhm_values: List[float] = []
-        for peak_pos in selected_peaks:
-            y = int(peak_pos[0] + 1)
-            x = int(peak_pos[1] + 1)
-
-            y0 = max(0, y - 4)
-            y1 = min(work_image.shape[0], y + 5)
-            x0 = max(0, x - 4)
-            x1 = min(work_image.shape[1], x + 5)
-            patch = work_image[y0:y1, x0:x1] - background
-
-            if patch.shape[0] < 5 or patch.shape[1] < 5:
-                continue
-
-            patch = np.clip(patch, 0.0, None)
-            flux = float(np.sum(patch))
-            if flux <= 0:
-                continue
-
-            yy, xx = np.indices(patch.shape)
-            cx = float(np.sum(xx * patch) / flux)
-            cy = float(np.sum(yy * patch) / flux)
-            var_x = float(np.sum(((xx - cx) ** 2) * patch) / flux)
-            var_y = float(np.sum(((yy - cy) ** 2) * patch) / flux)
-            sigma_psf = float(np.sqrt(max((var_x + var_y) / 2.0, 0.0)))
-
-            if sigma_psf > 0:
-                fwhm_values.append(2.355 * sigma_psf)
-
-        if not fwhm_values:
-            return None
-
-        return float(np.median(fwhm_values))
-    except Exception as exc:
-        logging.debug("Estimation FWHM impossible pour %s: %s", file_path, exc)
-        return None
-
-
-def _rank_files_by_fwhm(files: List[Path]) -> List[Tuple[Path, float]]:
-    """Classe les fichiers du meilleur au moins bon selon FWHM (plus petite = meilleure)."""
-    ranked: List[Tuple[Path, float]] = []
-    for file_path in files:
-        fwhm_value = _estimate_frame_fwhm(file_path)
-        if fwhm_value is None:
-            continue
-        ranked.append((file_path, fwhm_value))
-
-    ranked.sort(key=lambda item: item[1])
-    return ranked
 
 
 def _read_fits_layout(file_path: Path) -> Optional[Tuple[int, int, int, int]]:

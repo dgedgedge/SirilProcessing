@@ -14,19 +14,19 @@ sont distinguées des contrôles existants.
    illisibles lorsqu’un groupe lisible existe. Si aucun fichier n’est lisible,
    ce contrôle laisse passer les entrées. Une seule entrée restante est retournée
    directement, sans passer par les étapes suivantes.
-2. Préfiltrage par une estimation FWHM calculée en Python, puis pondération FWHM.
-3. Détection des étoiles et alignement avec Siril (`seqfindstar`, `register`).
-4. Dans `02_quality`, filtres successifs : FWHM pondérée, rondeur, nombre d’étoiles.
-5. Contrôle de l’inclusion Siril et de la validité des transformations, puis
-   pondération de rondeur.
-6. Analyse Drizzle, application de l’alignement aux entrées sélectionnées avec
+2. Détection des étoiles et alignement avec Siril sur toutes les entrées compatibles,
+   sans rejet de qualité ni pondération préalable.
+3. Dans `02_quality`, exclusion des entrées non incluses par Siril, des mesures
+   invalides et des transformations invalides, puis filtres successifs :
+   FWHM pondérée, rondeur, nombre d’étoiles.
+4. Pondérations FWHM et rondeur, uniquement sur les poses retenues.
+5. Analyse Drizzle, application de l’alignement aux entrées sélectionnées avec
    `seqapplyreg -filter-included`, puis empilement.
 
-Le pipeline de qualité fonctionne aussi avec Drizzle désactivé. Le chemin décrit
-est celui utilisé par la configuration CLI habituelle. Un appel Python à
-`stack_session_outputs` sans les clés `drizzle`, `nbstars_filter` et
-`roundness_weighted` utilise un ancien chemin qui transmet uniquement les filtres
-FWHM et rondeur directement à Siril.
+Ce parcours unique s’applique aux appels CLI et Python, avec ou sans Drizzle.
+La sélection précède le rééchantillonnage pour travailler sur les mesures natives.
+La compatibilité FITS reste contrôlée avant l’alignement, car Siril a besoin
+d’une séquence homogène.
 
 ## Réglages par défaut
 
@@ -35,7 +35,7 @@ Une configuration enregistrée ou des arguments CLI peuvent les remplacer.
 
 | Critère | Option CLI | Défaut | Effet |
 |---|---|---|---|
-| Préfiltrage FWHM | `--fwhm-reject-percent` | `10` | Écarte une proportion des FWHM estimées les plus élevées |
+| Rejet FWHM alternatif | `--fwhm-reject-percent` | `0` | Actif uniquement si le filtre FWHM principal est désactivé |
 | FWHM pondérée Siril | `--fwhm-filter` | `1.8k` | Conserve les valeurs faibles |
 | Rondeur Siril | `--roundness-filter` | `1.8k` | Conserve les valeurs élevées |
 | Nombre d’étoiles Siril | `--nbstars-filter` | `1.8k` | Rejette les écarts dans les deux sens autour de la médiane |
@@ -46,9 +46,8 @@ Une configuration enregistrée ou des arguments CLI peuvent les remplacer.
 
 ## Provenance des mesures
 
-Le préfiltrage utilise `_estimate_frame_fwhm()` et `_rank_files_by_fwhm()` dans
-[lib/lightprocessor.py](../lib/lightprocessor.py). Cette estimation sur les FITS
-est distincte des mesures utilisées après l’alignement.
+Les mesures de qualité et de pondération proviennent désormais uniquement de Siril.
+L’ancienne estimation FWHM Python a été supprimée.
 
 Pour `quality_mask()` dans [lib/quality_filter.py](../lib/quality_filter.py), les mesures proviennent du fichier `<séquence>.seq` produit
 par Siril à l’étape `01_registration`, puis copié dans `02_quality`.
@@ -90,8 +89,7 @@ MAD = médiane des |valeur − m|
 dispersion = 1,4826 × MAD
 ```
 
-Les seuils sont calculés sur les poses indépendantes : les répétitions dues à la
-pondération FWHM ne comptent qu’une fois. Le calcul est séquentiel : la rondeur
+Les seuils sont calculés sur les poses indépendantes avant toute pondération. Le calcul est séquentiel : la rondeur
 utilise les survivantes du filtre FWHM, puis le nombre d’étoiles utilise les
 survivantes des deux premiers filtres. Les six mesures doivent être finies et
 la FWHM non pondérée doit être positive dès le début.
@@ -130,26 +128,34 @@ Un coefficient `k` plus petit rend le filtre plus strict. Si la MAD est nulle,
 le seuil est exactement la médiane. Un seuil relatif peut laisser passer une
 série uniformément mauvaise : il compare les images entre elles.
 
-## Préfiltrage FWHM et pondérations
+## Un seul rejet FWHM et pondérations après sélection
 
-Le préfiltrage trie les images mesurables de la meilleure à la moins bonne FWHM.
-Pour `N` images mesurables et un rejet de `p` pour cent, le nombre conservé est :
+Depuis la version de pipeline 4, le rejet FWHM proportionnel avant alignement
+est supprimé. Le filtre `--fwhm-filter` est prioritaire. S’il est actif, une
+ancienne configuration `fwhm_reject_percent=10` est ignorée avec un log INFO :
+les deux rejets ne se cumulent jamais. Les anciens caches sont invalidés.
+
+Pour choisir uniquement un rejet proportionnel après alignement, utiliser par
+exemple `--fwhm-filter none --fwhm-reject-percent 10`. Sur les `N` mesures valides,
+on trie la FWHM pondérée Siril et conserve :
 
 ```text
 min(N, max(2, plafond(N × (1 − p / 100))))
 ```
 
-Le pourcentage est borné entre 0 et 95. Les arrondis et le minimum de deux images
-peuvent donc réduire le rejet effectif. `--no-fwhm-reject` le désactive.
-Les images dont la FWHM Python est non mesurable restent dans les entrées ; si
-aucune n’est mesurable, ce rejet et cette pondération sont ignorés. Le compteur
-`rejected_fwhm_unmeasurable` est trompeur : il compte ces images sans traduire
-une exclusion effective à cette étape.
+Le pourcentage doit être compris entre 0 et 95. Le minimum de deux et les
+arrondis peuvent réduire le rejet effectif. `--no-fwhm-reject` désactive cette
+alternative. Pour désactiver tout rejet FWHM, combiner cette option avec
+`--fwhm-filter none` ; les contrôles de validité restent appliqués.
 
-Les pondérations ajoutent des répétitions discrètes des meilleures entrées.
-Elles ne constituent pas un critère de rejet. Les multiplicités FWHM et rondeur
-se multiplient ; avec les maxima par défaut, une pose peut contribuer jusqu’à
-quatre entrées. Les diagnostics utilisent les poses indépendantes.
+`apply_quality_weights()` dans `lib/quality_filter.py` ajoute les répétitions
+après tous les filtres. La pondération FWHM utilise la FWHM non pondérée Siril,
+avec une qualité normalisée entre la meilleure et la moins bonne pose retenue.
+Elle est appliquée au-delà de deux poses retenues. La rondeur utilise une
+normalisation analogue, dans l’autre sens. Les multiplicités se multiplient ;
+avec les maxima par défaut, une pose peut contribuer jusqu’à quatre entrées.
+Elles ne constituent pas un rejet et ne modifient pas les seuils calculés.
+Les diagnostics utilisent les poses indépendantes.
 
 ## Étoiles dédoublées : limite actuelle
 
@@ -174,12 +180,22 @@ les véritables étoiles doubles. **Cette évolution n’est pas implémentée.*
 
 ## Rapports et limites de traçabilité
 
+Les logs INFO de sélection indiquent les images retirées et restantes pour
+chaque contrôle : validité des mesures, FWHM pondérée, rondeur et nombre
+d’étoiles, puis un bilan global. Les comptes sont séquentiels : une image déjà
+retirée ne compte pas à nouveau pour le critère suivant. Ils portent sur les
+poses indépendantes avant toute pondération. Les filtres désactivés ou sans
+image restante sont explicitement signalés. Ces comptes concernent
+`quality_mask()` ; la compatibilité FITS possède ses propres logs. Le contrôle
+« mesures valides » inclut maintenant les échecs d’inclusion ou de transformation Siril.
+
 Le fichier `<sortie>.drizzle.json` contient notamment :
 
 - `settings` : réglages employés ;
 - `quality_selection` : nombre de poses retenues, rejetées et entrées effectives ;
 - `frames` : poses retenues, FWHM non pondérée, rondeur, nombre d’étoiles,
-  transformations et multiplicité de rondeur ;
+  transformations, `fwhm_multiplicity`, `roundness_multiplicity` et
+  `quality_multiplicity` (produit des deux) ;
 - `analysis` : décision Drizzle et ses raisons.
 
 Le rapport ne fournit pas les seuils effectifs de chaque filtre, ni les mesures
@@ -217,8 +233,8 @@ effectivement validé et conserver ses limites connues.
 Points de référence :
 
 - [lib/config.py](../lib/config.py) et [bin/lightProcess.py](../bin/lightProcess.py) : valeurs par défaut et options ;
-- [lib/lightprocessor.py](../lib/lightprocessor.py) : compatibilité, préfiltrage et pondération FWHM ;
-- [lib/quality_filter.py](../lib/quality_filter.py) : `quality_mask()`, filtres FWHM, rondeur et nombre d’étoiles, application de la sélection et pondération de rondeur ;
+- [lib/lightprocessor.py](../lib/lightprocessor.py) : compatibilité FITS et préparation des entrées ;
+- [lib/quality_filter.py](../lib/quality_filter.py) : `quality_mask()`, filtres FWHM, rondeur et nombre d’étoiles, application de la sélection et pondérations FWHM/rondeur ;
 - [lib/drizzle.py](../lib/drizzle.py) : lecture des mesures Siril, orchestration du stack et diagnostic Drizzle ;
 - [tests/test_quality_filter.py](../tests/test_quality_filter.py), [tests/test_drizzle.py](../tests/test_drizzle.py) et [tests/test_lightprocessor_calibration.py](../tests/test_lightprocessor_calibration.py) : vérification des comportements ;
 - [Spécification Drizzle](DRIZZLE_SPECIFICATION.md) : diagnostic et rééchantillonnage.

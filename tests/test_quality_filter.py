@@ -6,6 +6,46 @@ from lib.drizzle import read_registration
 from lib.quality_filter import quality_mask
 
 
+@pytest.mark.parametrize('fwhm_filter,percent,expected', [
+    ('5', 50, [True, True, True, False]),
+    ('none', 50, [True, True, False, False]),
+    ('none', 0, [True, True, True, True]),
+])
+def test_fwhm_filter_and_proportional_rejection_never_accumulate(fwhm_filter, percent, expected):
+    rows = [([f, f, .9, 1, 0, 200], np.eye(3)) for f in [2, 3, 4, 20]]
+    assert quality_mask(rows, {'fwhm_filter': fwhm_filter, 'fwhm_reject_percent': percent}).tolist() == expected
+
+
+def test_registration_failures_are_removed_before_quality_thresholds():
+    rows = [([2, 2, .9, 1, 0, n], np.eye(3)) for n in [1, 1, 199, 200, 201]]
+    assert quality_mask(rows, {'nbstars_filter': '2'}, [False, False, True, True, True]).tolist() == [False, False, True, True, True]
+
+
+def test_quality_logs_count_sequential_rejections(caplog):
+    rows = [([1.7, w, r, 1, 0, n], np.eye(3)) for w, r, n in [
+        (float('nan'), .9, 200), (5, .2, 20), (1.8, .2, 20),
+        (1.8, .9, 70), (1.8, .9, 390), (1.8, .9, 200),
+        (1.8, .9, 199), (1.8, .9, 201),
+    ]]
+    with caplog.at_level('INFO'):
+        selected = quality_mask(rows, {'fwhm_filter': '2', 'roundness_filter': '.5', 'nbstars_filter': '5'})
+    assert selected.tolist() == [False]*5 + [True]*3
+    for criterion, removed, remaining, before in [
+        ('mesures valides', 1, 7, 8), ('FWHM pondérée', 1, 6, 7),
+        ('rondeur', 1, 5, 6), ('nombre d’étoiles', 2, 3, 5), ('bilan', 5, 3, 8),
+    ]:
+        assert f'{criterion} : {removed} image(s) retirée(s), {remaining}/{before} restante(s)' in caplog.text
+
+
+def test_quality_logs_disabled_and_exhausted_filters(caplog):
+    rows = [([1.7, 1.8, .9, 1, 0, 200], np.eye(3))]
+    with caplog.at_level('INFO'):
+        quality_mask(rows, {'fwhm_filter': '1', 'roundness_filter': '.5', 'nbstars_filter': 'none'})
+    assert 'FWHM pondérée : 1 image(s) retirée(s), 0/1 restante(s)' in caplog.text
+    assert 'rondeur : aucune image à évaluer, 0 image(s) retirée(s), 0/0 restante(s)' in caplog.text
+    assert 'nombre d’étoiles : filtre désactivé, 0 image(s) retirée(s), 0/0 restante(s)' in caplog.text
+
+
 def test_selection_rejects_bad_fwhm_and_roundness():
     rows=[([1.7, 1.8, .9, 1, 0, 30], np.eye(3)) for _ in range(10)]
     rows += [([4.,5.,.4,1,0,30],np.eye(3))]
@@ -65,5 +105,3 @@ def test_nbstars_boundaries_and_constant_samples(counts, value, expected):
 def test_nbstars_invalid_tolerance(value):
     with pytest.raises(ValueError):
         quality_mask([([1.7,1.8,.9,1,0,30],np.eye(3))], {'nbstars_filter':value})
-
-

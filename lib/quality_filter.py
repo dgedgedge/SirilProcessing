@@ -10,19 +10,43 @@ from pathlib import Path
 import numpy as np
 
 
-def quality_mask(rows, cfg):
+def quality_mask(rows, cfg, included=None):
     """Explicit selection shared by diagnostics and seqapplyreg -filter-included."""
     if not rows:
         raise ValueError('Aucune transformation disponible')
     values = np.array([r[0] for r in rows])
     mask = np.isfinite(values).all(axis=1) & (values[:, 0] > 0)
+    if included is not None:
+        mask &= np.asarray(included, dtype=bool)
+    logging.info('Sélection qualité — mesures valides : %d image(s) retirée(s), %d/%d restante(s)',
+                 len(rows)-int(mask.sum()), int(mask.sum()), len(rows))
+    labels = {'fwhm_filter': 'FWHM pondérée', 'roundness_filter': 'rondeur',
+              'nbstars_filter': 'nombre d’étoiles'}
     for key, column, lower in [('fwhm_filter', 1, False), ('roundness_filter', 2, True), ('nbstars_filter', 5, True)]:
         raw = str(cfg.get(key, 'none')).strip().lower()
+        before = int(mask.sum())
+        if key == 'fwhm_filter':
+            percent = float(cfg.get('fwhm_reject_percent', 0) or 0)
+            if not np.isfinite(percent) or not 0 <= percent <= 95:
+                raise ValueError('Pourcentage de rejet FWHM invalide')
+            if percent > 0 and raw not in ('none', 'off', 'false', '0', ''):
+                logging.info('Rejet FWHM proportionnel ignoré : le filtre FWHM principal est actif (aucun cumul).')
+            elif percent > 0:
+                indices = np.flatnonzero(mask)
+                keep = min(before, max(2, int(np.ceil(before * (1-percent/100)))))
+                rejected = indices[np.argsort(values[indices, column], kind='stable')[keep:]]
+                mask[rejected] = False
+                logging.info('Sélection qualité — FWHM pondérée : %d image(s) retirée(s), %d/%d restante(s) ; rejet proportionnel %.3f%%',
+                             before-keep, keep, before, percent)
+                continue
         if raw in ('none', 'off', 'false', '0', ''):
+            logging.info('Sélection qualité — %s : filtre désactivé, 0 image(s) retirée(s), %d/%d restante(s)',
+                         labels[key], before, before)
             continue
         sample = values[mask, column]
         if not len(sample):
-            break
+            logging.info('Sélection qualité — %s : aucune image à évaluer, 0 image(s) retirée(s), 0/0 restante(s)', labels[key])
+            continue
         if key == 'nbstars_filter':
             median = np.median(sample)
             coefficient = float(raw[:-1] if raw.endswith(('k', '%')) else raw)
@@ -35,8 +59,9 @@ def quality_mask(rows, cfg):
             else:
                 tolerance = coefficient
             mask &= abs(values[:, column] - median) <= tolerance
-            logging.info('Sélection étoiles : médiane=%.3f, tolérance=%.3f, plage=[%.3f, %.3f], retenues=%d/%d',
-                         median, tolerance, median-tolerance, median+tolerance, int(mask.sum()), len(sample))
+            logging.info('Sélection qualité — %s : %d image(s) retirée(s), %d/%d restante(s) ; médiane=%.3f, tolérance=%.3f, plage=[%.3f, %.3f]',
+                         labels[key], before-int(mask.sum()), int(mask.sum()), before,
+                         median, tolerance, median-tolerance, median+tolerance)
             continue
         if raw.endswith('k'):
             median = np.median(sample)
@@ -50,10 +75,15 @@ def quality_mask(rows, cfg):
         else:
             limit = float(raw)
         mask &= values[:, column] >= limit if lower else values[:, column] <= limit
+        logging.info('Sélection qualité — %s : %d image(s) retirée(s), %d/%d restante(s) ; seuil %s %.3f',
+                     labels[key], before-int(mask.sum()), int(mask.sum()), before,
+                     '>=' if lower else '<=', limit)
+    logging.info('Sélection qualité — bilan : %d image(s) retirée(s), %d/%d restante(s)',
+                 len(rows)-int(mask.sum()), int(mask.sum()), len(rows))
     return mask
 
 
-def apply_roundness_weights(lines, images, rows, records, files, seqpath, cfg):
+def apply_quality_weights(lines, images, rows, records, files, seqpath, cfg):
     """Expand selected sequence entries, preserving original registration matrices.
 
     Integer multiplicities match the existing FWHM weighting convention. No
@@ -65,10 +95,18 @@ def apply_roundness_weights(lines, images, rows, records, files, seqpath, cfg):
     enabled = cfg.get('roundness_weighted', False)
     roundness = [r['roundness'] for r in records]
     low, high = (min(roundness), max(roundness)) if roundness else (0, 0)
+    fwhm_extra = int(cfg.get('fwhm_weight_max_extra', 1))
+    if not 0 <= fwhm_extra <= 8:
+        raise ValueError('fwhm_weight_max_extra doit être entre 0 et 8')
+    fwhms = [r['fwhm'] for r in records]
+    best, worst = (min(fwhms), max(fwhms)) if fwhms else (0, 0)
     accepted = {r['source']: r for r in records}
     for record in records:
         quality = (record['roundness'] - low) / (high-low) if high > low else 0
         record['roundness_multiplicity'] = 1 + int(round(quality*extra_max)) if enabled else 1
+        fwhm_quality = (worst-record['fwhm'])/(worst-best) if worst > best else 0
+        record['fwhm_multiplicity'] = 1 + int(round(fwhm_quality*fwhm_extra)) if cfg.get('fwhm_weighted', False) and len(records) > 2 else 1
+        record['quality_multiplicity'] = record['roundness_multiplicity'] * record['fwhm_multiplicity']
         record['effective_stack_entries'] = 0
     extra_indices, image_lines = [], []
     for i, image in enumerate(images):
@@ -80,8 +118,8 @@ def apply_roundness_weights(lines, images, rows, records, files, seqpath, cfg):
         tokens[2] = '1' if include else '0'
         image_lines.append(' '.join(tokens))
         if include:
-            extra_indices.extend([i] * (record['roundness_multiplicity'] - 1))
-            record['effective_stack_entries'] += record['roundness_multiplicity']
+            extra_indices.extend([i] * (record['quality_multiplicity'] - 1))
+            record['effective_stack_entries'] += record['quality_multiplicity']
     header = next(shlex.split(line) for line in lines if line.startswith('S '))
     sequence, width = header[1], int(header[5])
     filenum = max(int(row[1]) for row in images)
@@ -118,6 +156,6 @@ def apply_roundness_weights(lines, images, rows, records, files, seqpath, cfg):
         else:
             output.append(line)
     seqpath.write_text('\n'.join(output)+'\n')
-    return sum(r['effective_stack_entries'] for r in records)
-
-
+    effective = sum(r['effective_stack_entries'] for r in records)
+    logging.info('Pondération qualité après sélection : %d poses retenues -> %d entrées effectives', len(records), effective)
+    return effective

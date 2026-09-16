@@ -105,7 +105,7 @@ def test_cache_requires_completed_matching_settings(tmp_path):
     output=tmp_path/'result.fits'
     report=tmp_path/'result.drizzle.json'
     assert not cache_matches(output, {'drizzle':'auto'})
-    report.write_text(json.dumps({'quality_pipeline_version':3,'status':'completed','settings':{'drizzle':'auto'}}))
+    report.write_text(json.dumps({'quality_pipeline_version':4,'status':'completed','settings':{'drizzle':'auto'}}))
     assert cache_matches(output, {'drizzle':'auto'})
     assert not cache_matches(output, {'drizzle':'off'})
     report.write_text(json.dumps({'status':'failed','settings':{'drizzle':'auto'}}))
