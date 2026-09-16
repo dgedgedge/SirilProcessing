@@ -183,15 +183,15 @@ Exemple de pipeline Siril par sous-session:
        <output_dir>/<target>/sessions/<session>/<session>_<group>_calibrated
 
 Stack final sur l'ensemble des sorties calibrees d'une cible:
-    1) convert <target>_ -out=<work_dir>/<target>/stacking/output
+    1) convert <target>_ -out=<work_dir>/<target>/stacking/01_registration
     2) seqfindstar <target>_
     3) seqplatesolve <target>_ -force -nocache -disto=ps_distortion si active
     4) register <target>_ -2pass -transf=<align_transform>
     5) Analyse Drizzle et selection ; seqapplyreg avec -drizzle si pertinent
        (sinon dematricage CFA et alignement standard).
     6) stack r_r_<target>_ <method/rejection> ... -output_norm -out=<target>_combined
-       Les dossiers temporaires stacking/input et stacking/output sont reconstruits
-       avant chaque stack pour eviter les melanges avec une execution precedente.
+       Repertoires fixes dans stacking : 00_inputs, 01_registration, 02_quality,
+       03_capability (ou SKIPPED.txt), 04_stacking. Un repertoire par script.
        Le stack median utilise -framing=min pour eviter les images alignees
        de tailles differentes.
 

@@ -415,3 +415,49 @@ Le JSON contient `roundness`, `nbstars`, `roundness_multiplicity` et
 `quality_selection`. La version du parcours de qualité invalide les anciens
 résultats en cache. Si la sélection qualité échoue ou ne retient aucune pose,
 l’empilement s’arrête explicitement, y compris en mode `force`.
+
+### Raisons précises dans le journal
+
+Chaque critère refusé est affiché sur sa propre ligne avec les valeurs mesurées
+et les seuils effectivement appliqués. Une donnée absente est distinguée d’un
+seuil dépassé. La mémoire RAM, le disque de travail et le disque de sortie sont
+vérifiés et affichés séparément, avec les besoins estimés et les disponibilités
+en Gio et en octets. Les critères satisfaits ne figurent pas parmi les raisons.
+Pour les transformations, le diagnostic indique le nombre de poses hors tolérance
+et la pose présentant le dépassement relatif maximal, avec le coefficient de
+matrice concerné, sa valeur attendue et sa tolérance. Il n’en déduit pas une cause
+physique que cette seule comparaison ne permet pas de déterminer.
+
+Le JSON conserve les codes `reasons` pour la compatibilité et ajoute
+`reason_details` (critère et message précis), également dans les analyses par
+sous-session. Le pourcentage de poses retenues regroupe les rejets qualité et
+alignement : le journal ne les attribue pas tous à un mauvais alignement.
+
+### Répertoires fixes et numéros d’étapes
+
+Le stacking utilise des chemins déterministes dans `work/<cible>/stacking/` :
+
+| Étape | Répertoire | Script / résultat |
+| --- | --- | --- |
+| 00 | `00_inputs/` | Liens vers les entrées calibrées |
+| 01 | `01_registration/` | `01_registration.sps`, FITS natifs et transformations |
+| 02 | `02_quality/` | Copie de la séquence, filtres, pondération et analyse Python |
+| 03 | `03_capability/` | `03_capability.sps` si Drizzle sélectionné, sinon `SKIPPED.txt` |
+| 04 | `04_stacking/` | `04_stacking.sps`, rééchantillonnage et empilement |
+
+Chaque script est stocké et exécuté dans le répertoire de son étape. Aucun nom
+aléatoire ni répertoire `run_*` n’est créé. Chaque reconstruction nettoie ces
+étapes puis les recrée aux mêmes chemins ; elles représentent le dernier traitement.
+Les anciens dossiers `run_*` ne sont pas réutilisés ; `--force-stacking` conserve
+son rôle de nettoyage complet de l’arborescence de stacking.
+
+Les métadonnées modifiables sont copiées de 01 vers 02 puis de 02 vers 04 ; les
+FITS sont référencés par liens absolus. Ainsi, les séquences de l’alignement initial
+et de la sélection restent consultables après l’empilement. Les scripts et logs
+ne sont pas recopiés. Le contrôle 03 ne produisant aucune donnée image, son saut
+est signalé par un fichier explicatif, sans lien de répertoire supplémentaire.
+Le JSON indique les chemins dans `stages` et l’exécution effective du contrôle dans
+`stages.capability_executed`. Le résultat final reste dans son dossier habituel.
+
+Le [graphique du dataflow](LIGHT_PROCESSOR_GUIDE.md#schéma-du-processus) indique
+les répertoires, scripts, transferts de données et branches optionnelles.

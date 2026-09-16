@@ -74,3 +74,29 @@ def test_run_siril_script_keeps_command_file(tmp_path):
     assert success is True
     assert script_path.exists()
     assert script_path.read_text() == "requires 1.2\nclose\n"
+
+
+@pytest.mark.parametrize('exit_code', [0, 1])
+def test_script_output_saved_to_log_and_logged_only_on_failure(tmp_path, caplog, exit_code):
+    import logging
+
+    executable = _fake_executable(tmp_path)
+    executable.write_text(
+        '#!/usr/bin/env sh\nprintf "sortie normale\\n"\n'
+        'printf "diagnostic erreur\\n" >&2\n'
+        f'exit {exit_code}\n'
+    )
+    siril = Siril(siril_path=str(executable), siril_mode='native')
+    log_path = tmp_path / '04_stacking.log'
+    log_path.write_text('ancien résultat')
+    with caplog.at_level(logging.DEBUG):
+        success = siril.run_siril_script('close', str(tmp_path), '04_stacking.sps')
+    assert success is (exit_code == 0)
+    assert log_path.read_text() == 'sortie normale\ndiagnostic erreur\n'
+    output_records = [r for r in caplog.records if 'sortie normale' in r.getMessage()]
+    if exit_code:
+        assert len(output_records) == 1
+        assert output_records[0].levelno == logging.ERROR
+        assert 'diagnostic erreur' in output_records[0].getMessage()
+    else:
+        assert not output_records

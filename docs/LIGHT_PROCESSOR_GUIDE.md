@@ -82,12 +82,22 @@ flowchart TD
     M --> N["work/<cible>/sessions/<session>/process<br/>convert light_<groupe>"]
     N --> O["calibrate light_<groupe><br/>dark et master flat si disponible"]
     O --> P["Copie Python des seuls process/pp_light_*<br/>vers output/<cible>/sessions/<session>/<session>_<groupe>_calibrated"]
-    P --> Q{"Cible multi-sessions ?"}
-    Q -->|Non| V["Fin<br/>FITS calibrés disponibles"]
-    Q -->|Oui| R["output/<cible>/stack<br/>stack final de tous les pp_*.fit(s)"]
-    R --> S["<cible>_combined.fit(s)<br/>prévisualisation JPG si produite"]
+    P --> R0
+    subgraph STACK["work/&lt;cible&gt;/stacking — étapes fixes"]
+        R0["00_inputs/<br/>Liens vers les FITS calibrés<br/>Préfiltrage et pondération FWHM"]
+        R0 --> R1["01_registration/<br/>01_registration.sps<br/>Conversion, détection des étoiles, alignement<br/>FITS natifs et transformations .seq"]
+        R1 -->|Copie des métadonnées, liens FITS| R2["02_quality/<br/>Sélection FWHM, rondeur, nombre d’étoiles<br/>Pondération rondeur et diagnostic Drizzle<br/>Séquence sélectionnée, sans script Siril"]
+        R2 --> CHOICE{"Drizzle sélectionné ?"}
+        CHOICE -->|Oui| R3["03_capability/<br/>03_capability.sps<br/>Contrôle de compatibilité Siril"]
+        CHOICE -->|Non| SKIP["03_capability/SKIPPED.txt<br/>Motif de non-exécution"]
+        R3 -->|Compatible : Drizzle ; sinon repli auto| R4
+        R3 -->|Incompatible en mode force| FAIL["Arrêt et diagnostic d’échec"]
+        SKIP --> R4
+        R2 -.->|Copie indépendante des métadonnées et liens FITS| R4["04_stacking/<br/>04_stacking.sps<br/>Drizzle ou traitement standard<br/>Empilement pondéré"]
+    end
+    R4 --> S["output/&lt;cible&gt;/stack/<br/>&lt;cible&gt;_combined.fit(s)<br/>&lt;cible&gt;_combined.drizzle.json<br/>Prévisualisation JPG si produite"]
     S --> T{"Option --mosaic ?"}
-    T -->|Oui| U["mosaic_<nom><br/>assemblage des résultats"]
+    T -->|Oui| U["Répertoire de travail mosaic_&lt;nom&gt;<br/>Assemblage des résultats"]
     T -->|Non| V["Fin"]
     U --> V
 ```
@@ -111,7 +121,7 @@ Cette copie est volontairement faite hors de Siril pour éviter que `convert pp_
 
 Le stack final d'une cible multi-sessions utilise ensuite :
 
-1. `convert <target>_ -out=<work_dir>/<target>/stacking/output`
+1. `convert <target>_ -out=<work_dir>/<target>/stacking/01_registration`
 2. `seqfindstar <target>_`
 3. `seqplatesolve <target>_ -force -nocache -disto=ps_distortion` si activé
 4. `register <target>_ -2pass -transf=<align_transform>`
@@ -120,11 +130,15 @@ Le stack final d'une cible multi-sessions utilise ensuite :
 7. `seqapplyreg r_<target>_ -framing=<max|min>`
 8. `stack r_r_<target>_ rej <low> <high> -output_norm -out=<target>_combined`
 
-Avant chaque stack final, les sous-répertoires temporaires `<cible>/stacking/input` et
-`<cible>/stacking/output` sont reconstruits à zéro. Cela évite de mélanger les liens
-préparés pour la séquence courante avec d'anciens FITS `M33_*.fit(s)`, `r_M33_*.fit(s)`
-ou `r_r_M33_*.fit(s)` produits par une exécution précédente. Le log de stacking et le
-script Siril `.sps`, placés directement dans `<cible>/stacking/`, sont conservés.
+Chaque reconstruction recrée les répertoires fixes `00_inputs`, `01_registration`,
+`02_quality`, `03_capability` et `04_stacking` dans `<cible>/stacking/`.
+Les scripts portent le même numéro que leur répertoire. Les métadonnées sont
+copiées entre étapes et les FITS référencés par liens absolus. La sélection qualité
+ne modifie pas l’alignement initial ; l’empilement ne modifie pas la sélection
+conservée dans `02_quality`. Le contrôle de compatibilité sauté est signalé par
+`03_capability/SKIPPED.txt`. Le log global reste dans `<cible>/stacking/`.
+Ces chemins décrivent la dernière reconstruction ; les anciens dossiers `run_*`
+ne sont plus utilisés. `--force-stacking` nettoie toute l’arborescence de stacking.
 
 Le cadrage vaut `max` pour les stacks de type moyenne/rejet. Pour `--stack-method median`,
 le cadrage passe automatiquement à `min`, car Siril ne peut pas empiler en médiane des
@@ -205,9 +219,11 @@ Cette logique s'applique aussi aux flats quand `--no-dark` n'est pas activé :
     │       └── process/                # Lights convertis et pp_light calibrés
     └── stacking/
         ├── <cible>_stacking.log
-        ├── stack_<cible>.sps
-        ├── input/                      # Liens/copies vers FITS calibrés, reconstruit à chaque stack
-        └── output/                     # Séquence Siril temporaire, reconstruit à chaque stack
+        ├── 00_inputs/                  # Entrées calibrées
+        ├── 01_registration/            # 01_registration.sps + alignements natifs
+        ├── 02_quality/                 # Sélection, poids, séquence prête à appliquer
+        ├── 03_capability/              # 03_capability.sps ou SKIPPED.txt
+        └── 04_stacking/                # 04_stacking.sps + rééchantillonnage et stack
 ```
 
 Les répertoires `flat_<group_key>`, `light_<group_key>`, `flat_process`, `process` et

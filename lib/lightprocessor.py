@@ -1231,10 +1231,18 @@ def stack_session_outputs(
         if transient_dir.exists():
             shutil.rmtree(transient_dir)
 
-    input_dir.mkdir(parents=True, exist_ok=True)
-    output_stack_dir.mkdir(parents=True, exist_ok=True)
-
     stack_cfg = stack_params or {}
+    if any(key in stack_cfg for key in ("drizzle", "nbstars_filter", "roundness_weighted")):
+        from lib.drizzle import STACK_STAGES, reset_stage
+        run_dir = session_stack_dir
+        for stage in STACK_STAGES:
+            reset_stage(run_dir / stage)
+        input_dir = run_dir / "00_inputs"
+        output_stack_dir = run_dir / "01_registration"
+    else:
+        run_dir = session_stack_dir
+        input_dir.mkdir(parents=True, exist_ok=True)
+        output_stack_dir.mkdir(parents=True, exist_ok=True)
 
     local_report = {
         "target_name": target_name,
@@ -1439,10 +1447,10 @@ close'''
         from lib.drizzle import run_stack
         prepare = script.split(seqapplyreg_line)[0].rstrip()
         success = run_stack(siril, files_for_stack, stack_cfg, output_stack_dir,
-                            session_stack_dir, sequence_prefix, output_path,
+                            run_dir, sequence_prefix, output_path,
                             prepare, stack_line, framing, stack_report=stack_report)
     else:
-        success = siril.run_siril_script(script, str(session_stack_dir), script_name=f"stack_{target_name}.sps")
+        success = siril.run_siril_script(script, str(output_stack_dir), script_name=f"stack_{target_name}.sps")
     if not success:
         return None
 

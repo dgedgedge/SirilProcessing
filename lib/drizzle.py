@@ -166,6 +166,89 @@ def coverage(points, period=1.0, bins=4):
                 independent_phases=len(unique), histogram=hist.astype(int).tolist())
 
 
+def explain_reasons(result, cfg, metadata, resources, records):
+    """Describe only failed checks, using the same thresholds as the decision."""
+    details = []
+    def add(code, message):
+        details.append({'criterion': code, 'message': message})
+
+    n = result['images_retained']
+    for code in result['reasons']:
+        if code == 'sampling':
+            fwhm = result['fwhm_pixels']
+            if fwhm is None:
+                cause = f'{n} poses retenues ; analyse nécessitant au moins 3 poses' if n < 3 else 'aucune FWHM positive disponible sur les poses retenues'
+                add(code, f'FWHM médiane indisponible : {cause}.')
+            else:
+                add(code, f"FWHM médiane = {fwhm:.3f} px ; activation exigeant une valeur strictement inférieure à {float(cfg.get('drizzle_fwhm_limit', 2.5)):.3f} px.")
+        elif code == 'alignment':
+            total = metadata['unique_inputs']
+            add(code, f'Sélection qualité/alignement : {n}/{total} poses indépendantes retenues ({100*n/total:.2f} %) ; minimum requis = 90 % ({int(np.ceil(.9*total))} poses). {total-n} poses écartées au total ; ce critère ne distingue pas rejet qualité et échec d’alignement.')
+        elif code == 'drift':
+            drift = result['drift_px']
+            if drift is None:
+                add(code, f'Dérive non calculée : {n} poses retenues ; au moins 3 poses nécessaires.')
+            else:
+                add(code, f"Dérive lente estimée = {np.linalg.norm(drift):.3f} px (X={drift[0]:+.3f}, Y={drift[1]:+.3f}) ; norme requise strictement inférieure à {float(cfg.get('drizzle_max_drift', 10)):.3f} px.")
+        elif code == 'resources':
+            checks = [('Mémoire RAM', 'estimated_memory_bytes', 'available_memory_bytes'),
+                      ('Disque de travail', 'estimated_disk_bytes', 'free_disk_bytes'),
+                      ('Disque de sortie', 'estimated_output_bytes', 'free_output_disk_bytes')]
+            for label, need_key, free_key in checks:
+                need, free = resources.get(need_key), resources.get(free_key)
+                if need is None or free is None:
+                    missing = ', '.join(key for key in (need_key, free_key) if resources.get(key) is None)
+                    add(code, f'{label} : vérification impossible ; données absentes : {missing}.')
+                elif need >= free:
+                    add(code, f'{label} : besoin estimé {need/2**30:.3f} Gio ({need} octets), disponible {free/2**30:.3f} Gio ({free} octets) ; le besoin doit être strictement inférieur au disponible.')
+        elif code == 'translation_model':
+            bad = []
+            for record in records:
+                if 'homography' not in record:
+                    continue
+                h = np.array(record['homography'])
+                for row, col in [(0,0),(0,1),(1,0),(1,1),(2,0),(2,1)]:
+                    target = 1. if row == col else 0.
+                    limit = (1e-7 if row == 2 else .01) + 1e-5*abs(target)
+                    difference = abs(h[row,col]-target)
+                    if difference > limit:
+                        bad.append((difference/limit, record, row, col, h[row,col], target, limit))
+            if bad:
+                _, record, row, col, value, target, limit = max(bad, key=lambda item: item[0])
+                count = len({id(item[1]) for item in bad})
+                source = record.get('source', f"pose index {record.get('sequence_index', '?')}")
+                add(code, f'Modèle de translation : {count}/{n} poses dépassent la tolérance des matrices. Dépassement relatif maximal sur {source} : H[{row},{col}]={value:.9g}, valeur attendue={target:g}, écart={abs(value-target):.9g} > tolérance={limit:.9g}. Ce test ne permet pas à lui seul d’attribuer l’écart à une rotation ou à une déformation.')
+        elif code == 'image_count':
+            add(code, f"Nombre de poses indépendantes : {n} ; minimum requis = {int(cfg.get('drizzle_min_frames', 30))}.")
+        elif code == 'dithering':
+            if n < 3:
+                add(code, f'Dithering non analysé : {n} poses retenues ; au moins 3 nécessaires.')
+            else:
+                if result['dither_count'] < 3:
+                    add(code, f"Dithering : {result['dither_count']} sauts significatifs détectés ; minimum requis = 3 (seuil de saut = {result['jump_threshold_px']:.3f} px après retrait de la dérive).")
+                if result.get('direction_count', 0) < 2:
+                    add(code, f"Directions des sauts : {result.get('direction_count', 0)} secteurs angulaires occupés ; minimum requis = 2 secteurs de 45°.")
+        elif code in ('coverage', 'cfa'):
+            if code == 'cfa' and n < 60:
+                add(code, f'CFA : {n} poses indépendantes ; minimum requis = 60.')
+            coverages = (result['cfa_coverage'] or {}) if code == 'cfa' else {'sub-pixel': result['coverage']}
+            if not coverages:
+                add(code, 'Couverture CFA non calculée : moins de 3 poses retenues.')
+            for label, cov in coverages.items():
+                if cov is None:
+                    add(code, f'Couverture {label} non calculée : {n} poses ; au moins 3 nécessaires.')
+                    continue
+                minimum = .75 if code == 'cfa' else float(cfg.get('drizzle_min_coverage', .75))
+                for metric, title, threshold in [('occupied', 'fraction de cellules occupées', minimum),
+                                                  ('uniformity', 'uniformité', .6),
+                                                  ('independent_phases', 'phases indépendantes', 12)]:
+                    if cov[metric] < threshold:
+                        add(code, f'Couverture {label} : {title} = {cov[metric]:.4g} ; minimum requis = {threshold:.4g}.')
+        else:
+            add(code, str(code))
+    return details
+
+
 def analyse(records, cfg, metadata, resources):
     n = len(records)
     validate_settings(cfg)
@@ -194,7 +277,7 @@ def analyse(records, cfg, metadata, resources):
         amplitudes = np.linalg.norm(vectors, axis=1)
         directions = np.unique(np.floor((np.arctan2(vectors[:, 1], vectors[:, 0])+np.pi)/(np.pi/4)).astype(int)) if len(vectors) else []
         result.update(dithering_detected=bool(len(indices) >= 3 and len(directions) >= 2),
-                      dither_count=len(indices), drift_px=(drift*(n-1)).tolist(),
+                      dither_count=len(indices), direction_count=len(directions), drift_px=(drift*(n-1)).tolist(),
                       noise_px=float(noise), jump_threshold_px=threshold,
                       dither_indices=indices.tolist(), coverage=coverage(points))
         if len(indices):
@@ -243,13 +326,56 @@ def analyse(records, cfg, metadata, resources):
                   reasons=[k for k,v in gates.items() if not v],
                   decision=('CFA Drizzle' if metadata['native_cfa'] else 'Drizzle') if enabled else 'Drizzle désactivé',
                   sampling_out=metadata['sampling_arcsec_px'] / scale if enabled and metadata['sampling_arcsec_px'] else metadata['sampling_arcsec_px'])
+    result['reason_details'] = explain_reasons(result, cfg, metadata, resources, records)
     return result
+
+
+STACK_STAGES = ('00_inputs', '01_registration', '02_quality', '03_capability', '04_stacking')
+
+
+def reset_stage(path):
+    """Recreate a named stage, unlinking directory aliases rather than following them."""
+    path = Path(path)
+    if path.is_symlink() or path.is_file():
+        path.unlink()
+    elif path.exists():
+        shutil.rmtree(path)
+    path.mkdir(parents=True)
+    return path
+
+
+def copy_stage_inputs(source, destination):
+    """Copy mutable metadata; reference immutable FITS without duplicating pixels."""
+    def transfer(src, dst):
+        src, dst = Path(src), Path(dst)
+        if src.name.lower().endswith(('.fit', '.fits', '.fts', '.fit.fz', '.fits.fz')):
+            dst.symlink_to(src.resolve())
+        else:
+            shutil.copy2(src, dst)
+        return str(dst)
+
+    for entry in Path(source).iterdir():
+        if entry.resolve() == destination.resolve() or entry.name in STACK_STAGES:
+            continue
+        if entry.suffix in ('.sps', '.log'):
+            continue
+        target = destination / entry.name
+        if entry.is_dir():
+            shutil.copytree(entry, target, copy_function=transfer)
+        else:
+            transfer(entry, target)
 
 
 def run_stack(siril, files, cfg, input_dir, work_dir, sequence, output_path, prepare, stack_line, framing, stack_report=None):
     """Register untouched inputs, diagnose, then apply exactly one resampling."""
-    if not siril.run_siril_script(prepare+'\nclose', str(work_dir), script_name='drizzle_registration.sps'):
+    if not siril.run_siril_script(prepare+'\nclose', str(input_dir), script_name='01_registration.sps'):
         return False
+    registration_dir = Path(input_dir)
+    quality_dir = reset_stage(Path(work_dir) / '02_quality')
+    stacking_dir = reset_stage(Path(work_dir) / '04_stacking')
+    capability_path = reset_stage(Path(work_dir) / '03_capability')
+    copy_stage_inputs(registration_dir, quality_dir)
+    input_dir = quality_dir
     headers = [fits.getheader(p) for p in files]
     first = headers[0]
     native = first.get('NAXIS', 0) == 2 and first.get('BAYERPAT', '').strip() in ('RGGB','BGGR','GRBG','GBRG')
@@ -298,17 +424,26 @@ def run_stack(siril, files, cfg, input_dir, work_dir, sequence, output_path, pre
     resources = dict(pixel_multiplier=scale**2, estimated_disk_bytes=frame_bytes*(max(len(files), effective_entries)+2)*2,
                      estimated_memory_bytes=frame_bytes*8, available_memory_bytes=available,
                      free_disk_bytes=shutil.disk_usage(input_dir).free)
+    resources['estimated_output_bytes'] = frame_bytes*2
     resources['free_output_disk_bytes'] = shutil.disk_usage(Path(output_path).parent).free
     resources['sufficient'] = frame_bytes*2 < resources['free_output_disk_bytes'] and resources['estimated_disk_bytes'] < resources['free_disk_bytes'] and resources['estimated_memory_bytes'] < available
     decision = analyse(records, cfg, metadata, resources)
-    supported = siril.run_siril_script('requires 1.4\nclose', str(work_dir), script_name='drizzle_capability.sps') if decision['enabled'] else None
+    supported, capability_dir = None, None
+    if decision['enabled']:
+        capability_dir = capability_path
+        supported = siril.run_siril_script(f'requires 1.4\ncd {capability_dir}\nclose', str(capability_dir), script_name='03_capability.sps')
+    if capability_dir is None:
+        (capability_path / 'SKIPPED.txt').write_text('Étape non exécutée : Drizzle non sélectionné après analyse qualité.\n')
     if supported is False:
         decision['reasons'].append('Siril 1.4 requis')
+        decision['reason_details'].append({'criterion': 'siril_version', 'message': 'Vérification Siril échouée : le script requires 1.4 a échoué. Consulter la sortie de 03_capability.sps pour distinguer version incompatible et erreur d’exécution.'})
         decision['enabled'] = False
         decision['decision'] = 'Drizzle désactivé'
         decision['sampling_out'] = sampling
     decision['siril_drizzle_supported'] = supported
     report = dict(schema_version=1, quality_pipeline_version=2,
+                  stages=dict(registration=str(registration_dir), quality=str(quality_dir), stacking=str(stacking_dir),
+                              capability=str(capability_path), capability_executed=capability_dir is not None),
                   quality_selection=dict(independent_retained=len(records), effective_stack_entries=effective_entries,
                                          rejected=metadata['unique_inputs']-len(records),
                                          before_drizzle=True), created_utc=datetime.now(timezone.utc).isoformat(), metadata=metadata,
@@ -331,15 +466,9 @@ def run_stack(siril, files, cfg, input_dir, work_dir, sequence, output_path, pre
         frame['ddx'] = frame['dx'] - records[i-1]['dx'] if same_session else None
         frame['ddy'] = frame['dy'] - records[i-1]['dy'] if same_session else None
         frame['displacement_px'] = float(np.hypot(frame['ddx'], frame['ddy'])) if same_session else None
+    if error:
+        decision['reason_details'].insert(0, {'criterion': 'analysis_error', 'message': f'Analyse interrompue : {error}.'})
     save()
-    reasons_fr = {
-        'dithering': 'dithering non démontré', 'image_count': 'nombre de poses insuffisant',
-        'coverage': 'couverture sub-pixel insuffisante ou irrégulière',
-        'sampling': 'FWHM absente ou bénéfice en résolution incertain',
-        'alignment': 'trop de poses rejetées ou mal alignées', 'drift': 'dérive excessive ou inconnue',
-        'resources': 'mémoire ou espace disque insuffisant', 'cfa': 'couverture Bayer insuffisante',
-        'translation_model': 'rotation ou déformation incompatible avec le diagnostic par translation',
-    }
     logging.info(
         'Analyse Drizzle\nImages analysées : %s ; retenues : %s\n'
         'Dithering détecté : %s ; dithers : %s ; fréquence : %s poses\n'
@@ -350,14 +479,14 @@ def run_stack(siril, files, cfg, input_dir, work_dir, sequence, output_path, pre
         decision['dither_count'], decision['frequency_frames'], decision['amplitude_median_px'],
         decision['coverage'], metadata['bayer_pattern'], sampling, decision['fwhm_pixels'],
         decision['drizzle_score'], decision['decision'], decision['pixfrac'], decision['kernel'],
-        '; '.join(reasons_fr.get(reason, reason) for reason in decision['reasons']) or 'critères satisfaits')
+        '\n  - ' + '\n  - '.join(item['message'] for item in decision['reason_details']) if decision['reason_details'] else 'tous les critères sont satisfaits')
     if cfg.get('drizzle') == 'off':
         logging.info('Drizzle désactivé explicitement (mode off).')
     elif not decision['enabled']:
-        logging.info('Drizzle non activé automatiquement : données insuffisantes ou bénéfice incertain.')
+        logging.info('Drizzle non activé automatiquement : voir les critères détaillés ci-dessus.')
     else:
         if decision['reasons']:
-            logging.warning('Drizzle forcé malgré ces critères non satisfaits : %s', ', '.join(decision['reasons']))
+            logging.warning('Drizzle forcé malgré ces critères non satisfaits : %s', '; '.join(item['message'] for item in decision['reason_details']))
         logging.info('Drizzle ×%s : pixels et stockage approximatif ×%s', decision['scale'], scale**2)
     if error or not records:
         report['status'] = 'failed'
@@ -365,6 +494,8 @@ def run_stack(siril, files, cfg, input_dir, work_dir, sequence, output_path, pre
         logging.error('Sélection qualité impossible, empilement interrompu : %s', error or 'aucune pose retenue')
         return False
     logging.info('Sélection AVANT Drizzle : %d poses indépendantes, %d entrées pondérées', len(records), effective_entries)
+    copy_stage_inputs(quality_dir, stacking_dir)
+    input_dir = stacking_dir
     filters = '-filter-included'
     prefix = sequence
     commands = ['requires 1.4' if decision['enabled'] else 'requires 1.2', f'cd {input_dir}']
@@ -387,7 +518,7 @@ def run_stack(siril, files, cfg, input_dir, work_dir, sequence, output_path, pre
         save()
         logging.error('Drizzle forcé impossible : Siril 1.4 requis')
         return False
-    success = siril.run_siril_script('\n'.join(commands), str(work_dir), script_name='drizzle_stack.sps')
+    success = siril.run_siril_script('\n'.join(commands), str(stacking_dir), script_name='04_stacking.sps')
     success = success and any(Path(str(output_path)+ext).exists() for ext in ('.fit', '.fits'))
     report['status'] = 'completed' if success else 'failed'
     if success:

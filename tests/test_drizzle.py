@@ -141,12 +141,16 @@ def test_all_quality_controls_precede_drizzle(tmp_path, mode, weighted):
     seq.write_text("S 'light_' 1 6 6 3 2 6 0 0 0\nL 1\n"+
                    ''.join(f'I {i+1} 1\n' for i in range(6))+
                    ''.join(f'R0 1.7 1.8 {r} 1 0 {n} H 1 0 {i*.2} 0 1 0 0 0 1\n' for i,(r,n) in enumerate(zip(rounds,stars))))
+    original_seq = seq.read_text()
+    calls = []
     cfg={'drizzle':mode,'roundness_filter':'.5','nbstars_filter':'10',
          'roundness_weighted':weighted,'robust_realign':False}
     class FakeSiril:
         def run_siril_script(self, script, *args, **kwargs):
+            calls.append(Path(args[0]))
             if '\nstack ' in script:
-                _, images, reg = read_registration(seq)
+                assert seq.read_text() == original_seq
+                _, images, reg = read_registration(Path(args[0])/seq.name)
                 assert images[0][2] == images[1][2] == '0'
                 assert len(images)==len(reg)==(8 if weighted else 6)
                 assert '-filter-included' in script
@@ -159,6 +163,17 @@ def test_all_quality_controls_precede_drizzle(tmp_path, mode, weighted):
             return True
     assert run_stack(FakeSiril(), files, cfg, tmp_path,tmp_path,'light_',tmp_path/'final',
                      'requires 1.2', 'stack r_light_ rej 3 3 -out=final', 'min')
+    assert len(calls) == len(set(calls))
+    assert calls[-1] == tmp_path/'04_stacking'
+    assert (tmp_path/'02_quality'/seq.name).read_bytes() == (tmp_path/'04_stacking'/seq.name).read_bytes()
+    assert not list(tmp_path.glob('run_*'))
+    assert not list(tmp_path.glob('03_stacking_*'))
+    if mode != 'force':
+        assert 'non exécutée' in (tmp_path/'03_capability'/'SKIPPED.txt').read_text()
+    else:
+        assert tmp_path/'03_capability' in calls
+    assert seq.read_text() == original_seq
+    assert not (tmp_path/'light_007.fits').exists()
 
 
 def test_nbstars_filters_absolute_percent_and_mad():
@@ -173,3 +188,72 @@ def test_old_quality_cache_is_invalidated(tmp_path):
     from lib.drizzle import cache_matches
     (tmp_path/'result.drizzle.json').write_text(json.dumps({'status':'completed','settings':{}}))
     assert not cache_matches(tmp_path/'result.fits', {})
+
+
+def test_precise_reasons_distinguish_missing_and_exceeded():
+    result=analyse(records(np.arange(12).reshape(6,2), 3.2),
+                   {'drizzle_fwhm_limit':2.7,'drizzle_max_drift':4}, metadata(10), {'sufficient':True})
+    messages={d['criterion']:d['message'] for d in result['reason_details']}
+    assert '3.200 px' in messages['sampling'] and '2.700 px' in messages['sampling']
+    assert '6/10' in messages['alignment'] and '9 poses' in messages['alignment']
+    assert '14.142 px' in messages['drift'] and '4.000 px' in messages['drift']
+    missing=analyse([], {}, metadata(10), {'sufficient':True})
+    messages={d['criterion']:d['message'] for d in missing['reason_details']}
+    assert 'indisponible' in messages['sampling'] and '0 poses' in messages['sampling']
+    assert 'non calculée' in messages['drift']
+
+
+def test_resource_reasons_report_only_failing_resources():
+    resources={'sufficient':False, 'estimated_memory_bytes':2**31, 'available_memory_bytes':2**30,
+               'estimated_disk_bytes':100, 'free_disk_bytes':200,
+               'estimated_output_bytes':300, 'free_output_disk_bytes':250}
+    result=analyse([], {}, metadata(1), resources)
+    messages=[d['message'] for d in result['reason_details'] if d['criterion']=='resources']
+    assert len(messages)==2
+    assert 'Mémoire RAM' in messages[0] and '2.000 Gio' in messages[0] and '1.000 Gio' in messages[0]
+    assert 'Disque de sortie' in messages[1] and '300 octets' in messages[1] and '250 octets' in messages[1]
+    assert not any('Disque de travail' in m for m in messages)
+
+
+def test_transform_reason_identifies_pose_coefficient_and_tolerance():
+    frames=records(np.zeros((4,2)))
+    for i,frame in enumerate(frames):
+        frame.update(source=f'pose{i}.fits',homography=np.eye(3).tolist())
+    frames[2]['homography'][0][1]=.02
+    result=analyse(frames, {}, metadata(4), {'sufficient':True})
+    message=next(d['message'] for d in result['reason_details'] if d['criterion']=='translation_model')
+    assert '1/4 poses' in message and 'pose2.fits' in message
+    assert 'H[0,1]=0.02' in message and 'tolérance=0.01' in message
+
+
+def test_stage_transfer_isolates_metadata_and_references_fits(tmp_path):
+    from lib.drizzle import copy_stage_inputs
+    source=tmp_path/'registration';source.mkdir()
+    dest=tmp_path/'stacking';dest.mkdir()
+    (source/'light_.seq').write_text('original')
+    fits.writeto(source/'light_001.fits',np.ones((4,4)))
+    (source/'registration.sps').write_text('close')
+    (source/'distortion').mkdir()
+    (source/'distortion'/'map.txt').write_text('calibration')
+    copy_stage_inputs(source,dest)
+    assert (dest/'light_001.fits').is_symlink()
+    assert (dest/'light_001.fits').resolve()==source/'light_001.fits'
+    (dest/'light_.seq').write_text('selection changed')
+    assert (source/'light_.seq').read_text()=='original'
+    assert not (dest/'registration.sps').exists()
+    assert (dest/'distortion'/'map.txt').read_text()=='calibration'
+
+
+def test_reset_numbered_stage_cleans_previous_outputs_and_unlinks_alias(tmp_path):
+    from lib.drizzle import reset_stage
+    stage=tmp_path/'04_stacking'
+    reset_stage(stage)
+    (stage/'stale.fits').write_text('old')
+    assert reset_stage(stage)==stage
+    assert list(stage.iterdir())==[]
+    elsewhere=tmp_path/'saved';elsewhere.mkdir()
+    (elsewhere/'keep').write_text('preserve')
+    alias=tmp_path/'03_capability';alias.symlink_to(elsewhere,target_is_directory=True)
+    reset_stage(alias)
+    assert not alias.is_symlink()
+    assert (elsewhere/'keep').read_text()=='preserve'

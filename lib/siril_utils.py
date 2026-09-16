@@ -182,7 +182,7 @@ class Siril:
     
     def run_siril_script(self, siril_script_content: str, working_dir: str, script_name: str = None) -> bool:
         """
-        Exécute un script Siril temporaire en utilisant la configuration de l'instance.
+        Exécute un script Siril et conserve stdout/stderr dans le fichier .log associé.
         
         Args:
             siril_script_content: Contenu du script Siril à exécuter
@@ -207,11 +207,13 @@ class Siril:
             safe_name = f"siril_script_{timestamp}.sps"
 
         script_path = working_path / safe_name
+        log_path = script_path.with_suffix(".log")
         try:
+            logging.info("Exécution du script Siril %s dans %s", script_path, working_dir)
             with open(script_path, "w") as f:
                 f.write(siril_script_content)
 
-            logging.info(f"Exécution du script Siril {script_path} dans {working_dir}:\n{siril_script_content}")
+            logging.debug("Contenu du script Siril %s :\n%s", script_path, siril_script_content)
 
             # Construction de la commande selon le mode
             if self._siril_mode == "native":
@@ -225,21 +227,21 @@ class Siril:
                 logging.error(f"Mode Siril inconnu: {self._siril_mode}")
                 return False
 
-            result = subprocess.run(
-                cmd,
-                cwd=working_dir,
-                capture_output=True,
-                text=True,
-                check=False
-            )
+            with log_path.open("w", encoding="utf-8") as log_file:
+                result = subprocess.run(
+                    cmd,
+                    cwd=working_dir,
+                    stdout=log_file,
+                    stderr=subprocess.STDOUT,
+                    check=False
+                )
             if result.returncode != 0:
                 logging.error(f"Le script Siril a échoué avec le code d'erreur {result.returncode}.")
-                logging.error(f"Stdout Siril:\n{result.stdout}")
-                logging.error(f"Stderr Siril:\n{result.stderr}")
+                logging.error("Sortie Siril (%s) :\n%s", log_path,
+                              log_path.read_text(encoding="utf-8", errors="replace"))
                 return False
             else:
                 logging.info("Script Siril exécuté avec succès.")
-                logging.debug(f"Stdout Siril:\n{result.stdout}")
                 return True
         except FileNotFoundError:
             logging.error(f"Exécutable Siril introuvable à '{self._siril_path}'. Veuillez vérifier le chemin.")
@@ -247,8 +249,6 @@ class Siril:
         except Exception as e:
             logging.error(f"Erreur lors de l'exécution du script Siril: {e}")
             return False
-        finally:
-            logging.info("Script Siril conservé: %s", script_path)
 
 
 # Fonction de compatibilité pour maintenir l'ancienne interface
@@ -269,5 +269,3 @@ def run_siril_script(siril_script_content: str, working_dir: str, siril_path: st
     """
     siril_instance = Siril(siril_path=siril_path, siril_mode=siril_mode)
     return siril_instance.run_siril_script(siril_script_content, working_dir)
-
-
