@@ -1,3 +1,7 @@
+# Drizzle : diagnostic et rééchantillonnage
+
+[Documentation](../../README.md) › [Filtrage](../README.md) › [Stacking](README.md)
+
 ## Détection automatique du dithering et activation du Drizzle
 
 L'outil doit analyser automatiquement les séquences d'images afin de déterminer :
@@ -386,16 +390,23 @@ Le parcours commun aux modes `off`, `auto` et `force` respecte cet ordre :
 
 1. Préparation des FITS compatibles, sans rejet FWHM ni pondération.
 2. Calcul des transformations et mesures des étoiles sur les poses natives.
-3. Filtrage FWHM, rondeur et nombre d’étoiles sur les poses indépendantes.
+3. Plafond FWHM non pondérée (`--max-fwhm`, en pixels natifs, `0` le désactive),
+   puis filtres FWHM pondérée par seuil et proportionnel (indépendants et cumulables),
+   rondeur et nombre d’étoiles sur les poses indépendantes, puis
+   [contrôle des profils stellaires](STELLAR_PROFILE_FILTER.md) sur leurs pixels
+   (R80 et allongement cohérent, actif par défaut). Seul le seuil
+   statistique `1.8k` est actif par défaut parmi les filtres FWHM.
 4. Pondérations FWHM et rondeur sur les poses retenues, dans `quality_filter.py`.
 5. Analyse du dithering et choix du Drizzle sur les poses indépendantes retenues.
-6. Application des transformations, avec Drizzle si activé, puis empilement pondéré.
+6. Contrôle géométrique avant chaque application de transformation, y compris
+   après dématriçage ou réalignement robuste, puis empilement pondéré.
+   Les détails figurent dans [la référence de sélection](IMAGE_SELECTION.md#cohérence-géométrique-des-alignements).
 
 Le filtre `--nbstars-filter` rejette les nombres aberrants dans les deux sens
 par rapport à la médiane : `1.8k` (défaut) autorise ±1,8 × 1,4826 MAD ; `30`
 autorise ±30 étoiles ; `20%` autorise ±20 % de la médiane. `none` le désactive.
 Les seuils sont calculés sur les poses indépendantes restantes après les filtres
-FWHM et rondeur. Ces formats remplacent les anciens seuils inférieurs et quotas.
+FWHM et rondeur.
 Voir [la référence de sélection](IMAGE_SELECTION.md) pour les limites,
 notamment face aux étoiles dédoublées et aux nuages.
 
@@ -414,8 +425,7 @@ rondeur n’est pas remesurée sur les images drizzlées. Les répétitions n’
 ni le nombre de poses indépendantes ni la couverture sub-pixel du diagnostic.
 Le JSON contient `roundness`, `nbstars`, `roundness_multiplicity` et
 `effective_stack_entries` pour chaque pose retenue, ainsi que le bilan
-`quality_selection`. La version du parcours de qualité invalide les anciens
-résultats en cache. Si la sélection qualité échoue ou ne retient aucune pose,
+`quality_selection`. Si la sélection qualité échoue ou ne retient aucune pose,
 l’empilement s’arrête explicitement, y compris en mode `force`.
 
 ### Raisons précises dans le journal
@@ -445,7 +455,7 @@ Le stacking utilise des chemins déterministes dans `work/<cible>/stacking/` :
 | 01 | `01_registration/` | `01_registration.sps`, FITS natifs et transformations |
 | 02 | `02_quality/` | Copie de la séquence, filtres, pondération et analyse Python |
 | 03 | `03_capability/` | `03_capability.sps` si Drizzle sélectionné, sinon `SKIPPED.txt` |
-| 04 | `04_stacking/` | `04_stacking.sps`, rééchantillonnage et empilement |
+| 04 | `04_stacking/` | `04_debayer_registration.sps` et `04_realign.sps` si nécessaires, contrôles géométriques intermédiaires, puis `04_stacking.sps` |
 
 Chaque script est stocké et exécuté dans le répertoire de son étape. Aucun nom
 aléatoire ni répertoire `run_*` n’est créé. Chaque reconstruction nettoie ces
@@ -461,7 +471,7 @@ est signalé par un fichier explicatif, sans lien de répertoire supplémentaire
 Le JSON indique les chemins dans `stages` et l’exécution effective du contrôle dans
 `stages.capability_executed`. Le résultat final reste dans son dossier habituel.
 
-Le [graphique du dataflow](LIGHT_PROCESSOR_GUIDE.md#schéma-du-processus) indique
+Le [graphique du dataflow](../../LIGHT_PROCESSOR_GUIDE.md#schéma-du-processus) indique
 les répertoires, scripts, transferts de données et branches optionnelles.
 
 ### RAM disponible sous Linux

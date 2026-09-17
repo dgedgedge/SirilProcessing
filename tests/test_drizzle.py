@@ -62,18 +62,30 @@ def test_siril_registration_parser(tmp_path):
 
 
 @pytest.mark.parametrize('mode', ['force', 'auto', 'off'])
-def test_pipeline_native_cfa_and_report(tmp_path, mode):
+@pytest.mark.parametrize('bad_alignment', [False, True])
+def test_pipeline_native_cfa_and_report(tmp_path, mode, bad_alignment, simulated_registered_sequence):
     files=[]
     for i in range(4):
         f=tmp_path/f'input{i}.fits'
         h=fits.Header({'BAYERPAT':'RGGB','FOCALLEN':550,'XPIXSZ':3.76,'DATE-OBS':f'2026-09-15T00:00:0{i}'})
         fits.writeto(f,np.ones((10,10)),h);files.append(f)
+        (tmp_path/f'light_{i+1:03d}.fits').symlink_to(f)
     seq=tmp_path/'light_.seq'
     seq.write_text("S 'light_' 1 4 4 3 0 6 0 0 0\n"+''.join(f'I {i+1} 1\n' for i in range(4))+''.join(f'R0 1.7 1.8 .9 1 0 30 H 1 0 {i} 0 1 {i} 0 0 1\n' for i in range(4)))
     class FakeSiril:
         scripts=[]
         def run_siril_script(self, script, *args, **kwargs):
             self.scripts.append(script)
+            directory = Path(args[0])
+            if kwargs.get('script_name') == '04_debayer_registration.sps':
+                overrides = {2: [[.951232,.0476758,114.759],[-.698402,-.0725698,2288.6],[0,0,1]]} if bad_alignment else None
+                simulated_registered_sequence(directory, 'light_', 'debayer_light_', overrides)
+            if kwargs.get('script_name') == '04_realign.sps':
+                from lib.siril_sequence import SirilSequence
+                checked = SirilSequence.read(directory/'debayer_light_.seq')
+                assert checked.images[1].included == (not bad_alignment)
+                assert '-filter-included' in script
+                simulated_registered_sequence(directory, 'debayer_light_', 'r_debayer_light_')
             if '\nstack ' in script:
                 (tmp_path/'final.fit').touch()
             return True
@@ -88,8 +100,34 @@ def test_pipeline_native_cfa_and_report(tmp_path, mode):
         assert '-debayer' not in script
         assert '\nregister r_' not in script
     else:
-        assert 'calibrate light_ -debayer -prefix=debayer_' in script
+        assert any('calibrate light_ -debayer -prefix=debayer_' in part for part in siril.scripts)
+        assert report['final_selection']['independent_retained'] == (3 if bad_alignment else 4)
+        assert any(check['rejected'] for check in report['geometry_checks']) == bad_alignment
         assert '-drizzle' not in script
+
+
+def test_invalid_debayer_alignment_stops_before_any_resampling(tmp_path, simulated_registered_sequence):
+    from lib.siril_sequence import SirilSequence, RegistrationData
+    files = [tmp_path/f'light_{i:03d}.fits' for i in range(1,4)]
+    for path in files:
+        fits.writeto(path, np.ones((20,20)), fits.Header({'BAYERPAT':'RGGB'}))
+    sequence = SirilSequence.from_files(tmp_path/'light_.seq', 'light_', files)
+    for image in sequence.images:
+        image.registrations['R0'] = RegistrationData(2,2,.9,0,.01,200,np.eye(3))
+    sequence.write()
+    scripts = []
+    class FakeSiril:
+        def run_siril_script(self, script, working_dir, script_name=None):
+            scripts.append(script)
+            if script_name == '04_debayer_registration.sps':
+                mirrored = [[-1,0,19],[0,1,0],[0,0,1]]
+                simulated_registered_sequence(working_dir, 'light_', 'debayer_light_',
+                                              {i: mirrored for i in range(1,4)})
+            return True
+    assert not run_stack(FakeSiril(), files, {'drizzle':'off'}, tmp_path, tmp_path, 'light_',
+                         tmp_path/'final', 'requires 1.2', 'stack r_light_ rej 3 3 -out=final', 'min')
+    assert not any('seqapplyreg' in script or '\nstack ' in script for script in scripts)
+    assert json.loads((tmp_path/'final.drizzle.json').read_text())['status'] == 'failed'
 
 
 def test_resources_and_cfa_have_separate_gates():
@@ -105,7 +143,7 @@ def test_cache_requires_completed_matching_settings(tmp_path):
     output=tmp_path/'result.fits'
     report=tmp_path/'result.drizzle.json'
     assert not cache_matches(output, {'drizzle':'auto'})
-    report.write_text(json.dumps({'quality_pipeline_version':4,'status':'completed','settings':{'drizzle':'auto'}}))
+    report.write_text(json.dumps({'quality_pipeline_version':10,'status':'completed','settings':{'drizzle':'auto'}}))
     assert cache_matches(output, {'drizzle':'auto'})
     assert not cache_matches(output, {'drizzle':'off'})
     report.write_text(json.dumps({'status':'failed','settings':{'drizzle':'auto'}}))
@@ -122,23 +160,23 @@ def test_session_boundaries_are_not_dithers():
 
 @pytest.mark.parametrize('mode', ['off', 'auto', 'force'])
 @pytest.mark.parametrize('weighted', [False, True])
-@pytest.mark.parametrize('abnormal_stars', [2, 60])
-def test_all_quality_controls_precede_drizzle(tmp_path, mode, weighted, abnormal_stars):
+@pytest.mark.parametrize('abnormal_stars,raw_fwhm', [(2, 1.7), (60, 1.7), (30, 6.40424)])
+def test_all_quality_controls_precede_drizzle(tmp_path, mode, weighted, abnormal_stars, raw_fwhm):
     files=[]
     for i in range(6):
         f=tmp_path/f'light_{i+1:03d}.fits'
         fits.writeto(f,np.ones((10,10), dtype=np.float32))
         files.append(f)
-    # One elongated exposure, one abnormal star count, four good exposures.
+    # One elongated exposure, one count anomaly or blurred exposure, four good ones.
     rounds=[.3,.8,.6,.7,.8,.9]
     stars=[30,abnormal_stars,30,30,30,30]
     seq=tmp_path/'light_.seq'
     seq.write_text("S 'light_' 1 6 6 3 2 6 0 0 0\nL 1\n"+
                    ''.join(f'I {i+1} 1\n' for i in range(6))+
-                   ''.join(f'R0 1.7 1.8 {r} 1 0 {n} H 1 0 {i*.2} 0 1 0 0 0 1\n' for i,(r,n) in enumerate(zip(rounds,stars))))
+                   ''.join(f'R0 {raw_fwhm if i == 1 else 1.7} 1.8 {r} 1 0 {n} H 1 0 {i*.2} 0 1 0 0 0 1\n' for i,(r,n) in enumerate(zip(rounds,stars))))
     original_seq = seq.read_text()
     calls = []
-    cfg={'drizzle':mode,'roundness_filter':'.5','nbstars_filter':'10',
+    cfg={'drizzle':mode,'roundness_filter':'.5','nbstars_filter':'10', 'max_fwhm': 6,
          'roundness_weighted':weighted,'robust_realign':False}
     class FakeSiril:
         def run_siril_script(self, script, *args, **kwargs):
@@ -153,7 +191,7 @@ def test_all_quality_controls_precede_drizzle(tmp_path, mode, weighted, abnormal
                 assert report['analysis']['images_retained']==4
                 assert report['quality_selection']['effective_stack_entries']==(6 if weighted else 4)
                 assert len(report['frames'])==4
-                assert all(r['roundness']>=.5 and abs(r['nbstars']-30)<=10 for r in report['frames'])
+                assert all(r['fwhm']<=6 and r['roundness']>=.5 and abs(r['nbstars']-30)<=10 for r in report['frames'])
                 (tmp_path/'final.fit').touch()
             return True
     assert run_stack(FakeSiril(), files, cfg, tmp_path,tmp_path,'light_',tmp_path/'final',
@@ -175,7 +213,7 @@ def test_old_quality_cache_is_invalidated(tmp_path):
     from lib.drizzle import cache_matches
     (tmp_path/'result.drizzle.json').write_text(json.dumps({'status':'completed','settings':{}}))
     assert not cache_matches(tmp_path/'result.fits', {})
-    (tmp_path/'result.drizzle.json').write_text(json.dumps({'status':'completed','settings':{},'quality_pipeline_version':2}))
+    (tmp_path/'result.drizzle.json').write_text(json.dumps({'status':'completed','settings':{},'quality_pipeline_version':9}))
     assert not cache_matches(tmp_path/'result.fits', {})
 
 

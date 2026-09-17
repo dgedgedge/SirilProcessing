@@ -1,85 +1,44 @@
-# Documentation Technique - SirilProcessing
+# Documentation SirilProcessing
 
-Ce répertoire contient la documentation technique détaillée des scripts de traitement.
+La documentation est organisée par étape de traitement et par sujet technique.
+Le [guide complet](../GUIDE_COMPLET.md) présente l’utilisation générale et le
+[README du projet](../README.md) les commandes de démarrage.
 
-## 📚 Guide d'orientation
+## Traitement des images
 
-### 📖 Pour les utilisateurs
-- **[`../GUIDE_COMPLET.md`](../GUIDE_COMPLET.md)** - Documentation principale et complète
-- **[`../README.md`](../README.md)** - Introduction générale du projet
-- **[`SOLAR_ECLIPSE_GIF.md`](SOLAR_ECLIPSE_GIF.md)** - GIF d'éclipse solaire et lecture des images de debug
+- [Traitement des lights](LIGHT_PROCESSOR_GUIDE.md) : calibration, alignement et stack final multi-sessions.
+- [Filtrage et contrôle qualité](filter/README.md) : choix des images et validation des darks.
+- [Stacking et sélection des poses](filter/stacking/README.md) : critères, profils stellaires et Drizzle.
+- [Mosaïques](MOSAIC_GUIDE.md) : assemblage de plusieurs champs.
+- [GIF d’éclipse solaire](SOLAR_ECLIPSE_GIF.md) : traitement et visualisation des images solaires.
 
-### 🔧 Pour les développeurs et maintenance
+## Configuration et utilisation
 
-#### Fonctionnalités principales
-- **[`SOLAR_ECLIPSE_GIF.md`](SOLAR_ECLIPSE_GIF.md)** - Pipeline `solarEclipseGif.py`, modèle solaire et debug plein Soleil
-- **[`VALIDATION_OPTIMIZATION.md`](VALIDATION_OPTIMIZATION.md)** - Validation conditionnelle optimisée
-- **[`RAPPORT_OPTIMISE.md`](RAPPORT_OPTIMISE.md)** - Système de rapport intégré
-- **[`LINK_CREATION_OPTIMIZATION.md`](LINK_CREATION_OPTIMIZATION.md)** - Optimisation création liens symboliques
+- [Configuration persistante](VALIDATION_CONFIG_GUIDE.md).
+- [Options courtes](OPTIONS_COURTES_GUIDE.md).
+- [Gestion de plusieurs sessions](MULTIPLE_SESSIONS_FEATURE.md).
+- [Gestion des chemins absolus](ABSOLUTE_PATHS_FEATURE.md).
 
-#### Configuration et interface
-- **[`VALIDATION_CONFIG_GUIDE.md`](VALIDATION_CONFIG_GUIDE.md)** - Configuration persistante
-- **[`OPTIONS_COURTES_GUIDE.md`](OPTIONS_COURTES_GUIDE.md)** - Options courtes et variables dest
+## Formats et fonctionnement interne
 
-#### Améliorations techniques
-- **[`ROBUST_STATISTICS_UPDATE.md`](ROBUST_STATISTICS_UPDATE.md)** - Statistiques robustes (MAD/percentiles)
-- **[`INTERRUPTION_HANDLING.md`](INTERRUPTION_HANDLING.md)** - Gestion propre des interruptions
+- [Séquences Siril](SIRIL_SEQUENCE.md) : lecture, modification et écriture des fichiers `.seq`.
+- [Bibliothèque Python](../lib/README.md) : organisation des modules.
+- [Rapports de traitement](RAPPORT_OPTIMISE.md).
+- [Création des liens symboliques](LINK_CREATION_OPTIMIZATION.md).
+- [Gestion des interruptions](INTERRUPTION_HANDLING.md).
+- [Nettoyage des processus](PROCESS_CLEANUP_FEATURE.md).
+- [Commande pyecho](PYECHO_GUIDE.md).
 
-#### Métadocumentation
-- **[`DOCUMENTATION_STATUS.md`](DOCUMENTATION_STATUS.md)** - État et obsolescence de la documentation
+## Maintenance de la documentation
 
-## 🏗️ Architecture des améliorations
+- [État de la documentation](DOCUMENTATION_STATUS.md).
+- [Tests du projet](../tests/README.md).
 
-```
-Validation Intelligence
-├── Validation conditionnelle → VALIDATION_OPTIMIZATION.md
-├── Statistiques robustes → ROBUST_STATISTICS_UPDATE.md
-└── Configuration persistante → VALIDATION_CONFIG_GUIDE.md
+Pour générer le site HTML depuis la racine du projet :
 
-Optimisations Performance
-├── Création liens optimisée → LINK_CREATION_OPTIMIZATION.md
-├── Rapport intégré → RAPPORT_OPTIMISE.md
-└── Gestion interruptions → INTERRUPTION_HANDLING.md
-
-Interface Utilisateur
-├── Options courtes → OPTIONS_COURTES_GUIDE.md
-└── Guide complet → ../GUIDE_COMPLET.md
+```bash
+.venv/bin/python bin/generate_docs_html.py
 ```
 
-## 📋 Ordre de lecture recommandé
-
-### Pour comprendre l'évolution
-1. `ROBUST_STATISTICS_UPDATE.md` - Bases statistiques
-2. `VALIDATION_OPTIMIZATION.md` - Logique de validation
-3. `LINK_CREATION_OPTIMIZATION.md` - Optimisation traitement
-4. `RAPPORT_OPTIMISE.md` - Système de rapport
-5. `VALIDATION_CONFIG_GUIDE.md` - Configuration
-6. `OPTIONS_COURTES_GUIDE.md` - Interface CLI
-
-### Pour implementation/debugging
-1. `INTERRUPTION_HANDLING.md` - Gestion erreurs
-2. `VALIDATION_OPTIMIZATION.md` - Logique validation
-3. `LINK_CREATION_OPTIMIZATION.md` - Ordre opérations
-4. `RAPPORT_OPTIMISE.md` - Collecte données
-
-## 🎯 Objectif de chaque document
-
-| Document | Objectif | Audience |
-|----------|----------|----------|
-| `SOLAR_ECLIPSE_GIF.md` | GIF d'éclipse, pipeline de détection, images de debug | Utilisateurs avancés / Développeurs |
-| `VALIDATION_OPTIMIZATION.md` | Validation conditionnelle vs systématique | Développeurs |
-| `RAPPORT_OPTIMISE.md` | Rapport intégré vs séparé | Développeurs |
-| `LINK_CREATION_OPTIMIZATION.md` | Ordre création liens/validation | Développeurs |
-| `ROBUST_STATISTICS_UPDATE.md` | Statistiques MAD vs std | Développeurs |
-| `VALIDATION_CONFIG_GUIDE.md` | Configuration persistante | Utilisateurs avancés |
-| `OPTIONS_COURTES_GUIDE.md` | Référence CLI | Utilisateurs |
-| `INTERRUPTION_HANDLING.md` | Gestion Ctrl+C | Développeurs |
-| `DOCUMENTATION_STATUS.md` | État documentation | Mainteneurs |
-
----
-
-**Note** : Cette documentation technique complète le guide utilisateur principal. Consultez d'abord [`GUIDE_COMPLET.md`](../GUIDE_COMPLET.md) pour l'usage général.
-
-## Drizzle
-
-[Spécification, diagnostic JSON et options du Drizzle](DRIZZLE_SPECIFICATION.md).
+Ouvrir `out/index.html`. L’index suit les dossiers de documentation ; chaque
+page de `filter/stacking/` permet de revenir aux rubriques parentes.

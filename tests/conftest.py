@@ -195,3 +195,21 @@ def sample_dark_group(temp_dir):
         files.append(str(filepath))
     
     return files
+
+
+@pytest.fixture
+def simulated_registered_sequence():
+    """Model Siril's per-file outputs using the sequence object API."""
+    from lib.siril_sequence import SirilSequence
+    def create(directory, source_prefix, output_prefix, overrides=None):
+        directory = Path(directory)
+        sequence = SirilSequence.read(directory/f'{source_prefix}.seq')
+        sequence.header[1] = output_prefix
+        for image in sequence.images:
+            original = image.filename
+            image.filename = directory/f'{output_prefix}{image.number:0{int(sequence.header[5])}d}.fits'
+            image.filename.symlink_to(original.resolve())
+            for registration in image.registrations.values():
+                registration.homography = np.array((overrides or {}).get(image.number, np.eye(3)), dtype=float)
+        sequence.write(directory/f'{output_prefix}.seq')
+    return create

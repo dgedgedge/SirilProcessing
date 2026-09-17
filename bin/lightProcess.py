@@ -336,15 +336,25 @@ Traitement Siril de mosaique (si --mosaic):
         dest='fwhm_filter',
         type=str,
         default=config.get("fwhm_filter"),
-        help=f"Filtre FWHM unique sur les mesures Siril, après alignement (ex: '1.8k'). Utiliser 'none' pour désactiver. (Défaut: '{config.get('fwhm_filter')}')"
+        help=f"Filtre par seuil sur la FWHM pondérée Siril, après alignement (ex: '1.8k'). Utiliser 'none' pour désactiver. (Défaut: '{config.get('fwhm_filter')}')"
     )
+
+    parser.add_argument('--max-fwhm', type=float, default=config.get('max_fwhm', 0.0),
+                        help="Plafond de FWHM non pondérée Siril en pixels natifs, avant les filtres statistiques. Indépendant du nombre d'étoiles ; 0 désactive (défaut).")
+    parser.add_argument('--stellar-profile-filter', dest='stellar_profile_filter', action='store_true',
+                        default=config.get('stellar_profile_filter'),
+                        help="Filtre des profils stellaires : étalement R80 et allongement cohérent, sur toutes les poses encore retenues (actif par défaut).")
+    parser.add_argument('--no-stellar-profile-filter', dest='stellar_profile_filter', action='store_false',
+                        help="Désactive la mesure et le filtrage des profils stellaires.")
+    parser.add_argument('--stellar-profile-sigma', type=float, default=config.get('stellar_profile_sigma'),
+                        help="Coefficient de dispersion robuste pour les profils stellaires (défaut : 3).")
 
     parser.add_argument(
         '--fwhm-reject-percent',
         dest='fwhm_reject_percent',
         type=float,
         default=config.get("fwhm_reject_percent", 0.0),
-        help="Rejet proportionnel FWHM après alignement (0 à 95), uniquement si --fwhm-filter none. Défaut : 0%%."
+        help="Rejet proportionnel FWHM après alignement (0 à 95), cumulable avec --fwhm-filter et appliqué sur ses survivantes. Défaut : 0%%."
     )
 
     parser.add_argument(
@@ -578,6 +588,9 @@ Traitement Siril de mosaique (si --mosaic):
         "roundness_weighted": args.roundness_weighted,
         "roundness_weight_max_extra": args.roundness_weight_max_extra,
         "fwhm_filter": args.fwhm_filter,
+        "max_fwhm": args.max_fwhm,
+        "stellar_profile_filter": args.stellar_profile_filter,
+        "stellar_profile_sigma": args.stellar_profile_sigma,
         "fwhm_reject_percent": args.fwhm_reject_percent,
         "fwhm_weighted": args.fwhm_weighted,
         "fwhm_weight_max_extra": args.fwhm_weight_max_extra,

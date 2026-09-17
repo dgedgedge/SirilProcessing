@@ -27,6 +27,9 @@ class Config:
         "roundness_weighted": True,
         "roundness_weight_max_extra": 1,
         "fwhm_filter": "1.8k",
+        "max_fwhm": 0.0,
+        "stellar_profile_filter": True,
+        "stellar_profile_sigma": 3.0,
         "fwhm_reject_percent": 0.0,
         "fwhm_weighted": True,
         "fwhm_weight_max_extra": 1,
@@ -180,7 +183,8 @@ class Config:
             if key.startswith("drizzle") and hasattr(args, key):
                 updates[key] = getattr(args, key)
 
-        for key in ("nbstars_filter", "roundness_weighted", "roundness_weight_max_extra"):
+        for key in ("nbstars_filter", "roundness_weighted", "roundness_weight_max_extra", "max_fwhm",
+                    "stellar_profile_filter", "stellar_profile_sigma"):
             if hasattr(args, key):
                 updates[key] = getattr(args, key)
 

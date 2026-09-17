@@ -256,10 +256,11 @@ def test_light_process_wrapper_runs_dry_run_pipeline(
     assert "Début du traitement de la session" in session_log.read_text(encoding="utf-8")
 
 
+@pytest.mark.parametrize('reject_percent,retained,effective', [(0, 3, 6), (50, 2, 2)])
 @pytest.mark.parametrize('method,roundness,platesolve', [
     ('average', '1.8k', None), ('average', 'none', True), ('median', '1.8k', False),
 ])
-def test_stack_selection_only_after_registration(tmp_path, monkeypatch, method, roundness, platesolve):
+def test_stack_selection_only_after_registration(tmp_path, monkeypatch, method, roundness, platesolve, reject_percent, retained, effective, simulated_registered_sequence):
     import json
     import lib.lightprocessor as processor
     import lib.drizzle as drizzle
@@ -301,18 +302,23 @@ def test_stack_selection_only_after_registration(tmp_path, monkeypatch, method, 
                     + ''.join(f'I {i+1} 1\n' for i in range(4))
                     + ''.join(f'R0 {f} {f} .9 1 0 200 H 1 0 {i*.2} 0 1 0 0 0 1\n'
                               for i, f in enumerate([2,3,4,20])))
-            elif script_name == '04_stacking.sps':
-                assert selections == [4]
+            elif script_name == '04_realign.sps':
                 framing = 'min' if method == 'median' else 'max'
                 assert f'seqapplyreg target_name_ -filter-included -framing={framing}' in script_content
                 assert 'register r_target_name_ -2pass -transf=affine' in script_content
-                assert f'seqapplyreg r_target_name_ -framing={framing}' in script_content
+                assert '\nstack ' not in script_content
+                simulated_registered_sequence(directory, 'target_name_', 'r_target_name_')
+            elif script_name == '04_stacking.sps':
+                assert selections == [4]
+                framing = 'min' if method == 'median' else 'max'
+                assert f'seqapplyreg r_target_name_ -filter-included -framing={framing}' in script_content
+                assert '\nregister ' not in script_content
                 stack_method = 'median' if method == 'median' else 'rej 3.0 3.0'
                 assert f'stack r_r_target_name_ {stack_method} -output_norm -out=' in script_content
                 report = json.loads((tmp_path/'out/target_name_combined.drizzle.json').read_text())
-                assert report['quality_selection']['independent_retained'] == 3
-                assert report['quality_selection']['effective_stack_entries'] == 6
-                assert [r['fwhm_multiplicity'] for r in report['frames']] == [3,2,1]
+                assert report['quality_selection']['independent_retained'] == retained
+                assert report['quality_selection']['effective_stack_entries'] == effective
+                assert [r['fwhm_multiplicity'] for r in report['frames']] == ([3,2,1] if retained == 3 else [1,1])
                 (tmp_path/'out/target_name_combined.fit').touch()
             else:
                 raise AssertionError(script_name)
@@ -320,18 +326,18 @@ def test_stack_selection_only_after_registration(tmp_path, monkeypatch, method, 
 
     monkeypatch.setattr(processor, 'Siril', DummySiril)
     cfg = dict(method=method, roundness_filter=roundness, fwhm_filter='1.8k',
-               fwhm_reject_percent=50, fwhm_weighted=True, fwhm_weight_max_extra=2,
+               fwhm_reject_percent=reject_percent, fwhm_weighted=True, fwhm_weight_max_extra=2,
                drizzle='off')
     if platesolve is not None:
         cfg['enable_stack_platesolve'] = platesolve
     report = {}
     result = stack_session_outputs(sources, tmp_path/'out', tmp_path/'work', 'target_name', cfg, stack_report=report)
     assert result == tmp_path/'out/target_name_combined.fit'
-    assert calls == ['01_registration.sps', '04_stacking.sps']
+    assert calls == ['01_registration.sps', '04_realign.sps', '04_stacking.sps']
     assert selections == [4]
     assert report['total_input'] == 4
-    assert report['kept_unique_for_stack'] == 3
-    assert report['kept_effective_for_stack'] == 6
+    assert report['kept_unique_for_stack'] == retained
+    assert report['kept_effective_for_stack'] == effective
 
 
 def test_stack_session_outputs_force_stacking_cleans_previous_artifacts(tmp_path):

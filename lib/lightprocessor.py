@@ -19,6 +19,7 @@ import numpy as np
 from astropy.io import fits
 from PIL import Image
 from lib.fits_info import FitsInfo
+from lib.siril_sequence import SirilSequence
 from lib.siril_utils import Siril
 
 
@@ -31,9 +32,7 @@ def save_calibrated_sequence(sequence_name, output_dir, source_dir=None):
             source = Path(source_dir) / name
             if source.is_file():
                 destination = output_dir / name
-                temporary = destination.with_suffix('.seq.tmp')
-                shutil.copy2(source, temporary)
-                temporary.replace(destination)
+                SirilSequence.read(source).write(destination)
                 logging.info('Séquence calibrée conservée : %s', destination)
                 return destination
     prefix = f'pp_{sequence_name}_'
@@ -51,15 +50,8 @@ def save_calibrated_sequence(sequence_name, output_dir, source_dir=None):
     if len(set(indices)) != len(indices) or len(widths) != 1:
         raise ValueError('Numérotation ambiguë des FITS calibrés')
     layers = int(fits.getheader(frames[0][2]).get('NAXIS3', 1))
-    # Siril sequence v4: no registration or statistics are invented.
-    content = ["# Séquence des FITS calibrés exportés",
-               f"S '{prefix}' {indices[0]} {len(frames)} {len(frames)} {frames[0][1]} 0 4 0",
-               f'L {layers}']
-    content.extend(f'I {index} 1' for index in indices)
     destination = output_dir / names[0]
-    temporary = destination.with_suffix('.seq.tmp')
-    temporary.write_text('\n'.join(content)+'\n', encoding='utf-8')
-    temporary.replace(destination)
+    SirilSequence.from_files(destination, prefix, [frame[2] for frame in frames], layers=layers).write()
     logging.info('Séquence calibrée conservée : %s', destination)
     return destination
 

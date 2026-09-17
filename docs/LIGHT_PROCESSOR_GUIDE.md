@@ -93,7 +93,7 @@ flowchart TD
         R3 -->|Compatible : Drizzle ; sinon repli auto| R4
         R3 -->|Incompatible en mode force| FAIL["Arrêt et diagnostic d’échec"]
         SKIP --> R4
-        R2 -.->|Copie indépendante des métadonnées et liens FITS| R4["04_stacking/<br/>04_stacking.sps<br/>Drizzle ou traitement standard<br/>Empilement pondéré"]
+        R2 -.->|Copie indépendante des métadonnées et liens FITS| R4["04_stacking/<br/>Scripts 04_* avec contrôles intermédiaires<br/>Drizzle ou traitement standard<br/>Empilement pondéré"]
     end
     R4 --> S["output/&lt;cible&gt;/stack/<br/>&lt;cible&gt;_combined.fit(s)<br/>&lt;cible&gt;_combined.drizzle.json<br/>Prévisualisation JPG si produite"]
     S --> T{"Option --mosaic ?"}
@@ -125,10 +125,17 @@ Le stack final d'une cible multi-sessions utilise ensuite :
 2. `seqfindstar <target>_`
 3. `seqplatesolve <target>_ -force -nocache -disto=ps_distortion` si activé
 4. `register <target>_ -2pass -transf=<align_transform>`
-5. `seqapplyreg <target>_ -filter-round=<roundness_filter> -filter-wfwhm=<fwhm_filter> -framing=<max|min>`
-6. `register r_<target>_ -2pass -transf=<align_transform>` si le réalignement robuste est activé
-7. `seqapplyreg r_<target>_ -framing=<max|min>`
-8. `stack r_r_<target>_ rej <low> <high> -output_norm -out=<target>_combined`
+5. Contrôle géométrique, filtres de qualité et pondérations dans `02_quality`.
+6. Si nécessaire, dématriçage et alignement de `debayer_<target>_` dans
+   `04_debayer_registration.sps`, puis contrôle de la transformation en Python.
+7. Application de l’alignement avec `seqapplyreg ... -filter-included -framing=<max|min>`.
+   Si le réalignement robuste est actif, `04_realign.sps` calcule ensuite une
+   nouvelle transformation, contrôlée avant son application.
+8. `04_stacking.sps` applique la dernière transformation validée et empile avec
+   `stack ... rej <low> <high> -output_norm -out=<target>_combined` (ou la méthode choisie).
+
+Voir [le contrôle géométrique](filter/stacking/IMAGE_SELECTION.md#cohérence-géométrique-des-alignements)
+pour les limites d’échelle, la gestion des exclusions et les rapports.
 
 Chaque reconstruction recrée les répertoires fixes `00_inputs`, `01_registration`,
 `02_quality`, `03_capability` et `04_stacking` dans `<cible>/stacking/`.
@@ -298,12 +305,12 @@ Cette approche garantit que vous avez les master darks nécessaires avant de tra
 
 Le mode `--drizzle auto` analyse l’alignement avant de choisir le rééchantillonnage.
 Le rapport JSON adjacent au FITS conserve les mesures pour comparer les nuits et
-les réglages Ekos. Voir la [spécification complète](DRIZZLE_SPECIFICATION.md),
+les réglages Ekos. Voir la [spécification complète](filter/stacking/DRIZZLE_SPECIFICATION.md),
 les modes `off/auto/force`, les seuils et les conditions du CFA Drizzle natif.
 
 ### Qualité des poses avant Drizzle
 
-La référence [Sélection des images pour le stacking](IMAGE_SELECTION.md)
+La référence [Sélection des images pour le stacking](filter/stacking/IMAGE_SELECTION.md)
 décrit l’ordre des contrôles, les formules, les valeurs par défaut, les rapports
 et les limites actuelles face aux étoiles dédoublées.
 
@@ -314,7 +321,24 @@ par défaut), autour de la médiane dans les deux sens ; `none` désactive le fi
 La pondération de rondeur, active par défaut, est configurable avec
 `--roundness-weight-max-extra` et désactivable avec `--no-roundness-weighted`.
 Elle complète la pondération FWHM existante. Voir les détails et les limites dans
-[la spécification Drizzle](DRIZZLE_SPECIFICATION.md#ordre-des-controles-de-qualite-et-ponderation).
+[la spécification Drizzle](filter/stacking/DRIZZLE_SPECIFICATION.md#ordre-des-contrôles-de-qualité-et-pondération).
+
+### Filtrage de la netteté et des profils stellaires
+
+`--stellar-profile-filter`, actif par défaut, mesure le rayon de flux R80 et
+l’allongement des étoiles sur chaque pose encore retenue, indépendamment de
+son nombre d’étoiles. Il exige un défaut partagé par plusieurs secteurs du champ.
+`--no-stellar-profile-filter` le désactive ; `--stellar-profile-sigma` règle le
+coefficient robuste (3 par défaut). Les résultats détaillés figurent dans
+`02_quality/stellar_profiles.json`. Voir [la méthode et sa validation](filter/stacking/STELLAR_PROFILE_FILTER.md).
+
+`--max-fwhm` fixe un plafond sur la FWHM non pondérée Siril, en pixels natifs.
+Il s’applique à toutes les poses valides, indépendamment du nombre d’étoiles,
+avant les filtres statistiques et les pondérations. Le défaut `0` le désactive.
+Ce plafond se cumule avec `--fwhm-filter` et `--fwhm-reject-percent`, qui
+utilisent tous deux la FWHM pondérée. Choisir le plafond sur des exemples bons
+et mauvais à même échantillonnage ; il ne garantit pas le rejet de tout bougé.
+Voir [les critères de sélection](filter/stacking/IMAGE_SELECTION.md) pour les formules et limites.
 
 ### Réouverture des calibrations dans Siril
 

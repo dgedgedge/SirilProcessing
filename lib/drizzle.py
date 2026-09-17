@@ -2,7 +2,6 @@
 import json
 import logging
 import os
-import shlex
 import re
 import shutil
 from datetime import datetime, timezone
@@ -10,7 +9,8 @@ from pathlib import Path
 
 import numpy as np
 from astropy.io import fits
-from lib.quality_filter import quality_mask, apply_quality_weights
+from lib.siril_sequence import SirilSequence
+from lib.quality_filter import quality_mask, apply_quality_weights, filter_registration_geometry, filter_stellar_profiles
 
 
 def memory_resources(meminfo_path=Path('/proc/meminfo')):
@@ -56,29 +56,16 @@ def validate_settings(cfg):
 def cache_matches(output, cfg):
     try:
         report = json.loads(Path(output).with_suffix('.drizzle.json').read_text())
-        return report.get('quality_pipeline_version') == 4 and report['status'] == 'completed' and report['settings'] == cfg
+        return report.get('quality_pipeline_version') == 10 and report['status'] == 'completed' and report['settings'] == cfg
     except (OSError, ValueError, KeyError):
         return False
 
 
 def read_registration(path):
-    lines = Path(path).read_text().splitlines()
-    header = next(shlex.split(s) for s in lines if s.startswith('S '))
-    if int(header[7]) not in (4, 5, 6, 7):
-        raise ValueError('Version de séquence non prise en charge')
-    images = [s.split() for s in lines if s.startswith('I ')]
-    layers = {}
-    for line in lines:
-        if line.startswith('R'):
-            v = line.split()
-            if len(v) != 17 or v[7] != 'H':
-                raise ValueError('Transformation Siril invalide')
-            h = np.array(v[8:], dtype=float).reshape(3, 3)
-            layers.setdefault(v[0], []).append((list(map(float, v[1:7])), h))
-    rows = next(iter(layers.values()), [])
-    if len(rows) != len(images):
-        raise ValueError('Alignements manquants')
-    return lines, images, rows
+    """Compatibility view; all sequence parsing belongs to SirilSequence."""
+    sequence = SirilSequence.read(path)
+    return (sequence.to_lines(), [image.to_line().split() for image in sequence.images],
+            [(image.registration().values, image.registration().homography) for image in sequence.images])
 
 
 def coverage(points, period=1.0, bins=4):
@@ -306,7 +293,13 @@ def run_stack(siril, files, cfg, input_dir, work_dir, sequence, output_path, pre
     capability_path = reset_stage(Path(work_dir) / '03_capability')
     copy_stage_inputs(registration_dir, quality_dir)
     input_dir = quality_dir
-    headers = [fits.getheader(p) for p in files]
+    try:
+        image_sequence = SirilSequence.read(Path(input_dir)/f'{sequence}.seq', source_files=files)
+    except (OSError, ValueError) as exc:
+        logging.error('Séquence Siril illisible : %s', exc)
+        return False
+    images = image_sequence.images
+    headers = [fits.getheader(image.processing_path) for image in images]
     first = headers[0]
     native = first.get('NAXIS', 0) == 2 and first.get('BAYERPAT', '').strip() in ('RGGB','BGGR','GRBG','GBRG')
     focal, pixel = first.get('FOCALLEN'), first.get('XPIXSZ')
@@ -315,34 +308,37 @@ def run_stack(siril, files, cfg, input_dir, work_dir, sequence, output_path, pre
                     focal_length_mm=focal, pixel_size_um=pixel, binning=[first.get('XBINNING',1),first.get('YBINNING',1)],
                     dimensions=[first.get('NAXIS1'),first.get('NAXIS2')], sampling_arcsec_px=sampling,
                     unique_inputs=len({str(Path(p).resolve()) for p in files}), effective_inputs=len(files))
-    seqpath = Path(input_dir)/f'{sequence}.seq'
     records, error, effective_entries = [], None, 0
+    geometry_checks = []
+    stellar_report = None
     try:
-        lines, images, rows = read_registration(seqpath)
-        if len(rows) != len(files):
-            raise ValueError('Nombre de transformations différent du nombre des entrées')
+        geometry_checks.append(filter_registration_geometry(image_sequence))
         # Compute quality thresholds on independent exposures, before weighting.
         unique_by_source = {}
-        for i, path in enumerate(files):
-            unique_by_source.setdefault(str(Path(path).resolve()), i)
+        for i, image in enumerate(images):
+            unique_by_source.setdefault(str(image.processing_path.resolve()), i)
         unique_indices = list(unique_by_source.values())
-        valid_registration = [images[i][2] == '1' and np.isfinite(rows[i][1]).all()
-                              and abs(np.linalg.det(rows[i][1])) > 1e-8
-                              and abs(rows[i][1][2, 2]) >= 1e-8 for i in unique_indices]
-        unique_selection = quality_mask([rows[i] for i in unique_indices], cfg, valid_registration)
-        selected_sources = {str(Path(files[i]).resolve()) for i,keep in zip(unique_indices, unique_selection) if keep}
-        selected = [str(Path(p).resolve()) in selected_sources for p in files]
+        independent_images = [images[i] for i in unique_indices]
+        valid_registration = [image.included and image.registration().valid for image in independent_images]
+        unique_selection = quality_mask(independent_images, cfg, valid_registration)
+        stellar_report = filter_stellar_profiles(independent_images, unique_selection, cfg)
+        (quality_dir / 'stellar_profiles.json').write_text(
+            json.dumps(stellar_report, indent=2, ensure_ascii=False, allow_nan=False)+'\n')
+        selected_sources = {str(image.processing_path.resolve()) for image, keep in zip(independent_images, unique_selection) if keep}
         seen = set()
-        for i, (values, h) in enumerate(rows):
-            source = str(Path(files[i]).resolve())
-            if source in seen or not selected[i] or images[i][2] != '1' or not np.isfinite(h).all() or abs(np.linalg.det(h)) < 1e-8 or abs(h[2,2]) < 1e-8 or values[0] <= 0:
+        for i, image in enumerate(images):
+            source = str(image.processing_path.resolve())
+            registration = image.registration()
+            if source in seen or source not in selected_sources or not image.included or not registration.valid:
                 continue
             seen.add(source)
+            h = registration.homography
             records.append(dict(source=source, sequence_index=i, date_obs=headers[i].get('DATE-OBS'),
-                                dx=float(h[0,2]/h[2,2]), dy=float(h[1,2]/h[2,2]), fwhm=values[0], roundness=values[2], nbstars=int(values[5]), homography=h.tolist(),
+                                dx=float(h[0,2]/h[2,2]), dy=float(h[1,2]/h[2,2]), fwhm=registration.fwhm,
+                                roundness=registration.roundness, nbstars=registration.number_of_stars, homography=h.tolist(),
                                 dithering_headers={key: headers[i][key] for key in headers[i] if 'DITH' in key.upper()}))
         records.sort(key=lambda r: (r['date_obs'] or '', r['source']))
-        effective_entries = apply_quality_weights(lines, images, rows, records, files, seqpath, cfg)
+        effective_entries = apply_quality_weights(image_sequence, records, cfg)
     except (OSError, ValueError, IndexError, StopIteration) as exc:
         error = str(exc)
         records = []
@@ -378,7 +374,9 @@ def run_stack(siril, files, cfg, input_dir, work_dir, sequence, output_path, pre
         decision['decision'] = 'Drizzle désactivé'
         decision['sampling_out'] = sampling
     decision['siril_drizzle_supported'] = supported
-    report = dict(schema_version=1, quality_pipeline_version=4,
+    report = dict(schema_version=1, quality_pipeline_version=10, geometry_checks=geometry_checks,
+                  stellar_profiles=dict(report=str(quality_dir / 'stellar_profiles.json'),
+                                        **{k:v for k,v in stellar_report.items() if k not in ('frames', 'references')}) if stellar_report is not None else None,
                   stages=dict(registration=str(registration_dir), quality=str(quality_dir), stacking=str(stacking_dir),
                               capability=str(capability_path), capability_executed=capability_dir is not None),
                   quality_selection=dict(independent_retained=len(records), effective_stack_entries=effective_entries,
@@ -439,29 +437,71 @@ def run_stack(siril, files, cfg, input_dir, work_dir, sequence, output_path, pre
     )
     copy_stage_inputs(quality_dir, stacking_dir)
     input_dir = stacking_dir
-    filters = '-filter-included'
     prefix = sequence
-    commands = ['requires 1.4' if decision['enabled'] else 'requires 1.2', f'cd {input_dir}']
+    required = 'requires 1.4' if decision['enabled'] else 'requires 1.2'
+    def execute(lines, script_name):
+        return siril.run_siril_script('\n'.join([required, f'cd {stacking_dir}', *lines, 'close']),
+                                      str(stacking_dir), script_name=script_name)
+
+    allowed = {image.number for image in image_sequence.images if image.included}
+    sources_by_number = {image.number: str(image.processing_path.resolve()) for image in image_sequence.images}
+    def validate_new_registration(new_prefix):
+        nonlocal allowed
+        try:
+            aligned = SirilSequence.read(stacking_dir/f'{new_prefix}.seq')
+            check = filter_registration_geometry(aligned, allowed_numbers=allowed)
+            geometry_checks.append(check)
+            allowed = {image.number for image in aligned.images if image.included}
+            save()
+            if not allowed:
+                raise ValueError('aucune image après contrôle géométrique')
+            return True
+        except (OSError, ValueError, IndexError) as exc:
+            logging.error('Alignement inutilisable avant rééchantillonnage : %s', exc)
+            report['status'] = 'failed'
+            report['alignment_error'] = str(exc)
+            save()
+            return False
+
+    def failed_stage():
+        report['status'] = 'failed'
+        save()
+        return False
+
+    if supported is False and cfg.get('drizzle') == 'force':
+        logging.error('Drizzle forcé impossible : Siril 1.4 requis')
+        return failed_stage()
     if decision['enabled']:
         options = f"-drizzle -scale={decision['scale']} -pixfrac={decision['pixfrac']} -kernel={decision['kernel']}"
     else:
         options = ''
         if native:
-            commands += [f'calibrate {sequence} -debayer -prefix=debayer_', f'register debayer_{sequence} -2pass -transf={cfg.get("align_transform", "affine")}']
+            if not execute([f'calibrate {sequence} -debayer -prefix=debayer_',
+                            f'register debayer_{sequence} -2pass -transf={cfg.get("align_transform", "affine")}'],
+                           '04_debayer_registration.sps'):
+                return failed_stage()
             prefix = f'debayer_{sequence}'
-    final_stack = re.sub(r'^stack \S+', f'stack r_{prefix}', stack_line)
-    commands += [f'seqapplyreg {prefix} {filters} -framing={framing} {options}']
+            if not validate_new_registration(prefix):
+                return False
     if not decision['enabled'] and cfg.get('robust_realign', True):
-        commands += [f'register r_{prefix} -2pass -transf={cfg.get("align_transform", "affine")}',
-                     f'seqapplyreg r_{prefix} -framing={framing}']
-        final_stack = re.sub(r'^stack \S+', f'stack r_r_{prefix}', stack_line)
-    commands += [final_stack, 'close']
-    if supported is False and cfg.get('drizzle') == 'force':
-        report['status'] = 'failed'
-        save()
-        logging.error('Drizzle forcé impossible : Siril 1.4 requis')
-        return False
-    success = siril.run_siril_script('\n'.join(commands), str(stacking_dir), script_name='04_stacking.sps')
+        if not execute([f'seqapplyreg {prefix} -filter-included -framing={framing}',
+                        f'register r_{prefix} -2pass -transf={cfg.get("align_transform", "affine")}'],
+                       '04_realign.sps'):
+            return failed_stage()
+        prefix = f'r_{prefix}'
+        if not validate_new_registration(prefix):
+            return False
+    final_sources = {sources_by_number[number] for number in allowed}
+    report['final_selection'] = dict(independent_retained=len(final_sources), effective_stack_entries=len(allowed),
+                                    sources=sorted(final_sources))
+    if stack_report is not None:
+        stack_report.update(kept_unique_for_stack=len(final_sources), kept_effective_for_stack=len(allowed),
+                            rejected_registration_quality=metadata['unique_inputs']-len(final_sources),
+                            weighted_extra_entries=len(allowed)-len(final_sources))
+    save()
+    final_stack = re.sub(r'^stack \S+', f'stack r_{prefix}', stack_line)
+    success = execute([f'seqapplyreg {prefix} -filter-included -framing={framing} {options}', final_stack],
+                      '04_stacking.sps')
     success = success and any(Path(str(output_path)+ext).exists() for ext in ('.fit', '.fits'))
     report['status'] = 'completed' if success else 'failed'
     if success:

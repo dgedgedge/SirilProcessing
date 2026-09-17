@@ -75,6 +75,7 @@ def slugify(text: str, sep: str = "-") -> str:
     text = re.sub(r"<[^>]+>", "", text)
     text = re.sub(r"`([^`]+)`", r"\1", text)
     text = re.sub(r"[^A-Za-z0-9_-]+", sep, text.strip().lower())
+    text = re.sub(re.escape(sep) + r"+", sep, text)
     return text.strip(sep) or "section"
 
 
@@ -103,7 +104,7 @@ def render_inline(text: str, current_rel: Path) -> str:
                 href = str(markdown_path_to_html(Path(target)))
             elif ".md#" in target:
                 md_path, anchor = target.split("#", 1)
-                href = f"{markdown_path_to_html(Path(md_path))}#{anchor}"
+                href = f"{markdown_path_to_html(Path(md_path))}#{slugify(anchor)}"
         return stash(f'<a href="{html.escape(href, quote=True)}">{label}</a>')
 
     text = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", render_link, text)
@@ -249,7 +250,7 @@ def rewrite_markdown_links(rendered: str) -> str:
             return match.group(0)
         if ".md#" in href:
             md_path, anchor = href.split("#", 1)
-            href = f"{markdown_path_to_html(Path(md_path))}#{anchor}"
+            href = f"{markdown_path_to_html(Path(md_path))}#{slugify(anchor)}"
         elif href.endswith(tuple(MARKDOWN_EXTENSIONS)):
             href = str(markdown_path_to_html(Path(href)))
         return f'href={quote}{html.escape(href, quote=True)}{quote}'
@@ -457,23 +458,19 @@ pre.mermaid {{
 .toc ul {{ margin: 0; padding-left: 20px; columns: 2; }}
 .toc li {{ break-inside: avoid; }}
 .toc-level-3 {{ margin-left: 18px; }}
-.doc-grid {{
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  gap: 14px;
-  padding: 0;
+.doc-tree {{
+  padding-left: 20px;
   list-style: none;
 }}
-.doc-grid li {{
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 14px;
-  background: #f8fafc;
-  transition: transform 120ms ease, box-shadow 120ms ease;
+.doc-tree li {{ margin: 8px 0; }}
+.doc-tree .doc-tree {{
+  margin-left: 6px;
+  border-left: 1px solid var(--line);
 }}
-.doc-grid li:hover {{
-  transform: translateY(-1px);
-  box-shadow: 0 10px 22px rgba(16, 42, 67, 0.10);
+.doc-tree summary {{
+  cursor: pointer;
+  font-weight: 600;
+  padding: 6px 0;
 }}
 small {{ color: var(--muted); }}
 .headerlink {{
@@ -536,14 +533,31 @@ def title_from_markdown(markdown: str, rel: Path) -> str:
 
 
 def build_index(title: str, docs: list[tuple[Path, str]]) -> str:
-    items = []
+    tree = {"pages": [], "children": {}}
     for rel, doc_title in docs:
-        href = markdown_path_to_html(rel)
-        items.append(
-            f'<li><a href="{html.escape(str(href), quote=True)}">{html.escape(doc_title)}</a>'
-            f'<br><small>{html.escape(str(rel))}</small></li>'
-        )
-    body = f"<h1>{html.escape(title)}</h1>\n<ul class=\"doc-grid\">{''.join(items)}</ul>"
+        node = tree
+        for part in rel.parts[:-1]:
+            node = node["children"].setdefault(part, {"pages": [], "children": {}})
+        node["pages"].append((rel, doc_title))
+
+    def page_link(rel: Path, doc_title: str) -> str:
+        href = html.escape(str(markdown_path_to_html(rel)), quote=True)
+        return f'<a href="{href}">{html.escape(doc_title)}</a>'
+
+    def render_tree(node: dict, omit_readme: bool = False) -> str:
+        items = []
+        for rel, doc_title in sorted(node["pages"], key=lambda page: (page[0].stem != "README", str(page[0]))):
+            if omit_readme and rel.stem == "README":
+                continue
+            items.append(f'<li>{page_link(rel, doc_title)}</li>')
+        for name, child in sorted(node["children"].items()):
+            entry = next((page for page in child["pages"] if page[0].stem == "README"), None)
+            label = page_link(*entry) if entry else html.escape(name)
+            items.append(f'<li><details open><summary>{label}</summary>'
+                         f'{render_tree(child, omit_readme=True)}</details></li>')
+        return f'<ul class="doc-tree">{"".join(items)}</ul>'
+
+    body = f"<h1>{html.escape(title)}</h1>\n{render_tree(tree)}"
     return html_page(title, body, [], "")
 
 

@@ -86,7 +86,7 @@ bin/solarEclipseGif.sh \
 
 Les critères de sélection des images, leurs valeurs par défaut et les limites
 face aux étoiles dédoublées sont décrits dans
-[Sélection des images pour le stacking](docs/IMAGE_SELECTION.md).
+[Sélection des images pour le stacking](docs/filter/stacking/IMAGE_SELECTION.md).
 A script to process light sessions automatically (grouping by metadata, calibration, registration, stacking), with optional mosaic creation for multiple sessions.
 
 Each stacked FITS result now also produces a JPG preview with the same basename.
@@ -176,10 +176,10 @@ Generate a browsable HTML copy of the Markdown documentation:
 bin/generate_docs_html.py
 ```
 
-The generated site is written to `generated_doc/`, which is ignored by git.
-Open `generated_doc/index.html` in a browser to browse it.
+The generated site is written to `out/`, which is ignored by git.
+Open `out/index.html` in a browser to browse the documentation hierarchy.
 
-The generator also writes `generated_doc/all_docs.html`, a single-page version
+The generator also writes `out/all_docs.html`, a single-page version
 suited for printing. If WeasyPrint is installed, a PDF can be generated with:
 
 ```bash
@@ -240,7 +240,8 @@ For more options, use `--help`.
 
 ### User Documentation
 - **[Complete Guide](GUIDE_COMPLET.md)** - Comprehensive user documentation (French)
-- **[Technical Documentation](docs/)** - Developer and advanced user documentation
+- **[Technical Documentation](docs/README.md)** - Documentation organized by topic
+- **[Filtrage et stacking](docs/filter/stacking/README.md)** - Sélection des images, profils stellaires et Drizzle
 
 ### Key Technical Documents
 - **[Dark Frame Validation](docs/MIN_DARKS_THRESHOLD_FEATURE.md)** - Minimum dark count threshold feature
@@ -253,4 +254,7 @@ For more options, use `--help`.
 
 Le stacking propose `--drizzle auto` (défaut), `off` et `force`, avec conservation
 du diagnostic dans `<cible>_combined.drizzle.json` à côté du FITS final.
-Voir la [spécification et le guide Drizzle](docs/DRIZZLE_SPECIFICATION.md).
+Voir la [spécification et le guide Drizzle](docs/filter/stacking/DRIZZLE_SPECIFICATION.md).
+
+La manipulation des fichiers `.seq` est décrite dans
+[le module de séquences Siril](docs/SIRIL_SEQUENCE.md).
