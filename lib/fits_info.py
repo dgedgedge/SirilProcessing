@@ -197,7 +197,10 @@ class FitsInfo:
             rounded_temp = round(round(self.temperature() / temperature_precision) * temperature_precision, 1)
             rounded_gain = round(self.gain())
             formatted_temp = str(rounded_temp)
-            formatted_exp = str(int(self.exptime()))
+            exposure = self.exptime()
+            # Preserve subsecond exposures without rounding or scientific notation.
+            formatted_exp = (np.format_float_positional(exposure, unique=True, trim='-')
+                             if 0 < exposure < 1 else str(int(exposure)))
             formatted_gain = str(rounded_gain)
             formatted_camera = self.camera()
             formatted_binning = self.binning()

@@ -322,6 +322,9 @@ def run_stack(siril, files, cfg, input_dir, work_dir, sequence, output_path, pre
         valid_registration = [image.included and image.registration().valid for image in independent_images]
         unique_selection = quality_mask(independent_images, cfg, valid_registration)
         stellar_report = filter_stellar_profiles(independent_images, unique_selection, cfg)
+        logging.info('Sélection qualité — bilan : %d image(s) retirée(s), %d/%d restante(s)',
+                     len(independent_images)-int(unique_selection.sum()),
+                     int(unique_selection.sum()), len(independent_images))
         (quality_dir / 'stellar_profiles.json').write_text(
             json.dumps(stellar_report, indent=2, ensure_ascii=False, allow_nan=False)+'\n')
         selected_sources = {str(image.processing_path.resolve()) for image, keep in zip(independent_images, unique_selection) if keep}

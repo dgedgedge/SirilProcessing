@@ -150,8 +150,6 @@ def quality_mask(rows, cfg, included=None):
         logging.info('Sélection qualité — %s : %d image(s) retirée(s), %d/%d restante(s) ; seuil %s %.3f',
                      labels[key], before-int(mask.sum()), int(mask.sum()), before,
                      '>=' if lower else '<=', limit)
-    logging.info('Sélection qualité — bilan : %d image(s) retirée(s), %d/%d restante(s)',
-                 len(rows)-int(mask.sum()), int(mask.sum()), len(rows))
     return mask
 
 

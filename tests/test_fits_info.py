@@ -104,6 +104,16 @@ class TestFitsInfoGrouping:
         expected = "TestCamera_T-15.0_E300_G125_B1x1"
         assert group_key == expected
 
+    @pytest.mark.parametrize('exposure, expected', [
+        (0.1, '0.1'), (0.25, '0.25'), (0.123456789, '0.123456789'),
+        (0.000001, '0.000001'), (0.999999, '0.999999'),
+        (0, '0'), (1, '1'), (1.9, '1'), (300, '300'),
+    ])
+    def test_group_key_exposure_precision(self, valid_dark_fits, exposure, expected):
+        info = FitsInfo(valid_dark_fits)
+        info.set_exptime(exposure)
+        assert info.group_key() == f'TestCamera_T-15.0_E{expected}_G125_B1x1'
+
     def test_group_key_temperature_precision(self, valid_dark_fits):
         """Test l'effet de la précision de température sur le groupement"""
         info = FitsInfo(valid_dark_fits)

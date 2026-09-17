@@ -83,7 +83,7 @@ def test_quality_logs_count_sequential_rejections(caplog):
     assert selected.tolist() == [False]*5 + [True]*3
     for criterion, removed, remaining, before in [
         ('mesures valides', 1, 7, 8), ('FWHM pondérée', 1, 6, 7),
-        ('rondeur', 1, 5, 6), ('nombre d’étoiles', 2, 3, 5), ('bilan', 5, 3, 8),
+        ('rondeur', 1, 5, 6), ('nombre d’étoiles', 2, 3, 5),
     ]:
         assert f'{criterion} : {removed} image(s) retirée(s), {remaining}/{before} restante(s)' in caplog.text
 
