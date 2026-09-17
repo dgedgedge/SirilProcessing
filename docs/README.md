@@ -1,44 +1,30 @@
 # Documentation SirilProcessing
 
-La documentation est organisée par étape de traitement et par sujet technique.
-Le [guide complet](../GUIDE_COMPLET.md) présente l’utilisation générale et le
-[README du projet](../README.md) les commandes de démarrage.
+[Projet](../README.md)
 
-## Traitement des images
+## Documentation des scripts
 
-- [Traitement des lights](LIGHT_PROCESSOR_GUIDE.md) : calibration, alignement et stack final multi-sessions.
-- [Filtrage et contrôle qualité](filter/README.md) : choix des images et validation des darks.
-- [Stacking et sélection des poses](filter/stacking/README.md) : critères, profils stellaires et Drizzle.
-- [Mosaïques](MOSAIC_GUIDE.md) : assemblage de plusieurs champs.
-- [GIF d’éclipse solaire](SOLAR_ECLIPSE_GIF.md) : traitement et visualisation des images solaires.
+Chaque script possède son dossier, avec ses commandes, ses traitements et ses
+sorties. Les wrappers shell sont documentés avec le script Python qu’ils lancent.
 
-## Configuration et utilisation
+| Ensemble | Contenu |
+|---|---|
+| [lightProcess](scripts/lightProcess/README.md) | Calibration des lights, traitements détaillés, filtrage, stacking, Drizzle et mosaïques |
+| [darkLibUpdate](scripts/darkLibUpdate/README.md) | Constitution, validation et mise à jour de la bibliothèque de darks |
+| [solarEclipseGif](scripts/solarEclipseGif/README.md) | Préparation et production des animations d’éclipse |
+| [pyecho](scripts/pyecho/README.md) | Messages dans les scripts Siril |
+| [pydir](scripts/pydir/README.md) | Affichage du contenu d’un répertoire |
+| [trouve_doublons](scripts/trouve_doublons/README.md) | Comparaison de répertoires et préparation d’un nettoyage |
+| [generate_docs_html et build_docs](scripts/generate_docs_html/README.md) | Site HTML et export PDF |
 
-- [Configuration persistante](VALIDATION_CONFIG_GUIDE.md).
-- [Options courtes](OPTIONS_COURTES_GUIDE.md).
-- [Gestion de plusieurs sessions](MULTIPLE_SESSIONS_FEATURE.md).
-- [Gestion des chemins absolus](ABSOLUTE_PATHS_FEATURE.md).
+## Architecture
 
-## Formats et fonctionnement interne
+L’[ensemble d’architecture](architecture/README.md) décrit uniquement les
+responsabilités générales des bibliothèques et leurs relations. Les algorithmes,
+seuils, options et formats détaillés sont documentés dans l’ensemble du script
+qui les utilise.
 
-- [Séquences Siril](SIRIL_SEQUENCE.md) : lecture, modification et écriture des fichiers `.seq`.
-- [Bibliothèque Python](../lib/README.md) : organisation des modules.
-- [Rapports de traitement](RAPPORT_OPTIMISE.md).
-- [Création des liens symboliques](LINK_CREATION_OPTIMIZATION.md).
-- [Gestion des interruptions](INTERRUPTION_HANDLING.md).
-- [Nettoyage des processus](PROCESS_CLEANUP_FEATURE.md).
-- [Commande pyecho](PYECHO_GUIDE.md).
+## Maintenance
 
-## Maintenance de la documentation
-
-- [État de la documentation](DOCUMENTATION_STATUS.md).
+- [Règles d’organisation et de mise à jour](CONTRIBUTING.md).
 - [Tests du projet](../tests/README.md).
-
-Pour générer le site HTML depuis la racine du projet :
-
-```bash
-.venv/bin/python bin/generate_docs_html.py
-```
-
-Ouvrir `out/index.html`. L’index suit les dossiers de documentation ; chaque
-page de `filter/stacking/` permet de revenir aux rubriques parentes.

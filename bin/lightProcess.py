@@ -79,7 +79,7 @@ def remove_session_file_logging(handler: logging.Handler) -> None:
 
 
 def build_session_target_map(input_roots: list[Path]) -> tuple[list[Path], dict[Path, Path]]:
-    """Construit la liste des sous-sessions et leur cible parente."""
+    """Associe chaque sous-session à la session fournie en paramètre."""
     from lib.lightprocessor import discover_session_roots
 
     session_dirs: list[Path] = []
@@ -92,10 +92,7 @@ def build_session_target_map(input_roots: list[Path]) -> tuple[list[Path], dict[
 
         for child in discovered:
             session_dirs.append(child)
-            if len(discovered) > 1:
-                session_to_target[child] = session_path
-            else:
-                session_to_target[child] = child
+            session_to_target[child] = session_path
 
     return session_dirs, session_to_target
 
@@ -169,7 +166,8 @@ Flux de traitement attendu:
     3) On calibre ensuite les lights de cette sous-session avec le master dark et le master flat.
     4) On exporte la sequence calibree sous forme de FITS, sans stack intermediaire.
     5) Une fois toutes les sous-sessions traitees, on reconstruit la sequence finale sur l'ensemble
-       des FITS calibres et on effectue un seul stack final de la cible.
+       des FITS calibres et on effectue un stack par session fournie, meme avec une seule sous-session.
+    6) Avec --mosaic, on assemble uniquement ces stacks de sessions.
 
 Exemple de pipeline Siril par sous-session:
     1) convert <sequence_name> -out=<work_dir>/process
@@ -180,9 +178,9 @@ Exemple de pipeline Siril par sous-session:
     3) calibrate <sequence_name> -dark=<master_dark> -flat=<master_flat> -cc=dark -cfa -equalize_cfa
        Ajouter -debayer en mode drizzle=off ; conserver le CFA en auto/force.
     4) copie Python de process/pp_<sequence_name>_*.fit(s) vers
-       <output_dir>/<target>/sessions/<session>/<session>_<group>_calibrated
+       <output_dir>/<session>/sessions/<sous-session>/<sous-session>_<group>_calibrated
 
-Stack final sur l'ensemble des sorties calibrees d'une cible:
+Stack final sur l'ensemble des sorties calibrees d'une session:
     1) convert <target>_ -out=<work_dir>/<target>/stacking/01_registration
     2) seqfindstar <target>_
     3) seqplatesolve <target>_ -force -nocache -disto=ps_distortion si active
@@ -401,7 +399,7 @@ Traitement Siril de mosaique (si --mosaic):
         dest='enable_stack_platesolve',
         action='store_true',
         default=config.get("enable_stack_platesolve", True),
-        help="Active seqplatesolve avant register dans le stack final multi-sessions (utile en cas d'alignement difficile). Défaut: activé."
+        help="Active seqplatesolve avant register dans le stack final de chaque session (utile en cas d'alignement difficile). Défaut: activé."
     )
 
     parser.add_argument(
@@ -409,7 +407,7 @@ Traitement Siril de mosaique (si --mosaic):
         dest='force_stacking',
         action='store_true',
         default=config.get("force_stacking", False),
-        help="Force uniquement la reconstruction du stack final multi-sessions (supprime les artefacts de stack existants sans forcer la recalibration)"
+        help="Force uniquement la reconstruction du stack final de chaque session (supprime les artefacts de stack existants sans forcer la recalibration)"
     )
 
     parser.add_argument(
@@ -532,10 +530,9 @@ Traitement Siril de mosaique (si --mosaic):
 
     for root_dir in input_roots:
         discovered = discover_session_roots(root_dir)
-        if len(discovered) > 1:
-            logging.info(f"Répertoire cible détecté avec {len(discovered)} sous-sessions: {root_dir}")
+        logging.info("Session %s : %d sous-session(s)", root_dir, len(discovered))
 
-    logging.info(f"Validation réussie pour {len(session_dirs)} répertoires de session")
+    logging.info(f"Validation réussie pour {len(session_dirs)} répertoires de sous-session")
 
     if args.purge_target:
         unique_targets = sorted({session_to_target[session] for session in session_dirs}, key=lambda p: str(p))
@@ -551,22 +548,9 @@ Traitement Siril de mosaique (si --mosaic):
                     except Exception as exc:
                         logging.warning(f"Impossible de purger {tree}: {exc}")
     
-    # Validation spécifique pour la mosaïque
     if args.create_mosaic:
-        if len(session_dirs) < 2:
-            logging.error("La mosaïque nécessite au moins 2 sessions de traitement")
-            return 1
-        
-        # Vérifier le nom de la mosaïque si pas fourni explicitement
-        if not args.mosaic_name:
-            auto_name = calculate_common_basename(session_dirs)
-            if len(auto_name) < 3:
-                logging.error(f"Le nom automatique '{auto_name}' est trop court (< 3 caractères)")
-                logging.error("Veuillez spécifier un nom explicite avec --mosaic-name")
-                return 1
-        
-        logging.info(f"Mosaïque activée: {len(session_dirs)} sessions")
-    
+        logging.info("Mosaïque demandée à partir des stacks des %d sessions", len(input_roots))
+
     # Configuration globale de Siril
     try:
         Siril.configure_defaults(siril_path=args.siril_path, siril_mode=args.siril_mode)
@@ -607,12 +591,12 @@ Traitement Siril de mosaique (si --mosaic):
     successful_sessions = 0
     failed_sessions = []
     successful_processors = []  # Garder les références des processors réussis
-    parent_target_outputs = {}  # parent root -> fichiers combinés
+    session_stack_outputs = {}  # session fournie -> résultat de stacking
     target_wcs_totals = {}  # target root -> aggregated WCS stats
 
     for i, session_dir in enumerate(session_dirs, 1):
         logging.info(f"{'='*60}")
-        logging.info(f"Traitement de la session {i}/{total_sessions}: {session_dir}")
+        logging.info(f"Traitement de la sous-session {i}/{total_sessions}: {session_dir}")
         logging.info(f"{'='*60}")
 
         target_root = session_to_target.get(session_dir, session_dir)
@@ -652,7 +636,7 @@ Traitement Siril de mosaique (si --mosaic):
             continue
         
         try:
-            logging.info(f"Début du traitement de la session: {session_dir}")
+            logging.info(f"Début du traitement de la sous-session: {session_dir}")
             
             # Vérifier le répertoire light pour cette session
             light_dir = None
@@ -694,7 +678,7 @@ Traitement Siril de mosaique (si --mosaic):
             target_stats["wcs_unreadable"] += int(session_stats.get("wcs_unreadable", 0) or 0)
 
             logging.info(
-                "Session stats - total lights: %d | WCS: present=%d, missing=%d, unreadable=%d | rejets: invalides=%d, non-light=%d, no-dark=%d, erreurs=%d | conservées=%d",
+                "Sous-session stats - total lights: %d | WCS: present=%d, missing=%d, unreadable=%d | rejets: invalides=%d, non-light=%d, no-dark=%d, erreurs=%d | conservées=%d",
                 session_stats.get("lights_total", 0),
                 session_stats.get("wcs_present", 0),
                 session_stats.get("wcs_missing", 0),
@@ -707,12 +691,12 @@ Traitement Siril de mosaique (si --mosaic):
             )
             
             if success:
-                logging.info(f"✅ Session {session_dir} traitée avec succès")
+                logging.info(f"✅ Sous-session {session_dir} traitée avec succès")
                 successful_sessions += 1
                 target_stats["sessions_success"] += 1
                 successful_processors.append(processor)  # Sauvegarder le processor réussi
             else:
-                logging.error(f"❌ Échec du traitement de la session {session_dir}")
+                logging.error(f"❌ Échec du traitement de la sous-session {session_dir}")
                 failed_sessions.append(session_dir)
                 
         except KeyboardInterrupt:
@@ -729,15 +713,15 @@ Traitement Siril de mosaique (si --mosaic):
         finally:
             remove_session_file_logging(session_log_handler)
     
-    # Montage des sorties d’une même cible à partir des sous-sessions
-    # Si un répertoire cible contient plusieurs sous-sessions, on les empile ensuite en un seul résultat.
+    # Un stack par session fournie, quel que soit son nombre de sous-sessions.
 
     for root_dir in input_roots:
         logging.info(f"{'='*60}")
         logging.info(f"Start Stacking process for session directory: {root_dir}")
         logging.info(f"{'='*60}")
         discovered = discover_session_roots(root_dir)
-        if len(discovered) <= 1:
+        if args.dry_run:
+            logging.info("[DRY-RUN] Stacking de la session %s à partir de %d sous-session(s)", root_dir, len(discovered))
             continue
 
         session_outputs = []
@@ -796,7 +780,7 @@ Traitement Siril de mosaique (si --mosaic):
             session_outputs = deduped_outputs
 
             logging.info(
-                f"Stack final multi-sessions pour {root_dir.name}: {len(session_outputs)} FITS calibrés"
+                f"Stack final de la session {root_dir.name}: {len(session_outputs)} FITS calibrés"
             )
 
         if session_outputs:
@@ -836,7 +820,7 @@ Traitement Siril de mosaique (si --mosaic):
                         root_dir.name,
                         existing_combined,
                     )
-                    parent_target_outputs[root_dir] = [existing_combined]
+                    session_stack_outputs[root_dir] = existing_combined
                     continue
 
                 stack_report = {}
@@ -860,24 +844,26 @@ Traitement Siril de mosaique (si --mosaic):
                     stack_report.get("kept_effective_for_stack", 0),
                 )
                 if combined_output:
-                    parent_target_outputs[root_dir] = [combined_output]
-                    logging.info(f"✅ Sortie combinée créée pour la cible {root_dir}: {combined_output}")
+                    session_stack_outputs[root_dir] = combined_output
+                    logging.info(f"✅ Sortie combinée créée pour la session {root_dir}: {combined_output}")
                 else:
-                    logging.error(f"❌ Échec de la sortie combinée pour la cible {root_dir}")
+                    logging.error(f"❌ Échec de la sortie combinée pour la session {root_dir}")
+            except Exception:
+                logging.exception("Échec du stacking de la session %s", root_dir)
             finally:
                 for stack_log_handler in stack_log_handlers:
                     remove_session_file_logging(stack_log_handler)
         else:
-            logging.warning(f"Aucun FITS calibré trouvé pour le stack final de la cible {root_dir}")
+            logging.warning(f"Aucun FITS calibré trouvé pour le stack final de la session {root_dir}")
 
     # Résumé final
     logging.info(f"{'='*60}")
     logging.info(f"RÉSUMÉ DU TRAITEMENT")
     logging.info(f"{'='*60}")
-    logging.info(f"Sessions traitées avec succès: {successful_sessions}/{total_sessions}")
+    logging.info(f"Sous-sessions calibrées avec succès: {successful_sessions}/{total_sessions}")
 
     if target_wcs_totals:
-        logging.info("RÉSUMÉ WCS PAR CIBLE")
+        logging.info("RÉSUMÉ WCS PAR SESSION")
         for target_root in sorted(target_wcs_totals.keys(), key=lambda p: p.name.lower()):
             stats = target_wcs_totals[target_root]
             lights_total = int(stats.get("lights_total", 0) or 0)
@@ -889,7 +875,7 @@ Traitement Siril de mosaique (si --mosaic):
 
             present_pct = (100.0 * wcs_present / lights_total) if lights_total > 0 else 0.0
             logging.info(
-                "Cible %s | sessions=%d/%d | lights=%d | WCS present=%d (%.1f%%), missing=%d, unreadable=%d",
+                "Session %s | sous-sessions=%d/%d | lights=%d | WCS present=%d (%.1f%%), missing=%d, unreadable=%d",
                 target_root.name,
                 sessions_success,
                 sessions_total,
@@ -901,31 +887,24 @@ Traitement Siril de mosaique (si --mosaic):
             )
     
     if failed_sessions:
-        logging.error(f"Sessions échouées ({len(failed_sessions)}):")
+        logging.error(f"Sous-sessions échouées ({len(failed_sessions)}):")
         for failed_session in failed_sessions:
             logging.error(f"  - {failed_session}")
     
-    # Traitement de la mosaïque si demandé et si suffisamment de sessions ont réussi
-    if args.create_mosaic and successful_sessions >= 2:
+    logging.info("Sessions empilées avec succès: %d/%d", len(session_stack_outputs), len(input_roots))
+    mosaic_success = not args.create_mosaic
+    # La mosaïque reçoit exclusivement un résultat de stacking par session.
+    if args.create_mosaic and args.dry_run and len(input_roots) >= 2:
+        logging.info("[DRY-RUN] Mosaïque prévue à partir des stacks des %d sessions", len(input_roots))
+        mosaic_success = True
+    elif args.create_mosaic and len(session_stack_outputs) >= 2:
         logging.info(f"{'='*60}")
         logging.info(f"CRÉATION DE LA MOSAÏQUE")
         logging.info(f"{'='*60}")
         
         try:
-            # Filtrer les sessions qui ont réussi
-            successful_session_dirs = [session_dirs[i] for i, session_dir in enumerate(session_dirs) 
-                                     if session_dir not in failed_sessions]
-            
-            # Collecter tous les fichiers de sortie des processors réussis
-            all_output_files = []
-            for processor in successful_processors:
-                output_files = processor.get_output_files()
-                all_output_files.extend(output_files)
-                logging.info(f"Fichiers récupérés du processor {processor.session_dir.name}: {len(output_files)} fichiers")
-
-            for target_root, combined in parent_target_outputs.items():
-                all_output_files.extend(combined)
-                logging.info(f"Fichiers combinés ajoutés pour la cible {target_root}: {len(combined)} fichiers")
+            successful_session_dirs = list(session_stack_outputs)
+            all_output_files = list(session_stack_outputs.values())
 
             logging.info(f"Total des fichiers pour la mosaïque: {len(all_output_files)}")
             for file in all_output_files:
@@ -954,6 +933,7 @@ Traitement Siril de mosaique (si --mosaic):
             if not args.dry_run:
                 mosaic_result = mosaic.create_mosaic()
                 if mosaic_result:
+                    mosaic_success = True
                     logging.info(f"🌟 Mosaïque créée avec succès: {mosaic_result}")
                 else:
                     logging.error("❌ Échec de la création de la mosaïque")
@@ -969,18 +949,20 @@ Traitement Siril de mosaique (si --mosaic):
                 import traceback
                 traceback.print_exc()
     
-    elif args.create_mosaic and successful_sessions < 2:
-        logging.warning("Mosaïque demandée mais moins de 2 sessions traitées avec succès")
+    elif args.create_mosaic:
+        logging.warning("Mosaïque demandée mais moins de 2 résultats de stacking disponibles")
     
     # Retour final
-    if successful_sessions == total_sessions:
-        if args.create_mosaic:
+    if successful_sessions == total_sessions and (args.dry_run or len(session_stack_outputs) == len(input_roots)) and mosaic_success:
+        if args.dry_run:
+            logging.info("Simulation terminée avec succès")
+        elif args.create_mosaic:
             logging.info("🎉 Toutes les sessions traitées et mosaïque créée avec succès")
         else:
             logging.info("🎉 Toutes les sessions ont été traitées avec succès")
         return 0
     elif successful_sessions > 0:
-        logging.warning(f"⚠️  Traitement partiel: {successful_sessions}/{total_sessions} sessions réussies")
+        logging.warning(f"⚠️  Traitement incomplet: {successful_sessions}/{total_sessions} sous-sessions calibrées, {len(session_stack_outputs)}/{len(input_roots)} sessions empilées")
         return 1
     else:
         logging.error("💥 Aucune session n'a pu être traitée")

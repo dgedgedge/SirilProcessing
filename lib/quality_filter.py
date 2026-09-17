@@ -1,7 +1,7 @@
 """Sélection et pondération des poses à partir des mesures de qualité Siril.
 
 Les critères sont indépendants de la décision d’utiliser le Drizzle.
-Voir docs/filter/stacking/IMAGE_SELECTION.md pour les seuils et leurs valeurs par défaut.
+Voir docs/scripts/lightProcess/filter/stacking/IMAGE_SELECTION.md pour les seuils et leurs valeurs par défaut.
 """
 import logging
 

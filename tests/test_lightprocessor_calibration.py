@@ -248,12 +248,12 @@ def test_light_process_wrapper_runs_dry_run_pipeline(
     assert result.returncode == 0, output
     assert Path(result.args[0]).name == "lightProcess.sh"
     assert "[DRY-RUN]" in output
-    assert "Session stats" in output
-    assert "Sessions traitées avec succès: 1/1" in output
+    assert "Sous-session stats" in output
+    assert "Sous-sessions calibrées avec succès: 1/1" in output
 
     session_log = tmp_path / "work" / "20260913_e180" / "sessions" / "20260913_e180" / "20260913_e180_lightProcess.log"
     assert session_log.exists()
-    assert "Début du traitement de la session" in session_log.read_text(encoding="utf-8")
+    assert "Début du traitement de la sous-session" in session_log.read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize('reject_percent,retained,effective', [(0, 3, 6), (50, 2, 2)])

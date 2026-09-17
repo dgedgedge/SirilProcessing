@@ -1,260 +1,46 @@
 # SirilProcessing
-The aim of the scripts I develop is to ease my processing with Siril.
 
-## Scripts
+Scripts de préparation et de traitement d’images astronomiques avec Siril :
+bibliothèque de darks, calibration des lights, sélection des poses, stacking,
+mosaïques et animations d’éclipse solaire.
 
-### darklibupdate.py
-A script to create and maintain a library of master dark frames. It groups dark frames by camera, temperature, exposure time, gain, and binning, then stacks them using Siril to create master darks.
+## Installation et démarrage
 
-**Note:** This script can also handle bias frames, as the only difference between darks and bias is the exposure time. Bias frames (0s exposure) will be automatically grouped separately from dark frames.
-
-#### Features:
-- **Automatic grouping** of dark frames by metadata (camera, temperature, exposure, gain, binning)
-- **Smart update logic** based on date, stacking parameters, and dark count thresholds
-- **Dark frame validation** with robust statistical analysis to detect problematic frames
-- **Flexible update criteria** with configurable minimum dark count thresholds
-- **Comprehensive reporting** with detailed validation and processing statistics
-- **Support for multiple Siril execution modes** (native, flatpak, appimage)
-- **Configuration persistence** to save user preferences
-- **Age-based filtering** to exclude old dark frames
-- **Temperature precision control** for grouping similar temperatures
-- **Interrupt handling** for clean cancellation with Ctrl+C
-
-### solarEclipseGif.py
-A script to build an animated GIF from monochrome solar eclipse FITS frames.
-
-Detailed documentation is available in
-[`docs/SOLAR_ECLIPSE_GIF.md`](docs/SOLAR_ECLIPSE_GIF.md).
-
-#### Features:
-- **Sky-background threshold calibration** from manual value or dark frames
-- **Full-sun session model** from selected full-sun frames or first nearly-full-sun frames
-- **Centering by detected solar circle** with mask-correlation fallback
-- **Optional NVIDIA/CUDA acceleration** for correlation steps when CuPy is available
-- **Fixed-size centered crops** with zero padding outside source boundaries
-- **Timestamp slotting** with at most 10 fps and stacking inside slots
-- **Full-sun debug panels** for calibration inspection
-- **Shift/centering debug panels** for mask and circle inspection
-
-#### Usage:
-```bash
-# With explicit full-sun and dark calibration frames
-bin/solarEclipseGif.sh \
-  --input-dir ~/Images/AstroDirect/sun/Light \
-  --full-sun-frames 1-10 \
-  --dark-calib-frames 180-190 \
-  --target-duration 30 \
-  --output ~/Images/AstroDirect/sun/eclipse.gif
-
-# With first nearly-full-sun frames as model source
-bin/solarEclipseGif.sh \
-  --input-dir ~/Images/AstroDirect/sun/Light \
-  --first-nearly-full-sun-frames 10 \
-  --target-duration 30 \
-  --output ~/Images/AstroDirect/sun/eclipse.gif
-
-# Full-sun model debug
-bin/solarEclipseGif.sh \
-  --input-dir ~/Images/AstroDirect/sun/Light \
-  --full-sun-frames 1-10 \
-  --debug-full-sun \
-  --output ~/Images/AstroDirect/sun/eclipse.gif
-```
-
-#### Useful options:
-- `--manual-seuil-fond-du-ciel`: Manual sky-background threshold
-- `--dark-calib-frames`: 1-based dark calibration selection
-- `--full-sun-frames`: 1-based full-sun model selection
-- `--first-nearly-full-sun-frames`: Fallback model frame count when no full-sun selection is provided
-- `--exclude-frames`: 1-based frames to exclude
-- `--debug-dir`: Debug output directory (default: `<input-dir>/debug`)
-- `--debug-full-sun`: Write full-sun model debug images
-- `--debug-shifts`: Write shift/centering debug images
-- `--debug-gif-frames`: Write the frames actually included in the GIF
-- `--debug-watershed`: Compute and show watershed contours in mask debug images
-- `--debug-luminosity`: Write before/after luminosity-normalization debug images
-- `--background-outside-mask-scale`: Attenuation factor for background outside the dilated solar mask
-- `--background-mask-dilate-fraction`: Relative dilation applied before background attenuation
-- `--background-s-curve-sigma`: Sky sigma threshold used by the background S-curve
-- `--background-s-curve-target-fraction`: Target low sky level for the background S-curve
-- `--enable-background-filter`: Enable selective background attenuation
-- `--disable-background-filter`: Disable selective background attenuation
-- `--rotate-clockwise-deg`: Clockwise crop rotation
-- `--target-duration`: Target GIF duration in seconds
-
-### lightProcess.py
-
-Les critères de sélection des images, leurs valeurs par défaut et les limites
-face aux étoiles dédoublées sont décrits dans
-[Sélection des images pour le stacking](docs/filter/stacking/IMAGE_SELECTION.md).
-A script to process light sessions automatically (grouping by metadata, calibration, registration, stacking), with optional mosaic creation for multiple sessions.
-
-Each stacked FITS result now also produces a JPG preview with the same basename.
-
-#### Quick usage:
-```bash
-# Standard processing with dark matching
-python3 bin/lightProcess.py /path/to/session_M31 --dark-lib /path/to/dark_library
-
-# Processing without using master darks
-python3 bin/lightProcess.py /path/to/session_M31 --no-dark
-
-# Target directory containing several session folders
-python3 bin/lightProcess.py /path/to/M_33 --log-level INFO
-```
-
-#### Multi-session target structure:
-If the input path contains immediate child folders such as `session_01`, `session_02`, etc., each sub-session is processed independently and then stacked together under the common target name.
-
-Example structure:
-```text
-/path/to/
-  M_33/
-    session_01/
-      light/
-      flat/
-    session_02/
-      light/
-      flat/
-```
-
-The script detects the child sessions automatically and eventually creates a combined result for the parent target, for example `M_33_combined.fit`.
-
-#### Key options:
-- `--dark-lib`: Path to the master dark library
-- `--no-dark`: Disable master dark usage for calibration
-- `--mosaic`: Build a mosaic after processing multiple sessions
-- `--mosaic-name`: Override auto-generated mosaic name
-- `--dry-run`: Simulate processing without running Siril
-
-#### Siril pipeline executed (per light group):
-1. `convert <sequence_name> -out=<work_dir>/process`
-2. Optional if a session `flat/` (or `Flat/`) directory exists:
-  - `convert <flat_sequence_name> -out=<work_dir>/flat_process`
-  - `calibrate <flat_sequence_name> -dark=<master_dark_for_flat> -cc=dark -cfa`
-    - With `--no-dark`: no dark calibration is applied to flats
-  - `stack pp_<flat_sequence_name> median -norm=mul -out=<master_flat>`
-3. `calibrate <sequence_name> -dark=<master_dark> -flat=<master_flat> -cc=dark -cfa -equalize_cfa -debayer`
-  - With `--no-dark`: `calibrate <sequence_name> -flat=<master_flat> -cfa -equalize_cfa -debayer`
-4. `register pp_<sequence_name> -2pass -transf=homography`
-5. `seqapplyreg pp_<sequence_name> -filter-wfwhm=2k -filter-round=2k`
-6. `stack r_pp_<sequence_name> mean <rejection> <low> <high> -output_norm -out=<result>`
-
-Outputs:
-- One stacked FITS result per group
-- One JPG preview generated from each stacked FITS
-
-#### Siril mosaic pipeline (with `--mosaic`):
-1. `convert mosaic_ -out=<mosaic_output_dir>`
-2. `seqplatesolve mosaic_ -force -nocache -disto=ps_distortion`
-3. `seqapplyreg mosaic_ -framing=max`
-4. `stack r_mosaic_ rej 3 3 -norm=addscale -output_norm -rgb_equal -maximize -overlap_norm -feather=5 -out=<mosaic_name>_mosaic`
-
-## Library
-
-The `lib/` directory contains shared modules used by both scripts:
-- `fits_info.py`: FITS file metadata handling
-- `config.py`: Configuration management
-- `siril_utils.py`: Siril script execution utilities
-
-See [lib/README.md](lib/README.md) for more details.
-
-## Requirements
+Depuis la racine du projet :
 
 ```bash
-pip install -r requirements.txt
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+./bin/lightProcess.sh /chemin/vers/la/cible
 ```
 
-Main dependencies:
-- astropy: For FITS file handling
+Les traitements astronomiques utilisent une installation de Siril accessible
+selon le mode configuré (`native`, `flatpak` ou `appimage`). Les wrappers `.sh`
+activent l’environnement Python avant d’appeler le script correspondant.
 
-## Documentation HTML
+## Documentation par script
 
-Generate a browsable HTML copy of the Markdown documentation:
+| Script | Documentation |
+|---|---|
+| `lightProcess.py` / `.sh` | [Utilisation et traitements détaillés](docs/scripts/lightProcess/README.md) |
+| `darkLibUpdate.py` / `.sh` | [Bibliothèque de master darks](docs/scripts/darkLibUpdate/README.md) |
+| `solarEclipseGif.py` / `.sh` | [Animations d’éclipse solaire](docs/scripts/solarEclipseGif/README.md) |
+| `pyecho.py` | [Affichage de messages](docs/scripts/pyecho/README.md) |
+| `pydir.py` | [Liste des fichiers d’un répertoire](docs/scripts/pydir/README.md) |
+| `trouve_doublons.py` | [Recherche de doublons](docs/scripts/trouve_doublons/README.md) |
+| `generate_docs_html.py` / `build_docs.sh` | [Génération de la documentation](docs/scripts/generate_docs_html/README.md) |
+
+## Architecture et maintenance
+
+- [Accueil de la documentation](docs/README.md).
+- [Architecture et rôle des bibliothèques](docs/architecture/README.md).
+- [Organisation et maintenance des documents](docs/CONTRIBUTING.md).
+- [Tests](tests/README.md).
+
+Pour générer le site HTML :
 
 ```bash
-bin/generate_docs_html.py
+.venv/bin/python bin/generate_docs_html.py
 ```
 
-The generated site is written to `out/`, which is ignored by git.
-Open `out/index.html` in a browser to browse the documentation hierarchy.
-
-The generator also writes `out/all_docs.html`, a single-page version
-suited for printing. If WeasyPrint is installed, a PDF can be generated with:
-
-```bash
-bin/generate_docs_html.py --pdf
-```
-
-## Usage
-
-### Dark Library (also handles Bias frames)
-
-#### Basic Usage
-```bash
-# Create master darks from input directories
-python3 bin/darklibupdate.py --input-dirs /path/to/darks1 /path/to/darks2
-
-# Process bias frames (0s exposure) along with darks
-python3 bin/darklibupdate.py --input-dirs /path/to/darks /path/to/bias
-
-# List existing master darks with details
-python3 bin/darklibupdate.py --list-darks
-
-# Test mode (analyze files but don't execute Siril)
-python3 bin/darklibupdate.py --input-dirs /path/to/darks --dummy
-```
-
-#### Advanced Features
-```bash
-# Enable dark frame validation to detect problematic frames
-python3 bin/darklibupdate.py --input-dirs /path/to/darks --validate-darks
-
-# Set minimum dark count threshold for updates
-python3 bin/darklibupdate.py --input-dirs /path/to/darks --min-darks-threshold 20
-
-# Generate detailed processing and validation report
-python3 bin/darklibupdate.py --input-dirs /path/to/darks --report
-
-# Set temperature precision for grouping (default 0.5°C)
-python3 bin/darklibupdate.py --input-dirs /path/to/darks --temperature-precision 0.2
-
-# Save current configuration for future use
-python3 bin/darklibupdate.py --input-dirs /path/to/darks --validate-darks --min-darks-threshold 15 --save-config
-
-# Force recalculation of all master darks
-python3 bin/darklibupdate.py --input-dirs /path/to/darks --force-recalc
-```
-
-#### Key Options
-- `--validate-darks`: Enable statistical validation to reject problematic dark frames
-- `--min-darks-threshold N`: Only update master darks if ≥N darks available and date is newer
-- `--report`: Generate comprehensive processing and validation report
-- `--temperature-precision X`: Set temperature grouping precision in °C
-- `--max-age N`: Limit dark frame age to N days from newest frame
-- `--save-config`: Save current settings as defaults
-
-For more options, use `--help`.
-
-## Documentation
-
-### User Documentation
-- **[Complete Guide](GUIDE_COMPLET.md)** - Comprehensive user documentation (French)
-- **[Technical Documentation](docs/README.md)** - Documentation organized by topic
-- **[Filtrage et stacking](docs/filter/stacking/README.md)** - Sélection des images, profils stellaires et Drizzle
-
-### Key Technical Documents
-- **[Dark Frame Validation](docs/MIN_DARKS_THRESHOLD_FEATURE.md)** - Minimum dark count threshold feature
-- **[Absolute Paths Management](docs/ABSOLUTE_PATHS_FEATURE.md)** - Automatic path conversion for robust configuration
-- **[Validation Optimization](docs/VALIDATION_OPTIMIZATION.md)** - Conditional validation logic
-- **[Robust Statistics](docs/ROBUST_STATISTICS_UPDATE.md)** - MAD-based validation methods
-- **[Configuration Guide](docs/VALIDATION_CONFIG_GUIDE.md)** - Persistent configuration options
-
-### Drizzle automatique
-
-Le stacking propose `--drizzle auto` (défaut), `off` et `force`, avec conservation
-du diagnostic dans `<cible>_combined.drizzle.json` à côté du FITS final.
-Voir la [spécification et le guide Drizzle](docs/filter/stacking/DRIZZLE_SPECIFICATION.md).
-
-La manipulation des fichiers `.seq` est décrite dans
-[le module de séquences Siril](docs/SIRIL_SEQUENCE.md).
+Ouvrir `out/index.html`. Les pages HTML suivent l’arborescence des documents.
