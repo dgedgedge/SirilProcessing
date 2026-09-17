@@ -1,5 +1,5 @@
 #!/bin/env python3
-from datetime import time
+from datetime import datetime
 import os
 import subprocess
 import logging
@@ -180,9 +180,9 @@ class Siril:
             self._validated = False
             return False
     
-    def run_siril_script(self, siril_script_content: str, working_dir: str) -> bool:
+    def run_siril_script(self, siril_script_content: str, working_dir: str, script_name: str = None) -> bool:
         """
-        Exécute un script Siril temporaire en utilisant la configuration de l'instance.
+        Exécute un script Siril et conserve stdout/stderr dans le fichier .log associé.
         
         Args:
             siril_script_content: Contenu du script Siril à exécuter
@@ -196,39 +196,52 @@ class Siril:
             logging.error("Configuration Siril non valide. Impossible d'exécuter le script.")
             return False
         
-        script_path = os.path.join(working_dir, "siril_script.sps")
+        working_path = Path(working_dir)
+        working_path.mkdir(parents=True, exist_ok=True)
+        if script_name:
+            safe_name = "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in script_name)
+            if not safe_name.endswith(".sps"):
+                safe_name = f"{safe_name}.sps"
+        else:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+            safe_name = f"siril_script_{timestamp}.sps"
+
+        script_path = working_path / safe_name
+        log_path = script_path.with_suffix(".log")
         try:
+            logging.info("Exécution du script Siril %s dans %s", script_path, working_dir)
             with open(script_path, "w") as f:
                 f.write(siril_script_content)
 
-            logging.info(f"Exécution du script Siril {script_path} dans {working_dir}:\n{siril_script_content}")
+            logging.debug("Contenu du script Siril %s :\n%s", script_path, siril_script_content)
 
             # Construction de la commande selon le mode
             if self._siril_mode == "native":
                 cmd = [self._siril_path, "-s", script_path]
             elif self._siril_mode == "flatpak":
-                cmd = ["flatpak", "run", "org.siril.Siril", "-s", script_path]
+                # Batch scripts use the CLI and do not require a graphical session.
+                cmd = ["flatpak", "run", "--command=siril-cli", "org.siril.Siril", "-s", script_path]
             elif self._siril_mode == "appimage":
                 cmd = [self._siril_path, "-s", script_path]
             else:
                 logging.error(f"Mode Siril inconnu: {self._siril_mode}")
                 return False
 
-            result = subprocess.run(
-                cmd,
-                cwd=working_dir,
-                capture_output=True,
-                text=True,
-                check=False
-            )
+            with log_path.open("w", encoding="utf-8") as log_file:
+                result = subprocess.run(
+                    cmd,
+                    cwd=working_dir,
+                    stdout=log_file,
+                    stderr=subprocess.STDOUT,
+                    check=False
+                )
             if result.returncode != 0:
                 logging.error(f"Le script Siril a échoué avec le code d'erreur {result.returncode}.")
-                logging.error(f"Stdout Siril:\n{result.stdout}")
-                logging.error(f"Stderr Siril:\n{result.stderr}")
+                logging.error("Sortie Siril (%s) :\n%s", log_path,
+                              log_path.read_text(encoding="utf-8", errors="replace"))
                 return False
             else:
                 logging.info("Script Siril exécuté avec succès.")
-                logging.debug(f"Stdout Siril:\n{result.stdout}")
                 return True
         except FileNotFoundError:
             logging.error(f"Exécutable Siril introuvable à '{self._siril_path}'. Veuillez vérifier le chemin.")
@@ -236,9 +249,6 @@ class Siril:
         except Exception as e:
             logging.error(f"Erreur lors de l'exécution du script Siril: {e}")
             return False
-        finally:
-            if os.path.exists(script_path):
-                os.remove(script_path)  # Nettoyage du script temporaire
 
 
 # Fonction de compatibilité pour maintenir l'ancienne interface
@@ -259,6 +269,3 @@ def run_siril_script(siril_script_content: str, working_dir: str, siril_path: st
     """
     siril_instance = Siril(siril_path=siril_path, siril_mode=siril_mode)
     return siril_instance.run_siril_script(siril_script_content, working_dir)
-
-
-

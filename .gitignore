@@ -38,3 +38,7 @@ Thumbs.db
 # Temporary files
 /tmp/
 *.tmp
+
+# Generated documentation
+generated_doc/
+out/

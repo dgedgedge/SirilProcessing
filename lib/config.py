@@ -22,13 +22,37 @@ class Config:
         "rejection_method": "winsorizedsigma",
         "rejection_param1": 3.0,
         "rejection_param2": 3.0,
+        "roundness_filter": "1.8k",
+        "nbstars_filter": "1.8k",
+        "roundness_weighted": True,
+        "roundness_weight_max_extra": 1,
+        "fwhm_filter": "1.8k",
+        "max_fwhm": 0.0,
+        "stellar_profile_filter": True,
+        "stellar_profile_sigma": 3.0,
+        "fwhm_reject_percent": 0.0,
+        "fwhm_weighted": True,
+        "fwhm_weight_max_extra": 1,
+        "align_transform": "affine",
+        "enable_stack_platesolve": True,
+        "force_stacking": False,
         "max_age_days": 182,
         "stack_method": "average",
+        "drizzle": "auto",
+        "drizzle_scale": "auto",
+        "drizzle_pixfrac": "auto",
+        "drizzle_kernel": "auto",
+        "drizzle_min_frames": 30,
+        "drizzle_min_coverage": 0.75,
+        "drizzle_fwhm_limit": 2.5,
+        "drizzle_max_drift": 10.0,
         "temperature_precision": 0.2,
         "min_darks_threshold": 0,
         "validate_darks": False,
         "report": False,
-        "input_dirs": None
+        "max_hot_pixels_percent": 1.0,
+        "input_dirs": None,
+        "keep_intermediate": False,
     }
     
     def __init__(self, config_file=None):
@@ -138,7 +162,32 @@ class Config:
             updates["rejection_param1"] = args.rejection_param1
         if hasattr(args, 'rejection_param2'):
             updates["rejection_param2"] = args.rejection_param2
+        if hasattr(args, 'roundness_filter'):
+            updates["roundness_filter"] = args.roundness_filter
+        if hasattr(args, 'fwhm_filter'):
+            updates["fwhm_filter"] = args.fwhm_filter
+        if hasattr(args, 'fwhm_reject_percent'):
+            updates["fwhm_reject_percent"] = args.fwhm_reject_percent
+        if hasattr(args, 'fwhm_weighted'):
+            updates["fwhm_weighted"] = args.fwhm_weighted
+        if hasattr(args, 'fwhm_weight_max_extra'):
+            updates["fwhm_weight_max_extra"] = args.fwhm_weight_max_extra
+        if hasattr(args, 'align_transform'):
+            updates["align_transform"] = args.align_transform
+        if hasattr(args, 'enable_stack_platesolve'):
+            updates["enable_stack_platesolve"] = args.enable_stack_platesolve
+        if hasattr(args, 'force_stacking'):
+            updates["force_stacking"] = args.force_stacking
         
+        for key in self.DEFAULTS:
+            if key.startswith("drizzle") and hasattr(args, key):
+                updates[key] = getattr(args, key)
+
+        for key in ("nbstars_filter", "roundness_weighted", "roundness_weight_max_extra", "max_fwhm",
+                    "stellar_profile_filter", "stellar_profile_sigma"):
+            if hasattr(args, key):
+                updates[key] = getattr(args, key)
+
         # Add stacking method
         if hasattr(args, 'stack_method'):
             updates["stack_method"] = args.stack_method
@@ -156,6 +205,18 @@ class Config:
             updates["validate_darks"] = args.validate_darks
         if hasattr(args, 'report'):
             updates["report"] = args.report
+        if hasattr(args, 'min_median_for_tests'):
+            updates["min_median_for_tests"] = args.min_median_for_tests
+        if hasattr(args, 'max_median_adu'):
+            updates["max_median_adu"] = args.max_median_adu
+        if hasattr(args, 'max_hot_pixels_percent'):
+            updates["max_hot_pixels_percent"] = args.max_hot_pixels_percent
+        if hasattr(args, 'max_mad_factor'):
+            updates["max_mad_factor"] = args.max_mad_factor
+        if hasattr(args, 'max_central_dispersion'):
+            updates["max_central_dispersion"] = args.max_central_dispersion
+        if hasattr(args, 'keep_intermediate'):
+            updates["keep_intermediate"] = args.keep_intermediate
         if hasattr(args, 'input_dirs') and args.input_dirs is not None:
             # Convertir tous les répertoires d'entrée en chemins absolus
             updates["input_dirs"] = [os.path.abspath(d) for d in args.input_dirs]
