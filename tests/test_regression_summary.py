@@ -6,14 +6,13 @@ import sys
 def test_full_regression_suite_summary(tmp_path, project_root, light_process_env):
     """Lance la suite pytest principale et valide le résumé global."""
     env = light_process_env.copy()
-    env["SIRILPROCESSING_REGRESSION_CHILD"] = "1"
-
     this_file = project_root / "tests" / "test_regression_summary.py"
     test_files = sorted(
         path
-        for path in project_root.rglob("test_*.py")
-        if path != this_file and ".venv" not in path.parts
+        for path in (project_root / "tests").rglob("test_*.py")
+        if path != this_file
     )
+    assert test_files, "Aucun test de non-régression découvert dans tests/"
 
     report_path = tmp_path / "regression_summary.txt"
     command = [sys.executable, "-m", "pytest", "-q", *[str(path) for path in test_files]]

@@ -3,11 +3,11 @@ from pathlib import Path
 from lib.mosaic import Mosaic
 
 
-def test_integrated_script():
+def test_integrated_script(tmp_path):
     """Teste la génération du script Siril intégré."""
     mosaic = Mosaic(
-        output_dir=Path("/tmp/mosaic_output"),
-        work_dir=Path("/tmp/mosaic_work"),
+        output_dir=tmp_path / "output",
+        work_dir=tmp_path / "work",
         mosaic_name="M31_test",
         input_files=[
             Path("panel_01_session_M31_nord.fit"),
