@@ -620,7 +620,13 @@ def main() -> int:
         generated_docs.append((output_rel, doc_title))
         single_page_docs.append((rel, doc_title, body))
 
-    (output_dir / "index.html").write_text(build_index(args.title, generated_docs), encoding="utf-8")
+    # Le README racine porte aussi la navigation HTML : aucun second sommaire
+    # indépendant à maintenir. Le catalogue reste un repli pour les autres sources.
+    project_home = output_dir / "README.html"
+    if project_home.exists():
+        shutil.copyfile(project_home, output_dir / "index.html")
+    else:
+        (output_dir / "index.html").write_text(build_index(args.title, generated_docs), encoding="utf-8")
     single_page_path = output_dir / "all_docs.html"
     single_page_path.write_text(build_single_page(args.title, single_page_docs), encoding="utf-8")
     print(f"Generated {len(generated_docs)} HTML document(s) in {output_dir}")

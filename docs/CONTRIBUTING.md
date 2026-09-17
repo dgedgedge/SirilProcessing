@@ -13,6 +13,19 @@ Chaque ensemble possède un `README.md` qui sert de sommaire. Un wrapper shell
 est documenté avec le script Python qu’il lance. Une information détaillée
 possède une page de référence ; les autres pages y renvoient.
 
+## Pages maîtresses communes aux deux formats
+
+Le `README.md` du projet contient une description synthétique et des liens
+vers les sommaires maîtres. `docs/README.md` présente les ensembles,
+`docs/scripts/README.md` mène aux scripts et `docs/architecture/README.md`
+présente l’architecture. Les détails d’installation sont dans
+[Installation](INSTALLATION.md).
+
+L’accueil HTML est généré à partir du README du projet ; chaque autre Markdown
+conserve son emplacement, avec l’extension `.html`. Ajouter une page demande
+donc de la relier depuis le README de son ensemble, pour qu’elle soit accessible
+dans les deux formats. La navigation HTML ne fournit pas de sommaire parallèle.
+
 ## Mise à jour
 
 Décrire le comportement présent du code. Les changements passés sont consultables

@@ -1,0 +1,45 @@
+name: Documentation HTML
+
+on:
+  push:
+    paths:
+      - '**/*.md'
+      - '**/*.markdown'
+      - 'bin/generate_docs_html.py'
+      - 'requirements-docs.txt'
+      - 'tests/test_docs_html.py'
+      - '.github/workflows/documentation.yml'
+  pull_request:
+    paths:
+      - '**/*.md'
+      - '**/*.markdown'
+      - 'bin/generate_docs_html.py'
+      - 'requirements-docs.txt'
+      - 'tests/test_docs_html.py'
+      - '.github/workflows/documentation.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Installer les dépendances HTML
+        run: python3 -m pip install -r requirements-docs.txt
+      - name: Vérifier le générateur
+        run: python3 -m unittest discover -s tests -p test_docs_html.py
+      - name: Générer la documentation
+        run: python3 bin/generate_docs_html.py
+      - name: Conserver le site HTML téléchargeable
+        uses: actions/upload-artifact@v4
+        with:
+          name: documentation-html
+          path: out/
+          if-no-files-found: error
+          retention-days: 30
