@@ -257,11 +257,13 @@ def filter_stellar_profiles(images, mask, cfg):
     return report
 
 
-def apply_quality_weights(sequence, records, cfg):
+def apply_quality_weights(sequence, records, cfg, expand=True):
     """Expand selected sequence entries, preserving original registration matrices.
 
     Integer multiplicities match the existing FWHM weighting convention. No
     interpolated image is measured and no duplicate contributes to diagnostics.
+    With expand=False, only select entries and calculate planned multiplicities;
+    materialize them after resampling to avoid processing the same pixels again.
     """
     extra_max = int(cfg.get('roundness_weight_max_extra', 1))
     if not 0 <= extra_max <= 8:
@@ -286,10 +288,31 @@ def apply_quality_weights(sequence, records, cfg):
         record = accepted.get(str(image.processing_path.resolve()))
         image.included = bool(record is not None and image.included and image.registration().valid)
         if image.included:
-            for _ in range(record['quality_multiplicity'] - 1):
-                sequence.duplicate(image)
+            if expand:
+                for _ in range(record['quality_multiplicity'] - 1):
+                    sequence.duplicate(image)
             record['effective_stack_entries'] += record['quality_multiplicity']
     sequence.write()
     effective = sum(r['effective_stack_entries'] for r in records)
     logging.info('Pondération qualité après sélection : %d poses retenues -> %d entrées effectives', len(records), effective)
     return effective
+
+
+def materialize_quality_weights(sequence, records, sources_by_number, allowed):
+    """Repeat already registered FITS using the original, frozen quality weights."""
+    accepted = {record['source']: record for record in records}
+    retained = set()
+    for image in list(sequence.images):
+        if not image.included:
+            continue
+        if image.number not in allowed:
+            raise ValueError(f'Pose exclue réintroduite après rééchantillonnage : {image.number}')
+        source = sources_by_number[image.number]
+        record = accepted[source]
+        retained.add(source)
+        for _ in range(record['quality_multiplicity']-1):
+            sequence.duplicate(image)
+    if not retained:
+        raise ValueError('Aucune pose après rééchantillonnage')
+    sequence.write()
+    return retained, sum(image.included for image in sequence.images)

@@ -3,6 +3,7 @@ import os
 import pytest
 
 from lib.siril_utils import Siril
+from lib.cpu_config import CpuConfig
 
 
 @pytest.fixture(autouse=True)
@@ -73,7 +74,17 @@ def test_run_siril_script_keeps_command_file(tmp_path):
     script_path = tmp_path / "work" / "calibration_test.sps"
     assert success is True
     assert script_path.exists()
-    assert script_path.read_text() == "requires 1.2\nclose\n"
+    assert script_path.read_text() == f"requires 1.2\nsetcpu {CpuConfig.get_limit()}\nclose\n"
+
+
+def test_sigkill_reports_signal_and_memory_diagnostic(tmp_path, monkeypatch, caplog):
+    import subprocess
+    executable = _fake_executable(tmp_path)
+    siril = Siril(siril_path=str(executable), siril_mode='native')
+    monkeypatch.setattr(subprocess, 'run', lambda *args, **kwargs: subprocess.CompletedProcess(args[0], -9))
+    assert not siril.run_siril_script('close', str(tmp_path), 'killed.sps')
+    assert 'SIGKILL' in caplog.text
+    assert 'pression mémoire' in caplog.text
 
 
 @pytest.mark.parametrize('exit_code', [0, 1])

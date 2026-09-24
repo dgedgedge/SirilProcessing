@@ -6,6 +6,46 @@ from lib.drizzle import read_registration
 from lib.quality_filter import quality_mask
 
 
+def test_weights_deferred_until_after_resampling_without_recalculation(tmp_path):
+    from astropy.io import fits
+    from lib.siril_sequence import SirilSequence, RegistrationData
+    from lib.quality_filter import apply_quality_weights, materialize_quality_weights
+    files = [tmp_path/f'light_{i:03d}.fits' for i in range(1, 4)]
+    for file in files:
+        fits.writeto(file, np.ones((8, 8), dtype=np.float32))
+    sequence = SirilSequence.from_files(tmp_path/'light_.seq', 'light_', files)
+    records = []
+    mapping = {}
+    for image in sequence.images:
+        image.registrations['R0'] = RegistrationData(image.number, image.number, .9, 0, 0, 100, np.eye(3))
+        mapping[image.number] = str(image.filename.resolve())
+        records.append(dict(source=mapping[image.number], fwhm=image.number, roundness=.9))
+    count = apply_quality_weights(sequence, records, {'fwhm_weighted': True, 'fwhm_weight_max_extra': 2}, expand=False)
+    assert count == 6
+    assert len(sequence.images) == 3
+    assert [record['quality_multiplicity'] for record in records] == [3, 2, 1]
+    # The middle pose fails a subsequent registration. Weights stay frozen.
+    sequence.images[1].included = False
+    sequence.images[0].registration().fwhm = 999
+    retained, count = materialize_quality_weights(sequence, records, mapping, {1, 3})
+    assert retained == {mapping[1], mapping[3]} and count == 4
+    copies = sequence.images[3:]
+    assert len(copies) == 2
+    assert all(image.filename.is_symlink() and image.filename.resolve() == files[0] for image in copies)
+    assert all(image.registration().fwhm == 999 for image in copies)
+
+
+def test_final_weighting_rejects_reintroduced_image(tmp_path):
+    from astropy.io import fits
+    from lib.siril_sequence import SirilSequence
+    from lib.quality_filter import materialize_quality_weights
+    path = tmp_path/'light_001.fit'
+    fits.writeto(path, np.ones((8, 8)))
+    sequence = SirilSequence.from_files(tmp_path/'light_.seq', 'light_', [path])
+    with pytest.raises(ValueError, match='réintroduite'):
+        materialize_quality_weights(sequence, [], {}, set())
+
+
 def test_raw_fwhm_ceiling_rejects_blur_with_normal_star_count(caplog):
     # The two visibly blurred M33 exposures pass the other recorded thresholds.
     rows = [([7.17891, 15.259, .697373, 0, .0119828, 815], np.eye(3)),

@@ -22,9 +22,10 @@ pondération ou de valeurs par défaut. Les limites des contrôles existants son
    invalides et des transformations géométriquement incohérentes, puis filtres successifs :
    plafond FWHM non pondérée, FWHM pondérée par seuil, rejet proportionnel FWHM,
    rondeur, nombre d’étoiles, puis profils stellaires (R80 et allongement cohérent).
-4. Pondérations FWHM et rondeur, uniquement sur les poses retenues.
+4. Calcul des pondérations FWHM et rondeur, uniquement sur les poses retenues.
 5. Analyse Drizzle, application de l’alignement aux entrées sélectionnées avec
-   `seqapplyreg -filter-included`, puis empilement. Tout nouvel alignement,
+   `seqapplyreg -filter-included`, puis création des répétitions par liens vers
+   les FITS alignés et empilement. Tout nouvel alignement,
    après dématriçage ou réalignement robuste, est contrôlé avant son application.
 
 Ce parcours unique s’applique aux appels CLI et Python, avec ou sans Drizzle.
@@ -300,9 +301,12 @@ La « FWHM pondérée » est le nom de la mesure Siril utilisée pour la sélect
 La « pondération FWHM » ci-dessous est une autre opération : elle augmente la
 contribution des images retenues au stack. Ces répétitions ne constituent pas un filtre de sélection.
 
-`apply_quality_weights()` dans `lib/quality_filter.py` utilise les objets de
-séquence pour ajouter les répétitions
-après tous les filtres. La pondération FWHM utilise la FWHM non pondérée Siril,
+`apply_quality_weights(..., expand=False)` dans `lib/quality_filter.py` calcule
+les multiplicités après tous les filtres. `materialize_quality_weights()` ajoute
+les répétitions après le dernier rééchantillonnage, par liens symboliques :
+les poses sont dématricées et alignées une seule fois par étape. Les poids
+initiaux sont conservés si un alignement ultérieur élimine encore des poses.
+La pondération FWHM utilise la FWHM non pondérée Siril,
 avec une qualité normalisée entre la meilleure et la moins bonne pose retenue.
 Elle est appliquée au-delà de deux poses retenues. La rondeur utilise une
 normalisation analogue, dans l’autre sens. Les multiplicités se multiplient ;

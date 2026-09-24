@@ -4,8 +4,10 @@ import os
 import subprocess
 import logging
 import shutil
+import signal
 from pathlib import Path
 from typing import List, Optional
+from lib.cpu_config import CpuConfig
 
 
 class Siril:
@@ -209,6 +211,18 @@ class Siril:
         script_path = working_path / safe_name
         log_path = script_path.with_suffix(".log")
         try:
+            # Conserver l'en-tête « requires » avant toute commande Siril.
+            lines = siril_script_content.splitlines(keepends=True)
+            insertion = 0
+            for line in lines:
+                stripped = line.strip()
+                if stripped and not stripped.startswith('#') and stripped.split()[0] != 'requires':
+                    break
+                insertion += 1
+            if insertion and not lines[insertion - 1].endswith('\n'):
+                lines[insertion - 1] += '\n'
+            lines.insert(insertion, f'setcpu {CpuConfig.get_limit()}\n')
+            siril_script_content = ''.join(lines)
             logging.info("Exécution du script Siril %s dans %s", script_path, working_dir)
             with open(script_path, "w") as f:
                 f.write(siril_script_content)
@@ -237,6 +251,14 @@ class Siril:
                 )
             if result.returncode != 0:
                 logging.error(f"Le script Siril a échoué avec le code d'erreur {result.returncode}.")
+                if result.returncode < 0:
+                    try:
+                        name = signal.Signals(-result.returncode).name
+                    except ValueError:
+                        name = str(-result.returncode)
+                    logging.error('Processus Siril interrompu par le signal %s (script %s).', name, script_path)
+                    if result.returncode == -signal.SIGKILL:
+                        logging.error('SIGKILL : vérifier les journaux système (OOM / pression mémoire ou arrêt externe).')
                 logging.error("Sortie Siril (%s) :\n%s", log_path,
                               log_path.read_text(encoding="utf-8", errors="replace"))
                 return False
@@ -269,3 +291,28 @@ def run_siril_script(siril_script_content: str, working_dir: str, siril_path: st
     """
     siril_instance = Siril(siril_path=siril_path, siril_mode=siril_mode)
     return siril_instance.run_siril_script(siril_script_content, working_dir)
+
+
+def add_siril_arguments(parser, config=None, *, photometry_aliases=False):
+    """Options d'exécution communes : CLI > configuration > valeurs par défaut."""
+    from lib.config import Config
+
+    def default(key):
+        return config.get(key) if config is not None else Config.DEFAULTS[key]
+
+    path_options = ["-s", "--siril-path"]
+    mode_options = ["-m", "--siril-mode"]
+    if photometry_aliases:
+        path_options.append("--photometry-siril-path")
+        mode_options.append("--photometry-siril-mode")
+    group = parser.add_argument_group("Exécution Siril")
+    group.add_argument(*path_options, dest="siril_path", default=default("siril_path"),
+                       help="Exécutable Siril (en mode native/appimage ; sans effet en flatpak)")
+    group.add_argument(*mode_options, dest="siril_mode", choices=["native", "flatpak", "appimage"],
+                       default=default("siril_mode"), help="Mode d'exécution de Siril")
+
+
+def create_siril_from_args(args=None):
+    """Crée le service validé ; sans arguments, conserve les défauts globaux Siril."""
+    return Siril(siril_path=getattr(args, "siril_path", None),
+                 siril_mode=getattr(args, "siril_mode", None))

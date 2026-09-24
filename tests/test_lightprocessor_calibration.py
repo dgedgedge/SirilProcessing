@@ -303,16 +303,19 @@ def test_stack_selection_only_after_registration(tmp_path, monkeypatch, method, 
                     + ''.join(f'R0 {f} {f} .9 1 0 200 H 1 0 {i*.2} 0 1 0 0 0 1\n'
                               for i, f in enumerate([2,3,4,20])))
             elif script_name == '04_realign.sps':
-                framing = 'min' if method == 'median' else 'max'
+                framing = 'min'
                 assert f'seqapplyreg target_name_ -filter-included -framing={framing}' in script_content
                 assert 'register r_target_name_ -2pass -transf=affine' in script_content
                 assert '\nstack ' not in script_content
                 simulated_registered_sequence(directory, 'target_name_', 'r_target_name_')
+            elif script_name == '04_applyreg.sps':
+                assert 'seqapplyreg r_target_name_ -filter-included -framing=min' in script_content
+                simulated_registered_sequence(directory, 'r_target_name_', 'r_r_target_name_')
             elif script_name == '04_stacking.sps':
                 assert selections == [4]
-                framing = 'min' if method == 'median' else 'max'
-                assert f'seqapplyreg r_target_name_ -filter-included -framing={framing}' in script_content
+                assert 'seqapplyreg' not in script_content
                 assert '\nregister ' not in script_content
+                assert '-maximize' not in script_content
                 stack_method = 'median' if method == 'median' else 'rej 3.0 3.0'
                 assert f'stack r_r_target_name_ {stack_method} -output_norm -out=' in script_content
                 report = json.loads((tmp_path/'out/target_name_combined.drizzle.json').read_text())
@@ -333,7 +336,7 @@ def test_stack_selection_only_after_registration(tmp_path, monkeypatch, method, 
     report = {}
     result = stack_session_outputs(sources, tmp_path/'out', tmp_path/'work', 'target_name', cfg, stack_report=report)
     assert result == tmp_path/'out/target_name_combined.fit'
-    assert calls == ['01_registration.sps', '04_realign.sps', '04_stacking.sps']
+    assert calls == ['01_registration.sps', '04_realign.sps', '04_applyreg.sps', '04_stacking.sps']
     assert selections == [4]
     assert report['total_input'] == 4
     assert report['kept_unique_for_stack'] == retained

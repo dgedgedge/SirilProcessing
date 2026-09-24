@@ -187,6 +187,39 @@ class SirilSequence:
         for image, path in zip(self.images, files):
             image.source_path = Path(path)
 
+    def selected_registration_copy(self):
+        """Compact selected independent frames for a fresh registration stage.
+
+        Preserve file numbers, measurements and the reference when retained.
+        Build fresh sequence metadata rather than retaining index-based overlap
+        or distortion records which would be invalid after compaction.
+        FITS headers remain the source of astrometry for the next registration.
+        """
+        selected, seen = [], set()
+        for image in self.images:
+            source = image.processing_path.resolve()
+            if image.included and source not in seen:
+                selected.append(image)
+                seen.add(source)
+        if not selected:
+            raise ValueError('Aucune pose sélectionnée')
+        layers = next((int(line.split()[1]) for line in self._lines if line.startswith('L ')), 1)
+        result = self.from_files(self.path, self.name, [image.filename for image in selected], layers)
+        # The version-specific S fields (e.g. variable-size / Drizzle flags in
+        # v6) are mandatory for Siril, even though the Python reader is lenient.
+        result.header = list(self.header)
+        result.header[2] = str(result.images[0].number)
+        originals = {image.number: image for image in selected}
+        for image in result.images:
+            original = originals[image.number]
+            image.source_path = original.source_path
+            image.registrations = deepcopy(original.registrations)
+            image.statistics = deepcopy(original.statistics)
+        ref_index = int(self.header[6])
+        reference = self.images[ref_index].number if 0 <= ref_index < len(self.images) else None
+        result.header[6] = str(next((i for i, image in enumerate(result.images) if image.number == reference), 0))
+        return result
+
     def duplicate(self, image):
         """Append an independent entry and a FITS symlink for discrete weighting."""
         if not any(item is image for item in self.images):

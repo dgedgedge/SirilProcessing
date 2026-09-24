@@ -148,7 +148,7 @@ def test_profile_read_errors_preserve_selection_and_are_reported(tmp_path, caplo
 
 
 @pytest.mark.parametrize('mode', ['off', 'auto', 'force'])
-def test_pixel_filter_excludes_defects_before_stacking(tmp_path, mode, caplog):
+def test_pixel_filter_excludes_defects_before_stacking(tmp_path, mode, caplog, simulated_registered_sequence):
     from lib.drizzle import run_stack
 
     files = []
@@ -164,9 +164,12 @@ def test_pixel_filter_excludes_defects_before_stacking(tmp_path, mode, caplog):
 
     class FakeSiril:
         def run_siril_script(self, script, directory, **kwargs):
+            if kwargs.get('script_name') == '04_applyreg.sps':
+                simulated_registered_sequence(directory, 'light_', 'r_light_')
             if '\nstack ' in script:
                 selected = SirilSequence.read(tmp_path/'04_stacking/light_.seq')
-                assert [i.included for i in selected.images] == [False, False]+[True]*10
+                assert [i.number for i in selected.images] == list(range(3, 13))
+                assert all(i.included for i in selected.images)
                 (tmp_path/'final.fit').touch()
             return True
 

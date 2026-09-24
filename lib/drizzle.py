@@ -10,7 +10,10 @@ from pathlib import Path
 import numpy as np
 from astropy.io import fits
 from lib.siril_sequence import SirilSequence
-from lib.quality_filter import quality_mask, apply_quality_weights, filter_registration_geometry, filter_stellar_profiles
+from lib.quality_filter import quality_mask, apply_quality_weights, materialize_quality_weights, filter_registration_geometry, filter_stellar_profiles
+
+
+QUALITY_PIPELINE_VERSION = 13
 
 
 def memory_resources(meminfo_path=Path('/proc/meminfo')):
@@ -56,7 +59,7 @@ def validate_settings(cfg):
 def cache_matches(output, cfg):
     try:
         report = json.loads(Path(output).with_suffix('.drizzle.json').read_text())
-        return report.get('quality_pipeline_version') == 10 and report['status'] == 'completed' and report['settings'] == cfg
+        return report.get('quality_pipeline_version') == QUALITY_PIPELINE_VERSION and report['status'] == 'completed' and report['settings'] == cfg
     except (OSError, ValueError, KeyError):
         return False
 
@@ -341,7 +344,7 @@ def run_stack(siril, files, cfg, input_dir, work_dir, sequence, output_path, pre
                                 roundness=registration.roundness, nbstars=registration.number_of_stars, homography=h.tolist(),
                                 dithering_headers={key: headers[i][key] for key in headers[i] if 'DITH' in key.upper()}))
         records.sort(key=lambda r: (r['date_obs'] or '', r['source']))
-        effective_entries = apply_quality_weights(image_sequence, records, cfg)
+        effective_entries = apply_quality_weights(image_sequence, records, cfg, expand=False)
     except (OSError, ValueError, IndexError, StopIteration) as exc:
         error = str(exc)
         records = []
@@ -377,7 +380,7 @@ def run_stack(siril, files, cfg, input_dir, work_dir, sequence, output_path, pre
         decision['decision'] = 'Drizzle désactivé'
         decision['sampling_out'] = sampling
     decision['siril_drizzle_supported'] = supported
-    report = dict(schema_version=1, quality_pipeline_version=10, geometry_checks=geometry_checks,
+    report = dict(schema_version=1, quality_pipeline_version=QUALITY_PIPELINE_VERSION, geometry_checks=geometry_checks,
                   stellar_profiles=dict(report=str(quality_dir / 'stellar_profiles.json'),
                                         **{k:v for k,v in stellar_report.items() if k not in ('frames', 'references')}) if stellar_report is not None else None,
                   stages=dict(registration=str(registration_dir), quality=str(quality_dir), stacking=str(stacking_dir),
@@ -439,6 +442,11 @@ def run_stack(siril, files, cfg, input_dir, work_dir, sequence, output_path, pre
         len(records), effective_entries, effective_entries - len(records),
     )
     copy_stage_inputs(quality_dir, stacking_dir)
+    # Even Siril builds that ignore exclusions during calibrate now see only
+    # retained, independent poses. Weighted aliases are added after resampling.
+    processing_sequence = SirilSequence.read(stacking_dir/f'{sequence}.seq', source_files=files)
+    processing_sequence = processing_sequence.selected_registration_copy()
+    processing_sequence.write()
     input_dir = stacking_dir
     prefix = sequence
     required = 'requires 1.4' if decision['enabled'] else 'requires 1.2'
@@ -494,17 +502,26 @@ def run_stack(siril, files, cfg, input_dir, work_dir, sequence, output_path, pre
         prefix = f'r_{prefix}'
         if not validate_new_registration(prefix):
             return False
-    final_sources = {sources_by_number[number] for number in allowed}
+    if not execute([f'seqapplyreg {prefix} -filter-included -framing={framing} {options}'],
+                   '04_applyreg.sps'):
+        return failed_stage()
+    try:
+        aligned = SirilSequence.read(stacking_dir/f'r_{prefix}.seq')
+        final_sources, final_entries = materialize_quality_weights(aligned, records, sources_by_number, allowed)
+    except (OSError, ValueError, KeyError) as exc:
+        logging.error('Pondération finale impossible : %s', exc)
+        report['weighting_error'] = str(exc)
+        return failed_stage()
     report['final_selection'] = dict(independent_retained=len(final_sources), effective_stack_entries=len(allowed),
                                     sources=sorted(final_sources))
+    report['final_selection']['effective_stack_entries'] = final_entries
     if stack_report is not None:
-        stack_report.update(kept_unique_for_stack=len(final_sources), kept_effective_for_stack=len(allowed),
+        stack_report.update(kept_unique_for_stack=len(final_sources), kept_effective_for_stack=final_entries,
                             rejected_registration_quality=metadata['unique_inputs']-len(final_sources),
-                            weighted_extra_entries=len(allowed)-len(final_sources))
+                            weighted_extra_entries=final_entries-len(final_sources))
     save()
-    final_stack = re.sub(r'^stack \S+', f'stack r_{prefix}', stack_line)
-    success = execute([f'seqapplyreg {prefix} -filter-included -framing={framing} {options}', final_stack],
-                      '04_stacking.sps')
+    final_stack = re.sub(r'^stack \S+', f'stack r_{prefix}', stack_line) + ' -filter-included'
+    success = execute([final_stack], '04_stacking.sps')
     success = success and any(Path(str(output_path)+ext).exists() for ext in ('.fit', '.fits'))
     report['status'] = 'completed' if success else 'failed'
     if success:

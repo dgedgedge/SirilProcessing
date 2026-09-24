@@ -31,6 +31,8 @@ La séquence exportée permet de rouvrir les calibrations dans Siril. Les `.seq`
 contiennent les références, mesures et transformations, pas les pixels.
 Les scripts `.sps` et leurs journaux sont conservés avec les étapes de travail.
 Le parcours implémenté ne génère pas de prévisualisation JPG.
+Avec `--mosaic`, la base de sortie contient également `<nom>_mosaic.fits`
+et le rapport `<nom>_mosaic.json`, produit par `Mosaic.post_process()`.
 
 ## Réutilisation et relance
 
@@ -47,6 +49,11 @@ La présence de calibrations suffit à permettre leur réutilisation : le cache
 de groupe n’est pas une vérification complète de tous les paramètres de
 calibration. Le cache du stack dispose, lui, de son rapport et de ses réglages.
 `--force-stacking` ne signifie pas à lui seul que les calibrations sont refaites.
+Les stacks des versions antérieures du pipeline (avant la version 12) sont
+reconstruits automatiquement pour appliquer le cadrage commun natif de Siril
+à toutes les méthodes d’empilement.
+La version 13 diffère les répétitions de pondération jusqu’au stack pour réduire
+le travail et les ressources du dématriçage et des rééchantillonnages.
 
 `--dry-run` simule la calibration et annonce les étapes de stacking et de
 mosaïque sans les exécuter.
@@ -63,7 +70,9 @@ Les entrées répétées pour la pondération sont distinguées des poses indép
 Le rapport `<session>_combined.drizzle.json` contient les réglages, le diagnostic
 Drizzle, les poses retenues et les contrôles géométriques. `quality_selection`
 décrit la sélection initiale ; `final_selection` tient compte des contrôles
-supplémentaires avant l’application des alignements.
+supplémentaires et des poses effectivement disponibles après le dernier
+rééchantillonnage. Les entrées pondérées de `quality_selection` sont prévues,
+celles de `final_selection` sont effectivement créées pour l’empilement.
 
 `stellar_profiles` référence le rapport détaillé
 `02_quality/stellar_profiles.json` : mesures par étoile, références, seuils,
