@@ -46,8 +46,10 @@ modèle objet de séquence ; elles ne sont pas recalculées par Python.
 Dans `02_quality`, les contrôles géométriques, la validité des mesures, les
 filtres FWHM, la rondeur et le nombre d’étoiles précèdent la mesure des profils
 stellaires. Les seuils utilisent les poses indépendantes. Les répétitions
-FWHM/rondeur sont créées après cette sélection et conservent l’association aux
-images sources.
+FWHM/rondeur sont calculées après cette sélection, mais les répétitions sont
+créées seulement après le dernier rééchantillonnage, juste avant le stack.
+Elles utilisent des liens vers les FITS alignés et conservent l’association aux
+images sources : une pose n’est dématricée ou rééchantillonnée qu’une fois par étape.
 
 Les valeurs par défaut, formules et bilans par critère sont centralisés dans
 [la référence de sélection](../filter/stacking/IMAGE_SELECTION.md). Le contrôle
@@ -63,7 +65,11 @@ décrits dans [la référence Drizzle](../filter/stacking/DRIZZLE_SPECIFICATION.
 Lorsque Drizzle est actif, les transformations initiales contrôlées sont
 appliquées avec ses paramètres. Dans la branche standard, une source CFA est
 dématricée puis réalignée dans `04_debayer_registration.sps`. Le `.seq` produit
-est contrôlé avant d’appliquer cette transformation.
+est contrôlé avant d’appliquer cette transformation. La séquence de travail est
+réduite aux poses indépendantes retenues avant le dématriçage ; les fichiers
+rejetés ne sont donc pas traités, même si Siril ignore les exclusions lors de
+`calibrate`. Le dématriçage utilise au plus quatre threads pour limiter les
+allocations simultanées. Cette limite est locale au processus de cette étape.
 
 Le réalignement robuste, actif si le réglage Python `robust_realign` n’est pas
 désactivé, applique un premier alignement puis recalcule les transformations
@@ -73,14 +79,29 @@ Une entrée déjà exclue ne peut pas être réintroduite par un nouvel aligneme
 
 ## Commande d’empilement
 
-`04_stacking.sps` applique l’alignement avec `seqapplyreg -filter-included`,
-puis empile la séquence obtenue. Le cadrage est `min` en médiane et `max` sinon.
+`04_applyreg.sps` applique l’alignement avec `seqapplyreg -filter-included` aux
+poses indépendantes. Python ajoute ensuite les répétitions de pondération par
+liens symboliques, selon les poids initiaux (sans recalcul après les rejets
+supplémentaires). `04_stacking.sps` empile les entrées incluses de cette séquence.
+Le cadrage est `min`
+pour toutes les méthodes, avec ou sans Drizzle : Siril recadre les poses
+sélectionnées sur leur champ commun à partir des données d’alignement,
+avant l’empilement. Ce cadrage s’applique aussi au premier rééchantillonnage
+du réalignement robuste, pour éviter de conserver les bordures du champ étendu.
+
+Le recadrage est donc assuré par Siril via
+`seqapplyreg <séquence> -filter-included -framing=min`. Il n’y a pas d’étape
+de crop Python après le stack. Les images rejetées avant chaque application
+des transformations ne participent pas à son cadrage. Un rejet ultérieur ne
+peut pas restituer une zone déjà retirée lors d’un cadrage précédent.
+La mosaïque optionnelle conserve son cadrage `max`, adapté à l’assemblage
+de champs différents.
 
 | Choix | Commande finale construite |
 |---|---|
-| `--stack-method median` | `stack <alignée> median -output_norm -out=<sortie>` |
-| Méthode non médiane, rejet `none` | `stack <alignée> mean -output_norm -out=<sortie>` |
-| Méthode non médiane, autre rejet | `stack <alignée> rej <bas> <haut> -output_norm -out=<sortie>` |
+| `--stack-method median` | `stack <alignée> median -output_norm -out=<sortie> -filter-included` |
+| Méthode non médiane, rejet `none` | `stack <alignée> mean -output_norm -out=<sortie> -filter-included` |
+| Méthode non médiane, autre rejet | `stack <alignée> rej <bas> <haut> -output_norm -out=<sortie> -filter-included` |
 
 La CLI accepte `sum`, mais le constructeur du stack final n’a pas de branche
 somme distincte : il suit le chemin non médian du tableau. De même, les noms

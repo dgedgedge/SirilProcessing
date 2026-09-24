@@ -3,7 +3,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 from astropy.io import fits
-from lib.drizzle import analyse, coverage, read_registration, run_stack, validate_settings
+from lib.drizzle import QUALITY_PIPELINE_VERSION, analyse, coverage, read_registration, run_stack, validate_settings
+from lib.siril_sequence import SirilSequence
 
 
 def metadata(n, cfa=False):
@@ -86,12 +87,17 @@ def test_pipeline_native_cfa_and_report(tmp_path, mode, bad_alignment, simulated
                 assert checked.images[1].included == (not bad_alignment)
                 assert '-filter-included' in script
                 simulated_registered_sequence(directory, 'debayer_light_', 'r_debayer_light_')
+            if kwargs.get('script_name') == '04_applyreg.sps':
+                prefix = next(line.split()[1] for line in script.splitlines() if line.startswith('seqapplyreg '))
+                simulated_registered_sequence(directory, prefix, f'r_{prefix}')
             if '\nstack ' in script:
                 (tmp_path/'final.fit').touch()
             return True
     siril=FakeSiril()
     assert run_stack(siril, files, {'drizzle':mode}, tmp_path,tmp_path,'light_',tmp_path/'final','requires 1.2','stack r_r_light_ rej 3 3 -out=final','min')
-    script=siril.scripts[-1]
+    script=siril.scripts[-2]
+    assert '-filter-included -framing=min' in script
+    assert '-maximize' not in script
     report=json.loads((tmp_path/'final.drizzle.json').read_text())
     assert report['status']=='completed'
     assert len(report['frames'])==4
@@ -143,7 +149,7 @@ def test_cache_requires_completed_matching_settings(tmp_path):
     output=tmp_path/'result.fits'
     report=tmp_path/'result.drizzle.json'
     assert not cache_matches(output, {'drizzle':'auto'})
-    report.write_text(json.dumps({'quality_pipeline_version':10,'status':'completed','settings':{'drizzle':'auto'}}))
+    report.write_text(json.dumps({'quality_pipeline_version':QUALITY_PIPELINE_VERSION,'status':'completed','settings':{'drizzle':'auto'}}))
     assert cache_matches(output, {'drizzle':'auto'})
     assert not cache_matches(output, {'drizzle':'off'})
     report.write_text(json.dumps({'status':'failed','settings':{'drizzle':'auto'}}))
@@ -161,7 +167,7 @@ def test_session_boundaries_are_not_dithers():
 @pytest.mark.parametrize('mode', ['off', 'auto', 'force'])
 @pytest.mark.parametrize('weighted', [False, True])
 @pytest.mark.parametrize('abnormal_stars,raw_fwhm', [(2, 1.7), (60, 1.7), (30, 6.40424)])
-def test_all_quality_controls_precede_drizzle(tmp_path, mode, weighted, abnormal_stars, raw_fwhm):
+def test_all_quality_controls_precede_drizzle(tmp_path, mode, weighted, abnormal_stars, raw_fwhm, simulated_registered_sequence):
     files=[]
     for i in range(6):
         f=tmp_path/f'light_{i+1:03d}.fits'
@@ -181,11 +187,16 @@ def test_all_quality_controls_precede_drizzle(tmp_path, mode, weighted, abnormal
     class FakeSiril:
         def run_siril_script(self, script, *args, **kwargs):
             calls.append(Path(args[0]))
+            if kwargs.get('script_name') == '04_applyreg.sps':
+                original = SirilSequence.read(Path(args[0])/seq.name)
+                assert len(original.images) == 4
+                assert all(image.included for image in original.images)
+                simulated_registered_sequence(args[0], 'light_', 'r_light_')
             if '\nstack ' in script:
                 assert seq.read_text() == original_seq
-                _, images, reg = read_registration(Path(args[0])/seq.name)
-                assert images[0][2] == images[1][2] == '0'
-                assert len(images)==len(reg)==(8 if weighted else 6)
+                _, images, reg = read_registration(Path(args[0])/('r_'+seq.name))
+                assert all(image[2] == '1' for image in images)
+                assert len(images)==len(reg)==(6 if weighted else 4)
                 assert '-filter-included' in script
                 report=json.loads((tmp_path/'final.drizzle.json').read_text())
                 assert report['analysis']['images_retained']==4
@@ -196,9 +207,9 @@ def test_all_quality_controls_precede_drizzle(tmp_path, mode, weighted, abnormal
             return True
     assert run_stack(FakeSiril(), files, cfg, tmp_path,tmp_path,'light_',tmp_path/'final',
                      'requires 1.2', 'stack r_light_ rej 3 3 -out=final', 'min')
-    assert len(calls) == len(set(calls))
+    assert len(calls) == len(set(calls))+1  # applyreg and stack are separate processes
     assert calls[-1] == tmp_path/'04_stacking'
-    assert (tmp_path/'02_quality'/seq.name).read_bytes() == (tmp_path/'04_stacking'/seq.name).read_bytes()
+    assert (tmp_path/'02_quality'/seq.name).read_bytes() != (tmp_path/'04_stacking'/seq.name).read_bytes()
     assert not list(tmp_path.glob('run_*'))
     assert not list(tmp_path.glob('03_stacking_*'))
     if mode != 'force':
@@ -209,11 +220,12 @@ def test_all_quality_controls_precede_drizzle(tmp_path, mode, weighted, abnormal
     assert not (tmp_path/'light_007.fits').exists()
 
 
-def test_old_quality_cache_is_invalidated(tmp_path):
+@pytest.mark.parametrize('version', [9, 10, 11, 12])
+def test_old_quality_cache_is_invalidated(tmp_path, version):
     from lib.drizzle import cache_matches
     (tmp_path/'result.drizzle.json').write_text(json.dumps({'status':'completed','settings':{}}))
     assert not cache_matches(tmp_path/'result.fits', {})
-    (tmp_path/'result.drizzle.json').write_text(json.dumps({'status':'completed','settings':{},'quality_pipeline_version':9}))
+    (tmp_path/'result.drizzle.json').write_text(json.dumps({'status':'completed','settings':{},'quality_pipeline_version':version}))
     assert not cache_matches(tmp_path/'result.fits', {})
 
 

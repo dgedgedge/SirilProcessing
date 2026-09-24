@@ -1,5 +1,7 @@
 #!/bin/env python3
 import os
+import argparse
+from pathlib import Path
 import json
 import logging
 
@@ -64,6 +66,21 @@ class Config:
         self._config = {}
         self.load()
     
+    @classmethod
+    def from_command_line(cls, argv=None):
+        """Charge --config avant de définir les valeurs par défaut du parseur complet."""
+        parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
+        parser.add_argument("--config")
+        args, _ = parser.parse_known_args(argv)
+        return cls(args.config) if args.config else cls()
+
+    def add_arguments(self, parser):
+        """Options communes de sélection et de sauvegarde de la configuration."""
+        parser.add_argument("--config", default=str(self.config_file),
+                            help="Fichier JSON de configuration partagé")
+        parser.add_argument("-S", "--save-config", action="store_true",
+                            help="Sauvegarder les paramètres dans le fichier de configuration")
+
     def load(self):
         """
         Charge la configuration depuis le fichier.
@@ -97,6 +114,7 @@ class Config:
             if "output_dir" in self._config:
                 self._config["output_dir"] = os.path.abspath(self._config["output_dir"])
             
+            Path(self.config_file).parent.mkdir(parents=True, exist_ok=True)
             with open(self.config_file, "w") as f:
                 json.dump(self._config, f, indent=2)
             logging.info(f"Configuration sauvegardée dans {self.config_file}")

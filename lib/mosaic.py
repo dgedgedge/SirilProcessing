@@ -9,11 +9,16 @@ Ce module fournit des fonctionnalités pour :
 """
 
 import os
+import argparse
+import json
+from copy import copy
 import shutil
 import logging
 from pathlib import Path
 from typing import List, Optional, Tuple
-from lib.siril_utils import Siril
+from lib.siril_utils import Siril, create_siril_from_args
+from lib.processor import processor
+from lib.postprocess import GradientExtractor
 
 
 def calculate_common_basename(session_dirs: List[Path]) -> str:
@@ -72,13 +77,13 @@ def calculate_common_basename(session_dirs: List[Path]) -> str:
     return common_prefix
 
 
-class Mosaic:
+class Mosaic(processor):
     """
     Classe pour gérer la création de mosaïques à partir de plusieurs sessions light.
     """
     
-    def __init__(self, output_dir: Path, work_dir: Path, 
-                 mosaic_name: str, input_files: List[Path]):
+    def __init__(self, output_dir: Path = Path('.'), work_dir: Path = Path('.'),
+                 mosaic_name: str = 'mosaic', input_files: Optional[List[Path]] = None):
         """
         Initialise la mosaïque.
         
@@ -91,17 +96,102 @@ class Mosaic:
         self.output_dir = Path(output_dir)
         self.work_dir = Path(work_dir)
         self.mosaic_name = mosaic_name
-        self.input_files = input_files
+        self.input_files = list(input_files or [])
+        self.gradient_processor = GradientExtractor()
         
         # Répertoires de travail
         self.mosaic_work_dir = self.work_dir / f"mosaic_{self.mosaic_name}"
         self.mosaic_input_dir = self.mosaic_work_dir / "input"
         self.mosaic_output_dir = self.mosaic_work_dir / "output"
     
-        logging.info(f"Mosaïque initialisée: {self.mosaic_name}")
-        logging.info(f"Fichiers d'entrée: {len(input_files)} fichiers")
-        for file in input_files:
-            logging.info(f"  - {file}")
+    def add_arguments(self, parser: argparse.ArgumentParser, include_inputs: bool = True) -> None:
+        self.gradient_processor.add_arguments(parser)
+        parser.add_argument(
+            '--mosaic-gradient', action=argparse.BooleanOptionalAction, default=True,
+            help='Corriger le gradient de chaque panneau avant assemblage (activé par défaut)',
+        )
+        parser.add_argument(
+            '--mosaic-name', type=str,
+            help="Nom de la mosaïque (obligatoire si le nom automatique fait moins de 3 caractères)",
+        )
+        if include_inputs:
+            parser.add_argument(
+                '--mosaic-inputs', nargs='+', type=Path, metavar='FITS',
+                help="Panneaux à assembler avec l’image courante (sinon input_files du constructeur)",
+            )
+
+    def set_from_args(self, args: argparse.Namespace) -> None:
+        """Configure la mosaïque et son traitement de gradient implicite."""
+        super().set_from_args(args)
+        self.gradient_processor.set_from_args(args)
+
+    def post_process(self, input_path: Path, output_path: Path, args=None) -> dict:
+        """Assemble l'image courante et les panneaux configurés ; écrit un rapport JSON.
+
+        Les panneaux --mosaic-inputs remplacent ceux du constructeur pour cet
+        appel. L'image courante est toujours incluse, sans répétition de fichiers.
+        create_mosaic() reste l'API directe pour assembler seulement input_files.
+        """
+        args = self._get_args(args)
+        panels = getattr(args, 'mosaic_inputs', None)
+        if panels is None:
+            panels = self.input_files
+        input_files = list(dict.fromkeys(Path(path).resolve() for path in [input_path, *panels]))
+        if len(input_files) < 2:
+            raise ValueError('Une mosaïque nécessite au moins deux images distinctes')
+        for path in input_files:
+            if not path.is_file():
+                raise FileNotFoundError(f'Panneau de mosaïque introuvable : {path}')
+        output_path = Path(output_path).resolve()
+        operation = copy(self)
+        operation.input_files = input_files
+        operation.output_dir = Path(getattr(args, 'output_dir', None) or self.output_dir).resolve()
+        operation.work_dir = Path(getattr(args, 'work_dir', None) or self.work_dir).resolve()
+        operation.mosaic_name = getattr(args, 'mosaic_name', None) or self.mosaic_name
+        if (operation.mosaic_name in ('.', '..') or
+                any(character in operation.mosaic_name for character in '/\\\n\r\x00"')):
+            raise ValueError('Nom de mosaïque incompatible avec un nom de fichier')
+        operation.mosaic_work_dir = Path(getattr(args, 'mosaic_directory', None) or
+                                        operation.work_dir / f'mosaic_{operation.mosaic_name}').resolve()
+        operation.mosaic_input_dir = operation.mosaic_work_dir / 'input'
+        operation.mosaic_output_dir = operation.mosaic_work_dir / 'output'
+        final_image = operation.mosaic_work_dir / f'{operation.mosaic_name}_mosaic.fits'
+        if output_path in input_files or output_path == final_image or final_image in input_files:
+            raise ValueError('Les panneaux, le rapport JSON et la mosaïque doivent avoir des chemins distincts')
+        # Keep the configured panel list reusable across calls in a sequence.
+        gradient_results = []
+        gradient_enabled = getattr(args, 'mosaic_gradient', True)
+        try:
+            operation.mosaic_work_dir.mkdir(parents=True, exist_ok=True)
+            stacked_files = input_files
+            processed_files = stacked_files
+            if gradient_enabled:
+                logging.info('Ajustement conjoint du gradient de %d panneaux', len(stacked_files))
+                gradient_results = self.gradient_processor.process_mosaic(
+                    stacked_files, operation.mosaic_work_dir, args=args)
+                processed_files = [Path(result['output_image']).resolve() for result in gradient_results]
+                if len(processed_files) != len(stacked_files) or not all(p.is_file() for p in processed_files):
+                    raise RuntimeError('Le gradient conjoint doit produire une image par panneau')
+            operation.input_files = processed_files
+            output_image = operation.create_mosaic(args=args)
+            if output_image is None or not Path(output_image).is_file():
+                raise RuntimeError('Échec de la création de la mosaïque')
+        finally:
+            if not getattr(args, 'keep_intermediate', False):
+                operation.cleanup()
+        result = {
+            'image_path': str(Path(input_path).resolve()),
+            'input_files': [str(path) for path in input_files],
+            'stacked_files': [str(path) for path in stacked_files],
+            'gradient_results': gradient_results,
+            'gradient_enabled': gradient_enabled,
+            'output_image': str(Path(output_image).resolve()),
+            'mosaic_name': operation.mosaic_name,
+            'report_saved_to': str(output_path),
+        }
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding='utf-8')
+        return result
     
     def prepare_input_files(self) -> List[Path]:
         """
@@ -201,7 +291,7 @@ close"""
         
         return script_content
     
-    def create_mosaic(self) -> Optional[Path]:
+    def create_mosaic(self, args=None) -> Optional[Path]:
         """
         Crée la mosaïque en utilisant le script Siril intégré.
         
@@ -224,7 +314,7 @@ close"""
                 logging.debug(f"  {i:2d}: {line}")
         
         # Exécuter le script Siril
-        siril = Siril.create_with_defaults()
+        siril = create_siril_from_args(args) if args is not None else Siril.create_with_defaults()
         success = siril.run_siril_script(script_content, str(self.mosaic_work_dir))
         
         if not success:
@@ -249,7 +339,7 @@ close"""
             return None
         
         # Déplacer le fichier vers le répertoire de sortie final
-        final_output = self.output_dir / f"{self.mosaic_name}_mosaic.fits"
+        final_output = self.mosaic_work_dir / f"{self.mosaic_name}_mosaic.fits"
         final_output.parent.mkdir(parents=True, exist_ok=True)
         
         if final_output.exists():
@@ -262,6 +352,7 @@ close"""
     
     def cleanup(self):
         """Nettoie les fichiers temporaires de la mosaïque."""
-        if self.mosaic_work_dir.exists():
-            shutil.rmtree(self.mosaic_work_dir)
-            logging.info(f"Répertoire de travail nettoyé: {self.mosaic_work_dir}")
+        for directory in (self.mosaic_input_dir, self.mosaic_output_dir):
+            if directory.exists():
+                shutil.rmtree(directory)
+                logging.info("Répertoire temporaire nettoyé: %s", directory)

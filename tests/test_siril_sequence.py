@@ -98,6 +98,33 @@ def test_source_mapping_requires_same_length(tmp_path):
         SirilSequence.read(path, source_files=[tmp_path/'one.fits'])
 
 
+def test_selected_registration_copy_preserves_reference_and_format(tmp_path):
+    path, original = make_sequence(tmp_path)
+    sequence = SirilSequence.read(path)
+    sequence.images[0].included = False
+    sequence.images[1].included = True
+    sequence.header[6] = '1'
+    sequence.duplicate(sequence.images[1])
+    compact = sequence.selected_registration_copy()
+    assert [image.number for image in compact.images] == [9]
+    assert compact.header[6] == '0'
+    assert compact.header[7:] == sequence.header[7:]  # Siril needs all version-specific S fields.
+    assert compact.images[0].statistics == sequence.images[1].statistics
+    np.testing.assert_array_equal(compact.images[0].registration().homography,
+                                  sequence.images[1].registration().homography)
+    assert path.read_text() == original
+    compact.write()
+    assert SirilSequence.read(path).header[3:5] == ['1', '1']
+
+
+def test_selected_copy_falls_back_when_reference_rejected(tmp_path):
+    path, _ = make_sequence(tmp_path)
+    sequence = SirilSequence.read(path)
+    sequence.images[0].included = False
+    sequence.images[1].included = True
+    assert sequence.selected_registration_copy().header[6] == '0'
+
+
 @pytest.mark.parametrize('change', [
     lambda s: s.replace('3 2 1 3', '3 3 1 3'),
     lambda s: s.replace('3 2 1 3', '3 2 2 3'),

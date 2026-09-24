@@ -41,41 +41,12 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from lib.config import Config
+from lib.siril_utils import add_siril_arguments
+from lib.logging_utils import setup_logging, add_session_file_logging, remove_session_file_logging
 
 
 class HelpFormatter(argparse.ArgumentDefaultsHelpFormatter, argparse.RawDescriptionHelpFormatter):
     """Formatter d'aide qui conserve les sauts de ligne et affiche les valeurs par défaut."""
-
-
-def setup_logging(log_level: str) -> None:
-    """Configure le système de logging."""
-    level = getattr(logging, log_level.upper(), logging.INFO)
-    logging.basicConfig(
-        level=level,
-        format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S',
-        force=True
-    )
-
-
-def add_session_file_logging(log_file: Path, log_level: str) -> logging.Handler:
-    """Ajoute un fichier de log pour la sous-session courante."""
-    log_file.parent.mkdir(parents=True, exist_ok=True)
-    level = getattr(logging, log_level.upper(), logging.INFO)
-    handler = logging.FileHandler(log_file, mode="w", encoding="utf-8")
-    handler.setLevel(level)
-    handler.setFormatter(logging.Formatter(
-        "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    ))
-    logging.getLogger().addHandler(handler)
-    return handler
-
-
-def remove_session_file_logging(handler: logging.Handler) -> None:
-    """Retire et ferme un handler de log de sous-session."""
-    logging.getLogger().removeHandler(handler)
-    handler.close()
 
 
 def build_session_target_map(input_roots: list[Path]) -> tuple[list[Path], dict[Path, Path]]:
@@ -156,7 +127,7 @@ def should_rebuild_stack(combined_output: Path, calibrated_dirs: list[Path]) -> 
 
 
 def main():
-    config = Config()
+    config = Config.from_command_line()
 
     siril_pipeline_epilog = """
 Flux de traitement attendu:
@@ -190,8 +161,8 @@ Stack final sur l'ensemble des sorties calibrees d'une session:
     6) stack r_r_<target>_ <method/rejection> ... -output_norm -out=<target>_combined
        Repertoires fixes dans stacking : 00_inputs, 01_registration, 02_quality,
        03_capability (ou SKIPPED.txt), 04_stacking. Un repertoire par script.
-       Le stack median utilise -framing=min pour eviter les images alignees
-       de tailles differentes.
+       Toutes les methodes utilisent seqapplyreg -filter-included -framing=min
+       pour recadrer les poses selectionnees sur leur champ commun avant le stack.
 
 Sorties:
     - Des FITS calibres par sous-session
@@ -265,22 +236,8 @@ Traitement Siril de mosaique (si --mosaic):
         help="Force le retraitement même si le fichier de sortie existent"
     )
     
-    # Arguments pour Siril
-    parser.add_argument(
-        '-s', '--siril-path',
-        dest='siril_path',
-        default=config.get("siril_path"),
-        help=f"Chemin vers l'exécutable Siril. (Défaut: '{config.get('siril_path')}')"
-    )
-    
-    parser.add_argument(
-        '-m', '--siril-mode',
-        dest='siril_mode',
-        choices=["native", "flatpak", "appimage"],
-        default=config.get("siril_mode"),
-        help=f"Mode d'exécution de Siril. (Défaut: '{config.get('siril_mode')}')"
-    )
-    
+    add_siril_arguments(parser, config)
+
     parser.add_argument("--drizzle", choices=["off", "auto", "force"], default=config.get("drizzle"))
     for option in ("scale", "pixfrac"):
         parser.add_argument(f"--drizzle-{option}", default=config.get(f"drizzle_{option}"), help="Valeur numérique ou auto")
@@ -426,21 +383,13 @@ Traitement Siril de mosaique (si --mosaic):
         help="Créer une mosaïque après traitement de toutes les sessions"
     )
     
-    parser.add_argument(
-        '--mosaic-name',
-        dest='mosaic_name',
-        type=str,
-        help="Nom personnalisé pour la mosaïque (obligatoire si le nom automatique fait moins de 3 caractères)"
-    )
+    from lib.mosaic import Mosaic, calculate_common_basename
+    mosaic_processor = Mosaic()
+    # Panel inputs are produced by this pipeline, not supplied independently.
+    mosaic_processor.add_arguments(parser, include_inputs=False)
     
-    # Arguments de configuration
-    parser.add_argument(
-        '-S', '--save-config',
-        dest='save_config',
-        action='store_true',
-        help="Sauvegarde la configuration actuelle pour une utilisation future"
-    )
-    
+    config.add_arguments(parser)
+
     parser.add_argument(
         '-l', '--log-level',
         dest='log_level',
@@ -478,7 +427,6 @@ Traitement Siril de mosaique (si --mosaic):
     # Imports différés pour permettre l'affichage de l'aide sans dépendances complètes.
     from lib.lightprocessor import LightProcessor, discover_session_roots, stack_session_outputs
     from lib.siril_utils import Siril
-    from lib.mosaic import Mosaic, calculate_common_basename
     
     # Configuration du logging
     setup_logging(args.log_level)
@@ -487,7 +435,8 @@ Traitement Siril de mosaique (si --mosaic):
     # Sauvegarde de la configuration si demandé
     if args.save_config:
         config.set_from_args(args)
-        config.save()
+        if not config.save():
+            return 1
     
     # Définition des répertoires par défaut
     if not args.output_dir:
@@ -522,6 +471,22 @@ Traitement Siril de mosaique (si --mosaic):
             return 1
 
         input_roots.append(session_dir)
+
+    if args.create_mosaic:
+        mosaic_name = args.mosaic_name or calculate_common_basename(input_roots)
+        if not mosaic_name or (not args.mosaic_name and len(mosaic_name) < 3):
+            logging.error("Nom automatique trop court ; fournir --mosaic-name")
+            return 1
+        if mosaic_name in ('.', '..') or any(c in mosaic_name for c in '/\\\n\r\x00"'):
+            logging.error("Nom de mosaïque incompatible avec un nom de répertoire")
+            return 1
+        work_base_dir = work_base_dir / mosaic_name
+        output_base_dir = work_base_dir
+        args.mosaic_name = mosaic_name
+        args.mosaic_directory = work_base_dir
+        args.work_dir = work_base_dir
+        args.output_dir = output_base_dir
+        logging.info("Répertoire commun de la mosaïque : %s", work_base_dir)
 
     session_dirs, session_to_target = build_session_target_map(input_roots)
     if not session_dirs:
@@ -910,38 +875,28 @@ Traitement Siril de mosaique (si --mosaic):
             for file in all_output_files:
                 logging.info(f"  - {file}")
             
-            # Calculer le nom de la mosaïque
-            if args.mosaic_name:
-                mosaic_name = args.mosaic_name
-            else:
-                auto_name = calculate_common_basename(successful_session_dirs)
-                if len(auto_name) < 3:
-                    logging.error(f"Le nom automatique '{auto_name}' est trop court (< 3 caractères)")
-                    logging.error("Veuillez spécifier un nom explicite avec --mosaic-name")
-                    return 1
-                mosaic_name = auto_name
-            
-            # Créer l'instance de mosaïque avec les fichiers explicites
-            mosaic = Mosaic(
-                output_dir=output_base_dir,
-                work_dir=work_base_dir,
-                mosaic_name=mosaic_name,
-                input_files=all_output_files
+            mosaic_name = args.mosaic_name
+
+            # Same processor contract as the other treatments: parsed options,
+            # current image, complementary panels, and a separate JSON report.
+            mosaic_args = argparse.Namespace(**vars(args))
+            mosaic_args.mosaic_name = mosaic_name
+            mosaic_args.mosaic_inputs = all_output_files[1:]
+            mosaic_args.output_dir = output_base_dir
+            mosaic_args.work_dir = work_base_dir
+            mosaic_report = work_base_dir / f'{mosaic_name}_mosaic.json'
+            mosaic_processor.set_from_args(mosaic_args)
+            result = mosaic_processor.post_process(
+                input_path=all_output_files[0], output_path=mosaic_report,
             )
-            
-            # Créer la mosaïque
-            if not args.dry_run:
-                mosaic_result = mosaic.create_mosaic()
-                if mosaic_result:
-                    mosaic_success = True
-                    logging.info(f"🌟 Mosaïque créée avec succès: {mosaic_result}")
-                else:
-                    logging.error("❌ Échec de la création de la mosaïque")
-                    
-                # Nettoyer les fichiers temporaires
-                mosaic.cleanup()
-            else:
-                logging.info("🔍 Mode simulation: mosaïque non créée")
+            if result.get('error'):
+                raise RuntimeError(result['error'])
+            mosaic_result = result.get('output_image')
+            if not mosaic_result or not Path(mosaic_result).is_file():
+                raise RuntimeError('La mosaïque ne fournit pas de fichier output_image valide')
+            mosaic_success = True
+            logging.info('🌟 Mosaïque créée avec succès: %s', mosaic_result)
+            logging.info('Rapport de mosaïque: %s', mosaic_report)
                 
         except Exception as e:
             logging.error(f"Erreur lors de la création de la mosaïque: {e}")

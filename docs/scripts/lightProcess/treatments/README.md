@@ -154,7 +154,7 @@ flowchart TD
     QUALITY --> PROFILES["Mesurer et filtrer les profils stellaires<br/>R80 et allongement cohérent"]
     PROFILES --> RETAINED{"Des poses restent sélectionnées ?"}
     RETAINED -->|Non| FAIL
-    RETAINED -->|Oui| WEIGHTS["Pondérer les poses retenues<br/>par répétitions FWHM et rondeur"]
+    RETAINED -->|Oui| WEIGHTS["Calculer les poids des poses retenues<br/>FWHM et rondeur, sans créer de répétitions"]
     WEIGHTS --> DRIZZLE["Analyser le dithering, l'échantillonnage<br/>la couverture et les ressources"]
     DRIZZLE --> DRIZZLE_CHOICE{"Drizzle sélectionné ?"}
     DRIZZLE_CHOICE -->|Oui| CAPABILITY["03_capability : vérifier la compatibilité Siril"]
@@ -169,9 +169,10 @@ flowchart TD
     DEBAYER --> ROBUST{"Réalignement robuste activé ?"}
     ROBUST -->|Oui| REALIGN["04_realign : appliquer l'alignement puis réaligner<br/>Contrôler les nouvelles transformations"]
     ROBUST -->|Non| APPLY
-    REALIGN --> APPLY["04_stacking : appliquer l'alignement<br/>uniquement aux entrées incluses"]
+    REALIGN --> APPLY["04_applyreg : appliquer l'alignement aux poses indépendantes<br/>Cadrage commun natif Siril : framing=min"]
     DRIZZLE_OPTIONS --> APPLY
-    APPLY --> STACK["Empiler avec la méthode et les seuils demandés"]
+    APPLY --> REPEAT["Créer les répétitions par liens vers les FITS alignés"]
+    REPEAT --> STACK["04_stacking : empiler avec la méthode et les seuils demandés"]
     STACK --> RESULT["FITS final et rapport de stacking"]
     RESULT --> RETURN["Retour à la boucle des sessions"]
     ONE --> RETURN

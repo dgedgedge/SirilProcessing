@@ -1344,7 +1344,8 @@ def stack_session_outputs(
     rejection_high = stack_cfg.get("rejection_high", 3.0)
     align_transform = str(stack_cfg.get("align_transform", "affine")).lower()
     enable_stack_platesolve = bool(stack_cfg.get("enable_stack_platesolve", True))
-    framing = "min" if method in {"median", "med"} else "max"
+    # Siril crops the selected exposures to their common field before stacking.
+    framing = "min"
     stack_sequence_prefix = f"r_{sequence_prefix}"
 
     if method in {"median", "med"}:
