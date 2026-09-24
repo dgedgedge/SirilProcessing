@@ -14,6 +14,16 @@ class Siril:
     """
     Classe pour gérer l'exécution de Siril avec validation et mémorisation des configurations.
     """
+
+    CONFIG_DEFAULTS = {
+        'siril_path': "siril",
+        'siril_mode': "flatpak",
+    }
+
+    @classmethod
+    def add_arguments(cls, parser, *, photometry_aliases=False):
+        add_siril_arguments(parser, photometry_aliases=photometry_aliases)
+
     
     # Attributs de classe pour la configuration globale par défaut
     _default_siril_path = "siril"
@@ -295,10 +305,8 @@ def run_siril_script(siril_script_content: str, working_dir: str, siril_path: st
 
 def add_siril_arguments(parser, config=None, *, photometry_aliases=False):
     """Options d'exécution communes : CLI > configuration > valeurs par défaut."""
-    from lib.config import Config
-
     def default(key):
-        return config.get(key) if config is not None else Config.DEFAULTS[key]
+        return config.get(key) if config is not None else Siril.CONFIG_DEFAULTS[key]
 
     path_options = ["-s", "--siril-path"]
     mode_options = ["-m", "--siril-mode"]

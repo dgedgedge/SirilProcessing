@@ -41,7 +41,6 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from lib.config import Config
-from lib.siril_utils import add_siril_arguments
 from lib.logging_utils import setup_logging, add_session_file_logging, remove_session_file_logging
 
 
@@ -183,198 +182,11 @@ Traitement Siril de mosaique (si --mosaic):
         epilog=siril_pipeline_epilog
     )
     
-    # Arguments positionnels
-    parser.add_argument(
-        "session_dirs",
-        nargs='+',
-        help="Un ou plusieurs répertoires de session contenant les sous-répertoires 'light' (et éventuellement 'flat')"
-    )
-    
-    # Arguments optionnels pour les chemins
-    parser.add_argument(
-        '-d', '--dark-lib',
-        dest="dark_library_path",
-        default=config.get("dark_library_path"),
-        help=f"Répertoire où sont stockés les master darks. (Défaut: '{config.get('dark_library_path')}')"
-    )
+    from lib.siril_utils import Siril
+    from lib.lightprocessor import LightProcessor
+    config.register(LightProcessor, parser)
+    config.register(Siril, parser)
 
-    parser.add_argument(
-        '--no-dark',
-        dest='no_dark',
-        action='store_true',
-        help="Désactive l'utilisation des master darks (calibration sans soustraction de dark)"
-    )
-    
-    parser.add_argument(
-        '--output',
-        dest="output_dir",
-        default=config.get("output_dir"),
-        help=f"Répertoire de sortie pour les résultats. (défaut: '{config.get('output_dir')}')"
-    )
-    
-    parser.add_argument(
-        '-w', '--work-dir',
-        dest='work_dir',
-        type=str,
-        default=config.get("work_dir"),
-        help=f"Répertoire de travail temporaire. (Défaut: '{config.get('work_dir')}')"
-    )
-    
-    # Arguments pour le traitement
-    parser.add_argument(
-        '-t', '--temperature-precision',
-        dest='temperature_precision',
-        type=float,
-        default=config.get("temperature_precision"),
-        help=f"Précision d'arrondi pour la température en degrés Celsius. (Défaut: {config.get('temperature_precision')}°C)"
-    )
-    
-    parser.add_argument(
-        '-f', '--force',
-        dest='force_reprocess',
-        action="store_true",
-        help="Force le retraitement même si le fichier de sortie existent"
-    )
-    
-    add_siril_arguments(parser, config)
-
-    parser.add_argument("--drizzle", choices=["off", "auto", "force"], default=config.get("drizzle"))
-    for option in ("scale", "pixfrac"):
-        parser.add_argument(f"--drizzle-{option}", default=config.get(f"drizzle_{option}"), help="Valeur numérique ou auto")
-    parser.add_argument("--drizzle-kernel", choices=["auto", "square", "gaussian", "turbo", "point"], default=config.get("drizzle_kernel"))
-    for option, kind in [("min_frames", int), ("min_coverage", float), ("fwhm_limit", float), ("max_drift", float)]:
-        parser.add_argument("--drizzle-" + option.replace("_", "-"), type=kind, default=config.get("drizzle_" + option))
-
-    # Arguments pour le stacking
-    parser.add_argument(
-        '--stack-method',
-        dest='stack_method',
-        choices=["average", "median", "sum"],
-        default=config.get("stack_method"),
-        help="Méthode de stacking"
-    )
-    
-    parser.add_argument(
-        '-r', '--rejection-method',
-        dest='rejection_method',
-        choices=["none", "sigma", "linear", "winsor", "percentile"],
-        default=config.get("rejection_method"),
-        help=f"Méthode de rejet pour Siril. (Défaut: '{config.get('rejection_method')}')"
-    )
-    
-    parser.add_argument(
-        '--rejection-param1',
-        dest='rejection_param1',
-        type=float,
-        default=config.get("rejection_param1"),
-        help=f"Premier paramètre de rejet pour Siril. (Défaut: {config.get('rejection_param1')})"
-    )
-    
-    parser.add_argument(
-        '--rejection-param2',
-        dest='rejection_param2',
-        type=float,
-        default=config.get("rejection_param2"),
-        help=f"Second paramètre de rejet pour Siril. (Défaut: {config.get('rejection_param2')})"
-    )
-
-    parser.add_argument(
-        '--roundness-filter',
-        dest='roundness_filter',
-        type=str,
-        default=config.get("roundness_filter"),
-        help=f"Filtre de rondeur des étoiles appliqué aux mesures natives avant analyse et application du Drizzle (ex: '2k'). Utiliser 'none' pour désactiver. (Défaut: '{config.get('roundness_filter')}')"
-    )
-
-    parser.add_argument(
-        '--fwhm-filter',
-        dest='fwhm_filter',
-        type=str,
-        default=config.get("fwhm_filter"),
-        help=f"Filtre par seuil sur la FWHM pondérée Siril, après alignement (ex: '1.8k'). Utiliser 'none' pour désactiver. (Défaut: '{config.get('fwhm_filter')}')"
-    )
-
-    parser.add_argument('--max-fwhm', type=float, default=config.get('max_fwhm', 0.0),
-                        help="Plafond de FWHM non pondérée Siril en pixels natifs, avant les filtres statistiques. Indépendant du nombre d'étoiles ; 0 désactive (défaut).")
-    parser.add_argument('--stellar-profile-filter', dest='stellar_profile_filter', action='store_true',
-                        default=config.get('stellar_profile_filter'),
-                        help="Filtre des profils stellaires : étalement R80 et allongement cohérent, sur toutes les poses encore retenues (actif par défaut).")
-    parser.add_argument('--no-stellar-profile-filter', dest='stellar_profile_filter', action='store_false',
-                        help="Désactive la mesure et le filtrage des profils stellaires.")
-    parser.add_argument('--stellar-profile-sigma', type=float, default=config.get('stellar_profile_sigma'),
-                        help="Coefficient de dispersion robuste pour les profils stellaires (défaut : 3).")
-
-    parser.add_argument(
-        '--fwhm-reject-percent',
-        dest='fwhm_reject_percent',
-        type=float,
-        default=config.get("fwhm_reject_percent", 0.0),
-        help="Rejet proportionnel FWHM après alignement (0 à 95), cumulable avec --fwhm-filter et appliqué sur ses survivantes. Défaut : 0%%."
-    )
-
-    parser.add_argument(
-        '--no-fwhm-reject',
-        dest='no_fwhm_reject',
-        action='store_true',
-        default=False,
-        help="Désactive totalement le rejet proportionnel FWHM (force à 0%%)."
-    )
-
-    parser.add_argument('--nbstars-filter', default=config.get('nbstars_filter'),
-                        help="Tolérance bilatérale autour du nombre médian d'étoiles : écart absolu (30), relatif (20%%), ou MAD (1.8k par défaut) ; none désactive")
-    parser.add_argument('--no-roundness-weighted', dest='roundness_weighted', action='store_false',
-                        default=config.get('roundness_weighted'), help="Désactive la pondération de rondeur avant Drizzle")
-    parser.add_argument('--roundness-weight-max-extra', type=int, choices=range(0, 9),
-                        default=config.get('roundness_weight_max_extra'), help="Répétitions supplémentaires maximales selon la rondeur")
-
-    parser.add_argument(
-        '--no-fwhm-weighted',
-        dest='fwhm_weighted',
-        action='store_false',
-        default=config.get("fwhm_weighted", True),
-        help="Désactive la pondération FWHM des meilleures images (safe actif par défaut)."
-    )
-
-    parser.add_argument(
-        '--fwhm-weight-max-extra',
-        dest='fwhm_weight_max_extra',
-        type=int,
-        default=config.get("fwhm_weight_max_extra", 1),
-        help="Nombre max de répétitions supplémentaires pour les meilleures images quand la pondération FWHM est active. Défaut safe: 1."
-    )
-
-    parser.add_argument(
-        '--align-transform',
-        dest='align_transform',
-        choices=["shift", "similarity", "affine", "homography"],
-        default=config.get("align_transform"),
-        help=f"Transformation d'alignement pour register au stack final. (Défaut: '{config.get('align_transform')}')"
-    )
-
-    parser.add_argument(
-        '--stack-platesolve',
-        dest='enable_stack_platesolve',
-        action='store_true',
-        default=config.get("enable_stack_platesolve", True),
-        help="Active seqplatesolve avant register dans le stack final de chaque session (utile en cas d'alignement difficile). Défaut: activé."
-    )
-
-    parser.add_argument(
-        '--force-stacking',
-        dest='force_stacking',
-        action='store_true',
-        default=config.get("force_stacking", False),
-        help="Force uniquement la reconstruction du stack final de chaque session (supprime les artefacts de stack existants sans forcer la recalibration)"
-    )
-
-    parser.add_argument(
-        '--purge-target',
-        dest='purge_target',
-        action='store_true',
-        default=False,
-        help="Supprime l'arborescence de sortie et de travail des cibles passées en argument avant traitement (sans toucher les autres cibles)."
-    )
-    
     # Arguments pour la mosaïque
     parser.add_argument(
         '--mosaic',
@@ -386,7 +198,7 @@ Traitement Siril de mosaique (si --mosaic):
     from lib.mosaic import Mosaic, calculate_common_basename
     mosaic_processor = Mosaic()
     # Panel inputs are produced by this pipeline, not supplied independently.
-    mosaic_processor.add_arguments(parser, include_inputs=False)
+    config.register(mosaic_processor, parser, include_inputs=False)
     
     config.add_arguments(parser)
 
@@ -405,26 +217,18 @@ Traitement Siril de mosaique (si --mosaic):
         help="Simule le traitement sans l'exécuter réellement"
     )
 
-    parser.add_argument(
-        '--keep-intermediate',
-        dest='keep_intermediate',
-        action='store_true',
-        default=config.get("keep_intermediate", False),
-        help="Conserve les répertoires/fichiers temporaires de prétraitement pour inspection manuelle."
-    )
-    
-    args = parser.parse_args()
+    args = config.parse_args(parser)
 
     from lib.drizzle import validate_settings, cache_matches
     try:
-        validate_settings({key: getattr(args, key) for key in Config.DEFAULTS if key.startswith("drizzle")})
+        validate_settings({key: getattr(args, key) for key in LightProcessor.CONFIG_DEFAULTS if key.startswith("drizzle")})
     except ValueError as exc:
         parser.error(str(exc))
 
     if args.no_fwhm_reject:
         args.fwhm_reject_percent = 0.0
+    config.capture_args(args)
 
-    # Imports différés pour permettre l'affichage de l'aide sans dépendances complètes.
     from lib.lightprocessor import LightProcessor, discover_session_roots, stack_session_outputs
     from lib.siril_utils import Siril
     
@@ -434,8 +238,7 @@ Traitement Siril de mosaique (si --mosaic):
     
     # Sauvegarde de la configuration si demandé
     if args.save_config:
-        config.set_from_args(args)
-        if not config.save():
+        if not config.save_requested(args):
             return 1
     
     # Définition des répertoires par défaut
@@ -527,7 +330,7 @@ Traitement Siril de mosaique (si --mosaic):
     
     # Configuration des paramètres de stacking
     stack_params = {
-        **{key: getattr(args, key) for key in Config.DEFAULTS if key.startswith("drizzle")},
+        **{key: getattr(args, key) for key in LightProcessor.CONFIG_DEFAULTS if key.startswith("drizzle")},
         "method": args.stack_method,
         "rejection": args.rejection_method,
         "rejection_low": args.rejection_param1,

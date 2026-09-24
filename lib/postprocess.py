@@ -60,6 +60,8 @@ class GradientExtractor(processor):
     """
 
 
+    parameter_persistence = {'gradient_output_dir': False}
+
     def __init__(
         self,
         min_polynomial_order: int = 1,
@@ -697,6 +699,10 @@ class GradientExtractor(processor):
 class PhotometricColorCalibrator(processor):
     """Résolution astrométrique puis PCC sur une image RGB linéaire (Siril >= 1.4)."""
 
+    parameter_persistence = dict.fromkeys(
+        ('photometry_object', 'photometry_coordinates', 'photometry_force',
+         'photometry_output'), False)
+
     enabled_by_default = True
 
     def get_prefix(self) -> str:
@@ -839,6 +845,8 @@ class NoiseReductionProcessor(processor):
 class DeconvolutionProcessor(processor):
     """Déconvolution et audit de PSF, après la photométrie si elle est activée."""
 
+    parameter_persistence = {'deconvolution_output': False}
+
     enabled_by_default = True
 
     def get_prefix(self):
@@ -869,6 +877,11 @@ class _PostProcessorSequence:
         for treatment in self.processors:
             treatment.set_from_args(args)
 
+    @property
+    def parameter_persistence(self):
+        return {key: value for treatment in self.processors
+                for key, value in treatment.parameter_persistence.items()}
+
     def add_arguments(self, parser: argparse.ArgumentParser) -> None:
         for processor in self.processors:
             prefix = processor.get_prefix()
@@ -888,7 +901,9 @@ class _PostProcessorSequence:
         Chaque traitement reçoit son propre chemin de rapport dans un sous-dossier
         <nom du rapport>_steps, et le même Namespace d'arguments parsés une fois.
         """
-        args = self._args if args is None else args
+        if args is None:
+            from lib.config import Config
+            args = self._args if self._args is not None else Config().arguments()
         current_path = Path(input_path).resolve()
         output_path = Path(output_path)
         if current_path == output_path.resolve():

@@ -81,6 +81,8 @@ class Mosaic(processor):
     """
     Classe pour gérer la création de mosaïques à partir de plusieurs sessions light.
     """
+    parameter_persistence = dict.fromkeys(
+        ('mosaic_inputs', 'mosaic_name', 'gradient_output_dir'), False)
     
     def __init__(self, output_dir: Path = Path('.'), work_dir: Path = Path('.'),
                  mosaic_name: str = 'mosaic', input_files: Optional[List[Path]] = None):

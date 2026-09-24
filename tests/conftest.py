@@ -14,8 +14,14 @@ import sys
 # Ajouter le répertoire lib au path pour les imports
 sys.path.insert(0, str(Path(__file__).parent.parent / 'lib'))
 
-from config import Config
+from lib.config import Config
 from fits_info import FitsInfo
+
+
+@pytest.fixture(autouse=True)
+def isolate_config(monkeypatch):
+    """Chaque test dispose de sa propre instance de configuration."""
+    monkeypatch.setattr(Config, '_instance', None)
 
 
 @pytest.fixture
