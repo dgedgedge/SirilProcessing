@@ -26,7 +26,7 @@ def pipeline(tmp_path, monkeypatch):
     monkeypatch.setattr(Siril, 'configure_defaults', Mock())
     calibrated = {}
 
-    class Processor:
+    class Processor(processing.LightProcessor):
         def __init__(self, session_dir, output_dir, **kwargs):
             self.session_dir = session_dir
             directory = output_dir / 'group_calibrated'
@@ -53,6 +53,9 @@ def pipeline(tmp_path, monkeypatch):
     stack_mock = Mock(side_effect=stack)
     mosaic_mock = Mock()
     mosaic_mock.return_value.add_arguments.side_effect = mosaic.Mosaic().add_arguments
+    mosaic_mock.return_value.parameter_persistence = mosaic.Mosaic.parameter_persistence
+    mosaic_mock.return_value.config_keys = {}
+    mosaic_mock.return_value.config_path_parameters = set()
     mosaic_output = tmp_path / 'mosaic.fits'
     mosaic_output.touch()
     mosaic_mock.return_value.post_process.return_value = {'output_image': str(mosaic_output)}

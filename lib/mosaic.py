@@ -19,6 +19,7 @@ from typing import List, Optional, Tuple
 from lib.siril_utils import Siril, create_siril_from_args
 from lib.processor import processor
 from lib.postprocess import GradientExtractor
+from lib.mosaic_crop import crop_mosaic
 
 
 def calculate_common_basename(session_dirs: List[Path]) -> str:
@@ -82,7 +83,7 @@ class Mosaic(processor):
     Classe pour gérer la création de mosaïques à partir de plusieurs sessions light.
     """
     parameter_persistence = dict.fromkeys(
-        ('mosaic_inputs', 'mosaic_name', 'gradient_output_dir'), False)
+        ('mosaic_inputs', 'mosaic_name', 'gradient_output_dir', 'mosaic_gradient_masks'), False)
     
     def __init__(self, output_dir: Path = Path('.'), work_dir: Path = Path('.'),
                  mosaic_name: str = 'mosaic', input_files: Optional[List[Path]] = None):
@@ -112,6 +113,16 @@ class Mosaic(processor):
             '--mosaic-gradient', action=argparse.BooleanOptionalAction, default=True,
             help='Corriger le gradient de chaque panneau avant assemblage (activé par défaut)',
         )
+        parser.add_argument('--mosaic-crop', action=argparse.BooleanOptionalAction, default=True,
+                            help='Recadrer la mosaïque sur un rectangle sans remplissage ; conserver aussi le FITS complet')
+        parser.add_argument('--mosaic-gradient-mode', choices=['background', 'relative'], default='background',
+                            help='Fond de chaque panneau et raccords (défaut), ou ancien ajustement relatif seul')
+        parser.add_argument('--mosaic-gradient-border', type=float, default=.02,
+                            help='Marge exclue du fond, fraction du petit côté (défaut : 0.02)')
+        parser.add_argument('--mosaic-gradient-mask-growth', type=int, choices=range(6), default=1,
+                            help='Dilatation du masque des objets en cellules de grille (défaut : 1)')
+        parser.add_argument('--mosaic-gradient-masks', nargs='+', type=Path, metavar='FITS',
+                            help='Un masque 2D par panneau, même grille et ordre ; pixels non nuls exclus')
         parser.add_argument(
             '--mosaic-name', type=str,
             help="Nom de la mosaïque (obligatoire si le nom automatique fait moins de 3 caractères)",
@@ -158,7 +169,9 @@ class Mosaic(processor):
         operation.mosaic_input_dir = operation.mosaic_work_dir / 'input'
         operation.mosaic_output_dir = operation.mosaic_work_dir / 'output'
         final_image = operation.mosaic_work_dir / f'{operation.mosaic_name}_mosaic.fits'
-        if output_path in input_files or output_path == final_image or final_image in input_files:
+        uncropped_image = operation.mosaic_work_dir / f'{operation.mosaic_name}_mosaic_uncropped.fits'
+        if (output_path in input_files or output_path in (final_image, uncropped_image)
+                or final_image in input_files or uncropped_image in input_files):
             raise ValueError('Les panneaux, le rapport JSON et la mosaïque doivent avoir des chemins distincts')
         # Keep the configured panel list reusable across calls in a sequence.
         gradient_results = []
@@ -188,6 +201,8 @@ class Mosaic(processor):
             'gradient_results': gradient_results,
             'gradient_enabled': gradient_enabled,
             'output_image': str(Path(output_image).resolve()),
+            'uncropped_image': getattr(operation, '_crop_result', {}).get('uncropped_image', str(Path(output_image).resolve())),
+            'crop': getattr(operation, '_crop_result', None),
             'mosaic_name': operation.mosaic_name,
             'report_saved_to': str(output_path),
         }
@@ -340,18 +355,32 @@ close"""
             logging.error(f"Emplacements recherchés: {[str(p) for p in potential_outputs]}")
             return None
         
-        # Déplacer le fichier vers le répertoire de sortie final
+        # Preserve the full mosaic outside the directories removed by cleanup,
+        # before attempting any crop. A failed crop leaves this file available.
+        uncropped = self.mosaic_work_dir / f"{self.mosaic_name}_mosaic_uncropped.fits"
         final_output = self.mosaic_work_dir / f"{self.mosaic_name}_mosaic.fits"
-        final_output.parent.mkdir(parents=True, exist_ok=True)
-        
-        if final_output.exists():
-            final_output.unlink()
-        
-        shutil.move(str(output_file), str(final_output))
-        logging.info(f"Mosaïque créée avec succès: {final_output}")
-        
-        return final_output
-    
+        protected = {Path(path).resolve() for path in self.input_files}
+        if uncropped.resolve() in protected or final_output.resolve() in protected:
+            raise ValueError('La mosaïque ne peut pas remplacer un panneau source')
+        uncropped.parent.mkdir(parents=True, exist_ok=True)
+        output_file.replace(uncropped)
+        logging.info('Mosaïque complète conservée : %s', uncropped)
+        if getattr(args, 'mosaic_crop', True):
+            panels = sorted(path for path in self.mosaic_output_dir.glob('r_mosaic_*')
+                            if path.suffix.lower() in ('.fit', '.fits', '.fts'))
+            if len(panels) != len(self.input_files):
+                panels = self.input_files
+            self._crop_result = crop_mosaic(uncropped, final_output, panel_paths=panels)
+            logging.info('Sortie mosaïque : %s ; rectangle %s ; %.1f %% de la surface conservée',
+                         self._crop_result['output_image'], self._crop_result['bounds'], 100*self._crop_result['retained_fraction'])
+            if self._crop_result.get('reason'):
+                logging.warning('Recadrage écarté, mosaïque complète utilisée : %s (%s)',
+                                self._crop_result['reason'], self._crop_result.get('detail') or '')
+        else:
+            self._crop_result = dict(enabled=False, applied=False,
+                                     uncropped_image=str(uncropped.resolve()), output_image=str(uncropped.resolve()))
+        return Path(self._crop_result['output_image'])
+
     def cleanup(self):
         """Nettoie les fichiers temporaires de la mosaïque."""
         for directory in (self.mosaic_input_dir, self.mosaic_output_dir):

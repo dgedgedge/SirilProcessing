@@ -56,3 +56,50 @@ def test_sequence_remembers_activation_and_configures_children(tmp_path):
     args.enable_gradient = True
     assert sequence.post_process(tmp_path/'unused.fit', tmp_path/'report.json') == {}
     assert treatment._get_args().gradient_sample_fraction == 0.12
+
+
+def test_processor_uses_shared_options_with_explicit_override(tmp_path, monkeypatch):
+    from lib.config import Config
+    config = Config(tmp_path / 'config.json')
+    treatment = NoiseReductionProcessor()
+    parser = argparse.ArgumentParser()
+    config.register(treatment, parser)
+    config.parse_args(parser, ['--denoise-modulation', '0.25'])
+    delegate = Mock(return_value={})
+    monkeypatch.setattr('lib.denoising.post_process', delegate)
+    paths = tmp_path / 'image.fit', tmp_path / 'report.json'
+    treatment.post_process(*paths)
+    assert delegate.call_args.args[2].denoise_modulation == 0.25
+    treatment.post_process(*paths, args=argparse.Namespace(denoise_modulation=0.8))
+    assert delegate.call_args.args[2].denoise_modulation == 0.8
+    assert config.get('denoise_modulation') == 0.25
+    treatment.set_from_args(argparse.Namespace(denoise_modulation=0.4))
+    treatment.post_process(*paths)
+    assert delegate.call_args.args[2].denoise_modulation == 0.4
+
+
+def test_sequence_registered_options_save_and_reload(tmp_path, monkeypatch):
+    import json
+    from lib.config import Config
+    path = tmp_path / 'config.json'
+    config = Config(path)
+    parser = argparse.ArgumentParser()
+    config.add_arguments(parser)
+    sequence = _PostProcessorSequence()
+    config.register(sequence, parser)
+    args = config.parse_args(parser, ['--disable-gradient', '--denoise-modulation', '0.2',
+                                     '--gradient-output', str(tmp_path / 'output'), '-S'])
+    assert config.save_requested(args)
+    saved = json.loads(path.read_text())
+    assert saved['enable_gradient'] is False
+    assert saved['denoise_modulation'] == 0.2
+    assert 'gradient_output_dir' not in saved
+    monkeypatch.setattr(Config, '_instance', None)
+    config = Config(path)
+    parser = argparse.ArgumentParser()
+    config.register(_PostProcessorSequence(), parser)
+    loaded = config.parse_args(parser, [])
+    assert loaded.enable_gradient is False
+    assert loaded.denoise_modulation == 0.2
+    overridden = config.parse_args(parser, ['--enable-gradient'])
+    assert overridden.enable_gradient is True

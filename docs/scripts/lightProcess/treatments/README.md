@@ -195,3 +195,9 @@ commandes et du cadrage est donné dans [Alignement et empilement](STACKING.md).
 | Sorties et relance | [Fichiers, cache, journaux et options de reprise](OUTPUTS.md) |
 | Assemblage de champs | [Mosaïque optionnelle](../MOSAIC.md) |
 | Séquences | [Images, mesures, transformations et écritures](../reference/SIRIL_SEQUENCE.md) |
+
+## Après le stacking ou la mosaïque
+
+Le script autonome [postProcess](../../postProcess/README.md) peut ensuite
+traiter le FITS produit : correction du gradient, étalonnage photométrique,
+débruitage puis déconvolution contrôlée.

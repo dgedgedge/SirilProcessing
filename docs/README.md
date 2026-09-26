@@ -7,6 +7,7 @@ une page maîtresse `README.md`, qui mène à ses guides et références détail
 
 - [Installation et démarrage](INSTALLATION.md)
 - [Documentation des scripts](scripts/README.md) : un ensemble par script, avec ses commandes, traitements et sorties.
+- [postProcess : séquence de post-traitement FITS](scripts/postProcess/README.md) : gradient, couleurs, débruitage et déconvolution.
 - [Architecture des bibliothèques](architecture/README.md) : leurs rôles généraux et leurs relations.
 - [Organisation et maintenance de la documentation](CONTRIBUTING.md)
 - [Tests du projet](../tests/README.md)

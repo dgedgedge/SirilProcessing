@@ -23,6 +23,75 @@ Un échec de stacking ou de mosaïque est signalé par un code de retour non nul
 sessions ayant un résultat de stacking, puis un mot commun suffisamment long. Un nom automatique de moins
 de trois caractères n’est pas accepté.
 
+## Recadrage automatique et conservation de la mosaïque complète
+
+Après l’assemblage Siril, le recadrage est **activé par défaut**, sous réserve
+de la limite par panneau ci-dessous. Lorsque le recadrage est accepté, deux FITS
+sont conservés dans le répertoire de la mosaïque :
+
+- `<nom>_mosaic_uncropped.fits` : mosaïque complète, sauvegardée avant tout recadrage ;
+- `<nom>_mosaic.fits` : résultat recadré, transmis aux traitements suivants.
+
+La mosaïque complète reste disponible **sans `--keep-intermediate`**, ainsi
+qu’en cas d’échec du recadrage. Le nettoyage ne supprime que les sous-dossiers
+`input` et `output`. Une nouvelle exécution sous le même nom remplace ces
+résultats ; il ne s’agit pas d’un archivage des versions successives.
+
+Le recadrage cherche le **plus grand rectangle entièrement rempli**, aligné
+sur les axes de l’image. Il supprime donc aussi les coins vides dus à la rotation
+des panneaux, pas seulement les lignes et colonnes totalement vides du pourtour.
+Cela peut retirer des parties valides des panneaux près des bords. À surface
+égale, le rectangle le plus proche du centre est préféré.
+
+**Si ce rectangle retire plus de la moitié des pixels d’au moins un panneau,
+le recadrage est écarté.** La sortie `output_image` désigne alors directement
+`<nom>_mosaic_uncropped.fits`, pour la suite des traitements. Une perte de
+50 % exactement reste autorisée. Cette limite est vérifiée pour chaque panneau,
+et non sur la surface totale de la mosaïque.
+
+Le contrôle compte les pixels valides de chaque panneau aligné par Siril
+(hors remplissage nul et valeurs non finies). Les coordonnées célestes WCS
+permettent de déterminer si leur centre tombe dans le rectangle proposé.
+Les zones de recouvrement comptent pour chacun des panneaux concernés.
+Si les panneaux alignés ne sont pas disponibles, les panneaux fournis à
+l’assemblage sont utilisés. Si le contrôle est impossible (notamment WCS absent),
+la sortie reste également l’image complète.
+
+Le rapport `crop.panel_retention` donne pour chaque panneau `total_pixels`,
+`retained_pixels`, `removed_pixels` et `removed_fraction`.
+En cas de refus, `crop.applied` vaut `false`, `crop.reason` vaut
+`panel_loss_exceeds_half` (limite dépassée) ou `panel_coverage_unavailable`
+(contrôle impossible), et `crop.proposed_bounds` décrit le rectangle refusé.
+Aucun nouveau FITS recadré n’est écrit dans ce cas ; un ancien fichier recadré
+d’une exécution précédente peut subsister, mais n’est pas désigné par `output_image`.
+
+
+La détection repose sur le remplissage à zéro de Siril : un pixel monochrome
+nul, ou RGB nul dans les trois canaux, est considéré comme vide. Un pixel non
+fini (`NaN`, infini) est également exclu. Aucun seuil de luminosité n’est
+appliqué : les valeurs négatives et les pixels ayant seulement un ou deux
+canaux nuls restent admissibles. Cette méthode ne reconstruit pas les empreintes
+géométriques des panneaux ; un véritable pixel noir exactement nul dans tous
+les canaux, même à l’intérieur de l’image, sera aussi exclu du rectangle.
+
+Les valeurs des pixels conservés ne sont pas rééchantillonnées. Les coordonnées
+de référence FITS/WCS sont décalées pour préserver les coordonnées célestes.
+Le rapport JSON contient `uncropped_image` et une section `crop` : dimensions
+avant/après (hauteur, largeur), rectangle `bounds` (origine `x`, `y` à partir
+de zéro, largeur, hauteur) et fraction de surface conservée `retained_fraction`.
+Si aucune zone valide n’existe, le traitement signale un échec et conserve le FITS complet.
+
+Pour désactiver le recadrage :
+
+```bash
+./bin/lightProcess.sh /chemin/champ_nord /chemin/champ_sud \
+  --mosaic --mosaic-name champ --no-mosaic-crop
+```
+
+Dans ce cas, `output_image` désigne directement `<nom>_mosaic_uncropped.fits`.
+`--mosaic-crop` le réactive explicitement. Cette préférence peut être mémorisée
+avec les autres options de configuration via `-S`.
+
 ## Traitement Siril
 
 Les fichiers existants sont préparés par liens symboliques ou copies dans le
@@ -69,37 +138,142 @@ des répertoires d'entrée est utilisé. Les stacks restent dans leurs sous-doss
 de session ; aucune copie supplémentaire n'est créée. Le rapport les liste
 dans `stacked_files`. `--keep-intermediate` contrôle toujours leur nettoyage.
 
-Avant d'appeler `create_mosaic()`, `post_process()` appelle
-`gradient_processor.process_mosaic()` avec tous les panneaux. Les corrections
-sont ajustées **conjointement**, canal par canal, sur les différences de signal
-aux mêmes positions du ciel dans leurs recouvrements WCS. La lumière commune
-(galaxies, nébuleuses) n'est donc pas ajustée comme un fond indépendant.
-Les petites régions comparées sont lissées pour réduire les écarts de PSF ;
-les différences aberrantes sont rejetées au cours de la résolution.
+## Correction du gradient des panneaux et préparation des raccords
 
-Le panneau ayant le plus de points de recouvrement sert de référence inchangée.
-Un gradient absolu commun à tous les panneaux reste indéterminé et n'est pas
-retiré. Le modèle est additif : il ne corrige pas un écart de gain photométrique.
-Les panneaux doivent avoir des WCS valides et former un ensemble connecté.
-Sinon le traitement échoue explicitement, sans revenir à une correction indépendante.
+Avant l’assemblage Siril, `gradient_processor.process_mosaic()` estime maintenant
+le **fond propre à chaque panneau** et prépare les jonctions dans un même
+ajustement. Le mode par défaut est `--mosaic-gradient-mode background`.
+La normalisation et le fondu des recouvrements restent ensuite assurés par le
+traitement de mosaïque Siril.
 
-`--gradient-method rbf` utilise une base commune affine et RBF thin-plate
-(4 × 4 centres) avec pénalisation de la courbure réglée par
+1. Une grille de petites régions couvre chaque panneau, au-delà des seules
+   bandes de recouvrement. Une marge évite le bord du champ ; les régions
+   contenant trop de pixels nuls ou non finis sont exclues. Chaque mesure est
+   une médiane après rejet des pixels aberrants, pour réduire l’influence des étoiles.
+2. Un plan au quantile inférieur, puis un rejet itératif des excès positifs,
+   repèrent les régions brillantes et étendues. Leur masque est agrandi d’une
+   cellule par défaut afin de protéger les extensions de la galaxie. En RGB,
+   une source détectée dans un canal est exclue du fond dans les trois canaux.
+3. Les valeurs des régions de fond retenues contraignent le modèle de chaque
+   panneau. Dans les recouvrements WCS, seules les positions admissibles dans
+   **les deux panneaux** fournissent les contraintes de jonction. Les différences
+   aberrantes sont rejetées séparément pour chaque canal.
+4. Le calcul combine les deux familles de mesures, avec un poids total comparable
+   pour chaque panneau et chaque paire de recouvrement : une bande très dense
+   ne domine donc pas toutes les mesures de fond.
+5. Le modèle est soustrait en conservant un niveau de ciel constant commun par
+   canal, pris dans les échantillons du panneau le mieux connecté. Ce panneau
+   est lui aussi corrigé : il ne sert plus de référence spatiale inchangée.
+   Les pixels nuls et non finis, le WCS et les extensions FITS sont préservés.
+
+En mode `rbf`, le modèle combine une tendance quadratique et une base RBF
+thin-plate à 4 × 4 centres, avec régularisation des termes RBF par
 `--gradient-smoothing`. En mode `polynomial`, le degré est celui de
-`--gradient-min-order` (pas de sélection sur le signal de la galaxie).
-`--gradient-samples-per-line` contrôle la densité de la grille de comparaison,
-suréchantillonnée pour couvrir les recouvrements étroits. La tolérance de grille
-et la conservation des cellules brillantes du traitement autonome ne sont pas
-utilisées ici : on rejette les différences aberrantes entre panneaux, pas les
-régions brillantes communes du ciel.
+`--gradient-min-order` ; utiliser `2` pour une courbure quadratique. Il n’y a
+pas de sélection automatique du degré à partir de la galaxie.
 
-Chaque panneau conserve ses fichiers `<index>_gradient_…` dans
-`<work_dir>/<mosaic_name>/` : FITS corrigé, rapport `<index>_gradient.json` et
-image des points de recouvrement si demandée. `joint_gradient.json` contient
-le panneau de référence, les recouvrements, et les écarts RMS avant/après sur
-les échantillons retenus. Les sources restent intactes. Ces résultats sont
-conservés après nettoyage et transmis à l'assemblage via `output_image`.
-L'appel direct historique à `create_mosaic()` effectue seulement l'assemblage.
+L’ajustement exige au moins 12 régions de fond bien réparties sur chaque panneau
+et des jonctions encore reliées après rejet des points aberrants, dans chaque
+canal. Si le fond visible ou les recouvrements sont insuffisants, il s’arrête
+explicitement avant de produire les FITS corrigés ; il ne revient pas
+silencieusement à un traitement moins protecteur.
+
+### Réglages de sélection
+
+| Option | Défaut | Effet |
+|---|---|---|
+| `--mosaic-gradient-mode` | `background` | Correction des fonds et raccords ; `relative` pour l’ancien ajustement seul |
+| `--gradient-samples-per-line` | `20` | Densité de la grille de fond ; la grille de recouvrement est plus dense |
+| `--gradient-grid-tolerance` | `2.0` | Seuil de détection des excès lumineux ; diminuer exclut davantage de régions |
+| `--mosaic-gradient-mask-growth` | `1` | Dilatation du masque d’objets en cellules, de 0 à 5 |
+| `--mosaic-gradient-border` | `0.02` | Marge exclue, fraction du petit côté du panneau, de 0 à 0.2 |
+| `--mosaic-gradient-masks` | aucun | Un masque FITS 2D par panneau, dans le même ordre ; pixels non nuls ou non finis exclus |
+| `--gradient-keep-all-samples` | désactivé | Désactive la détection automatique des objets ; les masques fournis et les contrôles de validité restent appliqués |
+| `--gradient-measurement-image` | activé | Aperçu de la sélection ; inverse : `--no-gradient-measurement-image` |
+
+Un masque fourni doit avoir les mêmes dimensions et la même grille de pixels
+que le **stack** correspondant, après alignement et recadrage. Il ne doit pas
+être construit sur une pose brute. Les chemins de ces masques sont propres à
+l’exécution et ne sont pas sauvegardés avec `-S`.
+
+Le masquage automatique reste une estimation : il ne peut pas séparer de façon
+certaine une émission astronomique très diffuse d’un gradient instrumental.
+Pour un objet occupant presque tout le champ, inspecter les aperçus et fournir
+un masque explicite si ses extensions restent utilisées comme fond. La correction
+est additive ; elle ne remplace pas une calibration des différences de gain.
+Le principe de masquage des sources et des zones sans couverture est également
+décrit dans la [documentation Photutils sur l’estimation du fond](https://photutils.readthedocs.io/en/2.3.0/user_guide/background.html).
+L’implémentation du projet utilise NumPy/SciPy et n’ajoute pas de dépendance Photutils.
+
+### Aperçus et rapports
+
+Chaque panneau conserve son FITS `<index>_gradient_…_gradient_corrected.fits`,
+son rapport `<index>_gradient.json` et son aperçu `…_measurement_points.png` dans
+`<work_dir>/<mosaic_name>/`. L’aperçu du mode `background` distingue :
+
+| Repère | Interprétation |
+|---|---|
+| **Cercle vert**, pouvant paraître carré à faible zoom | Région de **fond de ciel retenue** pour estimer le gradient du panneau. |
+| **Point plein cyan**, parfois perçu comme vert | Position de **recouvrement retenue** pour comparer deux panneaux et préparer leur jonction. Ce n’est pas une seconde catégorie de mesure du fond. |
+| **Croix orange ou marron** | Région **exclue automatiquement** : objet lumineux détecté ou voisinage protégé par la dilatation du masque. Elle n’est pas utilisée comme fond. |
+| **Croix grise** | Région invalide, exclue par un masque fourni ou rejetée lors de l’ajustement final. |
+
+Les repères sont dessinés après réduction de l’image pour rester visibles :
+les cercles verts ont un rayon de 6 pixels et un trait de 2 pixels, les points
+cyan un rayon de 2 pixels, les croix des branches de 5 pixels autour du centre
+et un trait de 2 pixels. Un contour sombre améliore leur contraste sur les
+étoiles et les régions lumineuses. Les cercles et croix sont dessinés au-dessus
+des points de raccord lorsqu’ils se superposent.
+
+Les symboles indiquent les **centres des mesures**, pas les dimensions des
+régions analysées. Le calcul du fond utilise une petite région autour du centre ;
+agrandir les repères ne change ni les échantillons ni la correction.
+
+Pour M31, les croix orange sont attendues sur la galaxie et ses extensions,
+les cercles verts dans le fond environnant, et les points cyan dans les
+recouvrements. Des cercles verts sur une extension visible de la galaxie
+justifient de vérifier la sélection et, si nécessaire, de fournir un masque.
+
+En RGB, l’aperçu affiche les points retenus dans **au moins un canal**, pas
+nécessairement dans les trois. Le JSON donne les coordonnées des candidats,
+le rayon des régions mesurées, les masques `used_per_channel`, les nombres de
+points et la dispersion du fond avant/après.
+
+Les **grands carrés verts en quadrillage continu** correspondent à l’ancien
+style d’affichage, encore utilisé dans le mode `relative`. Ce sont des repères
+agrandis, pas des surfaces de mesure. Les images créées avant la correction
+de l’affichage pouvaient aussi inclure les candidats rejetés ; les nouvelles
+images du mode `relative` ne montrent que les points retenus dans au moins
+un canal. Un ancien PNG n’est actualisé que lorsqu’il est régénéré.
+
+Les différences RMS sur les recouvrements sont indiquées dans `joint_gradient.json`.
+Ces diagnostics sont calculés sur les échantillons utilisés ; ils ne constituent
+pas une mesure indépendante de préservation du flux de la galaxie.
+
+### Comparer avec l’ancien mode
+
+```bash
+# Nouvelle correction du fond de chaque panneau, avec préparation des jonctions.
+./bin/lightProcess.sh /chemin/champ_nord /chemin/champ_sud \
+  --mosaic --mosaic-name champ --mosaic-gradient-mode background
+
+# Ancien ajustement relatif, sans correction absolue du fond des panneaux.
+./bin/lightProcess.sh /chemin/champ_nord /chemin/champ_sud \
+  --mosaic --mosaic-name champ --mosaic-gradient-mode relative
+```
+
+Le mode `relative` ne mesure que les différences de signal aux mêmes positions
+du ciel dans les recouvrements. Le panneau le mieux connecté reste inchangé,
+et un gradient commun à tous les panneaux est conservé. Ses aperçus affichent
+les points de recouvrement retenus dans au moins un canal après rejet.
+Les options de sélection de fond, de marge et de dilatation ne s’y appliquent
+pas ; les masques explicites nécessitent le mode `background`.
+`--no-mosaic-gradient` désactive entièrement cette étape préalable.
+
+Les sources restent intactes. Les résultats de gradient sont conservés après
+nettoyage et transmis à l’assemblage via `output_image`. L’appel direct
+historique à `create_mosaic()` effectue l’assemblage puis le recadrage,
+sans correction préalable du gradient.
 
 Les paramètres parsés `mosaic_name`, `output_dir`, `work_dir`, `siril_path` et
 `siril_mode` sont consommés par la classe ; les paramètres du constructeur

@@ -6,6 +6,7 @@ import json
 import logging
 from threading import Lock
 from copy import deepcopy
+import tempfile
 
 
 class _LegacyDefaults:
@@ -32,29 +33,29 @@ class Config:
     DEFAULTS = _LegacyDefaults()
     
     def __new__(cls, config_file=None):
-        """
-        Charge le fichier au premier appel, puis retourne l'instance partagée.
-        Un autre fichier explicite est refusé ; load() permet un rechargement.
-        """
         with cls._instance_lock:
-            if cls._instance is None:
-                instance = super().__new__(cls)
-                instance.config_file = str(Path(config_file or "~/.siril_darklib_config.json").expanduser().resolve())
-                instance._config = {}
-                instance._runtime = {}
-                instance._parameters = {}
-                instance._path_parameters = set()
-                instance.load()
-                cls._instance = instance
+            if cls.__dict__.get('_instance') is None:
+                cls._instance = super().__new__(cls)
+            return cls._instance
+
+    def __init__(self, config_file=None):
+        """Initialise une fois, y compris depuis un constructeur hérité."""
+        with self._instance_lock:
+            if not hasattr(self, '_config'):
+                self.config_file = str(Path(config_file or "~/.siril_darklib_config.json").expanduser().resolve())
+                self._config = {}
+                self._runtime = {}
+                self._parameters = {}
+                self._path_parameters = set()
+                self.load()
             elif config_file is not None:
                 requested = str(Path(config_file).expanduser().resolve())
-                if requested != cls._instance.config_file:
+                if requested != self.config_file:
                     raise ValueError(
-                        f"Config utilise déjà {cls._instance.config_file}, "
+                        f"Config utilise déjà {self.config_file}, "
                         f"impossible de sélectionner {requested}"
                     )
-            return cls._instance
-    
+
     @classmethod
     def from_command_line(cls, argv=None):
         """Charge --config avant de définir les valeurs par défaut du parseur complet."""
@@ -138,7 +139,10 @@ class Config:
         if os.path.exists(self.config_file):
             try:
                 with open(self.config_file, "r") as f:
-                    self._config = json.load(f)
+                    contents = json.load(f)
+                if not isinstance(contents, dict):
+                    raise ValueError("La configuration JSON doit être un objet")
+                self._config = contents
                 logging.info(f"Configuration chargée depuis {self.config_file}")
             except Exception as e:
                 logging.warning(f"Erreur lors du chargement de la configuration: {e}")
@@ -167,11 +171,21 @@ class Config:
                     self._config[key] = ([os.path.abspath(item) for item in value]
                                          if isinstance(value, list) else os.path.abspath(value))
             
-            Path(self.config_file).parent.mkdir(parents=True, exist_ok=True)
-            with open(self.config_file, "w") as f:
-                transient = {key for key, persistent, _ in self._parameters.values() if not persistent}
-                json.dump({key: value for key, value in self._config.items() if key not in transient},
-                          f, indent=2, default=self._json_value)
+            transient = {key for key, persistent, _ in self._parameters.values() if not persistent}
+            contents = {key: value for key, value in self._config.items() if key not in transient}
+            serialized = json.dumps(contents, indent=2, default=self._json_value)
+            destination = Path(self.config_file)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            temporary = None
+            try:
+                with tempfile.NamedTemporaryFile(mode='w', dir=destination.parent,
+                                                 prefix=f'.{destination.name}.', delete=False) as stream:
+                    temporary = Path(stream.name)
+                    stream.write(serialized)
+                temporary.replace(destination)
+            finally:
+                if temporary is not None:
+                    temporary.unlink(missing_ok=True)
             logging.info(f"Configuration sauvegardée dans {self.config_file}")
             return True
         except Exception as e:
@@ -202,10 +216,16 @@ class Config:
         """
         Définit une valeur de configuration.
         """
-        self._config[key] = value
+        matching = [(dest, config_key) for dest, (config_key, _, _) in self._parameters.items()
+                    if key in (dest, config_key)]
+        canonical = matching[0][1] if matching else key
+        self._config[canonical] = value
+        for dest, config_key in matching:
+            self._runtime[dest] = deepcopy(value)
+            self._runtime[config_key] = deepcopy(value)
         if key in self._runtime:
-            self._runtime[key] = value
-    
+            self._runtime[key] = deepcopy(value)
+
     def update(self, **kwargs):
         """
         Met à jour plusieurs valeurs de configuration en une seule fois.
@@ -232,10 +252,15 @@ class Config:
                     self.set(key, deepcopy(getattr(args, dest)))
             return
         from lib.darkprocess import DarkLib
+        from lib.lightprocessor import LightProcessor
+        paths = DarkLib.config_path_parameters | LightProcessor.config_path_parameters
         defaults = self.DEFAULTS
         aliases = DarkLib.config_keys
         for dest, value in vars(args).items():
             key = aliases.get(dest, dest)
             if key in defaults or key in DarkLib.legacy_parameters:
                 if value is not None:
+                    if key in paths:
+                        value = ([os.path.abspath(item) for item in value]
+                                 if isinstance(value, list) else os.path.abspath(value))
                     self.set(key, deepcopy(value))

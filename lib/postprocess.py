@@ -203,7 +203,7 @@ class GradientExtractor(processor):
         return results
 
     def process_mosaic(self, input_paths, output_dir, args=None):
-        """Ajuste conjointement les fonds des panneaux sur leurs recouvrements."""
+        """Corrige les fonds des panneaux et prépare leurs recouvrements."""
         from lib.joint_gradient import match_backgrounds
         return match_backgrounds(self, input_paths, output_dir, self._get_args(args))
 

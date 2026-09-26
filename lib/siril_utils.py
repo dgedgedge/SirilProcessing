@@ -21,8 +21,21 @@ class Siril:
     }
 
     @classmethod
-    def add_arguments(cls, parser, *, photometry_aliases=False):
-        add_siril_arguments(parser, photometry_aliases=photometry_aliases)
+    def add_arguments(cls, parser, config=None, *, photometry_aliases=False):
+        """Déclare les options du service avec leurs valeurs locales."""
+        def default(key):
+            return config.get(key) if config is not None else cls.CONFIG_DEFAULTS[key]
+
+        path_options = ["-s", "--siril-path"]
+        mode_options = ["-m", "--siril-mode"]
+        if photometry_aliases:
+            path_options.append("--photometry-siril-path")
+            mode_options.append("--photometry-siril-mode")
+        group = parser.add_argument_group("Exécution Siril")
+        group.add_argument(*path_options, dest="siril_path", default=default("siril_path"),
+                           help="Exécutable Siril (en mode native/appimage ; sans effet en flatpak)")
+        group.add_argument(*mode_options, dest="siril_mode", choices=["native", "flatpak", "appimage"],
+                           default=default("siril_mode"), help="Mode d'exécution de Siril")
 
     
     # Attributs de classe pour la configuration globale par défaut
@@ -303,21 +316,8 @@ def run_siril_script(siril_script_content: str, working_dir: str, siril_path: st
     return siril_instance.run_siril_script(siril_script_content, working_dir)
 
 
-def add_siril_arguments(parser, config=None, *, photometry_aliases=False):
-    """Options d'exécution communes : CLI > configuration > valeurs par défaut."""
-    def default(key):
-        return config.get(key) if config is not None else Siril.CONFIG_DEFAULTS[key]
-
-    path_options = ["-s", "--siril-path"]
-    mode_options = ["-m", "--siril-mode"]
-    if photometry_aliases:
-        path_options.append("--photometry-siril-path")
-        mode_options.append("--photometry-siril-mode")
-    group = parser.add_argument_group("Exécution Siril")
-    group.add_argument(*path_options, dest="siril_path", default=default("siril_path"),
-                       help="Exécutable Siril (en mode native/appimage ; sans effet en flatpak)")
-    group.add_argument(*mode_options, dest="siril_mode", choices=["native", "flatpak", "appimage"],
-                       default=default("siril_mode"), help="Mode d'exécution de Siril")
+# Alias lié à la déclaration, conservé pour les anciens appelants.
+add_siril_arguments = Siril.add_arguments
 
 
 def create_siril_from_args(args=None):

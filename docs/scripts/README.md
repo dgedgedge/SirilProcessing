@@ -6,6 +6,7 @@
 | Script | Ensemble documentaire |
 |---|---|
 | `lightProcess.py`, `lightProcess.sh` | [Traitement des lights](lightProcess/README.md) |
+| `postProcess.py`, `postProcess.sh` | [Post-traitement FITS : gradient, couleurs, bruit et déconvolution](postProcess/README.md) |
 | `darkLibUpdate.py`, `darkLibUpdate.sh` | [Bibliothèque de darks](darkLibUpdate/README.md) |
 | `solarEclipseGif.py`, `solarEclipseGif.sh` | [Éclipse solaire](solarEclipseGif/README.md) |
 | `pyecho.py` | [Messages](pyecho/README.md) |
