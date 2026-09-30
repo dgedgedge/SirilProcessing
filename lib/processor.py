@@ -17,6 +17,7 @@ class processor(ABC):
 
     enabled_by_default = True
     _args = None
+    parameter_persistence = {}
 
     def set_from_args(self, args: argparse.Namespace) -> None:
         """Configure les prochains traitements à partir des arguments parsés.
@@ -28,7 +29,12 @@ class processor(ABC):
 
     def _get_args(self, args=None):
         """Une surcharge ponctuelle ne modifie pas la configuration mémorisée."""
-        return self._args if args is None else args
+        if args is not None:
+            return args
+        if self._args is not None:
+            return self._args
+        from lib.config import Config
+        return Config().arguments()
 
     def get_prefix(self) -> str:
         return self.__class__.__name__.lower()

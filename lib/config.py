@@ -4,68 +4,58 @@ import argparse
 from pathlib import Path
 import json
 import logging
+from threading import Lock
+from copy import deepcopy
+import tempfile
+
+
+class _LegacyDefaults:
+    """Vue de compatibilité des défauts appartenant aux traitements."""
+
+    def __get__(self, instance, owner):
+        from lib.darkprocess import DarkLib
+        from lib.lightprocessor import LightProcessor
+        from lib.siril_utils import Siril
+        return {**DarkLib.CONFIG_DEFAULTS, **LightProcessor.CONFIG_DEFAULTS,
+                **Siril.CONFIG_DEFAULTS}
 
 
 class Config:
     """
     Classe pour charger, sauvegarder et accéder à la configuration du script.
     Gère la persistance des paramètres dans un fichier JSON.
+    Une seule instance et un seul fichier sont utilisés par processus.
     """
-    # Valeurs par défaut pour chaque paramètre de configuration
-    DEFAULTS = {
-        "siril_path": "siril",
-        "dark_library_path": os.path.abspath(os.path.expanduser("~/darkLib")),
-        "bias_library_path": os.path.abspath(os.path.expanduser("~/biasLib")),
-        "work_dir": os.path.abspath(os.path.expanduser("~/tmp/sirilWorkDir")),
-        "output_dir": os.path.abspath(os.path.expanduser("~/SirilProcessed")),
-        "siril_mode": "flatpak",
-        "cfa": False,
-        "output_norm": "noscale",
-        "rejection_method": "winsorizedsigma",
-        "rejection_param1": 3.0,
-        "rejection_param2": 3.0,
-        "roundness_filter": "1.8k",
-        "nbstars_filter": "1.8k",
-        "roundness_weighted": True,
-        "roundness_weight_max_extra": 1,
-        "fwhm_filter": "1.8k",
-        "max_fwhm": 0.0,
-        "stellar_profile_filter": True,
-        "stellar_profile_sigma": 3.0,
-        "fwhm_reject_percent": 0.0,
-        "fwhm_weighted": True,
-        "fwhm_weight_max_extra": 1,
-        "align_transform": "affine",
-        "enable_stack_platesolve": True,
-        "force_stacking": False,
-        "max_age_days": 182,
-        "stack_method": "average",
-        "drizzle": "auto",
-        "drizzle_scale": "auto",
-        "drizzle_pixfrac": "auto",
-        "drizzle_kernel": "auto",
-        "drizzle_min_frames": 30,
-        "drizzle_min_coverage": 0.75,
-        "drizzle_fwhm_limit": 2.5,
-        "drizzle_max_drift": 10.0,
-        "temperature_precision": 0.2,
-        "min_darks_threshold": 0,
-        "validate_darks": False,
-        "report": False,
-        "max_hot_pixels_percent": 1.0,
-        "input_dirs": None,
-        "keep_intermediate": False,
-    }
+    _instance = None
+    _instance_lock = Lock()
+
+    # Vue de compatibilité ; les déclarations restent dans les traitements.
+    DEFAULTS = _LegacyDefaults()
     
+    def __new__(cls, config_file=None):
+        with cls._instance_lock:
+            if cls.__dict__.get('_instance') is None:
+                cls._instance = super().__new__(cls)
+            return cls._instance
+
     def __init__(self, config_file=None):
-        """
-        Initialise la configuration à partir d'un fichier.
-        Si le fichier n'est pas spécifié, utilise le chemin par défaut ~/.siril_darklib_config.json
-        """
-        self.config_file = config_file or os.path.expanduser("~/.siril_darklib_config.json")
-        self._config = {}
-        self.load()
-    
+        """Initialise une fois, y compris depuis un constructeur hérité."""
+        with self._instance_lock:
+            if not hasattr(self, '_config'):
+                self.config_file = str(Path(config_file or "~/.siril_darklib_config.json").expanduser().resolve())
+                self._config = {}
+                self._runtime = {}
+                self._parameters = {}
+                self._path_parameters = set()
+                self.load()
+            elif config_file is not None:
+                requested = str(Path(config_file).expanduser().resolve())
+                if requested != self.config_file:
+                    raise ValueError(
+                        f"Config utilise déjà {self.config_file}, "
+                        f"impossible de sélectionner {requested}"
+                    )
+
     @classmethod
     def from_command_line(cls, argv=None):
         """Charge --config avant de définir les valeurs par défaut du parseur complet."""
@@ -81,6 +71,66 @@ class Config:
         parser.add_argument("-S", "--save-config", action="store_true",
                             help="Sauvegarder les paramètres dans le fichier de configuration")
 
+    def register(self, provider, parser, **kwargs):
+        """Interroge un traitement sans changer son API argparse historique.
+
+        parameter_persistence indique, par destination, les exceptions à la
+        rémanence des options. Les arguments positionnels sont toujours locaux
+        à l'exécution. config_keys permet de conserver les anciennes clés JSON.
+        """
+        previous = set(parser._actions)
+        provider.add_arguments(parser, **kwargs)
+        persistence = getattr(provider, 'parameter_persistence', {})
+        aliases = getattr(provider, 'config_keys', {})
+        self._path_parameters.update(getattr(provider, 'config_path_parameters', ()))
+        for action in parser._actions:
+            if action in previous or action.dest == argparse.SUPPRESS:
+                continue
+            dest = action.dest
+            key = aliases.get(dest, dest)
+            persistent = bool(action.option_strings) and persistence.get(dest, True)
+            metadata = (key, persistent, action.default)
+            if dest in self._parameters:
+                old = self._parameters[dest]
+                if old[:2] != metadata[:2]:
+                    raise ValueError(f"Déclarations incompatibles pour {dest}")
+            else:
+                self._parameters[dest] = metadata
+            if persistent and key in self._config:
+                value = deepcopy(self._config[key])
+                if value is not None and action.type is not None:
+                    try:
+                        value = ([action.type(item) for item in value]
+                                 if isinstance(value, list) else action.type(value))
+                    except (TypeError, ValueError) as exc:
+                        parser.error(f"Configuration invalide pour {dest}: {exc}")
+                action.default = value
+        return provider
+
+    def parse_args(self, parser, argv=None):
+        """Résout CLI > fichier > défaut local, sans écriture implicite."""
+        args = parser.parse_args(argv)
+        self.capture_args(args)
+        return args
+
+    def capture_args(self, args):
+        """Actualise les valeurs accessibles aux traitements pour cet appel."""
+        self._runtime = deepcopy(vars(args))
+        for dest, (key, _, _) in self._parameters.items():
+            if dest in self._runtime:
+                self._runtime[key] = deepcopy(self._runtime[dest])
+
+    def arguments(self):
+        """Copie des paramètres résolus, utilisable par les anciennes API."""
+        return argparse.Namespace(**deepcopy(self._runtime))
+
+    def save_requested(self, args):
+        """Sauvegarde seulement les paramètres déclarés rémanents avec -S."""
+        self.capture_args(args)
+        if not getattr(args, 'save_config', False):
+            return True
+        return self.save()
+
     def load(self):
         """
         Charge la configuration depuis le fichier.
@@ -89,7 +139,10 @@ class Config:
         if os.path.exists(self.config_file):
             try:
                 with open(self.config_file, "r") as f:
-                    self._config = json.load(f)
+                    contents = json.load(f)
+                if not isinstance(contents, dict):
+                    raise ValueError("La configuration JSON doit être un objet")
+                self._config = contents
                 logging.info(f"Configuration chargée depuis {self.config_file}")
             except Exception as e:
                 logging.warning(f"Erreur lors du chargement de la configuration: {e}")
@@ -104,30 +157,57 @@ class Config:
         Normalise les chemins avant la sauvegarde.
         """
         try:
-            # Normaliser les chemins
-            if "dark_library_path" in self._config:
-                self._config["dark_library_path"] = os.path.abspath(self._config["dark_library_path"])
-            if "bias_library_path" in self._config:
-                self._config["bias_library_path"] = os.path.abspath(self._config["bias_library_path"])
-            if "work_dir" in self._config:
-                self._config["work_dir"] = os.path.abspath(self._config["work_dir"])
-            if "output_dir" in self._config:
-                self._config["output_dir"] = os.path.abspath(self._config["output_dir"])
+            for dest, (key, persistent, _) in self._parameters.items():
+                if persistent and dest in self._runtime:
+                    self._config[key] = deepcopy(self._runtime[dest])
+            paths = self._path_parameters
+            if not self._parameters:
+                from lib.darkprocess import DarkLib
+                from lib.lightprocessor import LightProcessor
+                paths = DarkLib.config_path_parameters | LightProcessor.config_path_parameters
+            for key in paths:
+                value = self._config.get(key)
+                if value is not None:
+                    self._config[key] = ([os.path.abspath(item) for item in value]
+                                         if isinstance(value, list) else os.path.abspath(value))
             
-            Path(self.config_file).parent.mkdir(parents=True, exist_ok=True)
-            with open(self.config_file, "w") as f:
-                json.dump(self._config, f, indent=2)
+            transient = {key for key, persistent, _ in self._parameters.values() if not persistent}
+            contents = {key: value for key, value in self._config.items() if key not in transient}
+            serialized = json.dumps(contents, indent=2, default=self._json_value)
+            destination = Path(self.config_file)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            temporary = None
+            try:
+                with tempfile.NamedTemporaryFile(mode='w', dir=destination.parent,
+                                                 prefix=f'.{destination.name}.', delete=False) as stream:
+                    temporary = Path(stream.name)
+                    stream.write(serialized)
+                temporary.replace(destination)
+            finally:
+                if temporary is not None:
+                    temporary.unlink(missing_ok=True)
             logging.info(f"Configuration sauvegardée dans {self.config_file}")
             return True
         except Exception as e:
             logging.error(f"Erreur lors de la sauvegarde de la configuration: {e}")
             return False
+
+    @staticmethod
+    def _json_value(value):
+        if isinstance(value, Path):
+            return str(value)
+        raise TypeError(f"Valeur non sérialisable: {type(value).__name__}")
     
     def get(self, key, default=None):
         """
         Récupère une valeur de configuration.
         Si la clé n'existe pas, renvoie la valeur par défaut spécifiée ou celle définie dans DEFAULTS.
         """
+        if key in self._runtime:
+            return self._runtime[key]
+        for dest, (config_key, persistent, declared_default) in self._parameters.items():
+            if key in (dest, config_key):
+                return self._config.get(config_key, declared_default) if persistent else declared_default
         if default is None and key in self.DEFAULTS:
             default = self.DEFAULTS[key]
         return self._config.get(key, default)
@@ -136,13 +216,22 @@ class Config:
         """
         Définit une valeur de configuration.
         """
-        self._config[key] = value
-    
+        matching = [(dest, config_key) for dest, (config_key, _, _) in self._parameters.items()
+                    if key in (dest, config_key)]
+        canonical = matching[0][1] if matching else key
+        self._config[canonical] = value
+        for dest, config_key in matching:
+            self._runtime[dest] = deepcopy(value)
+            self._runtime[config_key] = deepcopy(value)
+        if key in self._runtime:
+            self._runtime[key] = deepcopy(value)
+
     def update(self, **kwargs):
         """
         Met à jour plusieurs valeurs de configuration en une seule fois.
         """
-        self._config.update(kwargs)
+        for key, value in kwargs.items():
+            self.set(key, value)
     
     def to_dict(self):
         """
@@ -151,100 +240,27 @@ class Config:
         return dict(self._config)
     
     def set_from_args(self, args):
-        """
-        Met à jour la configuration à partir des arguments de la ligne de commande.
-        Convertit automatiquement tous les chemins de répertoires en chemins absolus.
-        """
-        # Mise à jour des valeurs à partir des arguments
-        updates = {
-            "siril_path": args.siril_path,
-            "siril_mode": args.siril_mode,
-        }
-        
-        # Add work_dir if available
-        if hasattr(args, 'work_dir') and args.work_dir:
-            updates["work_dir"] = os.path.abspath(args.work_dir)
-        
-        # Add parameters for darkLibUpdate.py
-        if hasattr(args, 'cfa'):
-            updates["cfa"] = args.cfa
-        if hasattr(args, 'output_norm'):
-            updates["output_norm"] = args.output_norm
-        if hasattr(args, 'max_age'):
-            updates["max_age_days"] = args.max_age
-        
-        # Add rejection parameters
-        if hasattr(args, 'rejection_method'):
-            updates["rejection_method"] = args.rejection_method
-        if hasattr(args, 'rejection_param1'):
-            updates["rejection_param1"] = args.rejection_param1
-        if hasattr(args, 'rejection_param2'):
-            updates["rejection_param2"] = args.rejection_param2
-        if hasattr(args, 'roundness_filter'):
-            updates["roundness_filter"] = args.roundness_filter
-        if hasattr(args, 'fwhm_filter'):
-            updates["fwhm_filter"] = args.fwhm_filter
-        if hasattr(args, 'fwhm_reject_percent'):
-            updates["fwhm_reject_percent"] = args.fwhm_reject_percent
-        if hasattr(args, 'fwhm_weighted'):
-            updates["fwhm_weighted"] = args.fwhm_weighted
-        if hasattr(args, 'fwhm_weight_max_extra'):
-            updates["fwhm_weight_max_extra"] = args.fwhm_weight_max_extra
-        if hasattr(args, 'align_transform'):
-            updates["align_transform"] = args.align_transform
-        if hasattr(args, 'enable_stack_platesolve'):
-            updates["enable_stack_platesolve"] = args.enable_stack_platesolve
-        if hasattr(args, 'force_stacking'):
-            updates["force_stacking"] = args.force_stacking
-        
-        for key in self.DEFAULTS:
-            if key.startswith("drizzle") and hasattr(args, key):
-                updates[key] = getattr(args, key)
+        """Compatibilité : copie les paramètres rémanents sans écrire le fichier.
 
-        for key in ("nbstars_filter", "roundness_weighted", "roundness_weight_max_extra", "max_fwhm",
-                    "stellar_profile_filter", "stellar_profile_sigma"):
-            if hasattr(args, key):
-                updates[key] = getattr(args, key)
-
-        # Add stacking method
-        if hasattr(args, 'stack_method'):
-            updates["stack_method"] = args.stack_method
-        
-        # Add temperature precision if available
-        if hasattr(args, 'temperature_precision'):
-            updates["temperature_precision"] = args.temperature_precision
-        
-        # Add min darks threshold if available
-        if hasattr(args, 'min_darks_threshold'):
-            updates["min_darks_threshold"] = args.min_darks_threshold
-        
-        # Add validation options if available
-        if hasattr(args, 'validate_darks'):
-            updates["validate_darks"] = args.validate_darks
-        if hasattr(args, 'report'):
-            updates["report"] = args.report
-        if hasattr(args, 'min_median_for_tests'):
-            updates["min_median_for_tests"] = args.min_median_for_tests
-        if hasattr(args, 'max_median_adu'):
-            updates["max_median_adu"] = args.max_median_adu
-        if hasattr(args, 'max_hot_pixels_percent'):
-            updates["max_hot_pixels_percent"] = args.max_hot_pixels_percent
-        if hasattr(args, 'max_mad_factor'):
-            updates["max_mad_factor"] = args.max_mad_factor
-        if hasattr(args, 'max_central_dispersion'):
-            updates["max_central_dispersion"] = args.max_central_dispersion
-        if hasattr(args, 'keep_intermediate'):
-            updates["keep_intermediate"] = args.keep_intermediate
-        if hasattr(args, 'input_dirs') and args.input_dirs is not None:
-            # Convertir tous les répertoires d'entrée en chemins absolus
-            updates["input_dirs"] = [os.path.abspath(d) for d in args.input_dirs]
-        
-        # Add library paths based on which script is being used
-        if hasattr(args, 'dark_library_path') and args.dark_library_path:
-            updates["dark_library_path"] = os.path.abspath(args.dark_library_path)
-        if hasattr(args, 'bias_library_path') and args.bias_library_path:
-            updates["bias_library_path"] = os.path.abspath(args.bias_library_path)
-        if hasattr(args, 'output_dir') and args.output_dir:
-            updates["output_dir"] = os.path.abspath(args.output_dir)
-            
-        self.update(**updates)
+        Les applications enregistrées utilisent leurs déclarations locales.
+        Les anciens appelants conservent les clés et alias historiques.
+        """
+        if self._parameters:
+            self.capture_args(args)
+            for dest, (key, persistent, _) in self._parameters.items():
+                if persistent and hasattr(args, dest):
+                    self.set(key, deepcopy(getattr(args, dest)))
+            return
+        from lib.darkprocess import DarkLib
+        from lib.lightprocessor import LightProcessor
+        paths = DarkLib.config_path_parameters | LightProcessor.config_path_parameters
+        defaults = self.DEFAULTS
+        aliases = DarkLib.config_keys
+        for dest, value in vars(args).items():
+            key = aliases.get(dest, dest)
+            if key in defaults or key in DarkLib.legacy_parameters:
+                if value is not None:
+                    if key in paths:
+                        value = ([os.path.abspath(item) for item in value]
+                                 if isinstance(value, list) else os.path.abspath(value))
+                    self.set(key, deepcopy(value))

@@ -1,7 +1,9 @@
 # Séquence de post-traitements
 
+[Guide utilisateur de postProcess](../../../postProcess/README.md)
+
 `_PostProcessorSequence` orchestre une liste ordonnée de `processor`.
-Par défaut, cette liste contient `GradientExtractor()`, `PhotometricColorCalibrator()` puis `DeconvolutionProcessor()`. La séquence ne comporte
+Par défaut, cette liste contient `GradientExtractor()`, `PhotometricColorCalibrator()`, `NoiseReductionProcessor()` puis `DeconvolutionProcessor()`. La séquence ne comporte
 aucune branche dépendant de la classe concrète d'un traitement.
 
 ## Contrat commun
@@ -17,8 +19,10 @@ Un processeur hérite de `processor` et expose :
 
 La séquence ajoute automatiquement `--enable-<prefixe>` et `--disable-<prefixe>`.
 L’attribut `enabled_by_default` du processeur détermine son activation par défaut
-(`True` pour le gradient, la photométrie et la déconvolution). Un appel Python sans `args` utilise
-la configuration mémorisée, ou les valeurs par défaut si aucune n'a été fournie.
+(`True` pour les quatre traitements). Un appel Python sans `args` utilise
+la copie mémorisée par `set_from_args`, puis les paramètres partagés de `Config`
+si aucune copie locale n’a été fournie. Les défauts locaux du traitement
+s’appliquent aux paramètres absents.
 Passer `args` à `post_process` remplace cette configuration uniquement pour cet appel.
 Un traitement ne doit pas reparcourir `sys.argv`.
 
@@ -28,6 +32,15 @@ rapport = traitement.post_process(image, chemin_rapport)
 ```
 
 La séquence expose également `set_from_args(args)` et configure chacun de ses traitements.
+
+Le programme principal enregistre la séquence avec
+`config.register(sequence, parser)`, puis appelle `config.parse_args(parser)`.
+Les déclarations restent dans `add_arguments` de chaque traitement.
+`parameter_persistence` associe les destinations argparse non rémanentes à
+`False` ; les autres options sont rémanentes par défaut. La séquence rassemble
+ces déclarations. `config.save_requested(args)` sauvegarde les réglages si
+`--save-config` est présent. Les choix d’activation sont également rémanents.
+
 
 La séquence écrit les rapports individuels dans `<rapport>_steps/<index>_<prefixe>.json`,
 puis le rapport global `{ "prefixe": { ... }, ... }` au chemin demandé par le CLI.

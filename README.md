@@ -14,3 +14,5 @@ est plafonnée au nombre de processeurs du PC.
 - [Documentation — accueil et installation](docs/README.md)
 - [Documentation des scripts](docs/scripts/README.md)
 - [Architecture des bibliothèques](docs/architecture/README.md)
+
+- [Visualiseur graphique des analyses KStars / Ekos](docs/scripts/kstarsAnalyze/README.md)

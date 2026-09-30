@@ -88,7 +88,16 @@ def test_mosaic_uses_parsed_options_and_cleans_operation(tmp_path, monkeypatch, 
     def run(script, directory):
         assert Path(directory) == work
         assert 'panels_mosaic' in script
-        (work/'output/panels_mosaic.fit').write_bytes(b'mosaic')
+        import numpy as np
+        from astropy.io import fits
+        from astropy.wcs import WCS
+        wcs = WCS(naxis=2)
+        wcs.wcs.ctype = ['RA---TAN', 'DEC--TAN']
+        header = wcs.to_header()
+        data = np.pad(np.ones((6, 8), dtype=np.float32), 2)
+        fits.writeto(work/'output/panels_mosaic.fit', data, header)
+        for i in (1, 2):
+            fits.writeto(work/f'output/r_mosaic_{i:05d}.fit', data, header)
         return success
 
     service = Mock()
@@ -100,6 +109,8 @@ def test_mosaic_uses_parsed_options_and_cleans_operation(tmp_path, monkeypatch, 
     if success:
         result = mosaic.post_process(first, report)
         assert result['output_image'] == str(work/'panels_mosaic.fits')
+        assert Path(result['uncropped_image']).is_file()
+        assert result['crop']['cropped_shape'] == [6, 8]
         assert json.loads(report.read_text()) == result
     else:
         with pytest.raises(RuntimeError, match='création'):
@@ -247,3 +258,105 @@ def test_mosaic_can_skip_gradient(tmp_path, monkeypatch):
     assert result['gradient_enabled'] is False
     assert result['gradient_results'] == []
     assert not (tmp_path/'report_steps').exists()
+
+
+def test_mosaic_background_options_persistence(tmp_path):
+    import argparse
+    import json
+    from lib.config import Config
+    config = Config(tmp_path/'config.json')
+    parser = argparse.ArgumentParser()
+    config.add_arguments(parser)
+    config.register(Mosaic(), parser)
+    args = config.parse_args(parser, ['--mosaic-gradient-mode', 'background',
+        '--mosaic-gradient-border', '.04', '--mosaic-gradient-mask-growth', '2',
+        '--mosaic-gradient-masks', 'first.fits', 'second.fits', '--no-mosaic-crop', '-S'])
+    assert config.save_requested(args)
+    saved = json.loads(Path(config.config_file).read_text())
+    assert saved['mosaic_crop'] is False
+    assert saved['mosaic_gradient_mode'] == 'background'
+    assert saved['mosaic_gradient_border'] == .04
+    assert saved['mosaic_gradient_mask_growth'] == 2
+    assert 'mosaic_gradient_masks' not in saved
+
+
+@pytest.mark.parametrize('crop_enabled', [False, True])
+def test_full_mosaic_survives_cleanup_and_crop_failure(tmp_path, monkeypatch, gradient_stub, crop_enabled):
+    import argparse
+    import numpy as np
+    from astropy.io import fits
+    import lib.mosaic as module
+    from unittest.mock import Mock
+
+    panels = [tmp_path/'one.fit', tmp_path/'two.fit']
+    for panel in panels:
+        panel.touch()
+    mosaic = Mosaic(tmp_path/'out', tmp_path/'work', 'field', panels)
+    parser = argparse.ArgumentParser()
+    mosaic.add_arguments(parser)
+    args = parser.parse_args([] if crop_enabled else ['--no-mosaic-crop'])
+    args.keep_intermediate = False
+    work = tmp_path/'work/mosaic_field'
+    def run(*args):
+        fits.writeto(work/'output/field_mosaic.fit', np.ones((5, 7)))
+        return True
+    service = Mock()
+    service.run_siril_script.side_effect = run
+    monkeypatch.setattr(module, 'create_siril_from_args', lambda args: service)
+    def fail(*args, **kwargs):
+        raise OSError('crop failed')
+    monkeypatch.setattr(module, 'crop_mosaic', fail)
+    mosaic.set_from_args(args)
+    if crop_enabled:
+        with pytest.raises(OSError, match='crop failed'):
+            mosaic.post_process(panels[0], tmp_path/'report.json')
+    else:
+        result = mosaic.post_process(panels[0], tmp_path/'report.json')
+        assert result['output_image'] == result['uncropped_image']
+        assert result['crop']['enabled'] is False
+    assert (work/'field_mosaic_uncropped.fits').is_file()
+    assert not (work/'input').exists()
+    assert not (work/'output').exists()
+
+
+def test_excessive_crop_returns_full_mosaic_and_report_after_cleanup(tmp_path, monkeypatch, gradient_stub):
+    import argparse
+    import json
+    import numpy as np
+    from astropy.io import fits
+    from astropy.wcs import WCS
+    from unittest.mock import Mock
+    import lib.mosaic as module
+
+    panels = [tmp_path/'one.fit', tmp_path/'two.fit']
+    for path in panels:
+        path.touch()
+    mosaic = Mosaic(tmp_path/'out', tmp_path/'work', 'field', panels)
+    parser = argparse.ArgumentParser()
+    mosaic.add_arguments(parser)
+    mosaic.set_from_args(parser.parse_args([]))
+    work = tmp_path/'work/mosaic_field'
+    def run(*args):
+        wcs = WCS(naxis=2)
+        wcs.wcs.ctype = ['RA---TAN', 'DEC--TAN']
+        wcs.wcs.cdelt = [-.001, .001]
+        header = wcs.to_header()
+        data = np.zeros((10, 30))
+        data[:, 10:] = 1
+        fits.writeto(work/'output/field_mosaic.fit', data, header)
+        for i, offset in enumerate([4, 20], 1):
+            panel_header = header.copy()
+            panel_header['CRPIX1'] -= offset
+            fits.writeto(work/f'output/r_mosaic_{i:05d}.fit', np.ones((10, 10)), panel_header)
+        return True
+    service = Mock()
+    service.run_siril_script.side_effect = run
+    monkeypatch.setattr(module, 'create_siril_from_args', lambda args: service)
+    report = tmp_path/'report.json'
+    result = mosaic.post_process(panels[0], report)
+    assert result['output_image'] == result['uncropped_image']
+    assert result['crop']['reason'] == 'panel_loss_exceeds_half'
+    assert fits.getdata(result['output_image']).shape == (10, 30)
+    assert not (work/'field_mosaic.fits').exists()
+    assert not (work/'output').exists()
+    assert json.loads(report.read_text()) == result

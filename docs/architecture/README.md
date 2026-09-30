@@ -24,5 +24,6 @@ signatures de méthodes, ni les seuils de sélection.
 ## Documentation des traitements
 
 - [lightProcess : traitements détaillés](../scripts/lightProcess/treatments/README.md).
+- [postProcess : séquence de post-traitements FITS](../scripts/postProcess/README.md).
 - [darkLibUpdate : bibliothèque de darks](../scripts/darkLibUpdate/README.md).
 - [Autres scripts](../scripts/README.md).

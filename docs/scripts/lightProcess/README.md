@@ -39,4 +39,4 @@ ordre d’exécution :
 `-m/--siril-mode` et le même fichier Config. `--config chemin.json` sélectionne un
 fichier différent de `~/.siril_darklib_config.json` ; `-S/--save-config` mémorise les
 paramètres. Les options explicites priment sur le JSON, qui prime sur les défauts.
-Voir [la configuration partagée](treatments/postprocess/README.md#configuration-siril-partagée-avec-lightprocess).
+Voir [la configuration partagée](../postProcess/README.md#configuration-et-mémorisation).

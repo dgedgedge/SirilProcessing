@@ -11,7 +11,7 @@ import logging
 sys.path.append('lib')
 
 from darkprocess import DarkLib
-from config import Config
+from lib.config import Config
 
 def create_demo():
     """Crée une démonstration de l'option --force-recalc"""

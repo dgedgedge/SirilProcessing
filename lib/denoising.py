@@ -16,7 +16,7 @@ from lib.deconvolution_quality import artifact_metrics
 def add_arguments(parser):
     parser.add_argument('--denoise-modulation', type=float, default=.5)
     parser.add_argument('--denoise-max-blur', type=float, default=.03,
-                        help='Augmentation relative maximale de FWHM (défaut 3 %)')
+                        help='Augmentation relative maximale de FWHM (défaut 3 %%)')
 
 
 def post_process(input_path, output_path, args=None):

@@ -12,23 +12,8 @@ from lib.config import Config
 from lib.darkprocess import DarkLib
 from lib.siril_utils import Siril
 
-DARK_LIBRARY_PATH = os.path.expanduser("~/darkLib")  # Par défaut : ~/darkLib
-WORK_DIR = os.path.expanduser("~/tmp/sirilWorkDir")  # Ajout du workdir par défaut
-
-# --- Siril Stacking Parameters (Default values, can be overridden by command line) ---
-SIRIL_STACK_METHOD = "average"  # "average" (avec rejet) ou "median"
-SIRIL_OUTPUT_NORM = "noscale"   # Changer la valeur par défaut à "noscale" pour "Aucune normalisation"
-SIRIL_CFA = False # By default, images are considered monochrome
-SIRIL_REJECTION_METHOD = "winsorizedsigma"
-SIRIL_REJECTION_PARAM1 = 3.0
-SIRIL_REJECTION_PARAM2 = 3.0
-# --- Global Variables ---
-MAX_AGE_DAYS = 182  # Période par défaut (6 mois)
-
-CONFIG_FILE = os.path.expanduser("~/.siril_darklib_config.json")
-
 def main() -> None:
-    config = Config()
+    config = Config.from_command_line()
 
     # Création du parser d'arguments
     parser = argparse.ArgumentParser(
@@ -36,209 +21,11 @@ def main() -> None:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
 
-    # Configuration des arguments
-    parser.add_argument(
-        '-i', '--input-dirs',
-        dest='input_dirs',
-        nargs='+',
-        default=config.get("input_dirs"),
-        help="Liste des répertoires contenant les fichiers dark à traiter"
-    )
-    parser.add_argument(
-        '-d', '--dark-library-path',
-        dest='dark_library_path',
-        type=str,
-        default=config.get("dark_library_path"),
-        help=f"Répertoire où sont stockés les master darks. (Défaut: '{config.get('dark_library_path')}')"
-    )
-    parser.add_argument(
-        '-w', '--work-dir',
-        dest='work_dir',
-        type=str,
-        default=config.get("work_dir"),
-        help=f"Répertoire de travail temporaire. (Défaut: '{config.get('work_dir')}')"
-    )
-    parser.add_argument(
-        '-s', '--siril-path',
-        dest='siril_path',
-        type=str,
-        default=config.get("siril_path"),
-        help=f"Chemin vers l'exécutable Siril. (Défaut: '{config.get('siril_path')}')"
-    )
-    parser.add_argument(
-        '-m', '--siril-mode',
-        dest='siril_mode',
-        choices=['native', 'flatpak', 'appimage'],
-        default=config.get("siril_mode"),
-        help=f"Mode d'exécution de Siril. (Défaut: '{config.get('siril_mode')}')"
-    )
-    parser.add_argument(
-        '-S', '--save-config',
-        dest='save_config',
-        action='store_true',
-        help="Sauvegarde la configuration actuelle pour une utilisation future"
-    )
-    parser.add_argument(
-        '-D', '--dummy',
-        dest='dummy',
-        action='store_true',
-        help="Mode test: analyse les fichiers mais n'exécute pas Siril"
-    )
+    config.register(DarkLib, parser)
+    config.register(Siril, parser)
+    config.add_arguments(parser)
 
-    parser.add_argument(
-        '-l', '--log-level',
-        dest='log_level',
-        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
-        default='WARNING',
-        help=f"Niveau de journalisation. (Défaut: 'WARNING')"
-    )
-    
-    parser.add_argument(
-        '-L', '--list-darks',
-        dest='list_darks',
-        action='store_true',
-        help="Liste tous les master darks disponibles dans la bibliothèque avec leurs caractéristiques"
-    )
-    parser.add_argument(
-        '--log-skipped',
-        dest='log_skipped',
-        action='store_true',
-        help="Log les fichiers ignorés (non-DARK ou FITS invalides)"
-    )
-    parser.add_argument(
-        '-a', '--max-age',
-        dest='max_age',
-        type=int,
-        default=config.get("max_age_days"),
-        help=f"Nombre maximum de jours d'écart entre le dark le plus récent et le plus ancien d'un groupe. (Défaut: {config.get('max_age_days')} jours)"
-    )
-    parser.add_argument(
-        '-c', '--cfa',
-        dest='cfa',
-        action='store_true',
-        default=config.get("cfa", False),
-        help="Indique que les images sont en couleur (CFA). Par défaut, les images sont considérées monochromes."
-    )
-    parser.add_argument(
-        '-o', '--output-norm',
-        dest='output_norm',
-        choices=['addscale', 'noscale', 'rejection'],
-        default=config.get("output_norm"),
-        help=f"Méthode de normalisation pour Siril. (Défaut: '{config.get('output_norm')}')"
-    )
-    parser.add_argument(
-        '-r', '--rejection-method',
-        dest='rejection_method',
-        choices=['winsorizedsigma', 'sigma', 'minmax', 'percentile', 'none'],
-        default=config.get("rejection_method"),
-        help=f"Méthode de rejet pour Siril. (Défaut: '{config.get('rejection_method')}')"
-    )
-    parser.add_argument(
-        '--rejection-param1',
-        dest='rejection_param1',
-        type=float,
-        default=config.get("rejection_param1"),
-        help=f"Premier paramètre de rejet pour Siril. (Défaut: {config.get('rejection_param1')})"
-    )
-    parser.add_argument(
-        '--rejection-param2',
-        dest='rejection_param2',
-        type=float,
-        default=config.get("rejection_param2"),
-        help=f"Second paramètre de rejet pour Siril. (Défaut: {config.get('rejection_param2')})"
-    )
-    parser.add_argument(
-        '--stack-method',
-        dest='stack_method',
-        choices=['average', 'median'],
-        default=config.get("stack_method"),
-        help=f"Méthode d'empilement: 'average' (Empilement par moyenne avec rejet) ou 'median' (Empilement médian). (Défaut: '{config.get('stack_method')}')"
-    )
-    parser.add_argument(
-        '-t', '--temperature-precision',
-        dest='temperature_precision',
-        type=float,
-        default=config.get("temperature_precision"),
-        help=f"Précision d'arrondi pour la température en degrés Celsius. (Défaut: {config.get('temperature_precision')}°C)"
-    )
-    parser.add_argument(
-        '-n', '--min-darks-threshold',
-        dest='min_darks_threshold',
-        type=int,
-        default=config.get("min_darks_threshold", 10),
-        help=f"Seuil minimum de darks pour mettre à jour un master dark existant. Un master dark sera remplacé si le nombre de darks disponibles dépasse ce seuil OU s'il dépasse le nombre de darks utilisés dans le master dark précédent. (Défaut: {config.get('min_darks_threshold', 0)})"
-    )
-    parser.add_argument(
-        '-f', '--force-recalc',
-        dest='force_recalc',
-        action='store_true',
-        help="Force le recalcul de tous les master darks existants, même s'ils sont plus récents que les fichiers sources. Utile pour tester de nouveaux paramètres de regroupement."
-    )
-    parser.add_argument(
-        '-v', '--validate-darks',
-        dest='validate_darks',
-        action='store_true',
-        default=config.get("validate_darks", False),
-        help="Valide les fichiers darks en analysant leurs statistiques pour détecter ceux pris avec le capot ouvert (présence de lumière parasite)."
-    )
-    parser.add_argument(
-        '--no-validate-darks',
-        dest='validate_darks',
-        action='store_false',
-        help="Désactive la validation des fichiers darks."
-    )
-    parser.add_argument(
-        '-R', '--report',
-        dest='report',
-        action='store_true',
-        default=config.get("report", False),
-        help="Génère un rapport détaillé du traitement et de la validation effectués."
-    )
-    parser.add_argument(
-        '--no-report',
-        dest='report',
-        action='store_false',
-        help="Désactive la génération du rapport détaillé."
-    )
-    parser.add_argument(
-        '--min-median-for-tests',
-        dest='min_median_for_tests',
-        type=float,
-        default=10.0,
-        help="Seuil minimal de médiane (en ADU) au-dessus duquel les tests de robustesse (MAD/median et dispersion centrale) sont effectués lors de la validation des darks. (Défaut: 10.0 ADU)"
-    )
-    parser.add_argument(
-        '--max-median-adu',
-        dest='max_median_adu',
-        type=float,
-        default=200.0,
-        help="TEST 1: Médiane maximale acceptable (en ADU) pour un dark valide. Au-delà de ce seuil, le dark est rejeté car il contient probablement de la lumière parasite (capot mal fermé, pollution lumineuse). (Défaut: 200.0 ADU)"
-    )
-    parser.add_argument(
-        '--max-hot-pixels-percent',
-        dest='max_hot_pixels_percent',
-        type=float,
-        default=1.0,
-        help="TEST 2: Pourcentage maximal acceptable de pixels chauds (définis comme mean + 3×std). Au-delà de ce seuil, le dark est rejeté car il contient probablement des étoiles ou de la lumière. (Défaut: 1.0%%)"
-    )
-    parser.add_argument(
-        '--max-mad-factor',
-        dest='max_mad_factor',
-        type=float,
-        default=0.15,
-        help="TEST 3: Facteur maximal acceptable pour le ratio MAD/médiane (bruit relatif robuste). Ce test n'est effectué que si médiane > min_median_for_tests. Un ratio élevé indique une illumination non uniforme ou un gradient. (Défaut: 0.15)"
-    )
-    parser.add_argument(
-        '--max-central-dispersion',
-        dest='max_central_dispersion',
-        type=float,
-        default=0.4,
-        help="TEST 4: Dispersion centrale maximale acceptable, calculée comme (p90-p10)/médiane. Ce test n'est effectué que si médiane > min_median_for_tests. Une dispersion élevée indique une illumination variable. (Défaut: 0.4)"
-    )
-
-
-    # Code d'analyse des arguments inchangé...
-    args = parser.parse_args()
+    args = config.parse_args(parser)
 
     # Configuration de la journalisation
     logging.basicConfig(level=args.log_level, format='%(asctime)s [%(levelname)s] %(name)s: %(message)s', force=True)
@@ -248,8 +35,8 @@ def main() -> None:
     
     # Sauvegarde de la configuration si demandé
     if args.save_config:
-        config.set_from_args(args)
-        config.save()
+        if not config.save_requested(args):
+            return 1
 
     # Configuration globale de Siril
     siril_path = config.get("siril_path")
@@ -272,7 +59,7 @@ def main() -> None:
 
     logging.info("Starting Siril dark library creation script.")
 
-    os.makedirs(DARK_LIBRARY_PATH, exist_ok=True)
+    os.makedirs(dark_library_path, exist_ok=True)
     
     # Créer l'instance DarkLib
     darklib = DarkLib(config, force_recalc=args.force_recalc)

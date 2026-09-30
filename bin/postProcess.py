@@ -30,7 +30,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from lib.postprocess import _PostProcessorSequence
 from lib.config import Config
-from lib.siril_utils import add_siril_arguments
+from lib.siril_utils import Siril
 from lib.logging_utils import setup_logging, add_session_file_logging, remove_session_file_logging
 
 
@@ -46,16 +46,16 @@ def main():
                        help="Chemin vers le fichier de sortie JSON (défaut: <input_file>_postProcess.json)")
     parser.add_argument('-l', '--log-level', dest='log_level', choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'], default='INFO')
     
-    add_siril_arguments(parser, config, photometry_aliases=True)
+    config.register(Siril, parser, photometry_aliases=True)
     config.add_arguments(parser)
 
     # Créer le processeur séquentiel
     seq_processor = _PostProcessorSequence()
     
     # Ajouter les arguments spécifiques
-    seq_processor.add_arguments(parser)
+    config.register(seq_processor, parser)
     
-    args = parser.parse_args()
+    args = config.parse_args(parser)
     setup_logging(args.log_level)
 
     input_file = Path(args.input_file)
@@ -80,8 +80,7 @@ def main():
         logging.info("Configuration: %s", config.config_file)
         logging.info("Siril: mode=%s, path=%s", args.siril_mode, args.siril_path)
         if args.save_config:
-            config.set_from_args(args)
-            if not config.save():
+            if not config.save_requested(args):
                 return 1
         logging.info("Analyse de: %s", input_file)
         logging.info("Sortie vers: %s", output_path)
