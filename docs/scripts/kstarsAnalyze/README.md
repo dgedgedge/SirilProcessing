@@ -185,3 +185,6 @@ comptent, pas un mot inclus dans le nom du fichier. Chaque type possède son
 alternance indépendante et figure dans la légende. Sans type reconnu ou sans
 fichier de fin, la palette cyan/orange est conservée ; les abandons et
 interruptions restent rouges.
+
+Pour les journaux de guidage `.txt` au format PHD2, utiliser le
+[visualiseur de guide logs](../guideLogAnalyze/README.md).

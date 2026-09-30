@@ -10,6 +10,7 @@
 | `darkLibUpdate.py`, `darkLibUpdate.sh` | [Bibliothèque de darks](darkLibUpdate/README.md) |
 | `solarEclipseGif.py`, `solarEclipseGif.sh` | [Éclipse solaire](solarEclipseGif/README.md) |
 | `kstarsAnalyze.py`, `kstarsAnalyze.sh` | [Visualiseur des analyses KStars / Ekos](kstarsAnalyze/README.md) |
+| `guideLogAnalyze.py`, `guideLogAnalyze.sh` | [Analyse des guide logs KStars / Ekos](guideLogAnalyze/README.md) |
 | `pyecho.py` | [Messages](pyecho/README.md) |
 | `pydir.py` | [Liste de répertoire](pydir/README.md) |
 | `trouve_doublons.py` | [Doublons](trouve_doublons/README.md) |

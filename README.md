@@ -16,3 +16,5 @@ est plafonnée au nombre de processeurs du PC.
 - [Architecture des bibliothèques](docs/architecture/README.md)
 
 - [Visualiseur graphique des analyses KStars / Ekos](docs/scripts/kstarsAnalyze/README.md)
+
+- [Visualiseur des guide logs KStars / Ekos](docs/scripts/guideLogAnalyze/README.md)
