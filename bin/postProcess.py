@@ -20,41 +20,61 @@ Exemples:
     python postProcess.py /path/to/image.fit /tmp/output/result.json
 """
 
-import os
-import sys
+from __future__ import annotations
+
 import argparse
 import logging
+import os
+import sys
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from lib.postprocess import _PostProcessorSequence
 from lib.config import Config
+from lib.logging_utils import (
+    add_session_file_logging,
+    remove_session_file_logging,
+    setup_logging,
+)
+from lib.postprocess import _PostProcessorSequence
 from lib.siril_utils import Siril
-from lib.logging_utils import setup_logging, add_session_file_logging, remove_session_file_logging
 
 
-def main():
+def main() -> None:
+    """Exécute les étapes actives sur un FITS et écrit rapports et journal de session."""
     config = Config.from_command_line()
     parser = argparse.ArgumentParser(
         description="Séquence de post-traitements sur une image FITS calibrée",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    
-    parser.add_argument("input_file", type=str, help="Chemin vers l'image FITS calibrée")
-    parser.add_argument("output_file", type=str, nargs='?', default=None,
-                       help="Chemin vers le fichier de sortie JSON (défaut: <input_file>_postProcess.json)")
-    parser.add_argument('-l', '--log-level', dest='log_level', choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'], default='INFO')
-    
+
+    parser.add_argument(
+        "input_file", type=str, help="Chemin vers l'image FITS calibrée"
+    )
+    parser.add_argument(
+        "output_file",
+        type=str,
+        nargs="?",
+        default=None,
+        help="Chemin vers le fichier de sortie JSON (défaut: <input_file>_postProcess.json)",
+    )
+    parser.add_argument(
+        "-l",
+        "--log-level",
+        dest="log_level",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        default="INFO",
+    )
+
     config.register(Siril, parser, photometry_aliases=True)
     config.add_arguments(parser)
 
     # Créer le processeur séquentiel
     seq_processor = _PostProcessorSequence()
-    
+
     # Ajouter les arguments spécifiques
     config.register(seq_processor, parser)
-    
+
     args = config.parse_args(parser)
     setup_logging(args.log_level)
 
@@ -65,8 +85,12 @@ def main():
     else:
         # Par défaut: <input_file>_postProcess.json dans le même répertoire
         output_path = input_file.parent / f"{input_file.stem}_postProcess.json"
-    
-    log_file = output_path.parent / f"{output_path.stem}_steps" / f"00_{input_file.stem}_postProcess.log"
+
+    log_file = (
+        output_path.parent
+        / f"{output_path.stem}_steps"
+        / f"00_{input_file.stem}_postProcess.log"
+    )
     log_handler = None
     try:
         if log_file.resolve() == input_file.resolve():
@@ -90,18 +114,18 @@ def main():
             input_path=input_file,
             output_path=output_path,
         )
-        
-        logging.info(f"\n{'='*60}")
-        logging.info(f"RÉSULTATS")
-        logging.info(f"{'='*60}")
-        
+
+        logging.info(f"\n{'=' * 60}")
+        logging.info("RÉSULTATS")
+        logging.info(f"{'=' * 60}")
+
         for processor_name in results:
             logging.info("Traitement terminé: %s", processor_name)
 
         logging.info(f"\nRapport sauvegardé: {output_path}")
         logging.info("Post-traitements terminés")
         return 0
-        
+
     except KeyboardInterrupt:
         logging.warning("Traitement interrompu par l'utilisateur")
         return 130

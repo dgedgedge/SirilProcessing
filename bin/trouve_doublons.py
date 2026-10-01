@@ -12,17 +12,19 @@ Important sur les statistiques basename (--check-basename):
         basename identique.
 """
 
+from __future__ import annotations
+
 import argparse
 import hashlib
 import shlex
 import sys
+from collections.abc import Iterator
 from pathlib import Path
-
 
 BLOCK_SIZE = 4 * 1024 * 1024  # 4 MiB
 
 
-def human_size(size):
+def human_size(size: int) -> str:
     """Affichage lisible d'une taille en octets."""
     units = ["o", "Kio", "Mio", "Gio", "Tio", "Pio"]
     value = float(size)
@@ -33,7 +35,7 @@ def human_size(size):
         value /= 1024
 
 
-def absolute_path(path):
+def absolute_path(path: Path) -> Path:
     """
     Retourne le chemin absolu canonique.
 
@@ -46,7 +48,7 @@ def absolute_path(path):
     return path.resolve()
 
 
-def same_absolute_path(path1, path2):
+def same_absolute_path(path1: Path, path2: Path) -> bool:
     """
     Vérifie si deux chemins correspondent au même chemin absolu.
     """
@@ -56,7 +58,7 @@ def same_absolute_path(path1, path2):
         return False
 
 
-def sha256(path):
+def sha256(path: Path) -> bytes | None:
     """Calcule le SHA-256 d'un fichier."""
     h = hashlib.sha256()
 
@@ -71,16 +73,15 @@ def sha256(path):
                 h.update(block)
 
     except OSError as e:
-        print(
-            f"ERREUR lecture : {path} : {e}",
-            file=sys.stderr
-        )
+        print(f"ERREUR lecture : {path} : {e}", file=sys.stderr)
         return None
 
     return h.digest()
 
 
-def iter_files(directory, excluded_paths=None):
+def iter_files(
+    directory: Path, excluded_paths: set[Path] | None = None
+) -> Iterator[Path]:
     """
     Parcourt récursivement un répertoire.
 
@@ -106,14 +107,11 @@ def iter_files(directory, excluded_paths=None):
             yield path
 
         except OSError as e:
-            print(
-                f"ERREUR accès : {path} : {e}",
-                file=sys.stderr
-            )
+            print(f"ERREUR accès : {path} : {e}", file=sys.stderr)
 
 
-def main():
-
+def main() -> None:
+    """Recherche les doublons SHA-256 et génère un script shell sans supprimer les sources."""
     parser = argparse.ArgumentParser(
         description=(
             "Recherche dans le répertoire B les fichiers dont le contenu "
@@ -191,19 +189,15 @@ Protections :
   - Les liens symboliques sont ignorés.
   - Le script shell généré est exclu de l'analyse.
 """,
-        formatter_class=argparse.RawDescriptionHelpFormatter
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
 
     parser.add_argument(
-        "A",
-        type=Path,
-        help="Répertoire de référence. Il n'est jamais modifié."
+        "A", type=Path, help="Répertoire de référence. Il n'est jamais modifié."
     )
 
     parser.add_argument(
-        "B",
-        type=Path,
-        help="Répertoire dans lequel rechercher les doublons."
+        "B", type=Path, help="Répertoire dans lequel rechercher les doublons."
     )
 
     parser.add_argument(
@@ -211,10 +205,7 @@ Protections :
         "--output",
         type=Path,
         default=Path("supprime_doublons.sh"),
-        help=(
-            "Nom du script shell généré "
-            "(défaut : supprime_doublons.sh)"
-        )
+        help=("Nom du script shell généré (défaut : supprime_doublons.sh)"),
     )
 
     parser.add_argument(
@@ -223,7 +214,7 @@ Protections :
         help=(
             "Exige que le basename du fichier de A soit identique "
             "à celui du fichier de B après validation du contenu."
-        )
+        ),
     )
 
     args = parser.parse_args()
@@ -238,10 +229,7 @@ Protections :
         output = args.output.resolve()
 
     except OSError as e:
-        print(
-            f"ERREUR lors de la résolution des chemins : {e}",
-            file=sys.stderr
-        )
+        print(f"ERREUR lors de la résolution des chemins : {e}", file=sys.stderr)
         return 1
 
     # ------------------------------------------------------------
@@ -280,10 +268,7 @@ Protections :
     print(f"A (référence)       : {A}")
     print(f"B                   : {B}")
     print(f"Script généré       : {output}")
-    print(
-        f"Contrôle du basename : "
-        f"{'ACTIVÉ' if args.check_basename else 'désactivé'}"
-    )
+    print(f"Contrôle du basename : {'ACTIVÉ' if args.check_basename else 'désactivé'}")
     print()
 
     # ------------------------------------------------------------
@@ -304,16 +289,12 @@ Protections :
     errors = 0
 
     for path in iter_files(A, excluded_paths):
-
         try:
             resolved_path = path.resolve()
             size = path.stat().st_size
 
         except OSError as e:
-            print(
-                f"ERREUR stat : {path} : {e}",
-                file=sys.stderr
-            )
+            print(f"ERREUR stat : {path} : {e}", file=sys.stderr)
             errors += 1
             continue
 
@@ -348,47 +329,27 @@ Protections :
     # ------------------------------------------------------------
 
     try:
-        output.parent.mkdir(
-            parents=True,
-            exist_ok=True
-        )
+        output.parent.mkdir(parents=True, exist_ok=True)
 
-        script = output.open(
-            "w",
-            encoding="utf-8"
-        )
+        script = output.open("w", encoding="utf-8")
 
     except OSError as e:
-        print(
-            f"ERREUR : impossible de créer {output} : {e}",
-            file=sys.stderr
-        )
+        print(f"ERREUR : impossible de créer {output} : {e}", file=sys.stderr)
         return 1
 
     with script:
-
         script.write("#!/bin/bash\n")
         script.write("\n")
         script.write("set -u\n")
         script.write("\n")
 
-        script.write(
-            "# ============================================================\n"
-        )
-        script.write(
-            "# Script de suppression de fichiers dupliqués\n"
-        )
-        script.write(
-            "# ============================================================\n"
-        )
+        script.write("# ============================================================\n")
+        script.write("# Script de suppression de fichiers dupliqués\n")
+        script.write("# ============================================================\n")
         script.write("#\n")
-        script.write(
-            "# Ce fichier a été généré automatiquement.\n"
-        )
+        script.write("# Ce fichier a été généré automatiquement.\n")
         script.write("#\n")
-        script.write(
-            "# IMPORTANT : vérifier son contenu avant de l'exécuter.\n"
-        )
+        script.write("# IMPORTANT : vérifier son contenu avant de l'exécuter.\n")
         script.write("#\n")
         script.write("# Répertoire de référence A :\n")
         script.write(f"#   {A}\n")
@@ -400,18 +361,12 @@ Protections :
         script.write("#\n")
 
         if args.check_basename:
-            script.write(
-                "# Contrôle du basename : ACTIVÉ\n"
-            )
+            script.write("# Contrôle du basename : ACTIVÉ\n")
         else:
-            script.write(
-                "# Contrôle du basename : désactivé\n"
-            )
+            script.write("# Contrôle du basename : désactivé\n")
 
         script.write("#\n")
-        script.write(
-            "# Le programme générateur n'a supprimé aucun fichier.\n"
-        )
+        script.write("# Le programme générateur n'a supprimé aucun fichier.\n")
         script.write(
             "# Les commandes ci-dessous ne concernent que des fichiers de B.\n"
         )
@@ -425,7 +380,6 @@ Protections :
         print()
 
         for fb in iter_files(B, excluded_paths):
-
             nb_b += 1
 
             try:
@@ -433,10 +387,7 @@ Protections :
                 size_b = fb.stat().st_size
 
             except OSError as e:
-                print(
-                    f"ERREUR stat : {fb} : {e}",
-                    file=sys.stderr
-                )
+                print(f"ERREUR stat : {fb} : {e}", file=sys.stderr)
                 errors += 1
                 continue
 
@@ -456,7 +407,6 @@ Protections :
             candidates_different_path = []
 
             for fa_abs in candidates:
-
                 if fa_abs == fb_abs:
                     skipped_same_path += 1
                     continue
@@ -486,7 +436,6 @@ Protections :
             # ----------------------------------------------------
 
             for fa_abs in candidates_different_path:
-
                 # Protection répétée juste avant comparaison.
                 if same_absolute_path(fa_abs, fb_abs):
                     skipped_same_path += 1
@@ -504,7 +453,6 @@ Protections :
                     continue
 
                 if hash_a == hash_b:
-
                     # Le contrôle basename intervient après validation
                     # taille + SHA, comme demandé.
                     if args.check_basename and fa_abs.name != fb_abs.name:
@@ -536,24 +484,13 @@ Protections :
             # Commande shell
             # ----------------------------------------------------
 
-            script.write(
-                f"# {human_size(size_b)}\n"
-            )
+            script.write(f"# {human_size(size_b)}\n")
 
-            script.write(
-                "# Copie conservée : "
-                f"{shlex.quote(str(match))}\n"
-            )
+            script.write(f"# Copie conservée : {shlex.quote(str(match))}\n")
 
-            script.write(
-                "# Copie supprimée : "
-                f"{shlex.quote(str(fb_abs))}\n"
-            )
+            script.write(f"# Copie supprimée : {shlex.quote(str(fb_abs))}\n")
 
-            script.write(
-                "rm -- "
-                f"{shlex.quote(str(fb_abs))}\n"
-            )
+            script.write(f"rm -- {shlex.quote(str(fb_abs))}\n")
 
             script.write("\n")
 
@@ -561,26 +498,15 @@ Protections :
         # Résumé inscrit dans le script
         # --------------------------------------------------------
 
-        script.write(
-            "# ============================================================\n"
-        )
+        script.write("# ============================================================\n")
         script.write("# Résumé\n")
-        script.write(
-            "# ============================================================\n"
-        )
+        script.write("# ============================================================\n")
 
-        script.write(
-            f"# Doublons : {duplicates}\n"
-        )
+        script.write(f"# Doublons : {duplicates}\n")
 
-        script.write(
-            f"# Espace récupérable : {human_size(duplicate_size)}\n"
-        )
+        script.write(f"# Espace récupérable : {human_size(duplicate_size)}\n")
 
-        script.write(
-            f"# Comparaisons même chemin ignorées : "
-            f"{skipped_same_path}\n"
-        )
+        script.write(f"# Comparaisons même chemin ignorées : {skipped_same_path}\n")
 
         if args.check_basename:
             script.write(
@@ -603,7 +529,7 @@ Protections :
     except OSError as e:
         print(
             f"ATTENTION : impossible de rendre le script exécutable : {e}",
-            file=sys.stderr
+            file=sys.stderr,
         )
 
     # ------------------------------------------------------------
@@ -620,21 +546,14 @@ Protections :
     print(f"Doublons trouvés                     : {duplicates}")
     print(f"Espace récupérable                   : {human_size(duplicate_size)}")
 
-    print(
-        f"Comparaisons même chemin ignorées    : "
-        f"{skipped_same_path}"
-    )
+    print(f"Comparaisons même chemin ignorées    : {skipped_same_path}")
 
     if args.check_basename:
         print(
-            f"Matchs taille+SHA rejetés par basename : "
-            f"{basename_rejected_sha_matches}"
+            f"Matchs taille+SHA rejetés par basename : {basename_rejected_sha_matches}"
         )
 
-        print(
-            f"Fichiers B bloqués par basename      : "
-            f"{basename_blocked_files}"
-        )
+        print(f"Fichiers B bloqués par basename      : {basename_blocked_files}")
 
     if errors:
         print(f"Erreurs rencontrées                   : {errors}")

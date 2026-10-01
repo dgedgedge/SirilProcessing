@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Generate a browsable HTML documentation tree from repository Markdown files."""
 
+from __future__ import annotations
+
 import argparse
 import html
 import os
@@ -39,6 +41,7 @@ MARKDOWN_EXTENSIONS = {".md", ".markdown"}
 
 
 def parse_args() -> argparse.Namespace:
+    """Lit les chemins et options de génération HTML/PDF en ligne de commande."""
     parser = argparse.ArgumentParser(
         description="Generate static HTML documentation from Markdown files.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
@@ -72,6 +75,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def slugify(text: str, sep: str = "-") -> str:
+    """Produit un identifiant d’ancre normalisé à partir d’un titre Markdown."""
     text = re.sub(r"<[^>]+>", "", text)
     text = re.sub(r"`([^`]+)`", r"\1", text)
     text = re.sub(r"[^A-Za-z0-9_-]+", sep, text.strip().lower())
@@ -80,10 +84,12 @@ def slugify(text: str, sep: str = "-") -> str:
 
 
 def markdown_path_to_html(path: Path) -> Path:
+    """Remplace l’extension Markdown par .html en conservant le chemin relatif."""
     return path.with_suffix(".html")
 
 
 def escape_text(text: str) -> str:
+    """Échappe les caractères HTML pour afficher du texte brut."""
     return html.escape(text, quote=False)
 
 
@@ -92,14 +98,18 @@ def render_inline(text: str, current_rel: Path) -> str:
     placeholders: list[str] = []
 
     def stash(value: str) -> str:
+        """Protège un fragment HTML pendant le traitement des marqueurs Markdown."""
         placeholders.append(value)
         return f"\x00{len(placeholders) - 1}\x00"
 
     def render_link(match: re.Match[str]) -> str:
+        """Réécrit un lien Markdown en conservant sa destination et son libellé échappé."""
         label = render_inline(match.group(1), current_rel)
         target = match.group(2).strip()
         href = target
-        if not re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*:", target) and not target.startswith("#"):
+        if not re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*:", target) and not target.startswith(
+            "#"
+        ):
             if target.endswith(tuple(MARKDOWN_EXTENSIONS)):
                 href = str(markdown_path_to_html(Path(target)))
             elif ".md#" in target:
@@ -109,7 +119,11 @@ def render_inline(text: str, current_rel: Path) -> str:
 
     text = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", render_link, text)
     escaped = html.escape(text)
-    escaped = re.sub(r"`([^`]+)`", lambda m: stash(f"<code>{html.escape(m.group(1))}</code>"), escaped)
+    escaped = re.sub(
+        r"`([^`]+)`",
+        lambda m: stash(f"<code>{html.escape(m.group(1))}</code>"),
+        escaped,
+    )
     escaped = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", escaped)
     escaped = re.sub(r"\*([^*]+)\*", r"<em>\1</em>", escaped)
 
@@ -118,7 +132,10 @@ def render_inline(text: str, current_rel: Path) -> str:
     return escaped
 
 
-def render_markdown(markdown: str, current_rel: Path) -> tuple[str, list[tuple[int, str, str]]]:
+def render_markdown(
+    markdown: str, current_rel: Path
+) -> tuple[str, list[tuple[int, str, str]]]:
+    """Convertit le sous-ensemble Markdown de secours et retourne HTML et sommaire."""
     lines = markdown.splitlines()
     out: list[str] = []
     toc: list[tuple[int, str, str]] = []
@@ -129,6 +146,7 @@ def render_markdown(markdown: str, current_rel: Path) -> tuple[str, list[tuple[i
     table_buffer: list[str] = []
 
     def flush_paragraph() -> None:
+        """Émet le paragraphe accumulé puis vide son tampon."""
         nonlocal paragraph
         if paragraph:
             text = " ".join(line.strip() for line in paragraph)
@@ -136,16 +154,18 @@ def render_markdown(markdown: str, current_rel: Path) -> tuple[str, list[tuple[i
             paragraph = []
 
     def close_list() -> None:
+        """Ferme la liste HTML courante avant de changer de bloc."""
         nonlocal list_open
         if list_open:
             out.append("</ul>")
             list_open = False
 
     def flush_table() -> None:
+        """Émet la table accumulée et réinitialise les lignes en attente."""
         nonlocal table_buffer
         if not table_buffer:
             return
-        out.append("<pre class=\"markdown-table\"><code>")
+        out.append('<pre class="markdown-table"><code>')
         out.append(html.escape("\n".join(table_buffer)))
         out.append("</code></pre>")
         table_buffer = []
@@ -200,7 +220,9 @@ def render_markdown(markdown: str, current_rel: Path) -> tuple[str, list[tuple[i
             text = heading.group(2).strip()
             anchor = slugify(text)
             toc.append((level, text, anchor))
-            out.append(f'<h{level} id="{anchor}">{render_inline(text, current_rel)}</h{level}>')
+            out.append(
+                f'<h{level} id="{anchor}">{render_inline(text, current_rel)}</h{level}>'
+            )
             continue
 
         item = re.match(r"^\s*[-*]\s+(.+)$", line)
@@ -223,6 +245,7 @@ def render_markdown(markdown: str, current_rel: Path) -> tuple[str, list[tuple[i
 
 
 def extract_toc(markdown: str) -> list[tuple[int, str, str]]:
+    """Extrait les niveaux, ancres et libellés des titres hors blocs de code."""
     toc: list[tuple[int, str, str]] = []
     seen: dict[str, int] = {}
     for line in markdown.splitlines():
@@ -243,7 +266,9 @@ def extract_toc(markdown: str) -> list[tuple[int, str, str]]:
 
 def rewrite_markdown_links(rendered: str) -> str:
     """Rewrite links to Markdown files so they target generated HTML files."""
+
     def repl(match: re.Match[str]) -> str:
+        """Remplace l’extension d’un lien documentaire local sans modifier son ancre."""
         quote = match.group(1)
         href = html.unescape(match.group(2))
         if re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*:", href) or href.startswith("#"):
@@ -253,7 +278,7 @@ def rewrite_markdown_links(rendered: str) -> str:
             href = f"{markdown_path_to_html(Path(md_path))}#{slugify(anchor)}"
         elif href.endswith(tuple(MARKDOWN_EXTENSIONS)):
             href = str(markdown_path_to_html(Path(href)))
-        return f'href={quote}{html.escape(href, quote=True)}{quote}'
+        return f"href={quote}{html.escape(href, quote=True)}{quote}"
 
     return re.sub(r"href=(['\"])([^'\"]+)\1", repl, rendered)
 
@@ -264,7 +289,9 @@ def convert_mermaid_blocks(rendered: str) -> str:
         r'<pre><code class="(?:language-)?mermaid">(?P<body>.*?)</code></pre>',
         re.DOTALL,
     )
-    return pattern.sub(lambda m: f'<pre class="mermaid">{m.group("body")}</pre>', rendered)
+    return pattern.sub(
+        lambda m: f'<pre class="mermaid">{m.group("body")}</pre>', rendered
+    )
 
 
 def preprocess_mermaid_blocks(markdown: str) -> str:
@@ -276,7 +303,9 @@ def preprocess_mermaid_blocks(markdown: str) -> str:
     )
 
 
-def render_markdown_document(markdown: str, current_rel: Path) -> tuple[str, list[tuple[int, str, str]]]:
+def render_markdown_document(
+    markdown: str, current_rel: Path
+) -> tuple[str, list[tuple[int, str, str]]]:
     """Render Markdown using Python-Markdown when available, fallback otherwise."""
     if markdown_lib is None:
         return render_markdown(markdown, current_rel)
@@ -302,7 +331,10 @@ def render_markdown_document(markdown: str, current_rel: Path) -> tuple[str, lis
     return rendered, toc
 
 
-def html_page(title: str, body: str, toc: list[tuple[int, str, str]], rel_to_root: str) -> str:
+def html_page(
+    title: str, body: str, toc: list[tuple[int, str, str]], rel_to_root: str
+) -> str:
+    """Assemble une page HTML complète avec navigation, contenu et sommaire."""
     toc_html = ""
     if toc:
         links = [
@@ -310,7 +342,7 @@ def html_page(title: str, body: str, toc: list[tuple[int, str, str]], rel_to_roo
             for level, text, anchor in toc
             if level <= 3
         ]
-        toc_html = f"<nav class=\"toc\"><h2>Sommaire</h2><ul>{''.join(links)}</ul></nav>"
+        toc_html = f'<nav class="toc"><h2>Sommaire</h2><ul>{"".join(links)}</ul></nav>'
 
     return f"""<!doctype html>
 <html lang="fr">
@@ -341,9 +373,14 @@ def html_page(title: str, body: str, toc: list[tuple[int, str, str]], rel_to_roo
 
 
 def write_assets(output_dir: Path) -> None:
+    """Crée les ressources CSS et JavaScript partagées dans le dossier de sortie."""
     assets_dir = output_dir / "assets"
     assets_dir.mkdir(parents=True, exist_ok=True)
-    pygments_css = HtmlFormatter(style="friendly").get_style_defs(".codehilite") if HtmlFormatter else ""
+    pygments_css = (
+        HtmlFormatter(style="friendly").get_style_defs(".codehilite")
+        if HtmlFormatter
+        else ""
+    )
     (assets_dir / "style.css").write_text(
         f""":root {{
   --bg: #eef3f8;
@@ -503,6 +540,7 @@ small {{ color: var(--muted); }}
 
 
 def discover_markdown_files(source_root: Path, output_dir: Path) -> list[Path]:
+    """Liste les documents sources en excluant les sorties générées et dossiers techniques."""
     ignored_parts = {
         ".git",
         ".pytest_cache",
@@ -525,6 +563,7 @@ def discover_markdown_files(source_root: Path, output_dir: Path) -> list[Path]:
 
 
 def title_from_markdown(markdown: str, rel: Path) -> str:
+    """Prend le premier titre Markdown ou utilise le nom du document en repli."""
     for line in markdown.splitlines():
         match = re.match(r"^#\s+(.+?)\s*$", line)
         if match:
@@ -533,6 +572,7 @@ def title_from_markdown(markdown: str, rel: Path) -> str:
 
 
 def build_index(title: str, docs: list[tuple[Path, str]]) -> str:
+    """Génère un index HTML hiérarchique des documents et de leurs titres."""
     tree = {"pages": [], "children": {}}
     for rel, doc_title in docs:
         node = tree
@@ -541,20 +581,28 @@ def build_index(title: str, docs: list[tuple[Path, str]]) -> str:
         node["pages"].append((rel, doc_title))
 
     def page_link(rel: Path, doc_title: str) -> str:
+        """Produit un lien vers la version HTML du document avec son titre échappé."""
         href = html.escape(str(markdown_path_to_html(rel)), quote=True)
         return f'<a href="{href}">{html.escape(doc_title)}</a>'
 
     def render_tree(node: dict, omit_readme: bool = False) -> str:
+        """Rend récursivement les dossiers et documents de l’arbre de navigation."""
         items = []
-        for rel, doc_title in sorted(node["pages"], key=lambda page: (page[0].stem != "README", str(page[0]))):
+        for rel, doc_title in sorted(
+            node["pages"], key=lambda page: (page[0].stem != "README", str(page[0]))
+        ):
             if omit_readme and rel.stem == "README":
                 continue
-            items.append(f'<li>{page_link(rel, doc_title)}</li>')
+            items.append(f"<li>{page_link(rel, doc_title)}</li>")
         for name, child in sorted(node["children"].items()):
-            entry = next((page for page in child["pages"] if page[0].stem == "README"), None)
+            entry = next(
+                (page for page in child["pages"] if page[0].stem == "README"), None
+            )
             label = page_link(*entry) if entry else html.escape(name)
-            items.append(f'<li><details open><summary>{label}</summary>'
-                         f'{render_tree(child, omit_readme=True)}</details></li>')
+            items.append(
+                f"<li><details open><summary>{label}</summary>"
+                f"{render_tree(child, omit_readme=True)}</details></li>"
+            )
         return f'<ul class="doc-tree">{"".join(items)}</ul>'
 
     body = f"<h1>{html.escape(title)}</h1>\n{render_tree(tree)}"
@@ -562,16 +610,18 @@ def build_index(title: str, docs: list[tuple[Path, str]]) -> str:
 
 
 def build_single_page(title: str, docs: list[tuple[Path, str, str]]) -> str:
+    """Assemble les documents rendus dans une page unique destinée aussi au PDF."""
     sections = [f"<h1>{html.escape(title)}</h1>"]
     for rel, doc_title, body in docs:
         sections.append(
             f'<section class="pdf-section"><h1>{html.escape(doc_title)}</h1>'
-            f'<p><small>Source: {html.escape(str(rel))}</small></p>{body}</section>'
+            f"<p><small>Source: {html.escape(str(rel))}</small></p>{body}</section>"
         )
     return html_page(title, "\n".join(sections), [], "")
 
 
 def maybe_write_pdf(output_dir: Path, html_path: Path, pdf_name: str) -> Path | None:
+    """Écrit le PDF avec WeasyPrint si disponible ; retourne None en cas d’échec."""
     cache_dir = output_dir / ".cache"
     cache_dir.mkdir(parents=True, exist_ok=True)
     os.environ.setdefault("XDG_CACHE_HOME", str(cache_dir))
@@ -579,7 +629,9 @@ def maybe_write_pdf(output_dir: Path, html_path: Path, pdf_name: str) -> Path | 
     try:
         from weasyprint import HTML
     except Exception:
-        print("PDF skipped: WeasyPrint is not installed. Install it with: pip install WeasyPrint")
+        print(
+            "PDF skipped: WeasyPrint is not installed. Install it with: pip install WeasyPrint"
+        )
         return None
 
     pdf_path = output_dir / pdf_name
@@ -588,6 +640,7 @@ def maybe_write_pdf(output_dir: Path, html_path: Path, pdf_name: str) -> Path | 
 
 
 def main() -> int:
+    """Génère le site documentaire et, si demandé, la version PDF."""
     args = parse_args()
     source_root = Path(args.source_root).resolve()
     output_dir = Path(args.output_dir).resolve()
@@ -616,7 +669,9 @@ def main() -> int:
         output_path = output_dir / output_rel
         output_path.parent.mkdir(parents=True, exist_ok=True)
         rel_to_root = "../" * (len(output_rel.parts) - 1)
-        output_path.write_text(html_page(doc_title, body, toc, rel_to_root), encoding="utf-8")
+        output_path.write_text(
+            html_page(doc_title, body, toc, rel_to_root), encoding="utf-8"
+        )
         generated_docs.append((output_rel, doc_title))
         single_page_docs.append((rel, doc_title, body))
 
@@ -626,9 +681,13 @@ def main() -> int:
     if project_home.exists():
         shutil.copyfile(project_home, output_dir / "index.html")
     else:
-        (output_dir / "index.html").write_text(build_index(args.title, generated_docs), encoding="utf-8")
+        (output_dir / "index.html").write_text(
+            build_index(args.title, generated_docs), encoding="utf-8"
+        )
     single_page_path = output_dir / "all_docs.html"
-    single_page_path.write_text(build_single_page(args.title, single_page_docs), encoding="utf-8")
+    single_page_path.write_text(
+        build_single_page(args.title, single_page_docs), encoding="utf-8"
+    )
     print(f"Generated {len(generated_docs)} HTML document(s) in {output_dir}")
     print(f"Open {output_dir / 'index.html'}")
     print(f"Single-page HTML: {single_page_path}")

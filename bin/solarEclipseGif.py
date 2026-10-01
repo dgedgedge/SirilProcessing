@@ -15,10 +15,10 @@ import argparse
 import logging
 import math
 import shutil
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable
 
 import numpy as np
 from astropy.io import fits
@@ -158,36 +158,67 @@ RADIUS_COHERENCE_TOLERANCE = 0.20
 
 
 def parse_args() -> argparse.Namespace:
+    """Lit les options d’entrée FITS, de calibration solaire et de génération du GIF."""
     parser = argparse.ArgumentParser(
         description="Create a GIF movie from monochrome solar eclipse FITS frames.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("--input-dir", required=True, help="Repertoire des images sources FITS.")
-    parser.add_argument("--dark-calib-frames", default=None, help="Liste 1-based d'images dark: 1-10,15.")
+    parser.add_argument(
+        "--input-dir", required=True, help="Repertoire des images sources FITS."
+    )
+    parser.add_argument(
+        "--dark-calib-frames",
+        default=None,
+        help="Liste 1-based d'images dark: 1-10,15.",
+    )
     parser.add_argument(
         "--manual-seuil-fond-du-ciel",
         type=float,
         default=None,
         help="Seuil manuel du fond du ciel. Les pixels inferieurs sont ignores.",
     )
-    parser.add_argument("--full-sun-frames", default=None, help="Liste 1-based d'images soleil plein.")
+    parser.add_argument(
+        "--full-sun-frames", default=None, help="Liste 1-based d'images soleil plein."
+    )
     parser.add_argument(
         "--first-nearly-full-sun-frames",
         type=int,
         default=10,
         help="Nombre de premieres images utilisees comme soleil presque plein si --full-sun-frames est absent.",
     )
-    parser.add_argument("--exclude-frames", default=None, help="Liste 1-based d'images a exclure.")
+    parser.add_argument(
+        "--exclude-frames", default=None, help="Liste 1-based d'images a exclure."
+    )
     parser.add_argument(
         "--debug-dir",
         default=None,
         help="Repertoire de debug. Par defaut: <input-dir>/debug.",
     )
-    parser.add_argument("--debug-full-sun", action="store_true", help="Exporte le debug du modele plein Soleil.")
-    parser.add_argument("--debug-shifts", action="store_true", help="Exporte le debug du calcul des decalages.")
-    parser.add_argument("--debug-gif-frames", action="store_true", help="Exporte les images effectivement incluses dans le GIF.")
-    parser.add_argument("--debug-watershed", action="store_true", help="Calcule et affiche le watershed dans les images de debug.")
-    parser.add_argument("--debug-luminosity", action="store_true", help="Exporte le debug de normalisation de luminosite avant/apres.")
+    parser.add_argument(
+        "--debug-full-sun",
+        action="store_true",
+        help="Exporte le debug du modele plein Soleil.",
+    )
+    parser.add_argument(
+        "--debug-shifts",
+        action="store_true",
+        help="Exporte le debug du calcul des decalages.",
+    )
+    parser.add_argument(
+        "--debug-gif-frames",
+        action="store_true",
+        help="Exporte les images effectivement incluses dans le GIF.",
+    )
+    parser.add_argument(
+        "--debug-watershed",
+        action="store_true",
+        help="Calcule et affiche le watershed dans les images de debug.",
+    )
+    parser.add_argument(
+        "--debug-luminosity",
+        action="store_true",
+        help="Exporte le debug de normalisation de luminosite avant/apres.",
+    )
     parser.add_argument(
         "--background-outside-mask-scale",
         type=float,
@@ -222,14 +253,27 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Active explicitement le filtrage selectif du fond hors masque solaire.",
     )
-    parser.add_argument("--rotate-clockwise-deg", type=float, default=0.0, help="Rotation horaire appliquee aux crops.")
-    parser.add_argument("--target-duration", type=float, default=30.0, help="Duree cible du GIF en secondes.")
+    parser.add_argument(
+        "--rotate-clockwise-deg",
+        type=float,
+        default=0.0,
+        help="Rotation horaire appliquee aux crops.",
+    )
+    parser.add_argument(
+        "--target-duration",
+        type=float,
+        default=30.0,
+        help="Duree cible du GIF en secondes.",
+    )
     parser.add_argument("--output", required=True, help="Chemin du GIF de sortie.")
-    parser.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"])
+    parser.add_argument(
+        "--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"]
+    )
     return parser.parse_args()
 
 
 def setup_logging(level: str) -> None:
+    """Configure le niveau et le format des messages du traitement d’éclipse."""
     logging.basicConfig(
         level=getattr(logging, level.upper()),
         format="%(asctime)s [%(levelname)s] %(message)s",
@@ -285,10 +329,16 @@ def parse_frame_selection(spec: str | None, frame_count: int) -> set[int]:
 
 
 def find_fits_files(input_dir: Path) -> list[Path]:
-    return sorted(path for path in input_dir.iterdir() if path.is_file() and path.suffix.lower() in FITS_EXTENSIONS)
+    """Liste les fichiers FITS directement présents dans le dossier, triés par nom."""
+    return sorted(
+        path
+        for path in input_dir.iterdir()
+        if path.is_file() and path.suffix.lower() in FITS_EXTENSIONS
+    )
 
 
-def parse_timestamp(header, fallback_path: Path) -> float:
+def parse_timestamp(header: fits.Header, fallback_path: Path) -> float:
+    """Lit DATE-OBS en UTC ; utilise la date du fichier si les formats échouent."""
     for key in ("DATE-OBS", "DATEOBS", "DATE"):
         value = header.get(key)
         if not value:
@@ -305,7 +355,13 @@ def parse_timestamp(header, fallback_path: Path) -> float:
                 return float(dt.timestamp())
             except ValueError:
                 pass
-        for fmt in ("%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+        for fmt in (
+            "%Y-%m-%dT%H:%M:%S.%f",
+            "%Y-%m-%dT%H:%M:%S",
+            "%Y-%m-%d %H:%M:%S.%f",
+            "%Y-%m-%d %H:%M:%S",
+            "%Y-%m-%d",
+        ):
             try:
                 dt = datetime.strptime(value_s, fmt).replace(tzinfo=timezone.utc)
                 return float(dt.timestamp())
@@ -314,7 +370,8 @@ def parse_timestamp(header, fallback_path: Path) -> float:
     return float(fallback_path.stat().st_mtime)
 
 
-def optional_header_float(header, keys: Iterable[str]) -> float | None:
+def optional_header_float(header: fits.Header, keys: Iterable[str]) -> float | None:
+    """Retourne la première valeur convertible parmi les clés FITS, ou None."""
     for key in keys:
         value = header.get(key)
         if value is None:
@@ -327,6 +384,10 @@ def optional_header_float(header, keys: Iterable[str]) -> float | None:
 
 
 def ensure_2d_float(data: np.ndarray) -> np.ndarray:
+    """Extrait le premier plan en float32 et remplace les valeurs non finies par zéro.
+
+    Ce nettoyage concerne la visualisation de l’éclipse, pas les mesures de guidage.
+    Lève ValueError pour une image absente ou non réductible à deux dimensions."""
     if data is None:
         raise ValueError("FITS image has no data")
     arr = np.asarray(data, dtype=np.float32)
@@ -334,10 +395,13 @@ def ensure_2d_float(data: np.ndarray) -> np.ndarray:
         arr = arr[0]
     if arr.ndim != 2:
         raise ValueError(f"Unsupported FITS shape: {arr.shape}")
-    return np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32, copy=False)
+    return np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0).astype(
+        np.float32, copy=False
+    )
 
 
 def load_frames(input_dir: Path) -> list[Frame]:
+    """Charge les FITS lisibles et les trie par date ; exige au moins deux images."""
     files = find_fits_files(input_dir)
     if len(files) < 2:
         raise ValueError(f"Need at least 2 FITS files in {input_dir}")
@@ -349,8 +413,12 @@ def load_frames(input_dir: Path) -> list[Frame]:
                 header = hdul[0].header
                 image = ensure_2d_float(hdul[0].data)
                 timestamp = parse_timestamp(header, path)
-                exposure_s = optional_header_float(header, ("EXPTIME", "EXPOSURE", "EXP_TIME", "EXPO"))
-                gain = optional_header_float(header, ("GAIN", "EGAIN", "OFFSETGAIN", "ISO"))
+                exposure_s = optional_header_float(
+                    header, ("EXPTIME", "EXPOSURE", "EXP_TIME", "EXPO")
+                )
+                gain = optional_header_float(
+                    header, ("GAIN", "EGAIN", "OFFSETGAIN", "ISO")
+                )
             frames.append(Frame(0, path, timestamp, image, exposure_s, gain))
         except Exception as exc:
             logging.warning("Image ignoree %s: %s", path, exc)
@@ -364,7 +432,10 @@ def load_frames(input_dir: Path) -> list[Frame]:
     return frames
 
 
-def robust_display_u8(image: np.ndarray, low: float = 1.0, high: float = 99.7) -> np.ndarray:
+def robust_display_u8(
+    image: np.ndarray, low: float = 1.0, high: float = 99.7
+) -> np.ndarray:
+    """Étire les percentiles finis vers [0, 255] ; retourne du noir si la plage est nulle."""
     finite = image[np.isfinite(image)]
     if finite.size == 0:
         return np.zeros_like(image, dtype=np.uint8)
@@ -380,19 +451,25 @@ def compute_sky_threshold(
     dark_indices: set[int],
     manual_threshold: float | None,
 ) -> float:
+    """Choisit le seuil explicite, la moyenne des percentiles 99 des darks, ou zéro."""
     if manual_threshold is not None:
         logging.info("Seuil_fond_du_ciel manuel: %.3f", manual_threshold)
         return float(manual_threshold)
     if dark_indices:
-        levels = [float(np.percentile(frames[i].image, 99.0)) for i in sorted(dark_indices)]
+        levels = [
+            float(np.percentile(frames[i].image, 99.0)) for i in sorted(dark_indices)
+        ]
         threshold = float(np.mean(levels))
-        logging.info("Seuil_fond_du_ciel depuis %d dark(s): %.3f", len(levels), threshold)
+        logging.info(
+            "Seuil_fond_du_ciel depuis %d dark(s): %.3f", len(levels), threshold
+        )
         return threshold
     logging.info("Seuil_fond_du_ciel par defaut: 0")
     return 0.0
 
 
 def largest_component(mask: np.ndarray) -> np.ndarray:
+    """Conserve la plus grande région 8-connexe ; renvoie un masque vide si nécessaire."""
     labels = measure.label(mask.astype(bool), connectivity=2)
     if labels.max() == 0:
         return np.zeros_like(mask, dtype=bool)
@@ -402,6 +479,7 @@ def largest_component(mask: np.ndarray) -> np.ndarray:
 
 
 def remove_components_smaller_than(mask: np.ndarray, min_size: int) -> np.ndarray:
+    """Élimine les régions 8-connexes dont l’aire est inférieure à min_size pixels."""
     labels = measure.label(mask.astype(bool), connectivity=2)
     if labels.max() == 0:
         return np.zeros_like(mask, dtype=bool)
@@ -412,6 +490,7 @@ def remove_components_smaller_than(mask: np.ndarray, min_size: int) -> np.ndarra
 
 
 def disk_radius_for_shape(shape: tuple[int, int], fraction: float = 0.018) -> int:
+    """Dimensionne un noyau morphologique sur le petit côté, avec au moins trois pixels."""
     return max(3, int(round(min(shape) * fraction)))
 
 
@@ -436,9 +515,16 @@ def solar_main_component_mask(
         otsu = float(np.percentile(useful, 70.0))
     threshold = max(float(sky_threshold), otsu * threshold_factor)
     simple = smoothed > threshold
-    min_size = max(int(min_component_area_px), int(image.size * min_component_area_fraction))
+    min_size = max(
+        int(min_component_area_px), int(image.size * min_component_area_fraction)
+    )
     simple = remove_components_smaller_than(simple, min_size)
-    closed = ndimage.binary_closing(simple, structure=morphology.disk(disk_radius_for_shape(image.shape, closing_radius_fraction)))
+    closed = ndimage.binary_closing(
+        simple,
+        structure=morphology.disk(
+            disk_radius_for_shape(image.shape, closing_radius_fraction)
+        ),
+    )
     component = largest_component(closed)
     if fill_holes:
         component = ndimage.binary_fill_holes(component)
@@ -446,6 +532,7 @@ def solar_main_component_mask(
 
 
 def mask_centroid(mask: np.ndarray) -> tuple[float, float]:
+    """Retourne le barycentre x/y des pixels vrais, ou le centre de l’image si vide."""
     ys, xs = np.nonzero(mask)
     if len(xs) == 0:
         h, w = mask.shape
@@ -453,7 +540,10 @@ def mask_centroid(mask: np.ndarray) -> tuple[float, float]:
     return float(np.mean(xs)), float(np.mean(ys))
 
 
-def fit_circle_from_mask(mask: np.ndarray, center_hint: tuple[float, float] | None = None) -> CircleFitResult:
+def fit_circle_from_mask(
+    mask: np.ndarray, center_hint: tuple[float, float] | None = None
+) -> CircleFitResult:
+    """Ajuste le limbe par RANSAC avec repli moindres carrés ou rayon équivalent en aire."""
     edge = external_limb_candidates(mask)
     ys, xs = np.nonzero(edge)
     if len(xs) < 20:
@@ -495,7 +585,10 @@ def external_limb_candidates(mask: np.ndarray) -> np.ndarray:
     return edge
 
 
-def fit_circle_ransac(xs: np.ndarray, ys: np.ndarray, shape: tuple[int, int]) -> tuple[tuple[float, float, float], float, int, int] | None:
+def fit_circle_ransac(
+    xs: np.ndarray, ys: np.ndarray, shape: tuple[int, int]
+) -> tuple[tuple[float, float, float], float, int, int] | None:
+    """Estime le cercle du limbe et sa confiance RANSAC, ou None si aucun modèle admissible."""
     points = np.column_stack((xs.astype(np.float64), ys.astype(np.float64)))
     residual_threshold = max(2.0, min(shape) * 0.006)
     try:
@@ -533,7 +626,11 @@ def fit_circle_ransac(xs: np.ndarray, ys: np.ndarray, shape: tuple[int, int]) ->
     except Exception:
         cx, cy, radius = (float(v) for v in model.params)
     max_reasonable_radius = max(shape) * 2.0
-    if not all(np.isfinite((cx, cy, radius))) or radius <= 0 or radius > max_reasonable_radius:
+    if (
+        not all(np.isfinite((cx, cy, radius)))
+        or radius <= 0
+        or radius > max_reasonable_radius
+    ):
         return None
     confidence = inlier_count / max(candidate_count, 1)
     return (cx, cy, radius), float(confidence), inlier_count, candidate_count
@@ -545,6 +642,7 @@ def fit_circle_least_squares(
     mask: np.ndarray,
     center_hint: tuple[float, float] | None = None,
 ) -> tuple[float, float, float]:
+    """Ajuste un cercle sur les candidats du limbe avec contrôle du centre et du rayon."""
     x = xs.astype(np.float64)
     y = ys.astype(np.float64)
     a = np.column_stack((2.0 * x, 2.0 * y, np.ones_like(x)))
@@ -574,10 +672,14 @@ def watershed_contour_candidate(
     seed_radius = max(2, disk_radius_for_shape(image.shape, 0.01))
     guard_radius = max(seed_radius + 1, disk_radius_for_shape(image.shape, 0.025))
 
-    foreground = ndimage.binary_erosion(current_mask, structure=morphology.disk(seed_radius))
+    foreground = ndimage.binary_erosion(
+        current_mask, structure=morphology.disk(seed_radius)
+    )
     if not np.any(foreground):
         foreground = current_mask.astype(bool)
-    background = ~ndimage.binary_dilation(current_mask, structure=morphology.disk(guard_radius))
+    background = ~ndimage.binary_dilation(
+        current_mask, structure=morphology.disk(guard_radius)
+    )
     background |= smoothed <= sky_threshold
 
     markers = np.zeros(image.shape, dtype=np.int32)
@@ -627,7 +729,9 @@ def masque_solaire_principal(
             circle_fit.ransac_candidates,
         )
     if compute_watershed:
-        watershed_mask, watershed_boundaries = watershed_contour_candidate(image, final, sky_threshold, gaussian_sigma)
+        watershed_mask, watershed_boundaries = watershed_contour_candidate(
+            image, final, sky_threshold, gaussian_sigma
+        )
     else:
         watershed_mask = np.zeros_like(final, dtype=bool)
         watershed_boundaries = np.zeros_like(final, dtype=bool)
@@ -647,7 +751,9 @@ def masque_solaire_principal(
         circle_fit.ransac_candidates,
     )
     if debug_output_path is not None:
-        debug_solar_main_component_image(image, detection, debug_output_path, debug_info=debug_info)
+        debug_solar_main_component_image(
+            image, detection, debug_output_path, debug_info=debug_info
+        )
     return detection
 
 
@@ -658,6 +764,7 @@ def detect_full_sun(
     debug_info: str | None = None,
     compute_watershed: bool = False,
 ) -> FullSunDetection:
+    """Détecte le disque solaire et peut écrire un aperçu de ses masques et cercles."""
     return masque_solaire_principal(
         image,
         sky_threshold,
@@ -667,7 +774,10 @@ def detect_full_sun(
     )
 
 
-def crop_with_padding(image: np.ndarray, center_x: float, center_y: float, side: int) -> np.ndarray:
+def crop_with_padding(
+    image: np.ndarray, center_x: float, center_y: float, side: int
+) -> np.ndarray:
+    """Extrait un carré centré en pixels, complété par zéro hors du champ source."""
     side = max(1, int(side))
     half = side / 2.0
     x0 = int(round(center_x - half))
@@ -685,11 +795,16 @@ def crop_with_padding(image: np.ndarray, center_x: float, center_y: float, side:
 
     dst_x0 = src_x0 - x0
     dst_y0 = src_y0 - y0
-    out[dst_y0 : dst_y0 + (src_y1 - src_y0), dst_x0 : dst_x0 + (src_x1 - src_x0)] = image[src_y0:src_y1, src_x0:src_x1]
+    out[dst_y0 : dst_y0 + (src_y1 - src_y0), dst_x0 : dst_x0 + (src_x1 - src_x0)] = (
+        image[src_y0:src_y1, src_x0:src_x1]
+    )
     return out
 
 
-def solar_disk_mask(shape: tuple[int, int], radius: float, center: tuple[float, float] | None = None) -> np.ndarray:
+def solar_disk_mask(
+    shape: tuple[int, int], radius: float, center: tuple[float, float] | None = None
+) -> np.ndarray:
+    """Construit le masque booléen du disque à partir du centre et du rayon en pixels."""
     h, w = shape
     cx, cy = center if center is not None else ((w - 1) / 2.0, (h - 1) / 2.0)
     yy, xx = np.ogrid[:h, :w]
@@ -702,6 +817,7 @@ def solar_disk_luminosity(
     sky_threshold: float,
     center: tuple[float, float] | None = None,
 ) -> LuminosityStats:
+    """Mesure moyenne et médiane des pixels valides dans le disque solaire."""
     disk = solar_disk_mask(image.shape, radius, center)
     values = image[disk & (image > sky_threshold)]
     if values.size < max(32, int(np.count_nonzero(disk) * 0.01)):
@@ -711,10 +827,15 @@ def solar_disk_luminosity(
         values = values[np.isfinite(values)]
     if values.size == 0:
         return LuminosityStats(None, None, 0)
-    return LuminosityStats(float(np.mean(values)), float(np.median(values)), int(values.size))
+    return LuminosityStats(
+        float(np.mean(values)), float(np.median(values)), int(values.size)
+    )
 
 
-def masked_luminosity(image: np.ndarray, mask: np.ndarray, sky_threshold: float) -> LuminosityStats:
+def masked_luminosity(
+    image: np.ndarray, mask: np.ndarray, sky_threshold: float
+) -> LuminosityStats:
+    """Mesure la luminosité sur le masque fourni et compte ses pixels valides."""
     mask_bool = mask.astype(bool)
     values = image[mask_bool & (image > sky_threshold)]
     if values.size < max(32, int(np.count_nonzero(mask_bool) * 0.01)):
@@ -724,15 +845,26 @@ def masked_luminosity(image: np.ndarray, mask: np.ndarray, sky_threshold: float)
         values = values[np.isfinite(values)]
     if values.size == 0:
         return LuminosityStats(None, None, 0)
-    return LuminosityStats(float(np.mean(values)), float(np.median(values)), int(values.size))
+    return LuminosityStats(
+        float(np.mean(values)), float(np.median(values)), int(values.size)
+    )
 
 
 def luminosity_reference(model: SolarModel, sky_threshold: float) -> LuminosityStats:
-    return solar_disk_luminosity(model.image, model.radius, sky_threshold, (model.center_x, model.center_y))
+    """Sélectionne la statistique de luminosité demandée dans la référence solaire."""
+    return solar_disk_luminosity(
+        model.image, model.radius, sky_threshold, (model.center_x, model.center_y)
+    )
 
 
 def luminosity_factor(stats: LuminosityStats, reference: LuminosityStats) -> float:
-    if stats.median is None or reference.median is None or stats.median <= 0 or not np.isfinite(stats.median):
+    """Calcule le facteur multiplicatif de normalisation, avec repli neutre si indisponible."""
+    if (
+        stats.median is None
+        or reference.median is None
+        or stats.median <= 0
+        or not np.isfinite(stats.median)
+    ):
         return 1.0
     if reference.median <= 0 or not np.isfinite(reference.median):
         return 1.0
@@ -749,14 +881,31 @@ def filter_background_outside_mask(
     s_curve_sigma: float,
     s_curve_target_fraction: float,
 ) -> BackgroundFilterResult:
+    """Atténue le fond hors de la région solaire protégée et retourne ses statistiques."""
     if not enabled:
-        return BackgroundFilterResult(image.astype(np.float32, copy=False), int(np.count_nonzero(mask)), 0, None, None, None, None)
+        return BackgroundFilterResult(
+            image.astype(np.float32, copy=False),
+            int(np.count_nonzero(mask)),
+            0,
+            None,
+            None,
+            None,
+            None,
+        )
     scale = float(np.clip(outside_scale, 0.0, 1.0))
-    radius = 0 if float(dilate_fraction) <= 0 else disk_radius_for_shape(image.shape, float(dilate_fraction))
-    protected = ndimage.binary_dilation(mask.astype(bool), structure=morphology.disk(radius))
+    radius = (
+        0
+        if float(dilate_fraction) <= 0
+        else disk_radius_for_shape(image.shape, float(dilate_fraction))
+    )
+    protected = ndimage.binary_dilation(
+        mask.astype(bool), structure=morphology.disk(radius)
+    )
     outside = ~protected
     filtered = image.astype(np.float32, copy=True)
-    filtered[outside] = float(sky_threshold) + (filtered[outside] - float(sky_threshold)) * scale
+    filtered[outside] = (
+        float(sky_threshold) + (filtered[outside] - float(sky_threshold)) * scale
+    )
 
     outside_values = filtered[outside]
     outside_values = outside_values[np.isfinite(outside_values)]
@@ -766,7 +915,15 @@ def filter_background_outside_mask(
         solar_values = filtered[mask.astype(bool)]
         solar_values = solar_values[np.isfinite(solar_values)]
     if outside_values.size == 0 or solar_values.size == 0:
-        return BackgroundFilterResult(filtered, int(np.count_nonzero(protected)), int(np.count_nonzero(outside)), None, None, None, None)
+        return BackgroundFilterResult(
+            filtered,
+            int(np.count_nonzero(protected)),
+            int(np.count_nonzero(outside)),
+            None,
+            None,
+            None,
+            None,
+        )
 
     outside_mean = float(np.mean(outside_values))
     outside_std = float(np.std(outside_values))
@@ -774,11 +931,21 @@ def filter_background_outside_mask(
     s_low = outside_mean + max(0.0, float(s_curve_sigma)) * outside_std
     s_high = protected_median
     if not np.isfinite(s_low) or not np.isfinite(s_high) or s_high <= s_low:
-        return BackgroundFilterResult(filtered, int(np.count_nonzero(protected)), int(np.count_nonzero(outside)), outside_mean, outside_std, s_low, s_high)
+        return BackgroundFilterResult(
+            filtered,
+            int(np.count_nonzero(protected)),
+            int(np.count_nonzero(outside)),
+            outside_mean,
+            outside_std,
+            s_low,
+            s_high,
+        )
 
     t = np.clip((filtered - s_low) / (s_high - s_low), 0.0, 1.0)
     s_curve = t * t * (3.0 - 2.0 * t)
-    target = float(sky_threshold) + max(0.0, float(s_curve_target_fraction)) * max(s_high - float(sky_threshold), 0.0)
+    target = float(sky_threshold) + max(0.0, float(s_curve_target_fraction)) * max(
+        s_high - float(sky_threshold), 0.0
+    )
     curved = target + s_curve * (filtered - target)
     curved[protected] = filtered[protected]
     return BackgroundFilterResult(
@@ -792,9 +959,17 @@ def filter_background_outside_mask(
     )
 
 
-def draw_center(draw: ImageDraw.ImageDraw, center_x: float, center_y: float, color: tuple[int, int, int]) -> None:
+def draw_center(
+    draw: ImageDraw.ImageDraw,
+    center_x: float,
+    center_y: float,
+    color: tuple[int, int, int],
+) -> None:
+    """Dessine une croix au centre x/y en pixels sur le canevas de diagnostic."""
     r = 5
-    draw.ellipse((center_x - r, center_y - r, center_x + r, center_y + r), outline=color, width=2)
+    draw.ellipse(
+        (center_x - r, center_y - r, center_x + r, center_y + r), outline=color, width=2
+    )
     draw.line((center_x - 10, center_y, center_x + 10, center_y), fill=color, width=1)
     draw.line((center_x, center_y - 10, center_x, center_y + 10), fill=color, width=1)
 
@@ -807,6 +982,7 @@ def draw_circle(
     color: tuple[int, int, int],
     width: int = 2,
 ) -> None:
+    """Dessine le cercle de rayon donné en pixels sur le canevas de diagnostic."""
     draw.ellipse(
         (
             center_x - radius,
@@ -820,13 +996,17 @@ def draw_circle(
 
 
 def debug_font(size: int = 18) -> ImageFont.ImageFont:
+    """Charge une police de diagnostic avec repli sur la police Pillow disponible."""
     try:
         return ImageFont.truetype("DejaVuSans-Bold.ttf", size=size)
     except Exception:
         return ImageFont.load_default()
 
 
-def draw_legend(draw: ImageDraw.ImageDraw, text: str, color: tuple[int, int, int], width: int) -> None:
+def draw_legend(
+    draw: ImageDraw.ImageDraw, text: str, color: tuple[int, int, int], width: int
+) -> None:
+    """Dessine une légende lisible dans la largeur du panneau."""
     font = debug_font(24)
     bbox = draw.textbbox((0, 0), text, font=font)
     text_w = min(width, max(280, bbox[2] - bbox[0] + 54))
@@ -836,7 +1016,10 @@ def draw_legend(draw: ImageDraw.ImageDraw, text: str, color: tuple[int, int, int
     draw.text((42, 8), text, fill=(255, 255, 255), font=font)
 
 
-def draw_debug_info(draw: ImageDraw.ImageDraw, text: str | None, x: int, y: int, max_width: int) -> None:
+def draw_debug_info(
+    draw: ImageDraw.ImageDraw, text: str | None, x: int, y: int, max_width: int
+) -> None:
+    """Dessine les métadonnées multiligne sur un fond noir, si elles sont présentes."""
     if not text:
         return
     font = debug_font(28)
@@ -848,27 +1031,39 @@ def draw_debug_info(draw: ImageDraw.ImageDraw, text: str | None, x: int, y: int,
     box_height = line_height * len(lines) + 18
     draw.rectangle((x, y, x + box_width, y + box_height), fill=(0, 0, 0))
     for i, line in enumerate(lines):
-        draw.text((x + 11, y + 9 + i * line_height), line, fill=(255, 255, 255), font=font)
+        draw.text(
+            (x + 11, y + 9 + i * line_height), line, fill=(255, 255, 255), font=font
+        )
 
 
 def optional_average(values: Iterable[float | None]) -> float | None:
-    known = [float(value) for value in values if value is not None and np.isfinite(float(value))]
+    """Moyenne les valeurs connues et finies ; renvoie None si aucune ne subsiste."""
+    known = [
+        float(value)
+        for value in values
+        if value is not None and np.isfinite(float(value))
+    ]
     if not known:
         return None
     return float(np.mean(known))
 
 
 def format_optional_float(value: float | None, suffix: str = "") -> str:
+    """Formate une valeur avec quatre chiffres significatifs, ou n/a si absente."""
     if value is None:
         return "n/a"
     return f"{value:.4g}{suffix}"
 
 
 def format_optional_float_list(values: Iterable[float | None], suffix: str = "") -> str:
-    return "[" + ", ".join(format_optional_float(value, suffix) for value in values) + "]"
+    """Formate une liste de valeurs facultatives avec leur suffixe d’unité."""
+    return (
+        "[" + ", ".join(format_optional_float(value, suffix) for value in values) + "]"
+    )
 
 
 def frame_debug_info(frame: Frame, prefix: str | None = None) -> str:
+    """Compose les métadonnées de pose et de gain d’une image source."""
     lines = []
     if prefix:
         lines.append(prefix)
@@ -883,6 +1078,7 @@ def frame_debug_info(frame: Frame, prefix: str | None = None) -> str:
 
 
 def stacked_debug_info(frames: list[Frame], prefix: str) -> str:
+    """Résume les poses et gains connus des images contribuant à un empilement."""
     exposure_known = sum(1 for frame in frames if frame.exposure_s is not None)
     gain_known = sum(1 for frame in frames if frame.gain is not None)
     return "\n".join(
@@ -901,6 +1097,7 @@ def contour_overlay_panel(
     label: str,
     color: tuple[int, int, int],
 ) -> Image.Image:
+    """Superpose le contour coloré du masque à une image en niveaux de gris."""
     base = np.stack((gray, gray, gray), axis=-1)
     contour = segmentation.find_boundaries(mask.astype(bool), mode="inner")
     base[contour] = color
@@ -915,11 +1112,20 @@ def debug_solar_main_component_image(
     out_path: Path,
     debug_info: str | None = None,
 ) -> None:
+    """Écrit un diagnostic PNG comparant masques et ajustements du limbe."""
     gray = robust_display_u8(image)
-    simple_img = contour_overlay_panel(gray, detection.threshold_mask, "contour seuillage", (80, 180, 255))
-    final_img = contour_overlay_panel(gray, detection.final_mask, "contour masque principal", (60, 230, 120))
-    watershed_label = "contour watershed" if detection.watershed_computed else "watershed non calcule"
-    watershed_img = contour_overlay_panel(gray, detection.watershed_mask, watershed_label, (255, 230, 40))
+    simple_img = contour_overlay_panel(
+        gray, detection.threshold_mask, "contour seuillage", (80, 180, 255)
+    )
+    final_img = contour_overlay_panel(
+        gray, detection.final_mask, "contour masque principal", (60, 230, 120)
+    )
+    watershed_label = (
+        "contour watershed" if detection.watershed_computed else "watershed non calcule"
+    )
+    watershed_img = contour_overlay_panel(
+        gray, detection.watershed_mask, watershed_label, (255, 230, 40)
+    )
 
     circle_img = Image.fromarray(np.stack((gray, gray, gray), axis=-1), mode="RGB")
     circle_draw = ImageDraw.Draw(circle_img)
@@ -931,7 +1137,11 @@ def debug_solar_main_component_image(
         rs_cx, rs_cy, rs_radius = detection.ransac_circle
         draw_circle(circle_draw, rs_cx, rs_cy, rs_radius, ransac_color, width=3)
     draw_center(circle_draw, detection.center_x, detection.center_y, ransac_color)
-    confidence = "n/a" if detection.ransac_confidence is None else f"{detection.ransac_confidence:.2f}"
+    confidence = (
+        "n/a"
+        if detection.ransac_confidence is None
+        else f"{detection.ransac_confidence:.2f}"
+    )
     legend = f"RANSAC bleu conf={confidence} ({detection.ransac_inliers}/{detection.ransac_candidates})  LS orange"
     draw_legend(circle_draw, legend, ransac_color, circle_img.width)
 
@@ -958,10 +1168,19 @@ def build_solar_model(
     debug_full_sun: bool,
     debug_watershed: bool,
 ) -> SolarModel:
+    """Construit la référence solaire par moyenne de découpes centrées de calibration.
+
+    Les indices sont internes à la liste frames. Écrit les diagnostics demandés
+    et lève ValueError si aucune image de référence ne peut être choisie.
+    Voir docs/scripts/solarEclipseGif/README.md pour les étapes de calibration."""
     if full_sun_indices:
         model_indices = sorted(full_sun_indices)
     else:
-        available = [i for i in range(len(frames)) if i not in excluded_indices and i not in dark_indices]
+        available = [
+            i
+            for i in range(len(frames))
+            if i not in excluded_indices and i not in dark_indices
+        ]
         model_indices = available[: max(1, int(first_nearly_full_count))]
     if not model_indices:
         raise ValueError("No frame available to build the full-sun model")
@@ -971,7 +1190,11 @@ def build_solar_model(
         debug_output_path = None
         debug_info = None
         if debug_full_sun:
-            debug_output_path = debug_dir / "full_sun_frames" / f"full_sun_{frames[idx].index1:04d}_{frames[idx].path.stem}.png"
+            debug_output_path = (
+                debug_dir
+                / "full_sun_frames"
+                / f"full_sun_{frames[idx].index1:04d}_{frames[idx].path.stem}.png"
+            )
             debug_info = frame_debug_info(frames[idx], "Full-sun source")
         detection = detect_full_sun(
             frames[idx].image,
@@ -996,7 +1219,10 @@ def build_solar_model(
         side += 1
     side = max(side, 64)
 
-    crops = [crop_with_padding(frames[idx].image, det.center_x, det.center_y, side) for idx, det in detections]
+    crops = [
+        crop_with_padding(frames[idx].image, det.center_x, det.center_y, side)
+        for idx, det in detections
+    ]
     model_image = np.mean(np.stack(crops, axis=0), axis=0).astype(np.float32)
     model_detection = detect_full_sun(model_image, sky_threshold)
     model_radius = float(np.mean([radius, model_detection.radius]))
@@ -1005,7 +1231,10 @@ def build_solar_model(
         final_side += 1
     if final_side != side:
         side = max(final_side, 64)
-        crops = [crop_with_padding(frames[idx].image, det.center_x, det.center_y, side) for idx, det in detections]
+        crops = [
+            crop_with_padding(frames[idx].image, det.center_x, det.center_y, side)
+            for idx, det in detections
+        ]
         model_image = np.mean(np.stack(crops, axis=0), axis=0).astype(np.float32)
         model_detection = detect_full_sun(model_image, sky_threshold)
         model_radius = float(np.mean([radius, model_detection.radius]))
@@ -1015,7 +1244,9 @@ def build_solar_model(
             model_image,
             model_detection,
             debug_dir / "full_sun_model.png",
-            debug_info=stacked_debug_info([frames[i] for i in model_indices], "Full-sun model"),
+            debug_info=stacked_debug_info(
+                [frames[i] for i in model_indices], "Full-sun model"
+            ),
         )
 
     logging.info(
@@ -1041,6 +1272,7 @@ def debug_model_image(
     out_path: Path,
     debug_info: str | None = None,
 ) -> None:
+    """Écrit un PNG comparant la référence solaire, son masque et son cercle."""
     gray = robust_display_u8(model)
     src = Image.fromarray(np.stack((gray, gray, gray), axis=-1), mode="RGB")
     mask_rgb = np.stack((gray // 4, gray // 4, gray // 4), axis=-1)
@@ -1048,7 +1280,14 @@ def debug_model_image(
     mask_img = Image.fromarray(mask_rgb, mode="RGB")
     overlay = src.copy()
     draw = ImageDraw.Draw(overlay)
-    draw_circle(draw, detection.center_x, detection.center_y, detection.radius, (255, 180, 40), width=2)
+    draw_circle(
+        draw,
+        detection.center_x,
+        detection.center_y,
+        detection.radius,
+        (255, 180, 40),
+        width=2,
+    )
     draw_center(draw, detection.center_x, detection.center_y, (255, 80, 80))
     combined = Image.new("RGB", (gray.shape[1] * 3, gray.shape[0]))
     combined.paste(src, (0, 0))
@@ -1077,7 +1316,10 @@ def debug_luminosity_image(
     s_high: float | None,
     out_path: Path,
 ) -> None:
-    combined_values = np.concatenate([before.ravel(), after_luminosity.ravel(), after_background.ravel()])
+    """Écrit les aperçus avant/après correction de luminosité et filtrage du fond."""
+    combined_values = np.concatenate(
+        [before.ravel(), after_luminosity.ravel(), after_background.ravel()]
+    )
     finite = combined_values[np.isfinite(combined_values)]
     if finite.size:
         lo = float(np.percentile(finite, 1.0))
@@ -1088,6 +1330,7 @@ def debug_luminosity_image(
         hi = lo + 1.0
 
     def to_panel(image: np.ndarray, label: str) -> Image.Image:
+        """Transforme un plan numérique en panneau Pillow pour le diagnostic de luminosité."""
         u8 = np.clip((image - lo) * 255.0 / (hi - lo), 0, 255).astype(np.uint8)
         panel = Image.fromarray(np.stack((u8, u8, u8), axis=-1), mode="RGB")
         draw_legend(ImageDraw.Draw(panel), label, (80, 180, 255), panel.width)
@@ -1121,6 +1364,7 @@ def debug_luminosity_image(
 
 
 def prepare_mask_for_correlation(mask: np.ndarray, sigma: float = 1.2) -> np.ndarray:
+    """Prépare le masque flottant destiné à l’estimation du déplacement relatif."""
     out = mask.astype(np.float32, copy=True)
     if sigma > 0:
         out = ndimage.gaussian_filter(out, sigma=sigma)
@@ -1131,17 +1375,34 @@ def prepare_mask_for_correlation(mask: np.ndarray, sigma: float = 1.2) -> np.nda
     return out.astype(np.float32, copy=False)
 
 
-def radius_is_coherent(radius: float, reference_radius: float, tolerance: float = RADIUS_COHERENCE_TOLERANCE) -> bool:
-    if not np.isfinite(radius) or not np.isfinite(reference_radius) or reference_radius <= 0:
+def radius_is_coherent(
+    radius: float,
+    reference_radius: float,
+    tolerance: float = RADIUS_COHERENCE_TOLERANCE,
+) -> bool:
+    """Vérifie l’écart relatif du rayon détecté par rapport au rayon de référence."""
+    if (
+        not np.isfinite(radius)
+        or not np.isfinite(reference_radius)
+        or reference_radius <= 0
+    ):
         return False
-    return abs(float(radius) - float(reference_radius)) <= float(reference_radius) * tolerance
+    return (
+        abs(float(radius) - float(reference_radius))
+        <= float(reference_radius) * tolerance
+    )
 
 
-def relative_shift_from_masks_cpu(prev_mask: np.ndarray, current_mask: np.ndarray) -> tuple[float, float]:
+def relative_shift_from_masks_cpu(
+    prev_mask: np.ndarray, current_mask: np.ndarray
+) -> tuple[float, float]:
+    """Estime sur CPU le déplacement relatif des masques par corrélation de phase."""
     prev_prepared = prepare_mask_for_correlation(prev_mask)
     current_prepared = prepare_mask_for_correlation(current_mask)
     try:
-        shift_yx, _, _ = phase_cross_correlation(prev_prepared, current_prepared, upsample_factor=10)
+        shift_yx, _, _ = phase_cross_correlation(
+            prev_prepared, current_prepared, upsample_factor=10
+        )
         # phase_cross_correlation returns the shift to apply to current to align it to previous.
         return -float(shift_yx[1]), -float(shift_yx[0])
     except Exception as exc:
@@ -1150,6 +1411,7 @@ def relative_shift_from_masks_cpu(prev_mask: np.ndarray, current_mask: np.ndarra
 
 
 def parabolic_peak_offset(values: np.ndarray) -> float:
+    """Affine la position sous-pixel d’un maximum à partir de trois échantillons."""
     left, center, right = (float(v) for v in values)
     denom = left - 2.0 * center + right
     if abs(denom) < 1e-12:
@@ -1157,7 +1419,10 @@ def parabolic_peak_offset(values: np.ndarray) -> float:
     return float(np.clip(0.5 * (left - right) / denom, -0.5, 0.5))
 
 
-def relative_shift_from_masks_gpu(prev_mask: np.ndarray, current_mask: np.ndarray) -> tuple[float, float]:
+def relative_shift_from_masks_gpu(
+    prev_mask: np.ndarray, current_mask: np.ndarray
+) -> tuple[float, float]:
+    """Estime sur GPU le déplacement relatif des masques avec CuPy."""
     if cp is None:
         return relative_shift_from_masks_cpu(prev_mask, current_mask)
     prev_prepared = prepare_mask_for_correlation(prev_mask)
@@ -1198,21 +1463,33 @@ def relative_shift_from_masks(
     current_mask: np.ndarray,
     correlation_engine: CorrelationEngine,
 ) -> tuple[float, float]:
+    """Sélectionne le moteur CPU ou GPU pour mesurer le déplacement des masques."""
     if correlation_engine.use_gpu:
         return relative_shift_from_masks_gpu(prev_mask, current_mask)
     return relative_shift_from_masks_cpu(prev_mask, current_mask)
 
 
 def rotate_crop(crop: np.ndarray, clockwise_deg: float) -> np.ndarray:
+    """Tourne la découpe sans agrandir son canevas et conserve une image flottante."""
     if abs(clockwise_deg) < 1e-8:
         return crop
-    return ndimage.rotate(crop, -float(clockwise_deg), reshape=False, order=1, mode="constant", cval=0.0).astype(np.float32)
+    return ndimage.rotate(
+        crop, -float(clockwise_deg), reshape=False, order=1, mode="constant", cval=0.0
+    ).astype(np.float32)
 
 
 def rotate_mask(mask: np.ndarray, clockwise_deg: float) -> np.ndarray:
+    """Tourne le masque sur le même canevas puis restaure son type booléen."""
     if abs(clockwise_deg) < 1e-8:
         return mask.astype(bool, copy=False)
-    rotated = ndimage.rotate(mask.astype(np.float32), -float(clockwise_deg), reshape=False, order=0, mode="constant", cval=0.0)
+    rotated = ndimage.rotate(
+        mask.astype(np.float32),
+        -float(clockwise_deg),
+        reshape=False,
+        order=0,
+        mode="constant",
+        cval=0.0,
+    )
     return rotated > 0.5
 
 
@@ -1232,8 +1509,14 @@ def build_movie_frames(
     background_s_curve_sigma: float = 2.0,
     background_s_curve_target_fraction: float = 0.03,
 ) -> list[ProcessedFrame]:
+    """Centre, recadre et normalise les poses utiles selon la référence solaire.
+
+    La corrélation des masques sert de repli lorsque le rayon détecté est
+    incohérent. Les diagnostics facultatifs sont écrits dans les dossiers fournis."""
     if not movie_indices:
-        raise ValueError("No frame left for GIF generation after exclusions/calibration selections")
+        raise ValueError(
+            "No frame left for GIF generation after exclusions/calibration selections"
+        )
 
     processed: list[ProcessedFrame] = []
     previous_mask: np.ndarray | None = None
@@ -1251,7 +1534,10 @@ def build_movie_frames(
         debug_output_path = None
         debug_info = None
         if debug_shifts_dir is not None:
-            debug_output_path = debug_shifts_dir / f"mask_{step:04d}_frame_{frame.index1:04d}_{frame.path.stem}.png"
+            debug_output_path = (
+                debug_shifts_dir
+                / f"mask_{step:04d}_frame_{frame.index1:04d}_{frame.path.stem}.png"
+            )
             debug_info = frame_debug_info(frame, "Detection/Crop source")
 
         detection = masque_solaire_principal(
@@ -1268,7 +1554,9 @@ def build_movie_frames(
             cx_i, cy_i = detection.center_x, detection.center_y
             method = "circle"
         elif previous_mask is not None and previous_center is not None:
-            dx, dy = relative_shift_from_masks(previous_mask, current_mask, correlation_engine)
+            dx, dy = relative_shift_from_masks(
+                previous_mask, current_mask, correlation_engine
+            )
             cx_i = previous_center[0] + dx
             cy_i = previous_center[1] + dy
             method = f"correlation dx={dx:.2f} dy={dy:.2f}"
@@ -1296,7 +1584,9 @@ def build_movie_frames(
         cropped_mask = crop_with_padding(current_mask, cx_i, cy_i, model.side) > 0.5
         cropped_mask = rotate_mask(cropped_mask, rotate_clockwise_deg)
         stats_before = masked_luminosity(crop, cropped_mask, sky_threshold)
-        masked_reference_luminosity = masked_luminosity(model.image, cropped_mask, sky_threshold)
+        masked_reference_luminosity = masked_luminosity(
+            model.image, cropped_mask, sky_threshold
+        )
         factor = luminosity_factor(stats_before, masked_reference_luminosity)
         corrected_crop = (crop * factor).astype(np.float32, copy=False)
         stats_after = masked_luminosity(corrected_crop, cropped_mask, sky_threshold)
@@ -1349,17 +1639,30 @@ def build_movie_frames(
                 background_filter.outside_std,
                 background_filter.s_low,
                 background_filter.s_high,
-                debug_luminosity_dir / f"luminosity_{step:04d}_frame_{frame.index1:04d}_{frame.path.stem}.png",
+                debug_luminosity_dir
+                / f"luminosity_{step:04d}_frame_{frame.index1:04d}_{frame.path.stem}.png",
             )
 
-        processed.append(ProcessedFrame(frame, background_filter.image, cx_i, cy_i, stats_after.mean, stats_after.median, factor))
+        processed.append(
+            ProcessedFrame(
+                frame,
+                background_filter.image,
+                cx_i,
+                cy_i,
+                stats_after.mean,
+                stats_after.median,
+                factor,
+            )
+        )
         previous_mask = current_mask
         previous_center = (cx_i, cy_i)
 
     return processed
 
 
-def group_into_slots(processed: list[ProcessedFrame], target_duration: float) -> tuple[list[StackedFrame], list[int]]:
+def group_into_slots(
+    processed: list[ProcessedFrame], target_duration: float
+) -> tuple[list[StackedFrame], list[int]]:
     """Group acquisition frames into at most 10 fps GIF slots."""
     if not processed:
         return [], []
@@ -1371,7 +1674,9 @@ def group_into_slots(processed: list[ProcessedFrame], target_duration: float) ->
     t1 = processed[-1].source.timestamp
     if t1 <= t0:
         buckets = [[frame] for frame in processed]
-        return [stack_slot(bucket) for bucket in buckets], [slot_duration_ms] * len(buckets)
+        return [stack_slot(bucket) for bucket in buckets], [slot_duration_ms] * len(
+            buckets
+        )
 
     buckets: list[list[ProcessedFrame]] = [[] for _ in range(slot_count)]
     for frame in processed:
@@ -1400,10 +1705,13 @@ def group_into_slots(processed: list[ProcessedFrame], target_duration: float) ->
 
 
 def stack_slot(frames: list[ProcessedFrame]) -> StackedFrame:
+    """Moyenne les images d’un créneau et conserve les métadonnées de ses contributeurs."""
     if len(frames) == 1:
         image = frames[0].image.astype(np.float32, copy=False)
     else:
-        image = np.mean(np.stack([frame.image for frame in frames], axis=0), axis=0).astype(np.float32)
+        image = np.mean(
+            np.stack([frame.image for frame in frames], axis=0), axis=0
+        ).astype(np.float32)
     return StackedFrame(
         image=image,
         source_indices=[frame.source.index1 for frame in frames],
@@ -1421,9 +1729,16 @@ def stack_slot(frames: list[ProcessedFrame]) -> StackedFrame:
     )
 
 
-def log_gif_frame_composition(stacked_frames: list[StackedFrame], durations_ms: list[int]) -> None:
-    for idx, (stacked_frame, duration_ms) in enumerate(zip(stacked_frames, durations_ms), start=1):
-        first_source = stacked_frame.source_indices[0] if stacked_frame.source_indices else None
+def log_gif_frame_composition(
+    stacked_frames: list[StackedFrame], durations_ms: list[int]
+) -> None:
+    """Journalise les images sources et durées contribuant à chaque trame GIF."""
+    for idx, (stacked_frame, duration_ms) in enumerate(
+        zip(stacked_frames, durations_ms), start=1
+    ):
+        first_source = (
+            stacked_frame.source_indices[0] if stacked_frame.source_indices else None
+        )
         logging.info(
             "GIF frame %d/%d first_source=%s n=%d duration=%dms sources=%s exposures=%s gains=%s luminosity_medians=%s luminosity_factors=%s",
             idx,
@@ -1439,7 +1754,10 @@ def log_gif_frame_composition(stacked_frames: list[StackedFrame], durations_ms: 
         )
 
 
-def images_to_gif_frames(stacked_frames: list[StackedFrame], sky_threshold: float) -> list[Image.Image]:
+def images_to_gif_frames(
+    stacked_frames: list[StackedFrame], sky_threshold: float
+) -> list[Image.Image]:
+    """Convertit les empilements en trames Pillow avec l’étirement choisi."""
     if not stacked_frames:
         return []
     images = [frame.image for frame in stacked_frames]
@@ -1457,11 +1775,14 @@ def images_to_gif_frames(stacked_frames: list[StackedFrame], sky_threshold: floa
         arr = np.clip((image - low) / (high - low), 0.0, 1.0)
         arr = np.sqrt(arr)
         u8 = np.clip(arr * 255.0, 0, 255).astype(np.uint8)
-        gif_frames.append(Image.fromarray(u8, mode="L").convert("P", palette=Image.Palette.ADAPTIVE))
+        gif_frames.append(
+            Image.fromarray(u8, mode="L").convert("P", palette=Image.Palette.ADAPTIVE)
+        )
     return gif_frames
 
 
 def write_gif(frames: list[Image.Image], durations_ms: list[int], output: Path) -> None:
+    """Écrit les trames et leurs durées en millisecondes dans un GIF animé."""
     if not frames:
         raise ValueError("No GIF frame generated")
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -1482,9 +1803,14 @@ def save_debug_gif_frames(
     durations_ms: list[int],
     debug_gif_frames_dir: Path,
 ) -> None:
+    """Écrit les trames de diagnostic dans le dossier de sortie demandé."""
     debug_gif_frames_dir.mkdir(parents=True, exist_ok=True)
-    for idx, (gif_frame, stacked_frame, duration_ms) in enumerate(zip(gif_frames, stacked_frames, durations_ms), start=1):
-        source_spec = "-".join(str(source_idx) for source_idx in stacked_frame.source_indices)
+    for idx, (gif_frame, stacked_frame, duration_ms) in enumerate(
+        zip(gif_frames, stacked_frames, durations_ms), start=1
+    ):
+        source_spec = "-".join(
+            str(source_idx) for source_idx in stacked_frame.source_indices
+        )
         safe_source_spec = source_spec[:80] if source_spec else "none"
         out_path = debug_gif_frames_dir / (
             f"gif_{idx:04d}_duration_{duration_ms:04d}ms_sources_{safe_source_spec}"
@@ -1525,12 +1851,17 @@ def clean_debug_outputs(
 
 
 def main() -> int:
+    """Exécute la chaîne FITS vers GIF et retourne le code de sortie du programme."""
     args = parse_args()
     setup_logging(args.log_level)
 
     input_dir = Path(args.input_dir).expanduser().resolve()
     output = Path(args.output).expanduser().resolve()
-    debug_dir = Path(args.debug_dir).expanduser().resolve() if args.debug_dir else input_dir / "debug"
+    debug_dir = (
+        Path(args.debug_dir).expanduser().resolve()
+        if args.debug_dir
+        else input_dir / "debug"
+    )
 
     try:
         correlation_engine = select_correlation_engine()
@@ -1552,9 +1883,17 @@ def main() -> int:
         if full_sun:
             logging.info("Full-sun frame(s): %s", sorted(i + 1 for i in full_sun))
 
-        clean_debug_outputs(debug_dir, args.debug_full_sun, args.debug_shifts, args.debug_gif_frames, args.debug_luminosity)
+        clean_debug_outputs(
+            debug_dir,
+            args.debug_full_sun,
+            args.debug_shifts,
+            args.debug_gif_frames,
+            args.debug_luminosity,
+        )
 
-        sky_threshold = compute_sky_threshold(frames, darks, args.manual_seuil_fond_du_ciel)
+        sky_threshold = compute_sky_threshold(
+            frames, darks, args.manual_seuil_fond_du_ciel
+        )
         model = build_solar_model(
             frames,
             full_sun,
@@ -1569,17 +1908,23 @@ def main() -> int:
 
         movie_exclusions = set(excluded) | set(darks) | set(full_sun)
         movie_indices = [i for i in range(len(frames)) if i not in movie_exclusions]
-        logging.info("Movie frame count after exclusions/calibrations: %d", len(movie_indices))
+        logging.info(
+            "Movie frame count after exclusions/calibrations: %d", len(movie_indices)
+        )
 
         debug_shifts_dir = debug_dir / "shifts" if args.debug_shifts else None
         if debug_shifts_dir is not None:
             logging.info("Shift mask debug directory: %s", debug_shifts_dir)
             if args.debug_watershed:
                 logging.info("Watershed debug calculation enabled")
-        debug_gif_frames_dir = debug_dir / "gif_frames" if args.debug_gif_frames else None
+        debug_gif_frames_dir = (
+            debug_dir / "gif_frames" if args.debug_gif_frames else None
+        )
         if debug_gif_frames_dir is not None:
             logging.info("GIF frame debug directory: %s", debug_gif_frames_dir)
-        debug_luminosity_dir = debug_dir / "luminosity" if args.debug_luminosity else None
+        debug_luminosity_dir = (
+            debug_dir / "luminosity" if args.debug_luminosity else None
+        )
         if debug_luminosity_dir is not None:
             logging.info("Luminosity debug directory: %s", debug_luminosity_dir)
 
@@ -1603,7 +1948,9 @@ def main() -> int:
         log_gif_frame_composition(slot_images, durations_ms)
         gif_frames = images_to_gif_frames(slot_images, sky_threshold)
         if debug_gif_frames_dir is not None:
-            save_debug_gif_frames(gif_frames, slot_images, durations_ms, debug_gif_frames_dir)
+            save_debug_gif_frames(
+                gif_frames, slot_images, durations_ms, debug_gif_frames_dir
+            )
         write_gif(gif_frames, durations_ms, output)
 
         logging.info(

@@ -1,4 +1,7 @@
 """Configuration CPU commune à tous les traitements Siril."""
+
+from __future__ import annotations
+
 import os
 
 
@@ -8,14 +11,14 @@ class CpuConfig:
     _limit = None
 
     @classmethod
-    def configure(cls, limit=None):
+    def configure(cls, limit: int | None = None) -> None:
         """Fixe une limite globale ; None rétablit le mode automatique (N - 1)."""
         if limit is not None and (type(limit) is not int or limit < 1):
             raise ValueError("La limite CPU doit être un entier positif ou None")
         cls._limit = limit
 
     @classmethod
-    def get_limit(cls):
+    def get_limit(cls) -> int:
         """Calcule la limite sur la machine d'exécution, avec au moins un CPU."""
         available = os.cpu_count() or 1
         if cls._limit is None:
