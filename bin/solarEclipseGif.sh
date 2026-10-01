@@ -6,6 +6,9 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 VENV_DIR="${PROJECT_ROOT}/.venv"
 PY_SCRIPT="${SCRIPT_DIR}/solarEclipseGif.py"
 
+# Fix for GLIBCXX version conflicts with VS Code extension
+export LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libstdc++.so.6
+
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
   cat <<'EOF'
 Usage: bin/solarEclipseGif.sh [OPTIONS]
@@ -43,15 +46,28 @@ EOF
   exit 0
 fi
 
-if [[ ! -d "${VENV_DIR}" ]]; then
-  echo "[solarEclipseGif] Creation du venv dans ${VENV_DIR}"
-  python3 -m venv "${VENV_DIR}"
+# Venv selection priority:
+# 1) <project>/.venv (with activate script)
+# 2) System Python with LD_PRELOAD fix (fallback)
+USE_VENV=false
+SELECTED_VENV=""
+
+if [[ -d "${VENV_DIR}" && -f "${VENV_DIR}/bin/activate" ]]; then
+  SELECTED_VENV="${VENV_DIR}"
+  USE_VENV=true
 fi
 
-# shellcheck source=/dev/null
-source "${VENV_DIR}/bin/activate"
-
-python -m pip install --upgrade pip >/dev/null
-python -m pip install -r "${PROJECT_ROOT}/requirements.txt" >/dev/null
-
-exec python "${PY_SCRIPT}" "$@"
+if [[ "${USE_VENV}" == true ]]; then
+  python -m pip install --upgrade pip >/dev/null
+  python -m pip install -r "${PROJECT_ROOT}/requirements.txt" >/dev/null
+  
+  # shellcheck source=/dev/null
+  source "${SELECTED_VENV}/bin/activate"
+  exec python "${PY_SCRIPT}" "$@"
+else
+  echo "[solarEclipseGif] No valid venv found. Using system Python with GLIBCXX fix."
+  echo "[solarEclipseGif] Installing/upgrading dependencies..."
+  python3 -m pip install --break-system-packages --upgrade pip >/dev/null
+  python3 -m pip install --break-system-packages -r "${PROJECT_ROOT}/requirements.txt" >/dev/null
+  exec python3 "${PY_SCRIPT}" "$@"
+fi
