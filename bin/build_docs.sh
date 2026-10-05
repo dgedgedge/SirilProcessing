@@ -3,48 +3,11 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-PY_SCRIPT="${SCRIPT_DIR}/generate_docs_html.py"
 
-# Fix for GLIBCXX version conflicts with VS Code extension
+# Compatibilité avec la libstdc++ des extensions VS Code.
 export LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libstdc++.so.6
 
-# Venv selection priority:
-# 1) VENV_DIR environment variable
-# 2) <project>/.venv (with activate script)
-# 3) <project>/venv (with activate script)
-# 4) System Python with LD_PRELOAD fix (fallback)
-USE_VENV=false
-SELECTED_VENV=""
-
-if [[ -n "${VENV_DIR:-}" ]]; then
-  if [[ -d "${VENV_DIR}" && -f "${VENV_DIR}/bin/activate" ]]; then
-    SELECTED_VENV="${VENV_DIR}"
-    USE_VENV=true
-  else
-    echo "[build_docs] VENV_DIR specified but invalid: ${VENV_DIR}"
-    exit 1
-  fi
-elif [[ -d "${PROJECT_ROOT}/.venv" && -f "${PROJECT_ROOT}/.venv/bin/activate" ]]; then
-  SELECTED_VENV="${PROJECT_ROOT}/.venv"
-  USE_VENV=true
-elif [[ -d "${PROJECT_ROOT}/venv" && -f "${PROJECT_ROOT}/venv/bin/activate" ]]; then
-  SELECTED_VENV="${PROJECT_ROOT}/venv"
-  USE_VENV=true
-fi
-
-if [[ "${USE_VENV}" == true ]]; then
-  # shellcheck source=/dev/null
-  source "${SELECTED_VENV}/bin/activate"
-  exec python "${PY_SCRIPT}" \
-    --source-root "${PROJECT_ROOT}" \
-    --output-dir "${PROJECT_ROOT}/out" \
-    --pdf \
-    "$@"
-else
-  echo "[build_docs] No valid venv found. Using system Python with GLIBCXX fix."
-  exec python3 "${PY_SCRIPT}" \
-    --source-root "${PROJECT_ROOT}" \
-    --output-dir "${PROJECT_ROOT}/out" \
-    --pdf \
-    "$@"
-fi
+# shellcheck source=bin/venv_helpers.sh
+source "${SCRIPT_DIR}/venv_helpers.sh"
+prepare_project_venv "${PROJECT_ROOT}/requirements.txt"
+exec "${SELECTED_VENV}/bin/python" "${SCRIPT_DIR}/generate_docs_html.py" --source-root "${PROJECT_ROOT}" --output-dir "${PROJECT_ROOT}/out" --pdf "$@"
