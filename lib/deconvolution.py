@@ -69,6 +69,15 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         help="Fraction minimale des étoiles valides avant retrouvées après",
     )
     parser.add_argument(
+        "--deconvolution-force-manual-matching",
+        action="store_true",
+        help=(
+            "Forcer les seuils saisis (--deconvolution-match-radius, "
+            "--deconvolution-min-stars, --deconvolution-min-match-fraction) "
+            "au lieu du mode auto adaptatif"
+        ),
+    )
+    parser.add_argument(
         "--deconvolution-step",
         type=float,
         default=0.0003,

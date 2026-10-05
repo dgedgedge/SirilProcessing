@@ -42,3 +42,6 @@ Thumbs.db
 # Generated documentation
 generated_doc/
 out/
+
+# Poids Cosmic Clarity installés explicitement, sans versionner les binaires
+/models/cosmicclarity/

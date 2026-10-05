@@ -91,8 +91,11 @@ def test_photometry_explicitly_disabled(rgb, tmp_path, monkeypatch):
     monkeypatch.setattr('lib.siril_utils.Siril', factory)
     results = _PostProcessorSequence().post_process(rgb, tmp_path / 'report.json', arguments('--disable-photometry'))
     assert set(results) == {'gradient'}
-    assert results['gradient']['height'] == 20
-    assert results['gradient']['width'] == 20
+    gradient = results['gradient']
+    assert len(gradient['correction']['channels']) == 3
+    corrected = Path(gradient['output_image'])
+    assert corrected.is_file()
+    assert fits.getdata(corrected).shape == (3, 20, 20)
     factory.assert_not_called()
 
 

@@ -1,0 +1,32 @@
+{
+  "deep_denoise_cnn_AI3_6.pth": {
+    "url": "https://github.com/setiastro/cosmicclarity/releases/download/Linux/deep_denoise_cnn_AI3_6.pth",
+    "sha256": "f860e234dc6a3ab1acacbea399c235179c86cb8b287f2ab9010bc18c8af08671",
+    "size": 35415566
+  },
+  "deep_nonstellar_sharp_cnn_radius_1AI3_5s.pth": {
+    "url": "https://github.com/setiastro/cosmicclarity/releases/download/Linux/deep_nonstellar_sharp_cnn_radius_1AI3_5s.pth",
+    "sha256": "754bf02b6c1c00c150ab4d43a65dbf81d07f34b8009dfc886cbd36437d940cbc",
+    "size": 11803306
+  },
+  "deep_nonstellar_sharp_cnn_radius_2AI3_5s.pth": {
+    "url": "https://github.com/setiastro/cosmicclarity/releases/download/Linux/deep_nonstellar_sharp_cnn_radius_2AI3_5s.pth",
+    "sha256": "266acd67d5d7b654642124682df08033b0a9fc890d52414525aa89fb2a7a57ed",
+    "size": 11803306
+  },
+  "deep_nonstellar_sharp_cnn_radius_4AI3_5s.pth": {
+    "url": "https://github.com/setiastro/cosmicclarity/releases/download/Linux/deep_nonstellar_sharp_cnn_radius_4AI3_5s.pth",
+    "sha256": "33be8fa8ecdda683796d3144bf0da6dc52028316171b49e2134f022570579df9",
+    "size": 11803306
+  },
+  "deep_nonstellar_sharp_cnn_radius_8AI3_5s.pth": {
+    "url": "https://github.com/setiastro/cosmicclarity/releases/download/Linux/deep_nonstellar_sharp_cnn_radius_8AI3_5s.pth",
+    "sha256": "136786b54caec782d177b2ba20432ce07865e4f4b5f45d12b8d587c55d8624dc",
+    "size": 11803306
+  },
+  "deep_sharp_stellar_cnn_AI3_5s.pth": {
+    "url": "https://github.com/setiastro/cosmicclarity/releases/download/Linux/deep_sharp_stellar_cnn_AI3_5s.pth",
+    "sha256": "8f1c32e180a38cb439b3d8296633fc460f6c41f0f17e8e4291a5a0d9ccb017f9",
+    "size": 11802586
+  }
+}

@@ -376,3 +376,29 @@ def assess_quality(
             roundness_tolerance=roundness_tolerance,
         ),
     )
+
+
+def assess_denoising(
+    comparison: JSONReport, artifacts: JSONReport, *, max_blur: float = 0.03,
+) -> list[str]:
+    """Liste les motifs de rejet du débruitage, communs aux moteurs Siril et IA.
+
+    Exige une baisse du bruit sur chaque canal, sans flou stellaire excessif,
+    perte de rondeur supérieure à 0,01 ni nouveaux anneaux sur plus de 10 %
+    des étoiles contrôlées. max_blur est une augmentation relative de FWHM.
+    """
+    if not np.isfinite(max_blur) or not 0 <= max_blur <= 1:
+        raise ValueError('Tolérance de flou entre 0 et 1 requise')
+    if comparison['status'] != 'validated':
+        return ['insufficient_matches']
+    reasons = []
+    mean_ratio = comparison['after_fwhm_px']['mean'] / comparison['before_fwhm_px']['mean']
+    if max(mean_ratio, comparison['paired_ratio']['median']) > 1 + max_blur:
+        reasons.append('stellar_blurring')
+    if comparison['after_roundness']['mean'] < comparison['before_roundness']['mean'] - 0.01:
+        reasons.append('roundness_degraded')
+    if artifacts['max_noise_ratio'] >= 1:
+        reasons.append('no_noise_reduction')
+    if artifacts['max_ring_fraction'] > 0.1:
+        reasons.append('stellar_rings')
+    return reasons

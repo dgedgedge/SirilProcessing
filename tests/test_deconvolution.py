@@ -191,11 +191,12 @@ def test_invalid_parameters(tmp_path, simulated_siril, options):
     factory.assert_not_called()
 
 
-def test_order_and_default_activation():
+def test_order_and_default_activation() -> None:
+    """Vérifie que la déconvolution précède le débruitage, actifs par défaut."""
     sequence = _PostProcessorSequence()
     assert isinstance(sequence.processors[-3], PhotometricColorCalibrator)
-    assert isinstance(sequence.processors[-1], DeconvolutionProcessor)
-    assert sequence.processors[-2].get_prefix() == 'denoise'
+    assert isinstance(sequence.processors[-2], DeconvolutionProcessor)
+    assert sequence.processors[-1].get_prefix() == 'denoise'
     assert arguments().enable_denoise is True
     assert arguments().enable_deconvolution is True
     assert arguments().enable_photometry is True

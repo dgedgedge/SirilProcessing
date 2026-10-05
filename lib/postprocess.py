@@ -1143,7 +1143,7 @@ class PhotometricColorCalibrator(processor):
 
 
 class NoiseReductionProcessor(processor):
-    """Réduction du bruit avant déconvolution, activée par défaut."""
+    """Réduction du bruit après déconvolution, activée par défaut."""
 
     def get_prefix(self) -> str:
         """Retourne l’identifiant de l’étape utilisé dans les options et rapports."""
@@ -1200,27 +1200,82 @@ class _PostProcessorSequence:
     """Orchestre des processeurs indépendamment de leur type concret."""
 
     def __init__(self, processors: Sequence[processor] | None = None) -> None:
-        """Installe les étapes explicites ou la séquence standard gradient/couleur/bruit/PSF."""
+        """Installe les étapes explicites ou la séquence standard gradient/couleur/PSF/bruit."""
         self._args = None
+        self._custom_processors = processors is not None
         self.processors = (
             list(processors)
             if processors is not None
             else [
                 GradientExtractor(),
                 PhotometricColorCalibrator(),
-                NoiseReductionProcessor(),
                 DeconvolutionProcessor(),
+                NoiseReductionProcessor(),
             ]
         )
         prefixes = [processor.get_prefix() for processor in self.processors]
         if len(prefixes) != len(set(prefixes)):
             raise ValueError("Chaque processeur doit avoir un préfixe unique")
 
+    def _selected_processors(self, args: argparse.Namespace) -> list[processor]:
+        """Choisit les deux étapes de restauration de la séquence standard.
+
+        Une liste de processeurs explicite conserve ses propres instances.
+        """
+        backend = getattr(args, 'postprocess_backend', 'siril')
+        if backend not in ('siril', 'cosmic-clarity'):
+            raise ValueError('Moteur de post-traitement inconnu')
+        if self._custom_processors or backend == 'siril':
+            return list(self.processors)
+        from lib.cosmic_clarity.processors import (
+            CosmicClaritySharpenProcessor, CosmicClarityDenoiseProcessor,
+        )
+        return [
+            self.processors[0],
+            self.processors[1],
+            CosmicClaritySharpenProcessor(),
+            CosmicClarityDenoiseProcessor(),
+        ]
+
     def set_from_args(self, args: argparse.Namespace) -> None:
         """Configure la sélection et les options de chaque traitement."""
         self._args = deepcopy(args)
         for treatment in self.processors:
             treatment.set_from_args(args)
+
+    @staticmethod
+    def _is_deconvolution_no_safe_improvement(error: Exception) -> bool:
+        """Vrai quand la déconvolution s'arrête sans candidat validé.
+
+        Le moteur Siril lève un RuntimeError dans ce cas avec un message
+        explicite ; ce n'est pas un échec technique bloquant pour la suite.
+        """
+        return "Aucune déconvolution efficace" in str(error)
+
+    @staticmethod
+    def _deconvolution_no_safe_result(
+        report_path: Path,
+        current_path: Path,
+        error: Exception,
+    ) -> JSONReport:
+        """Construit le rapport de continuité pour une déconvolution non retenue."""
+        result: JSONReport = {
+            "status": "no_safe_improvement",
+            "output_image": str(current_path),
+            "error": str(error),
+        }
+        if report_path.is_file():
+            try:
+                report_data = json.loads(report_path.read_text(encoding="utf-8"))
+                if isinstance(report_data, dict):
+                    result.update(report_data)
+                result["status"] = "no_safe_improvement"
+                result["output_image"] = str(current_path)
+                result["error"] = str(error)
+            except (OSError, ValueError, TypeError):
+                pass
+        result["continued_with_original_image"] = True
+        return result
 
     @property
     def parameter_persistence(self) -> dict[str, bool]:
@@ -1233,6 +1288,10 @@ class _PostProcessorSequence:
 
     def add_arguments(self, parser: argparse.ArgumentParser) -> None:
         """Déclare les paramètres de cette étape dans le parseur partagé."""
+        if not self._custom_processors:
+            from lib.cosmic_clarity.processors import add_arguments
+
+            add_arguments(parser)
         for processor in self.processors:
             prefix = processor.get_prefix()
             group = parser.add_argument_group(f"Traitement {prefix}")
@@ -1275,7 +1334,7 @@ class _PostProcessorSequence:
         if current_path == output_path.resolve():
             raise ValueError("Le rapport JSON ne peut pas remplacer l'image d'entrée")
         all_results = {}
-        for index, processor in enumerate(self.processors, start=1):
+        for index, processor in enumerate(self._selected_processors(args), start=1):
             prefix = processor.get_prefix()
             if not getattr(args, f"enable_{prefix}", processor.enabled_by_default):
                 continue
@@ -1303,6 +1362,21 @@ class _PostProcessorSequence:
                 _write_report(report_path, result)
                 all_results[prefix] = result
             except Exception as error:
+                if (
+                    prefix == "deconvolution"
+                    and self._is_deconvolution_no_safe_improvement(error)
+                ):
+                    logging.warning(
+                        "Déconvolution non appliquée (aucune amélioration validée). "
+                        "Poursuite avec l'image d'origine: %s",
+                        current_path,
+                    )
+                    result = self._deconvolution_no_safe_result(
+                        report_path, current_path, error
+                    )
+                    _write_report(report_path, result)
+                    all_results[prefix] = result
+                    continue
                 raise RuntimeError(f"Échec du traitement {prefix}: {error}") from error
         _write_report(output_path, all_results)
         return all_results

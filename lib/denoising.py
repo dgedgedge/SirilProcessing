@@ -13,7 +13,7 @@ import numpy as np
 from astropy.io import fits
 
 from lib.deconvolution import _quote, compare_star_catalogs
-from lib.deconvolution_quality import artifact_metrics
+from lib.deconvolution_quality import artifact_metrics, assess_denoising
 from lib.siril_utils import create_siril_from_args
 from lib.type_defs import JSONReport
 
@@ -120,17 +120,7 @@ def post_process(
                 / comparison["before_fwhm_px"]["mean"]
             )
             median_ratio = comparison["paired_ratio"]["median"]
-            if max(mean_ratio, median_ratio) > 1 + max_blur:
-                reasons.append("stellar_blurring")
-            if (
-                comparison["after_roundness"]["mean"]
-                < comparison["before_roundness"]["mean"] - 0.01
-            ):
-                reasons.append("roundness_degraded")
-            if metrics["max_noise_ratio"] >= 1:
-                reasons.append("no_noise_reduction")
-            if metrics["max_ring_fraction"] > 0.1:
-                reasons.append("stellar_rings")
+            reasons = assess_denoising(comparison, metrics, max_blur=max_blur)
             logging.info(
                 "Réduction du bruit : %d étoiles appariées ; gain de bruit minimal %+.2f %% ; "
                 "variation FWHM moyenne %+.2f %% ; variation médiane appariée %+.2f %%",

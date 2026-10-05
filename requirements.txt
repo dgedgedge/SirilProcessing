@@ -3,9 +3,14 @@ numpy>=1.20.0
 Pillow>=10.0.0
 scipy>=1.10.0
 scikit-image>=0.22.0
-Markdown>=3.6
+
+# Visualiseurs KStars et génération HTML
+-r requirements-analyze.txt
+-r requirements-docs.txt
+
+# Export PDF
 WeasyPrint>=62.0
 
-# Testing dependencies
+# Tests
 pytest>=7.0.0
 pytest-cov>=4.0.0

@@ -5,7 +5,9 @@ Script de post-traitement extensible pour une image FITS unique.
 Ce script prend UNE SEULE image FITS calibrée en entrée et exécute les
 traitements activés par défaut : analyse du gradient, résolution
 astrométrique suivie de l'étalonnage photométrique des couleurs, puis
-déconvolution avec audit de PSF et comparaison stellaire avant/après.
+déconvolution avec audit de PSF et comparaison stellaire avant/après,
+puis réduction du bruit contrôlée. --postprocess-backend cosmic-clarity
+remplace ces deux dernières étapes par des réseaux neuronaux optionnels.
 Il produit un rapport JSON et les fichiers propres à chaque traitement.
 
 Le script utilise _PostProcessorSequence pour exécuter les traitements.
