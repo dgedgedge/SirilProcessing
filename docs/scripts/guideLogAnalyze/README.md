@@ -148,3 +148,8 @@ Si aucune calibration ne précède le guidage, son absence est indiquée ; aucun
 calibration d'un autre fichier n'est supposée applicable. Il s'agit de la dernière
 calibration **enregistrée**, sans présumer qu'une tentative incomplète a réussi :
 les messages du journal restent affichés pour en vérifier le résultat.
+
+Le lanceur utilise Python et pip du système pour créer le venv sans pip et
+mettre à jour ses dépendances avant chaque exécution. Il lance ensuite le
+Python du venv. La sélection de l’environnement, les prérequis et l’exécution
+sans mise à jour sont décrits dans [Installation](../../INSTALLATION.md).

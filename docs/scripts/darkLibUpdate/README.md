@@ -25,3 +25,8 @@ contrôlent les groupes à traiter et produisent les masters de la bibliothèque
 La consommation des masters par les lights est décrite dans
 [la calibration de lightProcess](../lightProcess/treatments/CALIBRATION.md).
 Le [catalogue d’architecture](../../architecture/LIBRARIES.md) situe le rôle des modules.
+
+Le lanceur utilise Python et pip du système pour créer le venv sans pip et
+mettre à jour ses dépendances avant chaque exécution. Il lance ensuite le
+Python du venv. La sélection de l’environnement, les prérequis et l’exécution
+sans mise à jour sont décrits dans [Installation](../../INSTALLATION.md).

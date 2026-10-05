@@ -40,3 +40,8 @@ ordre d’exécution :
 fichier différent de `~/.siril_darklib_config.json` ; `-S/--save-config` mémorise les
 paramètres. Les options explicites priment sur le JSON, qui prime sur les défauts.
 Voir [la configuration partagée](../postProcess/README.md#configuration-et-mémorisation).
+
+Le lanceur utilise Python et pip du système pour créer le venv sans pip et
+mettre à jour ses dépendances avant chaque exécution. Il lance ensuite le
+Python du venv. La sélection de l’environnement, les prérequis et l’exécution
+sans mise à jour sont décrits dans [Installation](../../INSTALLATION.md).

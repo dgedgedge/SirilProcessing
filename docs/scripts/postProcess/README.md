@@ -3,7 +3,7 @@
 [Documentation](../../README.md) › [Scripts](../README.md) › postProcess
 
 `bin/postProcess.py` traite une image FITS à travers quatre étapes ordonnées :
-**correction du gradient → étalonnage photométrique → débruitage → déconvolution**.
+**correction du gradient → étalonnage photométrique → déconvolution → débruitage**.
 Chaque étape reçoit l’image retenue par la précédente et produit un rapport JSON.
 Les quatre traitements sont activés par défaut ; leur activation peut être
 modifiée par la ligne de commande ou par la configuration mémorisée.
@@ -26,8 +26,7 @@ Le premier argument est le FITS d’entrée. Le second, facultatif, est le **rap
 JSON global**, et non le nom du FITS final. Sans cet argument, le rapport s’appelle
 `<image>_postProcess.json`, à côté du fichier source.
 
-Le wrapper active `VENV_DIR` s’il est défini, sinon `.venv`, puis `venv` dans le
-projet. Il conserve le dossier de lancement pour résoudre les chemins relatifs.
+Le wrapper conserve le dossier de lancement pour résoudre les chemins relatifs.
 L’appel Python équivalent, avec le venv déjà activé, est :
 
 ```bash
@@ -49,33 +48,53 @@ Voir [l’installation](../../INSTALLATION.md) pour l’environnement du projet.
 flowchart TD
     A["FITS source"] --> G["01 · Correction du gradient"]
     G --> P["02 · Astrométrie et couleurs PCC"]
-    P --> N["03 · Essai de débruitage"]
-    N --> Q{"Débruitage accepté ?"}
-    Q -->|Oui| D["04 · Déconvolution de l’image débruitée"]
-    Q -->|Non| O["Conserver l’image reçue par le débruitage"]
-    O --> D
+    P --> D["03 · Déconvolution contrôlée"]
     D --> V{"Déconvolution acceptée ?"}
-    V -->|Oui| R["FITS final et rapport global"]
-    V -->|Non| E["Arrêt avec erreur ; images et diagnostics conservés"]
+    V -->|Oui| N["04 · Essai de débruitage"]
+    V -->|Non| E["Poursuite avec l’image précédente ; audit conservé"]
+    N --> Q{"Débruitage accepté ?"}
+    Q -->|Oui| R["FITS final et rapport global"]
+    Q -->|Non| O["Conserver l’image reçue par le débruitage"]
+    O --> R
 ```
 
 Le schéma suppose les quatre étapes actives. Une étape désactivée est sautée et
 l’image courante est transmise à la suivante. Une erreur d’exécution interrompt
-la séquence. Le refus d’un candidat de débruitage pour qualité insuffisante est
-un résultat normal : la séquence poursuit avec l’image précédente.
+la séquence, sauf le cas `no_safe_improvement` de la déconvolution : l’audit est
+conservé et l’image d’entrée de l’étape est transmise à la suivante. Le refus
+d’un candidat de débruitage pour qualité insuffisante est un résultat normal :
+la séquence poursuit avec l’image précédente.
 
 | Position | Traitement | Classe | Effet sur l’image |
 |---|---|---|---|
 | 01 | `gradient` | `GradientExtractor` | Soustrait les variations du fond |
 | 02 | `photometry` | `PhotometricColorCalibrator` | Résout l’astrométrie et étalonne les couleurs |
-| 03 | `denoise` | `NoiseReductionProcessor` | Réduit le bruit si les contrôles de qualité sont satisfaits |
-| 04 | `deconvolution` | `DeconvolutionProcessor` | Améliore la finesse avec contrôle des étoiles et des artefacts |
+| 03 | `deconvolution` | `DeconvolutionProcessor` | Améliore la finesse avec contrôle des étoiles et des artefacts |
+| 04 | `denoise` | `NoiseReductionProcessor` | Réduit le bruit si les contrôles de qualité sont satisfaits |
 
 Les indices restent fixes lorsqu’une étape est désactivée. Les options
 `--enable-gradient`, `--enable-photometry`, `--enable-denoise` et
 `--enable-deconvolution` activent explicitement les étapes correspondantes ; les
 options `--disable-…` les désactivent. Les variantes `--enable_<préfixe>` et
 `--disable_<préfixe>` sont également acceptées. Le CLI ne change pas leur ordre.
+
+## Moteur Cosmic Clarity optionnel
+
+Le moteur classique `siril` reste le défaut. Pour remplacer les étapes de
+netteté et de débruitage par les réseaux Cosmic Clarity avec CUDA :
+
+```bash
+bin/postProcess.sh --install-cosmic-clarity
+bin/postProcess.sh image_RGB.fit --postprocess-backend cosmic-clarity
+```
+
+L'option d'installation est capturée par le `.sh` ; elle utilise pip système
+pour installer les dépendances dans le venv et récupérer les poids vérifiés.
+L'option de moteur appartient au programme Python et peut être mémorisée avec
+`-S`. Les noms des rapports, l'ordre et les contrôles d'acceptation restent les
+mêmes. Les algorithmes détaillés ci-dessous décrivent le moteur Siril.
+Voir [Cosmic Clarity](cosmic-clarity.md) pour les classes, modèles, paramètres,
+ressources, différences avec l'amont et limites de validation.
 
 ## 01 — Correction du gradient
 
@@ -150,34 +169,7 @@ Le résultat n’est publié qu’après réussite de Siril et vérification des
 et de la présence d’un WCS céleste. Le rapport conserve les coordonnées utilisées,
 les commandes, les chemins du script et du journal, ainsi que `output_image`.
 
-## 03 — Réduction du bruit
-
-Le traitement utilise la commande Siril `denoise -vst`, avec transformation
-stabilisatrice de variance Anscombe, en flottant 32 bits. Il compare les
-catalogues stellaires avant et après sur les mêmes étoiles : canal vert pour
-une image RGB, canal unique pour une image monochrome.
-
-Le candidat est accepté seulement si les contrôles suivants sont satisfaits :
-
-- au moins 10 étoiles appariées et 70 % des étoiles valides initiales retrouvées,
-  dans un rayon d’un pixel ;
-- augmentation de la FWHM moyenne et du ratio médian apparié limitée à 3 % par défaut ;
-- perte de rondeur moyenne au plus égale à `0.01` ;
-- diminution mesurée du bruit sur tous les canaux et fraction de nouveaux anneaux
-  stellaires ne dépassant pas 10 %.
-
-| Option | Défaut local | Rôle |
-|---|---|---|
-| `--denoise-modulation` | `0.5` | Intensité du débruitage, entre 0 et 1 |
-| `--denoise-max-blur` | `0.03` | Augmentation relative maximale de FWHM, entre 0 et 1 |
-
-Si le candidat est accepté, `03_denoise.fit` devient l’entrée de la déconvolution.
-Sinon, le rapport indique `status: "rejected"`, détaille `rejection_reasons` et
-renvoie l’image précédente dans `output_image`. Les candidats et diagnostics
-restent disponibles dans un dossier de travail unique. Un échec technique de
-Siril, en revanche, arrête la séquence.
-
-## 04 — Déconvolution contrôlée
+## 03 — Déconvolution contrôlée
 
 La déconvolution cherche à réduire l’étalement des détails. Elle utilise
 Richardson–Lucy par descente de gradient avec régularisation TV, sur une copie
@@ -220,13 +212,41 @@ pas accepté est appliqué au champ entier, qui doit à nouveau passer les contr
 | `--deconvolution-min-gain` | `0.02` | Gain relatif minimal de finesse |
 | `--deconvolution-max-noise` | `1.15` | Rapport maximal de bruit après/avant |
 | `--deconvolution-max-rings` | `0.1` | Fraction maximale de nouveaux anneaux |
-| `--deconvolution-output` | `04_deconvolution.fit` | FITS accepté, dans le dossier des étapes par défaut |
+| `--deconvolution-output` | `03_deconvolution.fit` | FITS accepté, dans le dossier des étapes par défaut |
 
-Si aucun essai n’est accepté, la séquence **se termine en erreur** avec le statut
-`no_safe_improvement` dans l’audit de déconvolution. L’image reçue est conservée,
-ainsi que les essais et leurs diagnostics ; une ancienne sortie finale n’est pas
-remplacée. Les contrôles quantitatifs restent à compléter par l’inspection des
-images, notamment des étoiles brillantes et des nébulosités.
+Si aucun essai n’est accepté, l’audit de déconvolution prend le statut
+`no_safe_improvement` et la séquence continue avec l’image reçue par cette étape.
+Le journal principal indique explicitement que la déconvolution n’a pas été
+appliquée. Les essais et diagnostics sont conservés ; les contrôles quantitatifs
+restent à compléter par l’inspection des images, notamment des étoiles brillantes
+et des nébulosités.
+
+## 04 — Réduction du bruit
+
+Le traitement utilise la commande Siril `denoise -vst`, avec transformation
+stabilisatrice de variance Anscombe, en flottant 32 bits. Il compare les
+catalogues stellaires avant et après sur les mêmes étoiles : canal vert pour
+une image RGB, canal unique pour une image monochrome.
+
+Le candidat est accepté seulement si les contrôles suivants sont satisfaits :
+
+- au moins 10 étoiles appariées et 70 % des étoiles valides initiales retrouvées,
+  dans un rayon d’un pixel ;
+- augmentation de la FWHM moyenne et du ratio médian apparié limitée à 3 % par défaut ;
+- perte de rondeur moyenne au plus égale à `0.01` ;
+- diminution mesurée du bruit sur tous les canaux et fraction de nouveaux anneaux
+  stellaires ne dépassant pas 10 %.
+
+| Option | Défaut local | Rôle |
+|---|---|---|
+| `--denoise-modulation` | `0.5` | Intensité du débruitage, entre 0 et 1 |
+| `--denoise-max-blur` | `0.03` | Augmentation relative maximale de FWHM, entre 0 et 1 |
+
+Si le candidat est accepté, `04_denoise.fit` devient le FITS final.
+Sinon, le rapport indique `status: "rejected"`, détaille `rejection_reasons` et
+renvoie l’image précédente dans `output_image`. Les candidats et diagnostics
+restent disponibles dans un dossier de travail unique. Un échec technique de
+Siril, en revanche, arrête la séquence.
 
 ## Configuration et mémorisation
 
@@ -286,12 +306,12 @@ rapports/
     ├── 02_photometry.json
     ├── 02_photometry.fit
     ├── 02_photometry_<identifiant>/
-    ├── 03_denoise.json
-    ├── 03_denoise.fit
-    ├── 03_denoise_<identifiant>/
-    ├── 04_deconvolution.json
-    ├── 04_deconvolution.fit
-    └── 04_deconvolution_<identifiant>/
+    ├── 03_deconvolution.json
+    ├── 03_deconvolution.fit
+    ├── 03_deconvolution_<identifiant>/
+    ├── 04_denoise.json
+    ├── 04_denoise.fit
+    └── 04_denoise_<identifiant>/
 ```
 
 Le PNG est facultatif. Les chemins explicites de sortie peuvent déplacer les
@@ -302,19 +322,21 @@ déconvolution contient aussi l’original de cette étape, les PSF et leurs ape
 ainsi que `matched_stars.csv` préfixé par le nom de l’étape en cas de succès.
 
 Le rapport global est un objet JSON dont les clés sont les préfixes des étapes
-exécutées : `gradient`, `photometry`, `denoise`, `deconvolution`. Chaque résultat
+exécutées : `gradient`, `photometry`, `deconvolution`, `denoise`. Chaque résultat
 indique son `output_image` lorsqu’une image doit être transmise. Le FITS final est
 celui référencé par la dernière étape active ; aucun FITS supplémentaire n’est
 créé à côté du rapport global pour renommer ce résultat.
 
 Le log principal est recréé à chaque lancement. Avec `--log-level DEBUG`, les
 exceptions y incluent leur traceback. Une erreur interrompt les étapes suivantes
-et empêche l’écriture du rapport global de cette exécution ; les sorties déjà
-produites et les audits disponibles restent sur disque. Un rapport global d’un
-lancement précédent peut donc encore exister : vérifier le code de sortie et les
-journaux. Le programme retourne `0` en cas de succès, `1` pour une erreur de
-traitement et `130` pour une interruption clavier ; argparse retourne `2` pour
-une ligne de commande invalide.
+et empêche l’écriture du rapport global de cette exécution, sauf pour le statut
+`no_safe_improvement` de la déconvolution qui est traité comme un refus contrôlé.
+Dans ce cas, la séquence continue avec l’image précédente et le rapport global
+est bien écrit. Les sorties déjà produites et les audits disponibles restent sur
+disque. Un rapport global d’un lancement précédent peut donc encore exister :
+vérifier le code de sortie et les journaux. Le programme retourne `0` en cas de
+succès, `1` pour une erreur de traitement et `130` pour une interruption clavier ;
+argparse retourne `2` pour une ligne de commande invalide.
 
 ## Utiliser seulement certaines étapes
 
@@ -339,3 +361,8 @@ bin/postProcess.sh image.fit rapports/details.json \
 
 Pour l’utilisation Python et l’ajout d’un traitement, consulter
 [le contrat de la séquence](../lightProcess/treatments/postprocess/SEQUENCE_PROCESSOR.md).
+
+Le lanceur utilise Python et pip du système pour créer le venv sans pip et
+mettre à jour ses dépendances avant chaque exécution. Il lance ensuite le
+Python du venv. La sélection de l’environnement, les prérequis et l’exécution
+sans mise à jour sont décrits dans [Installation](../../INSTALLATION.md).
