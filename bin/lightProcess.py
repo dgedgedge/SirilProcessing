@@ -99,8 +99,8 @@ def session_work_root(
 
 
 def stack_output_root(base_output_dir: Path, target_root: Path) -> Path:
-    """Construit le dossier des empilements communs de la cible."""
-    return target_output_root(base_output_dir, target_root) / "stack"
+    """Construit le dossier de sortie du résultat empilé de la cible."""
+    return target_output_root(base_output_dir, target_root)
 
 
 def target_work_root(base_work_dir: Path, target_root: Path) -> Path:
