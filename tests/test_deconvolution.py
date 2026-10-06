@@ -144,10 +144,10 @@ def test_process_saves_psf_preview_audit_and_next_input(tmp_path, simulated_siri
     factory.assert_called_once_with(siril_path='/test/siril', siril_mode='native')
     scripts = '\n'.join(call.args[0] for call in runner.run_siril_script.call_args_list)
     assert 'findstar -layer=1 -out=01_deconvolution_before_stars.tsv' in scripts
-    assert 'makepsf save 01_deconvolution_blind_psf.fit' in scripts
+    assert 'makepsf save 01_deconvolution_blind_psf.fits' in scripts
     assert 'makepsf blind -l0 -ks=15' in scripts
     assert '-iters=15 -gdstep=0.0003000 -tv -alpha=3000' in scripts
-    assert 'save 01_deconvolution_simple_trial.fit\nclose\nload 01_deconvolution_simple_trial.fit' in scripts
+    assert 'save 01_deconvolution_simple_trial.fits\nclose\nload 01_deconvolution_simple_trial.fits' in scripts
     for key in ('psf_path', 'psf_preview_path', 'matched_stars_path', 'output_image'):
         assert Path(deconv[key]).is_file()
     assert deconv['comparison']['matched_count'] == 10

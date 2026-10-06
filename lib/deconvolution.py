@@ -406,7 +406,7 @@ def post_process(
         raise ValueError("Canal de mesure incompatible avec cette image")
     tag = treatment_file_prefix(output_path)
     default_image = (
-        f"{output_path.stem}.fit" if tag else f"{input_path.stem}_deconvolved.fit"
+        f"{output_path.stem}.fits" if tag else f"{input_path.stem}_deconvolved.fits"
     )
     destination = Path(
         option("output", None) or output_path.parent / default_image
@@ -421,7 +421,7 @@ def post_process(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     work = Path(mkdtemp(prefix=tag or "deconvolution_", dir=output_path.parent))
     runner = create_siril_from_args(args)
-    snapshot = work / f"{tag}original.fit"
+    snapshot = work / f"{tag}original.fits"
     copyfile(input_path, snapshot)
     result = dict(
         image_path=str(input_path),
@@ -502,7 +502,7 @@ def post_process(
     ) -> Path:
         """Sélectionne des étoiles isolées et écrit une PSF FITS avec son aperçu PNG."""
         stars, rejected = read_star_catalog(catalog, profile=profile)
-        sheet = work / f"{tag}{label}_selected_stars.fit"
+        sheet = work / f"{tag}{label}_selected_stars.fits"
         try:
             selection = select_psf_stars(
                 stars,
@@ -531,7 +531,7 @@ def post_process(
         result["psf_selections"].append(selection)
         selection_path = work / f"{tag}{label}_selection.json"
         selection_path.write_text(json.dumps(selection, indent=2), encoding="utf-8")
-        psf = work / f"{tag}{label}_psf.fit"
+        psf = work / f"{tag}{label}_psf.fits"
         run(
             label + "_psf",
             [
@@ -574,7 +574,7 @@ def post_process(
         label: str,
     ) -> JSONReport:
         """Exécute un essai au pas demandé et renvoie l’image avec son audit de qualité."""
-        candidate = work / f"{tag}{label}.fit"
+        candidate = work / f"{tag}{label}.fits"
         after_catalog = work / f"{tag}{label}_stars.tsv"
         run(
             label,
@@ -669,7 +669,7 @@ def post_process(
         accepted = None
         try:
             if psf_method == "blind":
-                psf = work / f"{tag}blind_psf.fit"
+                psf = work / f"{tag}blind_psf.fits"
                 run(
                     "blind_psf",
                     [
@@ -698,7 +698,7 @@ def post_process(
             logging.warning("PSF simple non exploitable : %s", error)
         if accepted is None and adaptive:
             # Le tiers de chaque dimension, issu de l'original, jamais d'un essai déconvolué.
-            crop = work / f"{tag}central_original.fit"
+            crop = work / f"{tag}central_original.fits"
             with fits.open(snapshot, memmap=False) as hdul:
                 height, width = shape[-2:]
                 crop_h, crop_w = height // 3, width // 3

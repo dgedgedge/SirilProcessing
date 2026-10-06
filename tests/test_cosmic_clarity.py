@@ -140,11 +140,11 @@ def test_processor_quality_and_source_preservation(
         else:
             monkeypatch.setattr(
                 'lib.deconvolution.post_process',
-                lambda source, report, args: {'output_image': str(report.with_suffix('.fit'))},
+                lambda source, report, args: {'output_image': str(report.with_suffix('.fits'))},
             )
     cls = CosmicClaritySharpenProcessor if operation == 'sharpen' else CosmicClarityDenoiseProcessor
     report = tmp_path / 'report.json'
-    final = report.with_suffix('.fit')
+    final = report.with_suffix('.fits')
     if status == 'no_safe_improvement':
         final.write_bytes(b'previous output')
     result = cls().post_process(source, report, arguments())
@@ -172,7 +172,7 @@ def test_sequence_neural_handoff(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     def process(self: object, input_path: Path, output_path: Path, args: argparse.Namespace) -> dict:
         """Simule une sortie pour vérifier l'ordre et les chemins réellement transmis."""
         calls.append((input_path, output_path.name))
-        destination = output_path.with_suffix('.fit')
+        destination = output_path.with_suffix('.fits')
         shutil.copyfile(input_path, destination)
         return {'output_image': str(destination)}
 
@@ -184,7 +184,7 @@ def test_sequence_neural_handoff(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     result = sequence.post_process(source, tmp_path / 'global.json')
     assert list(result) == ['deconvolution', 'denoise']
     assert calls == [(source, '03_deconvolution.json'),
-                     (tmp_path / 'global_steps' / '03_deconvolution.fit', '04_denoise.json')]
+                     (tmp_path / 'global_steps' / '03_deconvolution.fits', '04_denoise.json')]
     calls.clear()
     args.enable_deconvolution = False
     sequence.post_process(source, tmp_path / 'disabled.json', args)
@@ -210,7 +210,7 @@ def test_sequence_continues_when_fallback_has_no_gain(
 
     def denoise(self: object, input_path: Path, output_path: Path, args: argparse.Namespace) -> dict:
         denoise_inputs.append(Path(input_path))
-        destination = output_path.with_suffix('.fit')
+        destination = output_path.with_suffix('.fits')
         shutil.copyfile(input_path, destination)
         return {'output_image': str(destination)}
 

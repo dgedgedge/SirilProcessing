@@ -138,7 +138,7 @@ class _CosmicClarityProcessor(processor):
         source, report = Path(input_path).resolve(), Path(output_path).resolve()
         destination = Path(
             (getattr(args, 'deconvolution_output', None) if self.operation == 'sharpen' else None)
-            or report.with_suffix('.fit')
+            or report.with_suffix('.fits')
         ).resolve()
         if source == report or destination in (source, report):
             raise ValueError('Les sorties doivent être différentes de la source et du rapport')
@@ -166,7 +166,7 @@ class _CosmicClarityProcessor(processor):
             raise ValueError('Canal de mesure incompatible avec cette image')
         report.parent.mkdir(parents=True, exist_ok=True)
         work = Path(mkdtemp(prefix=report.stem + '_', dir=report.parent))
-        candidate = work / 'candidate.fit'
+        candidate = work / 'candidate.fits'
         before, after = work / 'before.tsv', work / 'after.tsv'
         result = dict(image_path=str(source), engine='cosmic-clarity', status='evaluating',
                       candidate_image_path=str(candidate), layer=layer,

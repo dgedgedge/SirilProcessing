@@ -13,7 +13,7 @@ les options d'activation, les rapports et leurs contrôles de qualité.
 bin/postProcess.sh --install-cosmic-clarity
 
 # Traitement avec les réseaux, après installation.
-bin/postProcess.sh image_RGB.fit rapports/resultat.json \
+bin/postProcess.sh image_RGB.fit rapports/ \
   --postprocess-backend cosmic-clarity --photometry-object M20
 
 # Installation et traitement dans la même commande.
@@ -43,6 +43,15 @@ Un GPU NVIDIA avec pilote compatible CUDA 12.8 est requis par défaut. Le module
 `--cosmic-device cpu` autorise explicitement une exécution CPU. Siril 1.4 reste
 nécessaire pour les mesures stellaires, même avec les réseaux. Le traitement
 reste local, sans service distant ni entraînement.
+
+Les sorties de `postProcess` sont regroupées par exécution sous le nom
+`<image>_postprocess_<backend>`. Avec ce backend, on obtient donc par défaut :
+
+- dossier d’étapes : `<image>_postprocess_cosmic-clarity/`
+- rapport global : `<image>_postprocess_cosmic-clarity.json`
+- FITS final : `<image>_postprocess_cosmic-clarity.fits`
+
+Le rapport et le FITS final restent au même niveau que ce dossier.
 
 ## Options
 

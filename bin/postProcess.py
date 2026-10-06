@@ -12,14 +12,14 @@ Il produit un rapport JSON et les fichiers propres à chaque traitement.
 
 Le script utilise _PostProcessorSequence pour exécuter les traitements.
 Les chemins relatifs sont résolus depuis le dossier de lancement.
-Le fichier de sortie pour les résultats est celui fourni en argument.
+Le second argument facultatif choisit le répertoire de sortie.
 
 Usage:
     python postProcess.py <input_file> [output_file] [options]
 
 Exemples:
     python postProcess.py /path/to/pp_light_0001.fit
-    python postProcess.py /path/to/image.fit /tmp/output/result.json
+    python postProcess.py /path/to/image.fit /tmp/output/
 """
 
 from __future__ import annotations
@@ -29,6 +29,7 @@ import logging
 import os
 import sys
 from pathlib import Path
+from shutil import copyfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -40,6 +41,44 @@ from lib.logging_utils import (
 )
 from lib.postprocess import _PostProcessorSequence
 from lib.siril_utils import Siril
+
+
+def _sanitize_backend_name(name: str) -> str:
+    """Retourne un identifiant de backend sûr pour les noms de chemins."""
+    return "".join(char if char.isalnum() or char in ("-", "_") else "_" for char in name)
+
+
+def _build_postprocess_layout(
+    input_file: Path, output_arg: str | None, backend: str,
+) -> tuple[Path, Path, Path, str]:
+    """Construit les chemins de rapport, dossier d'étapes et résultat final.
+
+    Les étapes intermédiaires sont rangées dans un dossier nommé avec l'image
+    traitée et le backend. Le rapport JSON global et le FITS final sont écrits
+    au même niveau, avec le même nom de base.
+    """
+    backend_name = _sanitize_backend_name(backend)
+    run_name = f"{input_file.stem}_postprocess_{backend_name}"
+    if output_arg:
+        provided = Path(output_arg)
+        base_dir = provided if provided.suffix == "" else provided.parent
+    else:
+        base_dir = input_file.parent
+    base_dir = base_dir.resolve()
+    report_path = base_dir / f"{run_name}.json"
+    steps_dir = base_dir / run_name
+    result_path = base_dir / f"{run_name}.fits"
+    return report_path, steps_dir, result_path, run_name
+
+
+def _resolve_final_image(results: dict, fallback: Path) -> Path:
+    """Récupère l'image finale produite par la dernière étape active."""
+    final_image = fallback
+    for report in results.values():
+        output_image = report.get("output_image") if isinstance(report, dict) else None
+        if output_image:
+            final_image = Path(output_image)
+    return final_image.resolve()
 
 
 def main() -> None:
@@ -58,7 +97,10 @@ def main() -> None:
         type=str,
         nargs="?",
         default=None,
-        help="Chemin vers le fichier de sortie JSON (défaut: <input_file>_postProcess.json)",
+        help=(
+            "Répertoire de sortie des artefacts (ou ancien chemin de rapport). "
+            "Défaut: dossier de l'image d'entrée"
+        ),
     )
     parser.add_argument(
         "-l",
@@ -80,23 +122,19 @@ def main() -> None:
     args = config.parse_args(parser)
     setup_logging(args.log_level)
 
-    input_file = Path(args.input_file)
-    # Déterminer le fichier de sortie JSON
-    if args.output_file:
-        output_path = Path(args.output_file)
-    else:
-        # Par défaut: <input_file>_postProcess.json dans le même répertoire
-        output_path = input_file.parent / f"{input_file.stem}_postProcess.json"
-
-    log_file = (
-        output_path.parent
-        / f"{output_path.stem}_steps"
-        / f"00_{input_file.stem}_postProcess.log"
+    input_file = Path(args.input_file).resolve()
+    backend = getattr(args, "postprocess_backend", "siril")
+    output_path, steps_dir, result_path, run_name = _build_postprocess_layout(
+        input_file, args.output_file, backend,
     )
+    args.postprocess_steps_dir = steps_dir
+    log_file = steps_dir / f"00_{input_file.stem}_postProcess.log"
     log_handler = None
     try:
         if log_file.resolve() == input_file.resolve():
             raise ValueError("Le fichier de log ne peut pas remplacer l'image d'entrée")
+        if result_path.resolve() == input_file.resolve():
+            raise ValueError("Le fichier de sortie final ne peut pas remplacer l'image d'entrée")
         log_handler = add_session_file_logging(log_file, args.log_level)
         logging.info("Log de post-traitement: %s", log_file)
         logging.info("Log level set to %s", args.log_level)
@@ -105,17 +143,27 @@ def main() -> None:
             return 1
         logging.info("Configuration: %s", config.config_file)
         logging.info("Siril: mode=%s, path=%s", args.siril_mode, args.siril_path)
+        logging.info("Backend: %s", backend)
         if args.save_config:
             if not config.save_requested(args):
                 return 1
         logging.info("Analyse de: %s", input_file)
-        logging.info("Sortie vers: %s", output_path)
+        logging.info("Rapport global: %s", output_path)
+        logging.info("Dossier des étapes: %s", steps_dir)
+        logging.info("Résultat final: %s", result_path)
         # Exécuter la séquence de post-processing
         seq_processor.set_from_args(args)
         results = seq_processor.post_process(
             input_path=input_file,
             output_path=output_path,
         )
+        final_image = _resolve_final_image(results, input_file)
+        if not final_image.is_file():
+            raise FileNotFoundError(f"Image finale introuvable: {final_image}")
+        result_path.parent.mkdir(parents=True, exist_ok=True)
+        if final_image != result_path.resolve():
+            copyfile(final_image, result_path)
+        logging.info("Image finale exportée: %s", result_path)
 
         logging.info(f"\n{'=' * 60}")
         logging.info("RÉSULTATS")

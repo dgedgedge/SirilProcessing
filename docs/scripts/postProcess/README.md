@@ -18,19 +18,30 @@ l’histogramme.
 Depuis la racine du projet :
 
 ```bash
-bin/postProcess.sh image_RGB.fit rapports/resultat.json \
+bin/postProcess.sh image_RGB.fit rapports/ \
   --photometry-object M20
 ```
 
-Le premier argument est le FITS d’entrée. Le second, facultatif, est le **rapport
-JSON global**, et non le nom du FITS final. Sans cet argument, le rapport s’appelle
-`<image>_postProcess.json`, à côté du fichier source.
+Le premier argument est le FITS d’entrée. Le second, facultatif, choisit le
+**répertoire de sortie** (un ancien chemin de rapport JSON reste accepté et son
+dossier parent est utilisé). Sans cet argument, les sorties sont écrites à côté
+du fichier source.
+
+Chaque exécution crée un nom de base `<image>_postprocess_<backend>` :
+
+- dossier d’étapes et d’artefacts intermédiaires :
+  `<image>_postprocess_<backend>/`
+- rapport global : `<image>_postprocess_<backend>.json`
+- FITS final : `<image>_postprocess_<backend>.fits`
+
+Le rapport global et le FITS final sont donc au même niveau que le dossier
+d’étapes et partagent son nom de base.
 
 Le wrapper conserve le dossier de lancement pour résoudre les chemins relatifs.
 L’appel Python équivalent, avec le venv déjà activé, est :
 
 ```bash
-python bin/postProcess.py image_RGB.fit rapports/resultat.json
+python bin/postProcess.py image_RGB.fit rapports/
 bin/postProcess.sh --help
 ```
 
@@ -163,7 +174,7 @@ résolution ; sinon une solution WCS existante peut être réutilisée.
 | `--photometry-solve-catalog` | `tycho2`, `nomad`, `localgaia`, `gaia`, `ppmxl`, `brightstars` ou `apass` ; sinon choix Siril |
 | `--photometry-catalog` | Catalogue PCC : `nomad`, `apass`, `localgaia` ou `gaia` ; sinon choix Siril |
 | `--photometry-limitmag` | Magnitude limite positive pour PCC ; non imposée par défaut |
-| `--photometry-output` | FITS étalonné ; par défaut `02_photometry.fit` dans le dossier des étapes |
+| `--photometry-output` | FITS étalonné ; par défaut `02_photometry.fits` dans le dossier des étapes |
 
 Le résultat n’est publié qu’après réussite de Siril et vérification des dimensions
 et de la présence d’un WCS céleste. Le rapport conserve les coordonnées utilisées,
@@ -212,7 +223,7 @@ pas accepté est appliqué au champ entier, qui doit à nouveau passer les contr
 | `--deconvolution-min-gain` | `0.02` | Gain relatif minimal de finesse |
 | `--deconvolution-max-noise` | `1.15` | Rapport maximal de bruit après/avant |
 | `--deconvolution-max-rings` | `0.1` | Fraction maximale de nouveaux anneaux |
-| `--deconvolution-output` | `03_deconvolution.fit` | FITS accepté, dans le dossier des étapes par défaut |
+| `--deconvolution-output` | `03_deconvolution.fits` | FITS accepté, dans le dossier des étapes par défaut |
 
 Si aucun essai n’est accepté, l’audit de déconvolution prend le statut
 `no_safe_improvement` et la séquence continue avec l’image reçue par cette étape.
@@ -242,7 +253,7 @@ Le candidat est accepté seulement si les contrôles suivants sont satisfaits :
 | `--denoise-modulation` | `0.5` | Intensité du débruitage, entre 0 et 1 |
 | `--denoise-max-blur` | `0.03` | Augmentation relative maximale de FWHM, entre 0 et 1 |
 
-Si le candidat est accepté, `04_denoise.fit` devient le FITS final.
+Si le candidat est accepté, `04_denoise.fits` devient le FITS final.
 Sinon, le rapport indique `status: "rejected"`, détaille `rejection_reasons` et
 renvoie l’image précédente dans `output_image`. Les candidats et diagnostics
 restent disponibles dans un dossier de travail unique. Un échec technique de
@@ -292,25 +303,26 @@ de l’image d’entrée. Les réglages peuvent donc être mémorisés même si 
 
 ## Rapports, images et journaux
 
-Pour `bin/postProcess.sh image_RGB.fit rapports/resultat.json`, avec toutes les
+Pour `bin/postProcess.sh image_RGB.fit rapports/`, avec toutes les
 étapes actives et acceptées :
 
 ```text
 rapports/
-├── resultat.json
-└── resultat_steps/
+├── image_RGB_postprocess_siril.fits
+├── image_RGB_postprocess_siril.json
+└── image_RGB_postprocess_siril/
     ├── 00_image_RGB_postProcess.log
     ├── 01_gradient.json
     ├── 01_gradient_image_RGB_gradient_corrected.fits
     ├── 01_gradient_image_RGB_measurement_points.png
     ├── 02_photometry.json
-    ├── 02_photometry.fit
+    ├── 02_photometry.fits
     ├── 02_photometry_<identifiant>/
     ├── 03_deconvolution.json
-    ├── 03_deconvolution.fit
+    ├── 03_deconvolution.fits
     ├── 03_deconvolution_<identifiant>/
     ├── 04_denoise.json
-    ├── 04_denoise.fit
+    ├── 04_denoise.fits
     └── 04_denoise_<identifiant>/
 ```
 
@@ -324,8 +336,8 @@ ainsi que `matched_stars.csv` préfixé par le nom de l’étape en cas de succ�
 Le rapport global est un objet JSON dont les clés sont les préfixes des étapes
 exécutées : `gradient`, `photometry`, `deconvolution`, `denoise`. Chaque résultat
 indique son `output_image` lorsqu’une image doit être transmise. Le FITS final est
-celui référencé par la dernière étape active ; aucun FITS supplémentaire n’est
-créé à côté du rapport global pour renommer ce résultat.
+celui référencé par la dernière étape active, recopié au niveau du rapport global
+sous le nom `<image>_postprocess_<backend>.fits`.
 
 Le log principal est recréé à chaque lancement. Avec `--log-level DEBUG`, les
 exceptions y incluent leur traceback. Une erreur interrompt les étapes suivantes

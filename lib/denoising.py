@@ -59,7 +59,7 @@ def post_process(
     layer = 1 if len(shape) == 3 else 0
     report.parent.mkdir(parents=True, exist_ok=True)
     work = Path(mkdtemp(prefix=report.stem + "_", dir=report.parent))
-    candidate = work / "candidate.fit"
+    candidate = work / "candidate.fits"
     before, after = work / "before.tsv", work / "after.tsv"
     result = dict(
         image_path=str(source),
@@ -93,9 +93,9 @@ def post_process(
                 "setfindstar -gaussian",
                 f"findstar -layer={layer} -out=before.tsv",
                 f"denoise -vst -mod={modulation:g}",
-                "save candidate.fit",
+                "save candidate.fits",
                 "close",
-                "load candidate.fit",
+                "load candidate.fits",
                 "setfindstar reset",
                 "setfindstar -gaussian",
                 f"findstar -layer={layer} -out=after.tsv",
@@ -137,7 +137,7 @@ def post_process(
                 ", ".join(reasons),
             )
         else:
-            destination = report.with_suffix(".fit")
+            destination = report.with_suffix(".fits")
             if destination == source:
                 raise ValueError("La sortie ne peut pas remplacer l’image source")
             copyfile(candidate, destination)

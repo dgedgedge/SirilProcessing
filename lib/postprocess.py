@@ -1039,7 +1039,7 @@ class PhotometricColorCalibrator(processor):
 
         tag = treatment_file_prefix(output_path)
         default_image = (
-            f"{output_path.stem}.fit" if tag else f"{input_path.stem}_pcc.fit"
+            f"{output_path.stem}.fits" if tag else f"{input_path.stem}_pcc.fits"
         )
         output_image = Path(
             option("output") or output_path.parent / default_image
@@ -1086,7 +1086,7 @@ class PhotometricColorCalibrator(processor):
         # Un dossier neuf évite de confondre une ancienne sortie avec un succès.
         output_path.parent.mkdir(parents=True, exist_ok=True)
         work_dir = Path(mkdtemp(prefix=tag or "photometry_", dir=output_path.parent))
-        staged_image = work_dir / f"{tag}calibrated.fit"
+        staged_image = work_dir / f"{tag}calibrated.fits"
         script = "\n".join(
             [
                 "requires 1.4",
@@ -1333,17 +1333,18 @@ class _PostProcessorSequence:
         output_path = Path(output_path)
         if current_path == output_path.resolve():
             raise ValueError("Le rapport JSON ne peut pas remplacer l'image d'entrée")
+        configured_steps_dir = getattr(args, "postprocess_steps_dir", None)
+        if configured_steps_dir is None:
+            steps_dir = output_path.parent / f"{output_path.stem}_steps"
+        else:
+            steps_dir = Path(configured_steps_dir)
+        steps_dir.mkdir(parents=True, exist_ok=True)
         all_results = {}
         for index, processor in enumerate(self._selected_processors(args), start=1):
             prefix = processor.get_prefix()
             if not getattr(args, f"enable_{prefix}", processor.enabled_by_default):
                 continue
-            report_path = (
-                output_path.parent
-                / f"{output_path.stem}_steps"
-                / f"{index:02d}_{prefix}.json"
-            )
-            report_path.parent.mkdir(parents=True, exist_ok=True)
+            report_path = steps_dir / f"{index:02d}_{prefix}.json"
             logging.info("Exécution de %s sur %s", prefix, current_path)
             try:
                 result = processor.post_process(current_path, report_path, args=args)

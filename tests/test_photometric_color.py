@@ -30,7 +30,7 @@ def fake_siril(monkeypatch, rgb):
         wcs.wcs.crval = [270.6, -23.0]
         wcs.wcs.cdelt = [-0.001, 0.001]
         wcs.wcs.ctype = ['RA---TAN', 'DEC--TAN']
-        fits.writeto(Path(working_dir) / (f'{Path(script_name).stem}_calibrated.fit' if script_name[0].isdigit() else 'calibrated.fit'), fits.getdata(rgb) * 0.8, wcs.to_header())
+        fits.writeto(Path(working_dir) / (f'{Path(script_name).stem}_calibrated.fits' if script_name[0].isdigit() else 'calibrated.fits'), fits.getdata(rgb) * 0.8, wcs.to_header())
         return True
 
     runner.run_siril_script.side_effect = run
@@ -133,7 +133,7 @@ def test_siril_failure_does_not_publish_stale_output(rgb, tmp_path, fake_siril, 
 
     def fail(script, working_dir, script_name):
         if failure == 'no_wcs':
-            fits.writeto(Path(working_dir) / (f'{Path(script_name).stem}_calibrated.fit' if script_name[0].isdigit() else 'calibrated.fit'), fits.getdata(rgb))
+            fits.writeto(Path(working_dir) / (f'{Path(script_name).stem}_calibrated.fits' if script_name[0].isdigit() else 'calibrated.fits'), fits.getdata(rgb))
         return failure != 'exit'
 
     runner.run_siril_script.side_effect = fail
@@ -176,7 +176,7 @@ def test_rgb_sip_wcs_validates_spatial_axes(rgb, tmp_path, fake_siril):
 
     def generate_sip(*args, **kwargs):
         generate(*args, **kwargs)
-        with fits.open(Path(args[1]) / 'calibrated.fit', mode='update') as hdul:
+        with fits.open(Path(args[1]) / 'calibrated.fits', mode='update') as hdul:
             header = hdul[0].header
             header['WCSAXES'] = 3
             header['CTYPE1'] = 'RA---TAN-SIP'
