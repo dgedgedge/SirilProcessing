@@ -1,6 +1,6 @@
 """Inférence Cosmic Clarity sur FITS mono/RGB, sans interface ni moteur externe.
 
-Adaptation des réseaux MIT de Franklin Marek : canaux indépendants, tuiles
+Adaptation des réseaux MIT de Franklin Marek : luminance ou canaux séparés, tuiles
 256 px recouvrantes, mélange avec l'entrée et étirement temporaire. Les choix
 et différences avec l'application amont figurent dans cosmic-clarity.md.
 """
@@ -21,6 +21,7 @@ from lib.cosmic_clarity.models import (
     DENOISE_MODEL, NONSTELLAR_MODELS, STELLAR_MODEL, manifest, verify_model,
 )
 from lib.cosmic_clarity.network import RestorationCNN
+from lib.cosmic_clarity.color import extract_luminance, guided_chroma, merge_luminance
 from lib.type_defs import JSONReport
 
 
@@ -29,6 +30,8 @@ TILE_SIZE = 256
 OVERLAP = 64
 BORDER = 16
 TARGET_MEDIAN = 0.25
+SHARPEN_STRETCH_THRESHOLD = 0.08
+DENOISE_STRETCH_THRESHOLD = 0.05
 
 
 def select_device(name: str) -> torch.device:
@@ -122,21 +125,33 @@ class CosmicClarityEngine:
         operation: Literal['sharpen', 'denoise'], *,
         stellar_amount: float = 0.5, nonstellar_amount: float = 0.5,
         radius: float = 3.0, denoise_amount: float = 0.5,
+        sharpen_mode: Literal['luminance', 'separate'] = 'luminance',
+        denoise_mode: Literal['luminance', 'full', 'separate'] = 'luminance',
+        color_denoise_amount: float | None = None,
     ) -> JSONReport:
         """Écrit un candidat sans écraser l'entrée et retourne les paramètres d'audit.
 
         Les FITS CFA, dimensions non mono/RGB et pixels non finis sont refusés.
-        Les canaux sont normalisés dans [0,1], restaurés indépendamment, puis
-        remis dans l’échelle initiale des flottants ou l’échelle Siril normalisée
-        pour les entiers. Une image constante est refusée.
+        Normalise dans [0,1] puis applique les modes couleur de l’auteur :
+        luminance YCbCr par défaut, canaux séparés en option ; « full » débruite
+        Y par réseau et Cb/Cr par filtre guidé. L’intensité de chrominance omise
+        reprend denoise_amount. Étirement temporaire global avec médianes par
+        canal, puis retour à l’échelle des flottants ou Siril pour les entiers.
+        Une image constante est refusée. Les écrêtages et l’étirement ne
+        garantissent pas la conservation photométrique des couleurs.
         """
         if operation not in ('sharpen', 'denoise'):
             raise ValueError('Opération Cosmic Clarity inconnue')
+        if sharpen_mode not in ('luminance', 'separate'):
+            raise ValueError('Mode de netteté Cosmic Clarity inconnu')
+        if denoise_mode not in ('luminance', 'full', 'separate'):
+            raise ValueError('Mode de débruitage Cosmic Clarity inconnu')
+        color_amount = (denoise_amount if color_denoise_amount is None
+                        else color_denoise_amount)
         self.used_models.clear()
-        values = (stellar_amount, nonstellar_amount, radius, denoise_amount)
-        if (not np.isfinite(values).all() or not 1 <= radius <= 8
-                or any(not 0 <= value <= 1 for value in
-                       (stellar_amount, nonstellar_amount, denoise_amount))):
+        amounts = (stellar_amount, nonstellar_amount, denoise_amount, color_amount)
+        if (not np.isfinite((*amounts, radius)).all() or not 1 <= radius <= 8
+                or any(not 0 <= value <= 1 for value in amounts)):
             raise ValueError('Intensités Cosmic Clarity entre 0 et 1 ; rayon entre 1 et 8')
         if source.resolve() == destination.resolve():
             raise ValueError('Le candidat ne peut pas remplacer la source')
@@ -161,15 +176,23 @@ class CosmicClarityEngine:
             scale = max(1.0, float(planes.max()) - offset)
             normalized = (planes - offset) / scale
             prepared = normalized.copy()
+            threshold = (SHARPEN_STRETCH_THRESHOLD if operation == 'sharpen'
+                         else DENOISE_STRETCH_THRESHOLD)
+            minimum = float(normalized.min())
+            stretch_needed = float(np.median(normalized - minimum)) < threshold
             stretches = []
-            threshold = 0.08 if operation == 'sharpen' else 0.05
             for i, plane in enumerate(normalized):
-                minimum = float(plane.min())
                 median = float(np.median(plane - minimum))
-                enabled = 0 < median < threshold
-                if enabled:
+                enabled = stretch_needed and 0 < median < 1
+                if stretch_needed:
                     prepared[i] = midtone(plane - minimum, median, TARGET_MEDIAN)
                 stretches.append((enabled, minimum, median))
+            mode = sharpen_mode if operation == 'sharpen' else denoise_mode
+            chroma = None
+            if prepared.shape[0] == 3 and mode != 'separate':
+                luminance, cb, cr = extract_luminance(prepared)
+                chroma = (cb, cr)
+                prepared = luminance[None]
             restored = prepared.copy()
             if operation == 'denoise' and denoise_amount > 0:
                 restored += denoise_amount * (self._apply(prepared, DENOISE_MODEL) - prepared)
@@ -186,11 +209,19 @@ class CosmicClarityEngine:
                         prediction = ((1 - weight) * prediction
                                       + weight * self._apply(restored, NONSTELLAR_MODELS[high]))
                     restored += nonstellar_amount * (prediction - restored)
+            if chroma is not None:
+                cb, cr = chroma
+                if operation == 'denoise' and mode == 'full':
+                    cb = guided_chroma(prepared[0], cb, color_amount)
+                    cr = guided_chroma(prepared[0], cr, color_amount)
+                restored = merge_luminance(restored[0], cb, cr)
             for i, (enabled, minimum, median) in enumerate(stretches):
                 if enabled:
                     restored[i] = midtone(
                         restored[i], float(np.median(restored[i])), median,
-                    ) + minimum
+                    )
+            if stretch_needed:
+                restored = np.clip(restored + minimum, 0, 1)
             restored = (restored * scale + offset).astype(np.float32)
             if not np.isfinite(restored).all():
                 raise ValueError('Pixels non finis après restauration des unités')
@@ -198,13 +229,19 @@ class CosmicClarityEngine:
             hdul[0].header.pop('BLANK', None)
             hdul[0].header.add_history(f'Cosmic Clarity {operation}; {self.device}; float32')
             hdul.writeto(destination, overwrite=False)
-        logging.info('Cosmic Clarity %s sur %s : %s', operation, self.device, destination)
+        logging.info(
+            'Cosmic Clarity %s, mode %s, sur %s : %s',
+            operation, mode if data.ndim == 3 else 'mono', self.device, destination,
+        )
         return dict(
             engine='cosmic-clarity', operation=operation, device=str(self.device),
             torch_version=str(torch.__version__), models=dict(self.used_models),
-            precision='float32', channels='independent', tile_size=TILE_SIZE,
+            precision='float32', channels=mode if data.ndim == 3 else 'mono',
+            color_mode=mode, color_space='YCbCr BT.601' if chroma is not None else None,
+            tile_size=TILE_SIZE,
             overlap=OVERLAP, normalization_offset=offset, normalization_scale=scale,
             integer_scale=integer_scale, temporary_stretch=[s[0] for s in stretches],
             stellar_amount=stellar_amount, nonstellar_amount=nonstellar_amount,
             nonstellar_radius=radius, denoise_amount=denoise_amount,
+            color_denoise_amount=color_amount,
         )

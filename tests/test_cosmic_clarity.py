@@ -51,13 +51,22 @@ def test_backend_configuration_persistence(tmp_path: Path, monkeypatch: pytest.M
     parser = argparse.ArgumentParser()
     config.add_arguments(parser)
     config.register(_PostProcessorSequence(), parser)
-    args = config.parse_args(parser, ['--disable-clarity', '-S'])
+    args = config.parse_args(parser, [
+        '--disable-clarity', '--cosmic-sharpen-mode', 'separate',
+        '--cosmic-denoise-mode', 'full', '--cosmic-color-denoise-amount', '.25', '-S',
+    ])
     assert config.save_requested(args)
     monkeypatch.setattr(Config, '_instance', None)
     config = Config(config_path)
     parser = argparse.ArgumentParser()
     config.register(_PostProcessorSequence(), parser)
-    assert config.parse_args(parser, []).enable_clarity is False
+    loaded = config.parse_args(parser, [])
+    assert loaded.enable_clarity is False
+    assert loaded.cosmic_sharpen_mode == 'separate'
+    assert loaded.cosmic_denoise_mode == 'full'
+    assert loaded.cosmic_color_denoise_amount == .25
+    overridden = config.parse_args(parser, ['--cosmic-denoise-mode', 'luminance'])
+    assert overridden.cosmic_denoise_mode == 'luminance'
     assert config.parse_args(parser, ['--enable-clarity']).enable_clarity is True
 
 
@@ -117,6 +126,9 @@ def test_processor_quality_and_source_preservation(
 
         def process(self, source: Path, destination: Path, *args: object, **kwargs: object) -> dict:
             """Copie le FITS de test ; les métriques sont injectées séparément."""
+            assert kwargs['sharpen_mode'] == 'luminance'
+            assert kwargs['denoise_mode'] == 'luminance'
+            assert kwargs['color_denoise_amount'] is None
             shutil.copyfile(source, destination)
             return {'device': 'cuda', 'operation': operation}
 

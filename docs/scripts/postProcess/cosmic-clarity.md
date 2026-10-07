@@ -66,6 +66,9 @@ Le rapport et le FITS final restent au même niveau que ce dossier.
 | `--cosmic-nonstellar-amount` | `0.5` | Mélange des structures diffuses, entre 0 et 1 |
 | `--cosmic-nonstellar-radius` | `3.0` | Rayon en pixels, entre 1 et 8 |
 | `--cosmic-denoise-amount` | `0.5` | Mélange du débruitage, entre 0 et 1 |
+| `--cosmic-sharpen-mode` | `luminance` | Netteté sur Y ; `separate` traite R/V/B séparément |
+| `--cosmic-denoise-mode` | `luminance` | `luminance`, `full` (Y + chrominance guidée), `separate` |
+| `--cosmic-color-denoise-amount` | intensité du débruitage | Intensité Cb/Cr en mode `full`, de 0 à 1 |
 | `--deconvolution-force-manual-matching` | `false` | Force les seuils manuels d’appariement au lieu du mode auto |
 
 Les options Python respectent CLI > configuration JSON > défauts et ne sont
@@ -154,6 +157,8 @@ Cosmic Clarity précède Siril et est donc retenu entre deux candidats équivale
 - `lib/cosmic_clarity/models.py` installe les fichiers décrits dans `models.json`
   via HTTPS, dans un fichier temporaire, puis vérifie taille et SHA-256 avant
   remplacement atomique. L'inférence vérifie aussi chaque fichier chargé.
+- `color.py` fournit les conversions YCbCr et le filtre guidé des
+  [modes couleur](cosmic-color.md), sans PyTorch.
 - `network.py` contient les architectures compatibles avec les poids amont,
   avec connexions résiduelles et latérales. Les paramètres sont chargés
   strictement par PyTorch avec `weights_only=True`.
@@ -171,15 +176,14 @@ nécessaire, une translation et une échelle communes placent les pixels dans
 CFA, les dimensions incompatibles, les pixels non finis et les images constantes
 sont refusés. Les autres HDU et les métadonnées sont conservés.
 
-Chaque canal est traité indépendamment. Si sa médiane après soustraction du
-minimum est positive et inférieure à 0,08 (netteté) ou 0,05 (débruitage), une
-transformation temporaire déplace cette médiane à 0,25 :
-
-`T(x; m, t) = t (m - 1) x / [m (t + x - 1) - t x]`.
-
-Après inférence, la transformation rétablit la médiane initiale en utilisant la
-médiane du résultat, puis réintroduit le minimum. Les médianes dégénérées sont
-laissées inchangées pour éviter les divisions par zéro.
+Les modes couleur suivent les scripts AI3 de l’auteur : **luminance** par
+défaut pour la netteté et le débruitage en ligne de commande ; traitement des
+canaux séparés en option ; débruitage `full` combinant réseau sur Y et filtre
+guidé sur Cb/Cr. Le réseau reçoit une luminance ou un canal dupliqué trois fois,
+comme chez l’auteur, et son premier canal de sortie est retenu. Le mode `full`
+n’envoie pas le RGB complet au réseau.
+Voir [modes couleur et prétraitement](cosmic-color.md) pour les conversions,
+formules, paramètres, interfaces et limites de fidélité.
 
 Le réseau travaille sur des tuiles de 256 × 256 pixels, avec recouvrement de
 64 pixels. Une marge de 16 pixels est écartée sur chaque prédiction et les
@@ -193,9 +197,11 @@ encadrant le rayon choisi parmi 1, 2, 4 et 8. Leurs sorties sont interpolées
 linéairement. Chaque intensité `a` mélange l'entrée et la prédiction :
 `sortie = (1 - a) entrée + a prédiction`. Le débruitage utilise le poids AI3.6.
 
-Cette adaptation utilise des canaux indépendants, un rayon fixe et float32.
-Elle ne reproduit pas les modes luminance/chrominance, l'auto-PSF locale, les
-interfaces graphiques ni toutes les variantes de l'application Cosmic Clarity.
+Cette adaptation reprend les modes luminance/chrominance de la révision AI3
+référencée, avec un rayon fixe et float32. Elle ne reproduit pas l’auto-PSF
+locale, les interfaces graphiques ni toutes les variantes de l’application.
+Les statistiques de bord et l’ordre de padding/étirement diffèrent encore de
+l’amont ; il ne s’agit pas d’une reproduction pixel à pixel de l’exécutable.
 Elle ne charge pas les modèles AI4 de Suite Pro.
 
 ## Contrôles et limites

@@ -4,7 +4,7 @@ Script de post-traitement extensible pour une image FITS unique.
 
 Ce script prend UNE SEULE image FITS calibrée en entrée et exécute les
 traitements activés par défaut : analyse du gradient, résolution
-astrométrique suivie de l'étalonnage photométrique des couleurs, puis
+astrométrique Gaia suivie de l'étalonnage spectrophotométrique SPCC des couleurs, puis
 déconvolution avec audit de PSF et comparaison stellaire avant/après,
 puis réduction du bruit contrôlée. Le mode comparatif Cosmic Clarity + Siril
 est activé par défaut pour ces deux dernières étapes et peut être désactivé

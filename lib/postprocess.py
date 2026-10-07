@@ -897,7 +897,7 @@ class GradientExtractor(processor):
 
 
 class PhotometricColorCalibrator(processor):
-    """Résolution astrométrique puis PCC sur une image RGB linéaire (Siril >= 1.4)."""
+    """Résolution astrométrique puis SPCC Gaia ou PCC sur RGB linéaire (Siril >= 1.4)."""
 
     parameter_persistence = dict.fromkeys(
         (
@@ -941,7 +941,8 @@ class PhotometricColorCalibrator(processor):
         parser.add_argument(
             "--photometry-force",
             action="store_true",
-            help="Refaire une solution WCS existante",
+            default=True,
+            help="Compatibilité : l’astrométrie est toujours recalculée",
         )
         parser.add_argument(
             "--photometry-noflip",
@@ -954,6 +955,29 @@ class PhotometricColorCalibrator(processor):
             help="Sous-échantillonner pour la résolution",
         )
         parser.add_argument(
+            "--photometry-method", choices=["spcc", "pcc"], default="spcc",
+            help="Étalonnage spectrophotométrique SPCC (défaut) ou photométrique PCC",
+        )
+        sensors = parser.add_mutually_exclusive_group()
+        sensors.add_argument(
+            "--photometry-osc-sensor", help="Nom du capteur couleur dans SPCC Siril",
+        )
+        sensors.add_argument(
+            "--photometry-mono-sensor", help="Nom du capteur mono du RGB composé dans SPCC",
+        )
+        for key, description in (
+            ("osc-filter", "Filtre devant le capteur couleur"),
+            ("osc-lpf", "Filtre passe-bas du boîtier photo"),
+            ("red-filter", "Filtre rouge du RGB composé"),
+            ("green-filter", "Filtre vert du RGB composé"),
+            ("blue-filter", "Filtre bleu du RGB composé"),
+            ("white-reference", "Référence de blanc"),
+        ):
+            parser.add_argument(
+                f"--photometry-{key}",
+                help=f"{description} : nom exact SPCC (sinon réglage Siril mémorisé)",
+            )
+        parser.add_argument(
             "--photometry-solve-catalog",
             choices=[
                 "tycho2",
@@ -964,17 +988,19 @@ class PhotometricColorCalibrator(processor):
                 "brightstars",
                 "apass",
             ],
-            help="Catalogue astrométrique (sinon choix automatique Siril)",
+            default="gaia",
+            help="Catalogue astrométrique (défaut : Gaia)",
         )
         parser.add_argument(
             "--photometry-catalog",
             choices=["nomad", "apass", "localgaia", "gaia"],
-            help="Catalogue PCC (sinon valeur par défaut Siril)",
+            default="gaia",
+            help="Catalogue couleur (défaut : gaia ; SPCC accepte gaia/localgaia)",
         )
         parser.add_argument(
             "--photometry-limitmag",
             type=float,
-            help="Magnitude limite absolue pour PCC",
+            help="Magnitude limite absolue pour SPCC/PCC",
         )
         parser.add_argument(
             "--photometry-output",
@@ -983,12 +1009,12 @@ class PhotometricColorCalibrator(processor):
         )
 
     @staticmethod
-    def _quote_path(path: Path) -> str:
-        """Protège un chemin pour Siril et refuse les caractères de contrôle."""
+    def _quote_path(path: Path | str) -> str:
+        """Protège un chemin ou argument Siril et refuse les caractères de contrôle."""
         value = str(path)
         if any(character in value for character in ('"', "\n", "\r", "\x00")):
             raise ValueError(
-                "Chemin incompatible avec les scripts Siril (guillemet ou retour à la ligne)"
+                "Chemin ou argument incompatible avec les scripts Siril (guillemet ou retour à la ligne)"
             )
         return f'"{value}"'
 
@@ -998,25 +1024,75 @@ class PhotometricColorCalibrator(processor):
         output_path: Path,
         args: argparse.Namespace | None = None,
     ) -> JSONReport:
-        """Résout l’astrométrie et étalonne les couleurs RGB via Siril.
+        """Résout l’astrométrie et étalonne le RGB linéaire via SPCC Gaia par défaut.
+
+        SPCC utilise les profils Siril mémorisés sauf options explicites.
+        Pour un capteur couleur, le filtre provient des options, puis du champ
+        FITS FILTER, sinon de « No filter ». Le mode PCC reste disponible.
+        L’astrométrie est toujours recalculée, même si un WCS existe.
+        Le retournement est autorisé sauf noflip. Le rapport et le journal
+        décrivent les commandes exécutées.
 
         Conserve scripts et journaux, écrit le FITS de sortie et le rapport JSON.
         Lève ValueError pour une entrée ou des paramètres incompatibles et
-        RuntimeError si Siril échoue. Voir docs/scripts/postProcess/README.md."""
+        RuntimeError si Siril échoue. Voir docs/scripts/postProcess/photometry.md."""
         args = self._get_args(args)
 
         def option(name: str, default: ConfigValue = None) -> ConfigValue:
             """Lit une option photométrique, avec repli sur la valeur locale."""
             return getattr(args, f"photometry_{name}", default)
 
+        method = option("method", "spcc")
+        solve_catalog = option("solve_catalog", "gaia") or "gaia"
+        color_catalog = option("catalog", "gaia") or "gaia"
+        spectral_options = {
+            "oscsensor": option("osc_sensor"), "monosensor": option("mono_sensor"),
+            "oscfilter": option("osc_filter"), "osclpf": option("osc_lpf"),
+            "rfilter": option("red_filter"), "gfilter": option("green_filter"),
+            "bfilter": option("blue_filter"), "whiteref": option("white_reference"),
+        }
+        if method not in ("spcc", "pcc"):
+            raise ValueError("Méthode d’étalonnage inconnue : choisir spcc ou pcc")
+        if method == "spcc" and color_catalog not in ("gaia", "localgaia"):
+            raise ValueError("SPCC nécessite Gaia DR3 : choisir gaia ou localgaia")
+        if method == "pcc" and any(spectral_options.values()):
+            raise ValueError("Les profils capteur/filtres et la référence de blanc nécessitent SPCC")
+        if spectral_options["oscsensor"] and spectral_options["monosensor"]:
+            raise ValueError("Choisir un capteur couleur ou mono, pas les deux")
+        if (spectral_options["oscsensor"] and any(
+            spectral_options[name] for name in ("rfilter", "gfilter", "bfilter")
+        )) or (spectral_options["monosensor"] and any(
+            spectral_options[name] for name in ("oscfilter", "osclpf")
+        )):
+            raise ValueError("Les profils filtres doivent correspondre au type de capteur")
+        for value in spectral_options.values():
+            if value is not None and (not isinstance(value, str) or not value.strip()):
+                raise ValueError("Un nom de profil SPCC non vide est requis")
         input_path = Path(input_path).resolve()
         output_path = Path(output_path).resolve()
         with fits.open(input_path, memmap=False) as hdul:
             shape = hdul[0].shape
+            input_row_order = hdul[0].header.get("ROWORDER")
+            fits_filter = hdul[0].header.get("FILTER")
+            input_has_wcs = WCS(hdul[0].header, naxis=2).has_celestial
             if len(shape) != 3 or shape[0] != 3:
                 raise ValueError(
-                    "PCC nécessite une image FITS RGB linéaire à trois canaux, déjà dématricée"
+                    "SPCC/PCC nécessite une image FITS RGB linéaire à trois canaux, déjà dématricée"
                 )
+
+        filter_source = None
+        if method == "spcc" and not any(
+            spectral_options[name] for name in ("monosensor", "rfilter", "gfilter", "bfilter")
+        ):
+            if spectral_options["oscfilter"] is not None:
+                filter_source = "options"
+            else:
+                if fits_filter is not None and not isinstance(fits_filter, str):
+                    raise ValueError("Le champ FITS FILTER doit contenir un nom de filtre SPCC")
+                filter_name = fits_filter.strip() if fits_filter else ""
+                spectral_options["oscfilter"] = filter_name or "No filter"
+                filter_source = "FITS FILTER" if filter_name else "default"
+            self._quote_path(spectral_options["oscfilter"])
 
         coordinates = option("coordinates")
         object_name = option("object")
@@ -1039,14 +1115,14 @@ class PhotometricColorCalibrator(processor):
 
         tag = treatment_file_prefix(output_path)
         default_image = (
-            f"{output_path.stem}.fits" if tag else f"{input_path.stem}_pcc.fits"
+            f"{output_path.stem}.fits" if tag else f"{input_path.stem}_{method}.fits"
         )
         output_image = Path(
             option("output") or output_path.parent / default_image
         ).resolve()
         if output_image in (input_path, output_path):
             raise ValueError(
-                "La sortie PCC doit être différente de l'entrée et du rapport"
+                "La sortie couleur doit être différente de l'entrée et du rapport"
             )
         if output_image.suffix.lower() not in (".fit", ".fits", ".fts"):
             raise ValueError(
@@ -1064,9 +1140,9 @@ class PhotometricColorCalibrator(processor):
                 ) from error
             coordinates = [float(center.icrs.ra.deg), float(center.icrs.dec.deg)]
 
-        solve = ["platesolve"]
-        if option("force", False) or coordinates is not None:
-            solve.append("-force")
+        # Une calibration antérieure ou un WCS présent ne dispensent pas
+        # de refaire la résolution avant l’étalonnage des couleurs.
+        solve = ["platesolve", "-force"]
         if coordinates is not None:
             solve.append(f"{coordinates[0]:.10f},{coordinates[1]:.10f}")
         for name in ("focal", "pixelsize"):
@@ -1075,13 +1151,35 @@ class PhotometricColorCalibrator(processor):
         for name in ("noflip", "downscale"):
             if option(name, False):
                 solve.append(f"-{name}")
-        if option("solve_catalog"):
-            solve.append(f"-catalog={option('solve_catalog')}")
-        pcc = ["pcc"]
-        if option("catalog"):
-            pcc.append(f"-catalog={option('catalog')}")
+        solve.append(f"-catalog={solve_catalog}")
+        calibration = [method, f"-catalog={color_catalog}"]
         if option("limitmag") is not None:
-            pcc.append(f"-limitmag={option('limitmag'):.10g}")
+            calibration.append(f"-limitmag={option('limitmag'):.10g}")
+        if method == "spcc":
+            for name, value in spectral_options.items():
+                if value is not None:
+                    calibration.append(self._quote_path(f"-{name}={value}"))
+        logging.info(
+            "Photométrie : méthode=%s ; catalogue couleur=%s ; commande=%s",
+            method.upper(), color_catalog, " ".join(calibration),
+        )
+        logging.info(
+            "Astrométrie : %s ; retournement %s",
+            " ".join(solve), "interdit" if option("noflip", False) else "autorisé",
+        )
+        logging.info(
+            "Astrométrie : WCS d’entrée présent=%s ; nouvelle résolution demandée=%s",
+            input_has_wcs, True,
+        )
+        if method == "spcc":
+            logging.info(
+                "SPCC : filtre OSC=%s ; source=%s",
+                spectral_options["oscfilter"], filter_source,
+            )
+            logging.info(
+                "SPCC : autres profils non précisés repris des préférences Siril ; paramètres transmis=%s",
+                {name: value for name, value in spectral_options.items() if value is not None},
+            )
 
         # Un dossier neuf évite de confondre une ancienne sortie avec un succès.
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1096,7 +1194,7 @@ class PhotometricColorCalibrator(processor):
                 "set32bits",
                 f"load {self._quote_path(input_path)}",
                 " ".join(solve),
-                " ".join(pcc),
+                " ".join(calibration),
                 f"save {self._quote_path(staged_image)}",
                 "close",
                 "",
@@ -1109,7 +1207,7 @@ class PhotometricColorCalibrator(processor):
             script_name=f"{tag[:-1] if tag else 'photometry'}.sps",
         ):
             raise RuntimeError(
-                f"Résolution astrométrique / PCC échouée ; consulter {log_path}"
+                f"Résolution astrométrique / {method.upper()} échouée ; consulter {log_path}"
             )
         if not staged_image.is_file():
             raise RuntimeError(
@@ -1118,9 +1216,10 @@ class PhotometricColorCalibrator(processor):
         # Le troisième axe du FITS RGB porte les couleurs ; les distorsions SIP
         # ne concernent que les deux axes spatiaux.
         with fits.open(staged_image, memmap=False) as hdul:
+            output_row_order = hdul[0].header.get("ROWORDER")
             if hdul[0].shape != shape or not WCS(hdul[0].header, naxis=2).has_celestial:
                 raise RuntimeError(
-                    f"Sortie PCC invalide : dimensions RGB ou solution WCS manquante ; {log_path}"
+                    f"Sortie {method.upper()} invalide : dimensions RGB ou solution WCS manquante ; {log_path}"
                 )
         output_image.parent.mkdir(parents=True, exist_ok=True)
         # copyfile permet aussi une destination située sur un autre système de fichiers.
@@ -1133,7 +1232,21 @@ class PhotometricColorCalibrator(processor):
             "object": object_name,
             "center_coordinates_deg": coordinates,
             "platesolve_command": " ".join(solve),
-            "pcc_command": " ".join(pcc),
+            "method": method,
+            "input_has_wcs": input_has_wcs,
+            "force_solve": True,
+            "flip_allowed": not bool(option("noflip", False)),
+            "input_row_order": input_row_order,
+            "output_row_order": output_row_order,
+            "color_catalog": color_catalog,
+            "solve_catalog": solve_catalog,
+            "calibration_command": " ".join(calibration),
+            f"{method}_command": " ".join(calibration),
+            "filter_source": filter_source,
+            "spectral_profiles": {
+                name: value for name, value in spectral_options.items() if value is not None
+            },
+            "unspecified_profiles_source": "Siril preferences" if method == "spcc" else None,
             "script_path": str(work_dir / f"{tag[:-1] if tag else 'photometry'}.sps"),
             "log_path": str(log_path),
             "report_saved_to": str(output_path),

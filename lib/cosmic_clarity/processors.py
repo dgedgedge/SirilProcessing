@@ -65,6 +65,21 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
                        help='Mélange des structures diffuses entre 0 et 1')
     group.add_argument('--cosmic-nonstellar-radius', type=float, default=3.0,
                        help='Rayon du modèle entre 1 et 8 pixels, interpolation entre poids')
+    group.add_argument(
+        '--cosmic-sharpen-mode', choices=('luminance', 'separate'),
+        default='luminance', help='Netteté sur luminance (défaut) ou R/V/B séparés',
+    )
+    group.add_argument(
+        '--cosmic-denoise-mode', choices=('luminance', 'full', 'separate'),
+        default='luminance',
+        help=('Débruitage : luminance (défaut), luminance + chrominance, '
+              'ou R/V/B séparés'),
+    )
+    group.add_argument(
+        '--cosmic-color-denoise-amount', type=float, default=None,
+        help=('Intensité chrominance en mode full, entre 0 et 1 ; '
+              'défaut : intensité débruitage'),
+    )
     group.add_argument('--cosmic-denoise-amount', type=float, default=0.5,
                        help='Mélange du débruitage entre 0 et 1')
 
@@ -302,6 +317,9 @@ class _CosmicClarityProcessor(processor):
                 nonstellar_amount=getattr(args, 'cosmic_nonstellar_amount', 0.5),
                 radius=getattr(args, 'cosmic_nonstellar_radius', 3.0),
                 denoise_amount=getattr(args, 'cosmic_denoise_amount', 0.5),
+                sharpen_mode=getattr(args, 'cosmic_sharpen_mode', 'luminance'),
+                denoise_mode=getattr(args, 'cosmic_denoise_mode', 'luminance'),
+                color_denoise_amount=getattr(args, 'cosmic_color_denoise_amount', None),
             )
             lines = ['requires 1.4', f'cd {_quote(work)}', 'setext fit', 'set32bits']
             for image, catalog in ((source, before), (candidate, after)):

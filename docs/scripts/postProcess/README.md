@@ -3,7 +3,7 @@
 [Documentation](../../README.md) › [Scripts](../README.md) › postProcess
 
 `bin/postProcess.py` traite une image FITS à travers quatre étapes ordonnées :
-**correction du gradient → étalonnage photométrique → déconvolution → débruitage**.
+**correction du gradient → étalonnage spectrophotométrique → déconvolution → débruitage**.
 Chaque étape reçoit l’image retenue par la précédente et produit un rapport JSON.
 Les quatre traitements sont activés par défaut ; leur activation peut être
 modifiée par la ligne de commande ou par la configuration mémorisée.
@@ -58,7 +58,7 @@ Voir [l’installation](../../INSTALLATION.md) pour l’environnement du projet.
 ```mermaid
 flowchart TD
     A["FITS source"] --> G["01 · Correction du gradient"]
-    G --> P["02 · Astrométrie et couleurs PCC"]
+    G --> P["02 · Astrométrie Gaia et couleurs SPCC"]
     P --> C{"Clarity actif ?"}
     C -->|Non| D1["03 · Déconvolution Siril"]
     C -->|Oui| D2["03 · Déconvolution :\nCosmic Clarity + Siril\n(évaluation comparative)"]
@@ -173,17 +173,23 @@ bin/postProcess.sh image.fit rapports/gradient.json \
 
 Ce traitement utilise Python et ne lance pas Siril.
 
-## 02 — Astrométrie et étalonnage photométrique
+## 02 — Astrométrie et étalonnage spectrophotométrique
 
 Sur une image RGB linéaire, le traitement appelle successivement `platesolve`
-puis `pcc` dans Siril. L’astrométrie associe les pixels à des coordonnées célestes ;
-PCC utilise les étoiles d’un catalogue pour étalonner les couleurs.
+puis `spcc` dans Siril, avec **Gaia par défaut pour les deux commandes**.
+L’astrométrie associe les pixels à des coordonnées célestes ; SPCC utilise les
+spectres stellaires Gaia DR3 et les réponses spectrales du capteur et des filtres
+pour étalonner les couleurs. `--photometry-method pcc` permet de choisir PCC.
+Les profils SPCC non précisés sont repris des préférences Siril, sauf le filtre
+OSC : option du programme, puis champ `FILTER` du FITS, sinon `No filter`.
+Vérifier que les profils correspondent à l’acquisition. Voir [SPCC, profils et orientation](photometry.md).
 
 Le centre du champ peut être donné par un nom d’objet recherché au CDS ou par
 ses coordonnées ICRS/J2000 en degrés. Ces deux options sont exclusives. Sans
 centre explicite, Siril utilise les informations disponibles dans l’image et
-ses réglages. Un centre explicite ou `--photometry-force` demande une nouvelle
-résolution ; sinon une solution WCS existante peut être réutilisée.
+ses réglages. L’astrométrie est toujours recalculée même si un WCS existe,
+avec retournement autorisé par Siril. L’étalonnage des couleurs est ensuite
+exécuté à chaque lancement de l’étape, même si l’image a déjà été étalonnée.
 
 | Option | Rôle ; défaut local si non précisé |
 |---|---|
@@ -191,17 +197,26 @@ résolution ; sinon une solution WCS existante peut être réutilisée.
 | `--photometry-coordinates RA DEC` | Centre en degrés ; RA dans `[0, 360[`, DEC dans `[-90, 90]` |
 | `--photometry-focal MM` | Focale ; sinon métadonnées/réglages Siril |
 | `--photometry-pixelsize UM` | Taille effective du pixel ; tenir compte du binning et du rééchantillonnage |
-| `--photometry-force` | Refaire la résolution, désactivé par défaut |
+| `--photometry-force` | Option de compatibilité ; la résolution est systématiquement refaite |
 | `--photometry-noflip` | Conserver l’orientation pendant la résolution, désactivé par défaut |
 | `--photometry-downscale` | Sous-échantillonner pour la résolution, désactivé par défaut |
-| `--photometry-solve-catalog` | `tycho2`, `nomad`, `localgaia`, `gaia`, `ppmxl`, `brightstars` ou `apass` ; sinon choix Siril |
-| `--photometry-catalog` | Catalogue PCC : `nomad`, `apass`, `localgaia` ou `gaia` ; sinon choix Siril |
-| `--photometry-limitmag` | Magnitude limite positive pour PCC ; non imposée par défaut |
+| `--photometry-method` | `spcc` (défaut) ou `pcc` |
+| `--photometry-osc-sensor` / `--photometry-mono-sensor` | Nom exact du capteur SPCC ; options exclusives, sinon préférences Siril |
+| `--photometry-osc-filter` / `--photometry-osc-lpf` | Filtre OSC : option, puis FITS `FILTER`, sinon `No filter` ; passe-bas : sinon préférences Siril |
+| `--photometry-red-filter` / `--photometry-green-filter` / `--photometry-blue-filter` | Filtres du RGB composé avec un capteur mono ; sinon préférences Siril |
+| `--photometry-white-reference` | Référence de blanc SPCC ; sinon préférences Siril |
+| `--photometry-solve-catalog` | `tycho2`, `nomad`, `localgaia`, `gaia`, `ppmxl`, `brightstars` ou `apass` ; défaut `gaia` |
+| `--photometry-catalog` | Défaut `gaia` ; SPCC accepte `gaia` ou `localgaia`, PCC accepte aussi `nomad` et `apass` |
+| `--photometry-limitmag` | Magnitude limite positive pour SPCC/PCC ; non imposée par défaut |
 | `--photometry-output` | FITS étalonné ; par défaut `02_photometry.fits` dans le dossier des étapes |
 
 Le résultat n’est publié qu’après réussite de Siril et vérification des dimensions
 et de la présence d’un WCS céleste. Le rapport conserve les coordonnées utilisées,
-les commandes, les chemins du script et du journal, ainsi que `output_image`.
+la méthode, les catalogues, les profils transmis et la provenance du filtre, les commandes,
+les chemins du script et du journal, ainsi que `output_image`. Il indique aussi
+si un WCS existait, si une résolution était demandée et si un retournement était
+autorisé. `--photometry-noflip` empêche le retournement lors de la résolution ;
+il ne tourne pas l’image vers le nord. SPCC ne réoriente pas l’image.
 
 ## 03 — Déconvolution contrôlée
 
@@ -225,6 +240,12 @@ et la fraction de nouveaux anneaux ne doit pas dépasser 10 %. Les contrôles
 d’artefacts portent sur tous les canaux.
 
 ### Détail du candidat Cosmic Clarity (mode comparatif)
+
+Les modes suivent ceux de l’auteur : luminance par défaut pour la netteté et
+le débruitage, avec options R/V/B séparés et débruitage de chrominance.
+Voir [modes couleur Cosmic Clarity](cosmic-color.md) pour les options et les
+limites de conservation des couleurs.
+
 
 En mode comparatif, l’étape produit aussi un candidat neuronal :
 
