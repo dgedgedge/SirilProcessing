@@ -7,13 +7,13 @@ import json
 import logging
 from pathlib import Path
 from shutil import copyfile
-from tempfile import mkdtemp
 
 import numpy as np
 from astropy.io import fits
 
 from lib.deconvolution import _quote, compare_star_catalogs
 from lib.deconvolution_quality import artifact_metrics, assess_denoising
+from lib.postprocess_paths import reset_ordered_work_dir
 from lib.siril_utils import create_siril_from_args
 from lib.type_defs import JSONReport
 
@@ -58,7 +58,7 @@ def post_process(
             raise ValueError("Dématricer le FITS CFA avant réduction du bruit")
     layer = 1 if len(shape) == 3 else 0
     report.parent.mkdir(parents=True, exist_ok=True)
-    work = Path(mkdtemp(prefix=report.stem + "_", dir=report.parent))
+    work = reset_ordered_work_dir(report)
     candidate = work / "candidate.fits"
     before, after = work / "before.tsv", work / "after.tsv"
     result = dict(

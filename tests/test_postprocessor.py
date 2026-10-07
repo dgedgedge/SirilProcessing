@@ -39,7 +39,7 @@ def test_default_postprocess_order() -> None:
 def test_standard_backend_selection() -> None:
     """Le backend Siril conserve les processeurs standards."""
     sequence = _PostProcessorSequence()
-    selected = sequence._selected_processors(_args("--postprocess-backend", "siril"))
+    selected = sequence._selected_processors(_args("--disable-clarity"))
     assert [type(step) for step in selected] == [
         GradientExtractor,
         PhotometricColorCalibrator,

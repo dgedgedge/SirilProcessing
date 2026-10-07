@@ -17,11 +17,14 @@ def test_denoise_validation_and_handoff(tmp_path, monkeypatch, noise, width, sta
     source = tmp_path/'input.fit'
     fits.writeto(source, np.ones((80, 80), dtype='float32'))
     original = source.read_bytes()
+    stale_parent = tmp_path / '03_denoise_work'
+    stale_parent.mkdir(parents=True, exist_ok=True)
+    (stale_parent / 'stale.txt').write_text('stale')
     def run(script, work, script_name):
         assert 'denoise -vst -mod=0.5' in script
         assert '-nocosmetic' not in script
         assert 'set32bits' in script
-        fits.writeto(Path(work)/'candidate.fit', fits.getdata(source)*.99)
+        fits.writeto(Path(work)/'candidate.fits', fits.getdata(source)*.99)
         return True
     monkeypatch.setattr('lib.denoising.create_siril_from_args',
                         lambda args: SimpleNamespace(run_siril_script=run))
@@ -34,9 +37,13 @@ def test_denoise_validation_and_handoff(tmp_path, monkeypatch, noise, width, sta
                         dict(max_noise_ratio=noise, max_ring_fraction=0))
     result = post_process(source, tmp_path/'03_denoise.json')
     assert result['status'] == status
+    assert not (stale_parent / 'stale.txt').exists()
+    candidate = Path(result['candidate_image_path'])
+    assert candidate.parent.name == '001'
+    assert candidate.parent.parent == stale_parent
     assert source.read_bytes() == original
-    assert Path(result['output_image']) == (tmp_path/'03_denoise.fit' if status == 'accepted' else source)
-    assert (tmp_path/'03_denoise.fit').exists() == (status == 'accepted')
+    assert Path(result['output_image']) == (tmp_path/'03_denoise.fits' if status == 'accepted' else source)
+    assert (tmp_path/'03_denoise.fits').exists() == (status == 'accepted')
 
 
 def test_failed_siril_is_reported(tmp_path, monkeypatch):

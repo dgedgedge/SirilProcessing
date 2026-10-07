@@ -1222,10 +1222,8 @@ class _PostProcessorSequence:
 
         Une liste de processeurs explicite conserve ses propres instances.
         """
-        backend = getattr(args, 'postprocess_backend', 'siril')
-        if backend not in ('siril', 'cosmic-clarity'):
-            raise ValueError('Moteur de post-traitement inconnu')
-        if self._custom_processors or backend == 'siril':
+        clarity_enabled = getattr(args, 'enable_clarity', True)
+        if self._custom_processors or not clarity_enabled:
             return list(self.processors)
         from lib.cosmic_clarity.processors import (
             CosmicClaritySharpenProcessor, CosmicClarityDenoiseProcessor,
@@ -1292,25 +1290,45 @@ class _PostProcessorSequence:
             from lib.cosmic_clarity.processors import add_arguments
 
             add_arguments(parser)
+
+        class _ToggleTreatmentAction(argparse.Action):
+            """Mappe enable/disable d'une étape vers un booléen unique."""
+
+            def __init__(
+                self, option_strings: list[str], dest: str, **kwargs: object
+            ) -> None:
+                super().__init__(
+                    option_strings=option_strings, dest=dest, nargs=0, **kwargs
+                )
+
+            def __call__(
+                self,
+                parser: argparse.ArgumentParser,
+                namespace: argparse.Namespace,
+                values: object,
+                option_string: str | None = None,
+            ) -> None:
+                enabled = bool(option_string) and (
+                    option_string.startswith("--enable-")
+                    or option_string.startswith("--enable_")
+                )
+                setattr(namespace, self.dest, enabled)
+
         for processor in self.processors:
             prefix = processor.get_prefix()
             group = parser.add_argument_group(f"Traitement {prefix}")
-            activation = group.add_mutually_exclusive_group()
-            activation.add_argument(
+            group.add_argument(
                 f"--enable-{prefix}",
                 f"--enable_{prefix}",
-                dest=f"enable_{prefix}",
-                action="store_true",
-                default=processor.enabled_by_default,
-                help=f"Activer {prefix}",
-            )
-            activation.add_argument(
                 f"--disable-{prefix}",
                 f"--disable_{prefix}",
                 dest=f"enable_{prefix}",
-                action="store_false",
+                action=_ToggleTreatmentAction,
                 default=processor.enabled_by_default,
-                help=f"Désactiver {prefix}",
+                help=(
+                    f"Activer (--enable-{prefix}) ou désactiver "
+                    f"(--disable-{prefix}) {prefix}"
+                ),
             )
             processor.add_arguments(group)
 

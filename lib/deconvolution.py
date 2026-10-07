@@ -9,7 +9,6 @@ import logging
 from collections.abc import Sequence
 from pathlib import Path
 from shutil import copyfile
-from tempfile import mkdtemp
 
 import numpy as np
 from astropy.io import fits
@@ -17,7 +16,7 @@ from PIL import Image, ImageDraw
 from scipy.spatial import cKDTree
 
 from lib.deconvolution_quality import artifact_metrics, assess_quality, select_psf_stars
-from lib.postprocess_paths import treatment_file_prefix
+from lib.postprocess_paths import reset_ordered_work_dir, treatment_file_prefix
 from lib.siril_utils import create_siril_from_args
 from lib.type_defs import ConfigValue, JSONReport, StarMeasurement
 
@@ -39,8 +38,12 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--deconvolution-adaptive",
-        action="store_true",
-        help="Autoriser le repli Moffat et les essais de pas croissants",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Activer (défaut) ou désactiver (--no-deconvolution-adaptive) "
+            "le repli Moffat et les essais de pas croissants"
+        ),
     )
     parser.add_argument(
         "--deconvolution-alpha",
@@ -339,7 +342,9 @@ def post_process(
         ValueError: Si les paramètres ou le format FITS sont incompatibles.
         RuntimeError: Si Siril échoue ou si aucun essai sûr n’est accepté.
 
-    Voir docs/scripts/postProcess/README.md pour les seuils et le repli adaptatif."""
+    Les erreurs locales des essais et des PSF sont auditées ; les autres essais
+    disponibles continuent. Voir docs/scripts/postProcess/README.md pour les seuils
+    et le repli adaptatif."""
 
     def option(name: str, default: ConfigValue) -> ConfigValue:
         """Lit une option de déconvolution, avec repli sur son défaut local."""
@@ -348,7 +353,7 @@ def post_process(
     iterations = option("iterations", 10)
     size = option("psf_size", 15)
     psf_method = option("psf_method", "blind")
-    adaptive = option("adaptive", False)
+    adaptive = option("adaptive", True)
     alpha = option("alpha", 3000)
     if psf_method not in ("blind", "stars") or not np.isfinite(alpha) or alpha <= 0:
         raise ValueError("Méthode PSF ou alpha invalide")
@@ -419,7 +424,7 @@ def post_process(
         raise ValueError("Choisir une sortie FITS différente de l’entrée et du rapport")
     _quote(input_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    work = Path(mkdtemp(prefix=tag or "deconvolution_", dir=output_path.parent))
+    work = reset_ordered_work_dir(output_path)
     runner = create_siril_from_args(args)
     snapshot = work / f"{tag}original.fits"
     copyfile(input_path, snapshot)
@@ -566,7 +571,41 @@ def post_process(
             )
         return psf
 
+    def record_failure(label: str, error: ValueError | RuntimeError) -> JSONReport:
+        """Audite un échec local sans empêcher les autres essais de restauration."""
+        attempt = dict(
+            number=len(result["attempts"]) + 1,
+            label=label,
+            status="failed",
+            error=str(error),
+            quality=dict(accepted=False, artifact_failure=False, reasons=[str(error)]),
+        )
+        result["attempts"].append(attempt)
+        save_report()
+        logging.warning(
+            "Déconvolution essai %d (%s) échoué : %s",
+            attempt["number"], label, error,
+        )
+        return attempt
+
     def trial(
+        source: Path | str,
+        before_catalog: Path | str,
+        psf: Path | str,
+        step_value: float,
+        label: str,
+    ) -> JSONReport:
+        """Numérote l’essai et conserve ses erreurs comme diagnostics locaux."""
+        logging.info(
+            "Déconvolution essai %d (%s), pas %.7f",
+            len(result["attempts"]) + 1, label, step_value,
+        )
+        try:
+            return evaluate_trial(source, before_catalog, psf, step_value, label)
+        except (ValueError, RuntimeError) as error:
+            return record_failure(label, error)
+
+    def evaluate_trial(
         source: Path | str,
         before_catalog: Path | str,
         psf: Path | str,
@@ -593,6 +632,7 @@ def post_process(
             before_catalog, after_catalog, radius, minimum, fraction, layer
         )
         attempt = dict(
+            number=len(result["attempts"]) + 1,
             label=label,
             source_path=str(source),
             candidate_image_path=str(candidate),
@@ -695,7 +735,7 @@ def post_process(
                 accepted = first
         except (ValueError, RuntimeError) as error:
             result["simple_psf_error"] = str(error)
-            logging.warning("PSF simple non exploitable : %s", error)
+            record_failure("simple_psf", error)
         if accepted is None and adaptive:
             # Le tiers de chaque dimension, issu de l'original, jamais d'un essai déconvolué.
             crop = work / f"{tag}central_original.fits"
@@ -711,28 +751,32 @@ def post_process(
             result["crop"] = dict(
                 path=str(crop), x=x0, y=y0, width=crop_w, height=crop_h
             )
-            crop_before = detect(crop, "central_before")
-            psf_catalog = detect(crop, "central_moffat", "Moffat", amplitude=True)
-            psf = build_psf(crop, psf_catalog, "central_moffat", "Moffat", 0.1)
-            best = None
-            for step_number in range(4, int(round(max_step * 10000)) + 1):
-                attempt = trial(
-                    crop,
-                    crop_before,
-                    psf,
-                    step_number / 10000,
-                    f"central_step_{step_number:02d}",
-                )
-                if attempt["quality"]["artifact_failure"]:
-                    result["search_stopped_at_step"] = step_number / 10000
-                    break
-                if attempt["quality"]["accepted"]:
-                    # Dernier pas efficace avant le premier essai excessif.
-                    best = attempt
-            if best is not None:
-                full = trial(snapshot, before, psf, best["step"], "full_trial")
-                if full["quality"]["accepted"]:
-                    accepted = full
+            try:
+                crop_before = detect(crop, "central_before")
+                psf_catalog = detect(crop, "central_moffat", "Moffat", amplitude=True)
+                psf = build_psf(crop, psf_catalog, "central_moffat", "Moffat", 0.1)
+                best = None
+                for step_number in range(4, int(round(max_step * 10000)) + 1):
+                    attempt = trial(
+                        crop,
+                        crop_before,
+                        psf,
+                        step_number / 10000,
+                        f"central_step_{step_number:02d}",
+                    )
+                    if attempt["quality"]["artifact_failure"]:
+                        result["search_stopped_at_step"] = step_number / 10000
+                        break
+                    if attempt["quality"]["accepted"]:
+                        # Dernier pas efficace avant le premier essai excessif.
+                        best = attempt
+                if best is not None:
+                    full = trial(snapshot, before, psf, best["step"], "full_trial")
+                    if full["quality"]["accepted"]:
+                        accepted = full
+            except (ValueError, RuntimeError) as error:
+                result["adaptive_psf_error"] = str(error)
+                record_failure("central_moffat", error)
         if accepted is None:
             result["status"] = "no_safe_improvement"
             save_report()

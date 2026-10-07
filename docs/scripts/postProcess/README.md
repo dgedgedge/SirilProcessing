@@ -59,11 +59,17 @@ Voir [l’installation](../../INSTALLATION.md) pour l’environnement du projet.
 flowchart TD
     A["FITS source"] --> G["01 · Correction du gradient"]
     G --> P["02 · Astrométrie et couleurs PCC"]
-    P --> D["03 · Déconvolution contrôlée"]
-    D --> V{"Déconvolution acceptée ?"}
-    V -->|Oui| N["04 · Essai de débruitage"]
+    P --> C{"Clarity actif ?"}
+    C -->|Non| D1["03 · Déconvolution Siril"]
+    C -->|Oui| D2["03 · Déconvolution :\nCosmic Clarity + Siril\n(évaluation comparative)"]
+    D1 --> V{"Déconvolution acceptée ?"}
+    D2 --> V
+    V -->|Oui| N0{"Clarity actif ?"}
     V -->|Non| E["Poursuite avec l’image précédente ; audit conservé"]
-    N --> Q{"Débruitage accepté ?"}
+    N0 -->|Non| N1["04 · Débruitage Siril"]
+    N0 -->|Oui| N2["04 · Débruitage :\nCosmic Clarity + Siril\n(évaluation comparative)"]
+    N1 --> Q{"Débruitage accepté ?"}
+    N2 --> Q
     Q -->|Oui| R["FITS final et rapport global"]
     Q -->|Non| O["Conserver l’image reçue par le débruitage"]
     O --> R
@@ -80,8 +86,8 @@ la séquence poursuit avec l’image précédente.
 |---|---|---|---|
 | 01 | `gradient` | `GradientExtractor` | Soustrait les variations du fond |
 | 02 | `photometry` | `PhotometricColorCalibrator` | Résout l’astrométrie et étalonne les couleurs |
-| 03 | `deconvolution` | `DeconvolutionProcessor` | Améliore la finesse avec contrôle des étoiles et des artefacts |
-| 04 | `denoise` | `NoiseReductionProcessor` | Réduit le bruit si les contrôles de qualité sont satisfaits |
+| 03 | `deconvolution` | `DeconvolutionProcessor` (Siril seul) ou `CosmicClaritySharpenProcessor` (comparatif) | Améliore la finesse avec contrôle des étoiles et des artefacts |
+| 04 | `denoise` | `NoiseReductionProcessor` (Siril seul) ou `CosmicClarityDenoiseProcessor` (comparatif) | Réduit le bruit si les contrôles de qualité sont satisfaits |
 
 Les indices restent fixes lorsqu’une étape est désactivée. Les options
 `--enable-gradient`, `--enable-photometry`, `--enable-denoise` et
@@ -91,19 +97,36 @@ options `--disable-…` les désactivent. Les variantes `--enable_<préfixe>` et
 
 ## Moteur Cosmic Clarity optionnel
 
-Le moteur classique `siril` reste le défaut. Pour remplacer les étapes de
-netteté et de débruitage par les réseaux Cosmic Clarity avec CUDA :
+Le mode comparatif Cosmic Clarity + Siril est activé par défaut.
+Chaque étape `deconvolution` et `denoise` évalue **les deux moteurs** (Cosmic
+Clarity et Siril) et conserve automatiquement la meilleure sortie acceptée.
+Si aucune déconvolution n’est acceptée, le statut reste
+`no_safe_improvement` et l’image reçue est conservée. Si aucun débruitage n’est
+accepté, l’image reçue est également conservée.
+
+Algorithme appliqué en mode comparatif :
+
+1. exécution des deux moteurs ;
+2. contrôles de qualité sur chaque candidat (mêmes métriques stellaires) ;
+3. conservation des seuls candidats `accepted` ;
+4. calcul d’un score interne par candidat (netteté ou débruitage) ;
+5. sélection du score maximal, sinon conservation de l’image d’entrée.
 
 ```bash
 bin/postProcess.sh --install-cosmic-clarity
-bin/postProcess.sh image_RGB.fit --postprocess-backend cosmic-clarity
+bin/postProcess.sh image_RGB.fit --enable-clarity
+bin/postProcess.sh image_RGB.fit --disable-clarity
 ```
 
 L'option d'installation est capturée par le `.sh` ; elle utilise pip système
 pour installer les dépendances dans le venv et récupérer les poids vérifiés.
-L'option de moteur appartient au programme Python et peut être mémorisée avec
-`-S`. Les noms des rapports, l'ordre et les contrôles d'acceptation restent les
-mêmes. Les algorithmes détaillés ci-dessous décrivent le moteur Siril.
+`--enable-clarity` et `--disable-clarity` appartiennent au programme Python et
+peuvent être mémorisées avec `-S`.
+Les noms des rapports, l'ordre et les contrôles d'acceptation restent les mêmes.
+Les algorithmes détaillés ci-dessous décrivent le moteur Siril.
+Quand Clarity est actif, les sections 03/04 sont exécutées en double
+(Cosmic Clarity + Siril), puis une sélection automatique conserve le meilleur
+candidat accepté.
 Voir [Cosmic Clarity](cosmic-clarity.md) pour les classes, modèles, paramètres,
 ressources, différences avec l'amont et limites de validation.
 
@@ -186,6 +209,10 @@ La déconvolution cherche à réduire l’étalement des détails. Elle utilise
 Richardson–Lucy par descente de gradient avec régularisation TV, sur une copie
 de l’image reçue. La PSF est le noyau représentant cet étalement.
 
+Ce paragraphe décrit le traitement **Siril** (`--disable-clarity`) ; en mode
+comparatif (par défaut), un candidat **Cosmic Clarity** est évalué en parallèle
+et soumis aux mêmes contrôles d’acceptation.
+
 Par défaut, la PSF est estimée par Siril avec `makepsf blind -l0`. L’option
 `--deconvolution-psf-method stars` utilise une sélection d’étoiles fines, rondes
 et isolées. Le premier essai emploie 10 itérations et un pas de `0.0003`.
@@ -197,13 +224,46 @@ supérieure à `0.01`. Le bruit ne doit pas dépasser 1,15 fois son niveau initi
 et la fraction de nouveaux anneaux ne doit pas dépasser 10 %. Les contrôles
 d’artefacts portent sur tous les canaux.
 
-**Le repli adaptatif est désactivé par défaut.** Avec
-`--deconvolution-adaptive`, si le premier essai échoue, le traitement extrait
-le tiers central de chaque dimension de l’original, construit une PSF à partir
-d’étoiles ajustées par un profil Moffat, puis teste des pas croissants de
-`0.0004` à `0.001` par défaut. Chaque essai repart du recadrage original.
-La recherche s’arrête au premier échec des contrôles d’artefacts. Le dernier
-pas accepté est appliqué au champ entier, qui doit à nouveau passer les contrôles.
+### Détail du candidat Cosmic Clarity (mode comparatif)
+
+En mode comparatif, l’étape produit aussi un candidat neuronal :
+
+- application du modèle stellaire puis des modèles non stellaires
+  (interpolation sur le rayon `--cosmic-nonstellar-radius`) ;
+- mélange entrée/prédiction selon `--cosmic-stellar-amount` et
+  `--cosmic-nonstellar-amount` ;
+- écriture d’un candidat FITS dédié, puis mesures Siril avant/après sur le même
+  canal (`--deconvolution-layer`) et appariement stellaire identique.
+
+Le candidat Siril et le candidat Cosmic Clarity sont ensuite comparés :
+
+- seuls les candidats au statut `accepted` sont éligibles ;
+- un score de netteté est calculé pour chaque candidat accepté :
+  `2*mean_gain + 2*ratio_gain - 0.2*noise_penalty - 0.2*ring_penalty` ;
+- le candidat au score maximal devient `03_deconvolution.fits` ;
+- si aucun candidat n’est accepté, l’étape renvoie `no_safe_improvement` et
+  conserve l’image d’entrée.
+
+**Le repli adaptatif est activé par défaut.** Si le premier essai échoue, le
+traitement extrait le tiers central de chaque dimension de l’original, construit
+une PSF à partir d’étoiles ajustées par un profil Moffat, puis teste des pas
+croissants de `0.0004` à `0.001` par défaut. Chaque essai repart du recadrage
+original. La recherche s’arrête au premier échec des contrôles d’artefacts.
+Le dernier pas accepté est appliqué au champ entier, qui doit à nouveau passer
+les contrôles. Utiliser `--no-deconvolution-adaptive` pour forcer le mode simple.
+Les essais sont numérotés dans le journal et dans `attempts[].number` du
+rapport JSON. Une erreur locale de PSF (par exemple moins de trois étoiles
+Moffat admissibles) est conservée dans l’audit et invalide ce repli seulement.
+Une erreur d’exécution d’un essai laisse les pas suivants disponibles se
+poursuivre ; un rejet pour artefacts arrête toujours la montée du pas.
+En mode comparatif, le candidat Cosmic Clarity reste évalué et sélectionnable.
+Pour les étapes de déconvolution et de débruitage, le journal `INFO` présente
+les deux évaluations, leurs mesures et verdicts, les scores des candidats
+acceptés puis le choix final. Voir le [détail du journal comparatif](cosmic-clarity.md#déroulé-comparatif-des-étapes-03-et-04).
+
+Avant le démarrage de l’étape, le dossier `03_deconvolution_work/` est supprimé
+puis recréé ; l’exécution courante écrit dans `03_deconvolution_work/001/`.
+Cela évite les reliquats d’un lancement précédent et garde un ordre lisible.
 
 | Option | Défaut local | Rôle |
 |---|---|---|
@@ -212,7 +272,7 @@ pas accepté est appliqué au champ entier, qui doit à nouveau passer les contr
 | `--deconvolution-psf-size` | `15` | Taille impaire du noyau, entre 3 et 255 pixels |
 | `--deconvolution-alpha` | `3000` | Régularisation TV ; valeur plus faible = régularisation plus forte |
 | `--deconvolution-step` | `0.0003` | Pas du premier essai |
-| `--deconvolution-adaptive` | désactivé | Autoriser le repli central avec PSF Moffat |
+| `--deconvolution-adaptive` / `--no-deconvolution-adaptive` | activé | Activer/désactiver le repli central avec PSF Moffat |
 | `--deconvolution-max-step` | `0.001` | Dernier pas de la recherche adaptative, incrément de `0.0001` |
 | `--deconvolution-fine-quantile` | `0.35` | Fraction fine retenue pour la sélection stellaire de PSF |
 | `--deconvolution-psf-roundness` | `0.8` | Rondeur minimale des étoiles de PSF |
@@ -239,6 +299,10 @@ stabilisatrice de variance Anscombe, en flottant 32 bits. Il compare les
 catalogues stellaires avant et après sur les mêmes étoiles : canal vert pour
 une image RGB, canal unique pour une image monochrome.
 
+Ce paragraphe décrit le traitement **Siril** (`--disable-clarity`) ; en mode
+comparatif (par défaut), un candidat **Cosmic Clarity** est évalué en parallèle
+et départagé automatiquement.
+
 Le candidat est accepté seulement si les contrôles suivants sont satisfaits :
 
 - au moins 10 étoiles appariées et 70 % des étoiles valides initiales retrouvées,
@@ -247,6 +311,23 @@ Le candidat est accepté seulement si les contrôles suivants sont satisfaits :
 - perte de rondeur moyenne au plus égale à `0.01` ;
 - diminution mesurée du bruit sur tous les canaux et fraction de nouveaux anneaux
   stellaires ne dépassant pas 10 %.
+
+### Détail du candidat Cosmic Clarity (mode comparatif)
+
+En mode comparatif, l’étape calcule aussi un candidat neuronal de débruitage
+(`--cosmic-denoise-amount`, modèle AI3.6), puis applique les mêmes mesures
+stellaires Siril et contrôles d’artefacts que pour Siril.
+Avant le démarrage de l’étape, le dossier `04_denoise_work/` est supprimé puis
+recréé ; l’exécution courante écrit dans `04_denoise_work/001/`.
+
+La sélection suit la même logique que pour la déconvolution :
+
+- seuls les candidats `accepted` participent ;
+- score de débruitage par candidat accepté :
+  `(1 - max_noise_ratio) - 0.5*blur_penalty - 0.2*ring_penalty` ;
+- le score maximal est retenu et copié en `04_denoise.fits` ;
+- sans candidat accepté, le rapport final de l’étape garde `status: "rejected"`
+  et transmet l’image reçue à l’étape.
 
 | Option | Défaut local | Rôle |
 |---|---|---|
@@ -304,13 +385,13 @@ de l’image d’entrée. Les réglages peuvent donc être mémorisés même si 
 ## Rapports, images et journaux
 
 Pour `bin/postProcess.sh image_RGB.fit rapports/`, avec toutes les
-étapes actives et acceptées :
+étapes actives et acceptées (mode comparatif activé par défaut) :
 
 ```text
 rapports/
-├── image_RGB_postprocess_siril.fits
-├── image_RGB_postprocess_siril.json
-└── image_RGB_postprocess_siril/
+├── image_RGB_postprocess_cosmic-clarity.fits
+├── image_RGB_postprocess_cosmic-clarity.json
+└── image_RGB_postprocess_cosmic-clarity/
     ├── 00_image_RGB_postProcess.log
     ├── 01_gradient.json
     ├── 01_gradient_image_RGB_gradient_corrected.fits
@@ -320,18 +401,23 @@ rapports/
     ├── 02_photometry_<identifiant>/
     ├── 03_deconvolution.json
     ├── 03_deconvolution.fits
-    ├── 03_deconvolution_<identifiant>/
+    ├── 03_deconvolution_work/
+    │   └── 001/
     ├── 04_denoise.json
     ├── 04_denoise.fits
-    └── 04_denoise_<identifiant>/
+    └── 04_denoise_work/
+        └── 001/
 ```
 
 Le PNG est facultatif. Les chemins explicites de sortie peuvent déplacer les
 images. Le FITS d’origine n’est pas modifié par les sorties par défaut.
 Les dossiers uniques des traitements Siril conservent leurs scripts `.sps`,
-journaux `.log`, catalogues stellaires et images candidates. Celui de la
-déconvolution contient aussi l’original de cette étape, les PSF et leurs aperçus,
-ainsi que `matched_stars.csv` préfixé par le nom de l’étape en cas de succès.
+journaux `.log`, catalogues stellaires et images candidates. Pour la
+déconvolution et le débruitage, ces dossiers sont maintenant déterministes
+(`03_deconvolution_work/001` et `04_denoise_work/001`), recréés à chaque
+exécution ; pour la déconvolution, ils contiennent aussi l’original de l’étape,
+les PSF et leurs aperçus, ainsi que `matched_stars.csv` préfixé par le nom de
+l’étape en cas de succès.
 
 Le rapport global est un objet JSON dont les clés sont les préfixes des étapes
 exécutées : `gradient`, `photometry`, `deconvolution`, `denoise`. Chaque résultat

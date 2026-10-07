@@ -437,7 +437,7 @@ def test_wrapper_options_reach_processing(tmp_path, image_enabled):
                             env={**os.environ, "VENV_DIR": sys.prefix},
                             capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
-    report = json.loads((tmp_path / "reports/image_postprocess_siril.json").read_text())["gradient"]
+    report = json.loads((tmp_path / "reports/image_postprocess_cosmic-clarity.json").read_text())["gradient"]
     assert list(report["results"]) == ["order_2"]
     assert report["results"]["order_2"]["n_samples"] == 80
     assert (tmp_path / "points/01_gradient_image_measurement_points.png").exists() == image_enabled
@@ -549,7 +549,7 @@ def test_wrapper_file_logging(tmp_path, failure, level):
         image.write_text("not FITS")
     else:
         _create_test_fits_file(image)
-    log_file = tmp_path / "image_postprocess_siril/00_image_postProcess.log"
+    log_file = tmp_path / "image_postprocess_cosmic-clarity/00_image_postProcess.log"
     log_file.parent.mkdir()
     log_file.write_text("old invocation")
     result = subprocess.run([
@@ -577,9 +577,9 @@ def test_default_output_uses_general_name_and_indexed_files(tmp_path):
                              '--disable-photometry', '--disable-denoise', '--disable-deconvolution'], cwd=tmp_path,
                             env={**os.environ, 'VENV_DIR': sys.prefix}, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
-    assert (tmp_path / 'target_postprocess_siril.json').exists()
-    assert (tmp_path / 'target_postprocess_siril.fits').exists()
-    work = tmp_path / 'target_postprocess_siril'
+    assert (tmp_path / 'target_postprocess_cosmic-clarity.json').exists()
+    assert (tmp_path / 'target_postprocess_cosmic-clarity.fits').exists()
+    work = tmp_path / 'target_postprocess_cosmic-clarity'
     assert (work / '00_target_postProcess.log').exists()
     assert (work / '01_gradient.json').exists()
     assert (work / '01_gradient_target_measurement_points.png').exists()

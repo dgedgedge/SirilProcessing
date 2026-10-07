@@ -4,9 +4,10 @@
 
 ## Installation et lancement
 
-Le moteur Siril reste le défaut. Cosmic Clarity remplace seulement les étapes
-03 (netteté) et 04 (débruitage), en conservant les étapes gradient et photométrie,
-les options d'activation, les rapports et leurs contrôles de qualité.
+Le mode comparatif est le défaut. Les étapes 03 (netteté) et 04 (débruitage)
+évaluent systématiquement **Cosmic Clarity et Siril**, puis retiennent
+automatiquement la meilleure sortie acceptée. Les étapes gradient et
+photométrie, ainsi que les options d’activation, restent inchangées.
 
 ```bash
 # Installation seule : pip système cible le venv choisi par le lanceur.
@@ -14,14 +15,14 @@ bin/postProcess.sh --install-cosmic-clarity
 
 # Traitement avec les réseaux, après installation.
 bin/postProcess.sh image_RGB.fit rapports/ \
-  --postprocess-backend cosmic-clarity --photometry-object M20
+  --enable-clarity --photometry-object M20
 
 # Installation et traitement dans la même commande.
 bin/postProcess.sh --install-cosmic-clarity image_RGB.fit \
-  --postprocess-backend cosmic-clarity
+  --enable-clarity
 
-# Revenir aux traitements classiques, même si le moteur neuronal est mémorisé.
-bin/postProcess.sh image_RGB.fit --postprocess-backend siril
+# Revenir au mode Siril seul.
+bin/postProcess.sh image_RGB.fit --disable-clarity
 ```
 
 `--install-cosmic-clarity` est consommé par le `.sh` : il n'est ni transmis au
@@ -57,7 +58,8 @@ Le rapport et le FITS final restent au même niveau que ce dossier.
 
 | Option | Défaut | Rôle |
 |---|---|---|
-| `--postprocess-backend` | `siril` | `siril` ou `cosmic-clarity` |
+| `--enable-clarity` | activé | Active le mode comparatif Cosmic Clarity + Siril |
+| `--disable-clarity` | désactivé | Désactive le comparatif et garde Siril seul |
 | `--cosmic-model-dir` | `<projet>/models/cosmicclarity` | Poids locaux vérifiés |
 | `--cosmic-device` | `cuda` | `cuda` ou `cpu` |
 | `--cosmic-stellar-amount` | `0.5` | Mélange stellaire, entre 0 et 1 |
@@ -86,6 +88,66 @@ remplacent pas le mode auto.
 Une intensité nulle désactive le calcul correspondant, mais ne dispense pas des
 contrôles d'acceptation : une netteté inchangée ne peut pas satisfaire le gain
 minimal demandé. Le débruitage sans amélioration rend l'image précédente.
+
+## Déroulé comparatif des étapes 03 et 04
+
+Quand Clarity est activé, chaque étape de restauration lance deux évaluations :
+
+1. **Cosmic Clarity** produit un candidat (`candidate.fits`) puis exécute
+   exactement les mêmes mesures stellaires Siril que le pipeline classique.
+2. **Siril** exécute l’algorithme natif correspondant (déconvolution ou
+   débruitage) avec ses paramètres usuels.
+3. Les deux rapports sont stockés dans `evaluations.cosmic_clarity` et
+   `evaluations.siril` avec leurs statuts, mesures et motifs de rejet.
+4. Le pipeline garde uniquement les candidats au statut `accepted`, calcule un
+   score de sélection, puis retient le meilleur score.
+5. Si aucun candidat n’est accepté :
+   - étape 03 → statut `no_safe_improvement` ;
+   - étape 04 → statut `rejected` ;
+   et l’image d’entrée de l’étape est conservée.
+
+Le journal de niveau `INFO` indique, pour la déconvolution et le débruitage,
+le début puis le verdict de chaque évaluation **Cosmic Clarity** et **Siril**.
+Il affiche les motifs de rejet ou d’échec, les FWHM moyennes en pixels,
+les gains de finesse moyen et médian apparié, la variation maximale du bruit
+et la fraction maximale d’étoiles avec nouveaux anneaux lorsque ces mesures
+sont disponibles. Chaque candidat accepté reçoit un score affiché (plus élevé
+= meilleur). Une ligne `choix final` donne le moteur retenu, son score, le
+nombre de candidats acceptés et le chemin de sortie ; sans candidat accepté,
+elle indique que l’image d’entrée est conservée.
+
+Un échec local du repli de déconvolution Siril, notamment une PSF Moffat
+avec trop peu d’étoiles admissibles, conserve le candidat Cosmic Clarity dans
+la sélection. Le rapport `evaluations.siril` garde les essais numérotés et
+leurs erreurs ; si Siril n’a aucun essai accepté, son statut est
+`no_safe_improvement`.
+
+```mermaid
+flowchart TD
+    A["Image reçue"] --> B["Cosmic Clarity : candidat + audit Siril"]
+    A --> C["Siril : traitement natif + audit"]
+    B --> D{"Statut accepted ?"}
+    C --> E{"Statut accepted ?"}
+    D --> F["Candidats éligibles"]
+    E --> F
+    F --> G{"Au moins un candidat ?"}
+    G -->|Oui| H["Calcul du score par candidat"]
+    H --> I["Sélection du score maximal"]
+    I --> J["Copie du candidat sélectionné vers 03/04_*.fits"]
+    G -->|Non| K["Conserver l'image d'entrée"]
+```
+
+### Score de sélection utilisé
+
+Le score sert uniquement à départager les candidats déjà `accepted`.
+
+- **Netteté (03)** : favorise le gain de finesse et pénalise bruit/anneaux.
+  `score = 2*mean_gain + 2*ratio_gain - 0.2*noise_penalty - 0.2*ring_penalty`
+- **Débruitage (04)** : favorise la baisse de bruit et pénalise flou/anneaux.
+  `score = (1 - max_noise_ratio) - 0.5*blur_penalty - 0.2*ring_penalty`
+
+En cas d’égalité stricte de score, le tri conserve l’ordre d’évaluation :
+Cosmic Clarity précède Siril et est donc retenu entre deux candidats équivalents.
 
 ## Modules et algorithme
 
@@ -139,18 +201,20 @@ Elle ne charge pas les modèles AI4 de Suite Pro.
 ## Contrôles et limites
 
 La netteté exige les mêmes mesures que la déconvolution Siril : étoiles appariées,
-gain de finesse, bruit et anneaux acceptables. Un rejet Cosmic Clarity déclenche
-automatiquement une tentative de repli avec la déconvolution Siril. Si ce repli
-échoue aussi faute de gain validé (`no_safe_improvement`), l'image d'entrée est
-conservée et la séquence continue vers le débruitage. Le débruitage utilise la
-fonction commune `assess_denoising` ; un rejet conserve l'image reçue. Un incident
-technique ou des mesures impossibles font échouer l'étape.
+gain de finesse, bruit et anneaux acceptables. Le pipeline calcule ces mesures
+pour Cosmic Clarity et Siril, puis choisit la sortie acceptée au score le plus
+favorable. Si les deux sont rejetées, l’étape retourne `no_safe_improvement` et
+conserve l’image d’entrée. Le débruitage applique la même logique comparative
+avec `assess_denoising`; si les deux sorties sont rejetées, l’image reçue est
+conservée. Un incident technique ou des mesures impossibles font échouer l'étape.
 
 Les rapports `03_deconvolution.json` et `04_denoise.json` indiquent le moteur,
 le périphérique, la version de PyTorch, les empreintes des poids utilisés,
 les réglages, les mesures et les motifs de rejet. Chaque dossier de travail
-conserve le candidat, le script et les catalogues de contrôle. Une ancienne
-sortie acceptée n'est pas remplacée par un candidat rejeté.
+conserve le candidat, le script et les catalogues de contrôle. Pour les étapes
+03 et 04, les dossiers parents `03_deconvolution_work/` et `04_denoise_work/`
+sont supprimés avant calcul puis recréés avec un sous-dossier ordonné `001/`.
+Une ancienne sortie acceptée n'est pas remplacée par un candidat rejeté.
 
 Ces contrôles ne prouvent pas la conservation de structures diffuses ou des flux
 photométriques. La validation sur des FITS astronomiques avec Siril et inspection

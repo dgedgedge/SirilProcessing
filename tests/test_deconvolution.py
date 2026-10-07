@@ -150,6 +150,9 @@ def test_process_saves_psf_preview_audit_and_next_input(tmp_path, simulated_siri
     assert 'save 01_deconvolution_simple_trial.fits\nclose\nload 01_deconvolution_simple_trial.fits' in scripts
     for key in ('psf_path', 'psf_preview_path', 'matched_stars_path', 'output_image'):
         assert Path(deconv[key]).is_file()
+    first_script = Path(deconv['scripts'][0]['script_path'])
+    assert first_script.parent.name == '001'
+    assert first_script.parent.parent.name == '01_deconvolution_work'
     assert deconv['comparison']['matched_count'] == 10
     assert result['next']['seen'] == deconv['output_image']
     assert image.read_bytes() == source_bytes
@@ -248,9 +251,127 @@ def test_default_does_not_escalate_an_ineffective_trial(tmp_path, simulated_siri
     monkeypatch.setattr('lib.deconvolution.assess_quality', lambda *a, **k:
                         dict(accepted=False, artifact_failure=False, reasons=['insufficient_sharpening']))
     with pytest.raises(RuntimeError, match='Aucune déconvolution efficace'):
-        post_process(image, tmp_path/'report.json', arguments())
+        post_process(image, tmp_path/'report.json', arguments('--no-deconvolution-adaptive'))
     report = json.loads((tmp_path/'report.json').read_text())
     assert len(report['attempts']) == 1
     assert 'crop' not in report
     assert report['regularization'] == 'TV'
     assert report['psf_method'] == 'blind'
+
+
+def test_default_enables_adaptive_search(tmp_path, simulated_siril, monkeypatch):
+    image, _, _ = simulated_siril
+    verdicts = iter([
+        dict(accepted=False, artifact_failure=False, reasons=['insufficient_sharpening']),
+        dict(accepted=True, artifact_failure=False, reasons=[]),
+        dict(accepted=False, artifact_failure=True, reasons=['stellar_rings']),
+        dict(accepted=True, artifact_failure=False, reasons=[]),
+    ])
+    monkeypatch.setattr('lib.deconvolution.assess_quality', lambda *a, **k: next(verdicts))
+    result = post_process(image, tmp_path/'report.json', arguments('--deconvolution-psf-method', 'stars'))
+    assert result['selected_step'] == .0004
+    assert result['search_stopped_at_step'] == .0005
+    work_dir = Path(result['attempts'][0]['candidate_image_path']).parent
+    assert work_dir.name == '001'
+    assert work_dir.parent.name == 'report_work'
+
+
+def test_moffat_failure_keeps_numbered_audit(
+    tmp_path: Path,
+    simulated_siril: tuple[Path, Mock, Mock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Une PSF centrale inutilisable rejette le repli, sans erreur fatale de PSF."""
+    image, _, _ = simulated_siril
+    monkeypatch.setattr('lib.deconvolution.assess_quality', lambda *a, **k:
+                        dict(accepted=False, artifact_failure=False, reasons=['insufficient_sharpening']))
+    monkeypatch.setattr('lib.deconvolution.select_psf_stars', Mock(
+        side_effect=ValueError('PSF : seulement 1 étoiles fines et isolées ; minimum 3')))
+    report = tmp_path / 'report.json'
+    original = image.read_bytes()
+    with pytest.raises(RuntimeError, match='Aucune déconvolution efficace'):
+        post_process(image, report, arguments())
+    audit = json.loads(report.read_text())
+    assert audit['status'] == 'no_safe_improvement'
+    assert [a['number'] for a in audit['attempts']] == [1, 2]
+    assert audit['attempts'][1]['label'] == 'central_moffat'
+    assert audit['attempts'][1]['status'] == 'failed'
+    assert 'minimum 3' in audit['adaptive_psf_error']
+    assert image.read_bytes() == original
+
+
+def test_failed_central_trial_continues_to_next_step(
+    tmp_path: Path,
+    simulated_siril: tuple[Path, Mock, Mock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Une erreur Siril locale laisse essayer le pas suivant et le champ entier."""
+    image, runner, _ = simulated_siril
+    real_run = runner.run_siril_script.side_effect
+
+    def run(script: str, working_dir: str, script_name: str) -> bool:
+        """Simule l’échec d’un seul essai central."""
+        if 'central_step_04' in script_name:
+            return False
+        return real_run(script, working_dir, script_name)
+
+    runner.run_siril_script.side_effect = run
+    verdicts = iter([
+        dict(accepted=False, artifact_failure=False, reasons=['insufficient_sharpening']),
+        dict(accepted=True, artifact_failure=False, reasons=[]),
+        dict(accepted=True, artifact_failure=False, reasons=[]),
+    ])
+    monkeypatch.setattr('lib.deconvolution.assess_quality', lambda *a, **k: next(verdicts))
+    result = post_process(image, tmp_path / 'report.json', arguments('--deconvolution-max-step', '.0005'))
+    assert result['status'] == 'accepted'
+    assert result['selected_step'] == .0005
+    assert [a['number'] for a in result['attempts']] == [1, 2, 3, 4]
+    assert result['attempts'][1]['status'] == 'failed'
+
+
+def test_clarity_selected_after_real_moffat_failure(
+    tmp_path: Path,
+    simulated_siril: tuple[Path, Mock, Mock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Le candidat Clarity reste sélectionnable après l’échec réel du repli Siril."""
+    import sys
+    from shutil import copyfile
+    from types import SimpleNamespace
+    from lib.cosmic_clarity import processors
+
+    image, _, _ = simulated_siril
+
+    class FakeEngine:
+        """Produit un candidat sans GPU pour vérifier la sélection comparative."""
+
+        def __init__(self, *args: object) -> None:
+            """Accepte les paramètres du moteur de production."""
+
+        def process(
+            self, source: Path, destination: Path,
+            *args: object, **kwargs: object,
+        ) -> dict[str, str]:
+            """Copie l’entrée ; les métriques contrôlées déterminent l’acceptation."""
+            copyfile(source, destination)
+            return {'device': 'test'}
+
+    monkeypatch.setitem(sys.modules, 'lib.cosmic_clarity.inference', SimpleNamespace(CosmicClarityEngine=FakeEngine))
+    monkeypatch.setattr(processors, 'compare_star_catalogs', lambda *a: {
+        'status': 'validated', 'pairs': [], 'before_fwhm_px': {'mean': 4},
+        'after_fwhm_px': {'mean': 3}, 'paired_ratio': {'median': .75},
+        'before_roundness': {'mean': 1}, 'after_roundness': {'mean': 1},
+    })
+    monkeypatch.setattr(processors, 'artifact_metrics', lambda *a:
+                        dict(max_noise_ratio=1, max_ring_fraction=0))
+    monkeypatch.setattr('lib.deconvolution.assess_quality', lambda *a, **k:
+                        dict(accepted=False, artifact_failure=False, reasons=['insufficient_sharpening']))
+    monkeypatch.setattr('lib.deconvolution.select_psf_stars', Mock(side_effect=ValueError('PSF : minimum 3')))
+    result = processors.CosmicClaritySharpenProcessor().post_process(image, tmp_path / 'report.json', arguments())
+    assert result['status'] == 'accepted'
+    assert result['selected_engine'] == 'cosmic_clarity'
+    assert Path(result['output_image']).is_file()
+    siril = result['evaluations']['siril']
+    assert siril['status'] == 'no_safe_improvement'
+    assert siril['attempts'][1]['status'] == 'failed'
+    assert siril['attempts'][1]['number'] == 2

@@ -6,9 +6,9 @@ Ce script prend UNE SEULE image FITS calibrée en entrée et exécute les
 traitements activés par défaut : analyse du gradient, résolution
 astrométrique suivie de l'étalonnage photométrique des couleurs, puis
 déconvolution avec audit de PSF et comparaison stellaire avant/après,
-puis réduction du bruit contrôlée. --postprocess-backend cosmic-clarity
-remplace ces deux dernières étapes par des réseaux neuronaux optionnels.
-Il produit un rapport JSON et les fichiers propres à chaque traitement.
+puis réduction du bruit contrôlée. Le mode comparatif Cosmic Clarity + Siril
+est activé par défaut pour ces deux dernières étapes et peut être désactivé
+avec --disable-clarity.
 
 Le script utilise _PostProcessorSequence pour exécuter les traitements.
 Les chemins relatifs sont résolus depuis le dossier de lancement.
@@ -46,6 +46,11 @@ from lib.siril_utils import Siril
 def _sanitize_backend_name(name: str) -> str:
     """Retourne un identifiant de backend sûr pour les noms de chemins."""
     return "".join(char if char.isalnum() or char in ("-", "_") else "_" for char in name)
+
+
+def _effective_backend_name(args: argparse.Namespace) -> str:
+    """Nom du mode réellement appliqué aux étapes de restauration."""
+    return "cosmic-clarity" if getattr(args, "enable_clarity", True) else "siril"
 
 
 def _build_postprocess_layout(
@@ -123,7 +128,7 @@ def main() -> None:
     setup_logging(args.log_level)
 
     input_file = Path(args.input_file).resolve()
-    backend = getattr(args, "postprocess_backend", "siril")
+    backend = _effective_backend_name(args)
     output_path, steps_dir, result_path, run_name = _build_postprocess_layout(
         input_file, args.output_file, backend,
     )
