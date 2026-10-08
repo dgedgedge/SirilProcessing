@@ -13,9 +13,8 @@ configurées. Pour toute session, avec une ou plusieurs sous-sessions :
   sessions/<sous-session>/<sous-session>_<groupe>_calibrated/
     pp_light_*.fit(s)
     pp_light_*.seq
-  stack/
-    <session>_combined.fit(s)
-    <session>_combined.drizzle.json
+  <session>_combined.fit(s)
+  <session>_combined.drizzle.json
 
 <travail>/<session>/
   sessions/<sous-session>/

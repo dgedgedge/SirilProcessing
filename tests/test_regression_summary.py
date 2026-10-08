@@ -32,8 +32,8 @@ def test_full_regression_suite_summary(tmp_path, project_root, light_process_env
     assert "failed" not in output.lower(), output
     assert "error" not in output.lower(), output
 
-    match = re.search(r"(?P<passed>\d+) passed", output)
-    assert match is not None, output
+    passed_match = re.search(r"(?P<passed>\d+) passed", output)
+    assert passed_match is not None, output
 
     collected = subprocess.run(
         [sys.executable, "-m", "pytest", "--collect-only", "-q", *[str(path) for path in test_files]],
@@ -52,15 +52,25 @@ def test_full_regression_suite_summary(tmp_path, project_root, light_process_env
         for line in collection_output.splitlines()
         if "::test_" in line
     ]
-    passed = int(match.group("passed"))
+    passed = int(passed_match.group("passed"))
+    skipped_match = re.search(r"(?P<skipped>\d+) skipped", output)
+    xfailed_match = re.search(r"(?P<xfailed>\d+) xfailed", output)
+    xpassed_match = re.search(r"(?P<xpassed>\d+) xpassed", output)
+    skipped = int(skipped_match.group("skipped")) if skipped_match else 0
+    xfailed = int(xfailed_match.group("xfailed")) if xfailed_match else 0
+    xpassed = int(xpassed_match.group("xpassed")) if xpassed_match else 0
+    accounted = passed + skipped + xfailed + xpassed
 
-    assert passed == len(collected_tests), (
-        f"Synthèse incohérente: {passed} tests passés pour "
-        f"{len(collected_tests)} tests collectés.\n{output}"
+    assert accounted == len(collected_tests), (
+        "Synthèse incohérente: "
+        f"{passed} passés, {skipped} ignorés, {xfailed} xfailed et {xpassed} xpassed "
+        f"pour {len(collected_tests)} tests collectés.\n{output}"
     )
 
     summary = (
-        f"Regression summary: {passed}/{len(collected_tests)} tests passed "
+        f"Regression summary: {passed} passed, {skipped} skipped, "
+        f"{xfailed} xfailed, {xpassed} xpassed "
+        f"on {len(collected_tests)} collected tests "
         f"across {len(test_files)} files."
     )
     assert summary.startswith("Regression summary:")

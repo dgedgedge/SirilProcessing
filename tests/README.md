@@ -20,6 +20,9 @@ Depuis la racine du projet, avec les dépendances de `requirements.txt` install�
 # Tests de mosaïque et d’accès à Siril
 .venv/bin/python -m pytest -q tests/test_mosaic.py tests/test_mosaic_validation.py tests/test_integrated_script.py tests/test_simplified_mosaic.py tests/test_siril_validation.py
 
+# Post-traitements FITS (Siril classique + backend Cosmic Clarity)
+.venv/bin/python -m pytest -q tests/test_postprocess.py tests/test_deconvolution.py tests/test_denoising.py tests/test_cosmic_clarity.py tests/test_cosmic_inference.py
+
 # Couverture des bibliothèques
 .venv/bin/python -m pytest --cov=lib --cov-report=html
 ```
@@ -48,6 +51,7 @@ Pour une exécution simple sans ce contrôle supplémentaire :
 | Sélection et profils stellaires | `test_quality_filter.py`, `test_stellar_quality.py` |
 | Drizzle et transformations | `test_drizzle.py`, `test_registration_geometry.py` |
 | Séquences Siril | `test_siril_sequence.py` |
+| Post-traitements Siril et backend Cosmic Clarity | `test_postprocessor.py`, `test_postprocess.py`, `test_deconvolution.py`, `test_denoising.py`, `test_deconvolution_quality.py`, `test_photometric_color.py`, `test_cosmic_clarity.py`, `test_cosmic_inference.py` |
 | Mosaïque : noms, entrées, préparation et script généré | `test_mosaic.py`, `test_mosaic_validation.py`, `test_integrated_script.py`, `test_simplified_mosaic.py` |
 | Configuration, lancement et journaux Siril | `test_siril_validation.py` |
 | Génération et navigation HTML | `test_docs_html.py` |

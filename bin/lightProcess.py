@@ -12,43 +12,53 @@ Ce script :
 Usage:
     python lightProcessor.py <répertoire_session> [options]
     python lightProcessor.py <répertoire1> <répertoire2> [répertoire3...] [options]
-    
+
 Exemples:
     # Traitement d'une seule session
     python lightProcessor.py /path/to/session_M31 --dark-lib /path/to/dark_library
 
     # Traitement sans utiliser de master dark
     python lightProcessor.py /path/to/session_M31 --no-dark
-    
+
     # Traitement de plusieurs sessions en séquence
     python lightProcessor.py /path/to/session_M31 /path/to/session_M42 /path/to/session_NGC7000
-    
+
     # Traitement avec création de mosaïque automatique
     python lightProcessor.py /path/to/session_M31_nord /path/to/session_M31_sud --mosaic
-    
+
     # Mosaïque avec nom personnalisé
     python lightProcessor.py session1 session2 session3 --mosaic --mosaic-name "M31_complete"
 """
 
-import os
-import sys
+from __future__ import annotations
+
 import argparse
 import logging
+import os
 import shutil
+import sys
 from pathlib import Path
 
 # Add the parent directory to the path to import the lib module
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from lib.config import Config
-from lib.logging_utils import setup_logging, add_session_file_logging, remove_session_file_logging
+from lib.logging_utils import (
+    add_session_file_logging,
+    remove_session_file_logging,
+    setup_logging,
+)
 
 
-class HelpFormatter(argparse.ArgumentDefaultsHelpFormatter, argparse.RawDescriptionHelpFormatter):
+class HelpFormatter(
+    argparse.ArgumentDefaultsHelpFormatter, argparse.RawDescriptionHelpFormatter
+):
     """Formatter d'aide qui conserve les sauts de ligne et affiche les valeurs par défaut."""
 
 
-def build_session_target_map(input_roots: list[Path]) -> tuple[list[Path], dict[Path, Path]]:
+def build_session_target_map(
+    input_roots: list[Path],
+) -> tuple[list[Path], dict[Path, Path]]:
     """Associe chaque sous-session à la session fournie en paramètre."""
     from lib.lightprocessor import discover_session_roots
 
@@ -68,22 +78,33 @@ def build_session_target_map(input_roots: list[Path]) -> tuple[list[Path], dict[
 
 
 def target_output_root(base_output_dir: Path, target_root: Path) -> Path:
+    """Construit le dossier de sortie d’une cible sous la base configurée."""
     return base_output_dir / target_root.name
 
 
-def session_output_root(base_output_dir: Path, target_root: Path, session_dir: Path) -> Path:
-    return target_output_root(base_output_dir, target_root) / "sessions" / session_dir.name
+def session_output_root(
+    base_output_dir: Path, target_root: Path, session_dir: Path
+) -> Path:
+    """Construit le dossier de sortie d’une session de la cible."""
+    return (
+        target_output_root(base_output_dir, target_root) / "sessions" / session_dir.name
+    )
 
 
-def session_work_root(base_work_dir: Path, target_root: Path, session_dir: Path) -> Path:
+def session_work_root(
+    base_work_dir: Path, target_root: Path, session_dir: Path
+) -> Path:
+    """Construit le dossier de travail d’une session sans modifier le disque."""
     return base_work_dir / target_root.name / "sessions" / session_dir.name
 
 
 def stack_output_root(base_output_dir: Path, target_root: Path) -> Path:
-    return target_output_root(base_output_dir, target_root) / "stack"
+    """Construit le dossier de sortie du résultat empilé de la cible."""
+    return target_output_root(base_output_dir, target_root)
 
 
 def target_work_root(base_work_dir: Path, target_root: Path) -> Path:
+    """Construit le dossier de travail de la cible sous la base configurée."""
     return base_work_dir / target_root.name
 
 
@@ -125,7 +146,8 @@ def should_rebuild_stack(combined_output: Path, calibrated_dirs: list[Path]) -> 
     return latest_input > combined_mtime
 
 
-def main():
+def main() -> None:
+    """Résout les options, traite les sessions et produit les stacks et mosaïques demandés."""
     config = Config.from_command_line()
 
     siril_pipeline_epilog = """
@@ -175,53 +197,64 @@ Traitement Siril de mosaique (si --mosaic):
     3) seqapplyreg mosaic_ -framing=max
     4) stack r_mosaic_ rej 3 3 -norm=addscale -output_norm -rgb_equal -maximize -overlap_norm -feather=5 -out=<mosaic_name>_mosaic
 """
-    
+
     parser = argparse.ArgumentParser(
         description="Traitement automatique des images light avec prétraitement et stacking",
         formatter_class=HelpFormatter,
-        epilog=siril_pipeline_epilog
+        epilog=siril_pipeline_epilog,
     )
-    
-    from lib.siril_utils import Siril
+
     from lib.lightprocessor import LightProcessor
+    from lib.siril_utils import Siril
+
     config.register(LightProcessor, parser)
     config.register(Siril, parser)
 
     # Arguments pour la mosaïque
     parser.add_argument(
-        '--mosaic',
-        dest='create_mosaic',
-        action='store_true',
-        help="Créer une mosaïque après traitement de toutes les sessions"
+        "--mosaic",
+        dest="create_mosaic",
+        action="store_true",
+        help="Créer une mosaïque après traitement de toutes les sessions",
     )
-    
+
     from lib.mosaic import Mosaic, calculate_common_basename
+
     mosaic_processor = Mosaic()
     # Panel inputs are produced by this pipeline, not supplied independently.
     config.register(mosaic_processor, parser, include_inputs=False)
-    
+
     config.add_arguments(parser)
 
     parser.add_argument(
-        '-l', '--log-level',
-        dest='log_level',
-        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
-        default='INFO',
-        help=f"Niveau de journalisation. (Défaut: 'INFO')"
+        "-l",
+        "--log-level",
+        dest="log_level",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        default="INFO",
+        help="Niveau de journalisation. (Défaut: 'INFO')",
     )
-    
+
     parser.add_argument(
-        '-D', '--dry-run',
-        dest='dry_run',
+        "-D",
+        "--dry-run",
+        dest="dry_run",
         action="store_true",
-        help="Simule le traitement sans l'exécuter réellement"
+        help="Simule le traitement sans l'exécuter réellement",
     )
 
     args = config.parse_args(parser)
 
-    from lib.drizzle import validate_settings, cache_matches
+    from lib.drizzle import cache_matches, validate_settings
+
     try:
-        validate_settings({key: getattr(args, key) for key in LightProcessor.CONFIG_DEFAULTS if key.startswith("drizzle")})
+        validate_settings(
+            {
+                key: getattr(args, key)
+                for key in LightProcessor.CONFIG_DEFAULTS
+                if key.startswith("drizzle")
+            }
+        )
     except ValueError as exc:
         parser.error(str(exc))
 
@@ -229,18 +262,22 @@ Traitement Siril de mosaique (si --mosaic):
         args.fwhm_reject_percent = 0.0
     config.capture_args(args)
 
-    from lib.lightprocessor import LightProcessor, discover_session_roots, stack_session_outputs
+    from lib.lightprocessor import (
+        LightProcessor,
+        discover_session_roots,
+        stack_session_outputs,
+    )
     from lib.siril_utils import Siril
-    
+
     # Configuration du logging
     setup_logging(args.log_level)
     logging.info(f"Log level set to {args.log_level}")
-    
+
     # Sauvegarde de la configuration si demandé
     if args.save_config:
         if not config.save_requested(args):
             return 1
-    
+
     # Définition des répertoires par défaut
     if not args.output_dir:
         args.output_dir = config.get("output_dir")
@@ -269,8 +306,12 @@ Traitement Siril de mosaique (si --mosaic):
 
         discovered = discover_session_roots(session_dir)
         if not discovered:
-            logging.error(f"Aucun répertoire 'light' ou 'Light' trouvé dans: {session_dir}")
-            logging.info("Structure attendue: session_dir/light/ ou session_dir/Light/ (et optionnellement session_dir/flat/)")
+            logging.error(
+                f"Aucun répertoire 'light' ou 'Light' trouvé dans: {session_dir}"
+            )
+            logging.info(
+                "Structure attendue: session_dir/light/ ou session_dir/Light/ (et optionnellement session_dir/flat/)"
+            )
             return 1
 
         input_roots.append(session_dir)
@@ -280,7 +321,7 @@ Traitement Siril de mosaique (si --mosaic):
         if not mosaic_name or (not args.mosaic_name and len(mosaic_name) < 3):
             logging.error("Nom automatique trop court ; fournir --mosaic-name")
             return 1
-        if mosaic_name in ('.', '..') or any(c in mosaic_name for c in '/\\\n\r\x00"'):
+        if mosaic_name in (".", "..") or any(c in mosaic_name for c in '/\\\n\r\x00"'):
             logging.error("Nom de mosaïque incompatible avec un nom de répertoire")
             return 1
         work_base_dir = work_base_dir / mosaic_name
@@ -300,10 +341,15 @@ Traitement Siril de mosaique (si --mosaic):
         discovered = discover_session_roots(root_dir)
         logging.info("Session %s : %d sous-session(s)", root_dir, len(discovered))
 
-    logging.info(f"Validation réussie pour {len(session_dirs)} répertoires de sous-session")
+    logging.info(
+        f"Validation réussie pour {len(session_dirs)} répertoires de sous-session"
+    )
 
     if args.purge_target:
-        unique_targets = sorted({session_to_target[session] for session in session_dirs}, key=lambda p: str(p))
+        unique_targets = sorted(
+            {session_to_target[session] for session in session_dirs},
+            key=lambda p: str(p),
+        )
         for target_root in unique_targets:
             out_tree = target_output_root(output_base_dir, target_root)
             work_tree = target_work_root(work_base_dir, target_root)
@@ -315,22 +361,32 @@ Traitement Siril de mosaique (si --mosaic):
                         logging.info(f"Arborescence cible purgée: {tree}")
                     except Exception as exc:
                         logging.warning(f"Impossible de purger {tree}: {exc}")
-    
+
     if args.create_mosaic:
-        logging.info("Mosaïque demandée à partir des stacks des %d sessions", len(input_roots))
+        logging.info(
+            "Mosaïque demandée à partir des stacks des %d sessions", len(input_roots)
+        )
 
     # Configuration globale de Siril
     try:
         Siril.configure_defaults(siril_path=args.siril_path, siril_mode=args.siril_mode)
-        logging.info(f"Configuration Siril validée: path={args.siril_path}, mode={args.siril_mode}")
+        logging.info(
+            f"Configuration Siril validée: path={args.siril_path}, mode={args.siril_mode}"
+        )
     except ValueError as e:
         logging.error(f"Erreur de configuration Siril: {e}")
-        logging.error("Vérifiez que Siril est installé et accessible avec les paramètres spécifiés")
+        logging.error(
+            "Vérifiez que Siril est installé et accessible avec les paramètres spécifiés"
+        )
         return 1
-    
+
     # Configuration des paramètres de stacking
     stack_params = {
-        **{key: getattr(args, key) for key in LightProcessor.CONFIG_DEFAULTS if key.startswith("drizzle")},
+        **{
+            key: getattr(args, key)
+            for key in LightProcessor.CONFIG_DEFAULTS
+            if key.startswith("drizzle")
+        },
         "method": args.stack_method,
         "rejection": args.rejection_method,
         "rejection_low": args.rejection_param1,
@@ -353,7 +409,7 @@ Traitement Siril de mosaique (si --mosaic):
 
     if args.no_dark:
         logging.warning("Mode sans dark activé: la soustraction de dark sera ignorée")
-    
+
     # Traitement des images pour chaque répertoire de session
     total_sessions = len(session_dirs)
     successful_sessions = 0
@@ -363,12 +419,16 @@ Traitement Siril de mosaique (si --mosaic):
     target_wcs_totals = {}  # target root -> aggregated WCS stats
 
     for i, session_dir in enumerate(session_dirs, 1):
-        logging.info(f"{'='*60}")
-        logging.info(f"Traitement de la sous-session {i}/{total_sessions}: {session_dir}")
-        logging.info(f"{'='*60}")
+        logging.info(f"{'=' * 60}")
+        logging.info(
+            f"Traitement de la sous-session {i}/{total_sessions}: {session_dir}"
+        )
+        logging.info(f"{'=' * 60}")
 
         target_root = session_to_target.get(session_dir, session_dir)
-        processor_output_dir = session_output_root(output_base_dir, target_root, session_dir)
+        processor_output_dir = session_output_root(
+            output_base_dir, target_root, session_dir
+        )
         processor_work_dir = session_work_root(work_base_dir, target_root, session_dir)
 
         if args.force_reprocess:
@@ -376,13 +436,15 @@ Traitement Siril de mosaique (si --mosaic):
                 if directory.exists():
                     try:
                         shutil.rmtree(directory)
-                        logging.info(f"Répertoire supprimé (relance --force): {directory}")
+                        logging.info(
+                            f"Répertoire supprimé (relance --force): {directory}"
+                        )
                     except Exception as exc:
                         logging.warning(f"Impossible de supprimer {directory}: {exc}")
 
         session_log_file = processor_work_dir / f"{session_dir.name}_lightProcess.log"
         session_log_handler = add_session_file_logging(session_log_file, args.log_level)
-        
+
         try:
             # Création du processeur pour cette session
             logging.info("Log de sous-session: %s", session_log_file)
@@ -398,14 +460,16 @@ Traitement Siril de mosaique (si --mosaic):
                 keep_intermediate=args.keep_intermediate,
             )
         except Exception as e:
-            logging.error(f"Erreur lors de l'initialisation du processeur pour {session_dir}: {e}")
+            logging.error(
+                f"Erreur lors de l'initialisation du processeur pour {session_dir}: {e}"
+            )
             failed_sessions.append(session_dir)
             remove_session_file_logging(session_log_handler)
             continue
-        
+
         try:
             logging.info(f"Début du traitement de la sous-session: {session_dir}")
-            
+
             # Vérifier le répertoire light pour cette session
             light_dir = None
             for light_name in ["light", "Light"]:
@@ -413,9 +477,9 @@ Traitement Siril de mosaique (si --mosaic):
                 if potential_light_dir.exists():
                     light_dir = potential_light_dir
                     break
-            
+
             logging.info(f"Répertoire light: {light_dir}")
-            
+
             flat_dir = None
             for flat_name in ["flat", "Flat"]:
                 potential_flat_dir = session_dir / flat_name
@@ -423,8 +487,10 @@ Traitement Siril de mosaique (si --mosaic):
                     flat_dir = potential_flat_dir
                     break
             if flat_dir is not None:
-                logging.info(f"Répertoire flat détecté: {flat_dir} (sera utilisé pour le prétraitement)")
-            
+                logging.info(
+                    f"Répertoire flat détecté: {flat_dir} (sera utilisé pour le prétraitement)"
+                )
+
             success = processor.process_session(stack_params)
             session_stats = processor.get_session_stats()
 
@@ -440,10 +506,14 @@ Traitement Siril de mosaique (si --mosaic):
                 },
             )
             target_stats["sessions_total"] += 1
-            target_stats["lights_total"] += int(session_stats.get("lights_total", 0) or 0)
+            target_stats["lights_total"] += int(
+                session_stats.get("lights_total", 0) or 0
+            )
             target_stats["wcs_present"] += int(session_stats.get("wcs_present", 0) or 0)
             target_stats["wcs_missing"] += int(session_stats.get("wcs_missing", 0) or 0)
-            target_stats["wcs_unreadable"] += int(session_stats.get("wcs_unreadable", 0) or 0)
+            target_stats["wcs_unreadable"] += int(
+                session_stats.get("wcs_unreadable", 0) or 0
+            )
 
             logging.info(
                 "Sous-session stats - total lights: %d | WCS: present=%d, missing=%d, unreadable=%d | rejets: invalides=%d, non-light=%d, no-dark=%d, erreurs=%d | conservées=%d",
@@ -457,16 +527,20 @@ Traitement Siril de mosaique (si --mosaic):
                 session_stats.get("rejected_processing_failure", 0),
                 session_stats.get("kept_for_stacking", 0),
             )
-            
+
             if success:
                 logging.info(f"✅ Sous-session {session_dir} traitée avec succès")
                 successful_sessions += 1
                 target_stats["sessions_success"] += 1
-                successful_processors.append(processor)  # Sauvegarder le processor réussi
+                successful_processors.append(
+                    processor
+                )  # Sauvegarder le processor réussi
             else:
-                logging.error(f"❌ Échec du traitement de la sous-session {session_dir}")
+                logging.error(
+                    f"❌ Échec du traitement de la sous-session {session_dir}"
+                )
                 failed_sessions.append(session_dir)
-                
+
         except KeyboardInterrupt:
             logging.warning("Traitement interrompu par l'utilisateur")
             failed_sessions.append(session_dir)
@@ -475,21 +549,26 @@ Traitement Siril de mosaique (si --mosaic):
             logging.error(f"Erreur durant le traitement de {session_dir}: {e}")
             if args.log_level == "DEBUG":
                 import traceback
+
                 traceback.print_exc()
             failed_sessions.append(session_dir)
             continue
         finally:
             remove_session_file_logging(session_log_handler)
-    
+
     # Un stack par session fournie, quel que soit son nombre de sous-sessions.
 
     for root_dir in input_roots:
-        logging.info(f"{'='*60}")
+        logging.info(f"{'=' * 60}")
         logging.info(f"Start Stacking process for session directory: {root_dir}")
-        logging.info(f"{'='*60}")
+        logging.info(f"{'=' * 60}")
         discovered = discover_session_roots(root_dir)
         if args.dry_run:
-            logging.info("[DRY-RUN] Stacking de la session %s à partir de %d sous-session(s)", root_dir, len(discovered))
+            logging.info(
+                "[DRY-RUN] Stacking de la session %s à partir de %d sous-session(s)",
+                root_dir,
+                len(discovered),
+            )
             continue
 
         session_outputs = []
@@ -554,11 +633,14 @@ Traitement Siril de mosaique (si --mosaic):
         if session_outputs:
             target_stack_dir = stack_output_root(output_base_dir, root_dir)
             target_stack_dir.mkdir(parents=True, exist_ok=True)
-            target_stack_work_dir = target_work_root(work_base_dir, root_dir) / "stacking"
+            target_stack_work_dir = (
+                target_work_root(work_base_dir, root_dir) / "stacking"
+            )
             stack_log_files = [target_stack_work_dir / f"{root_dir.name}_stacking.log"]
             for session_dir in discovered:
                 stack_log_files.append(
-                    session_work_root(work_base_dir, root_dir, session_dir) / f"{session_dir.name}_stacking.log"
+                    session_work_root(work_base_dir, root_dir, session_dir)
+                    / f"{session_dir.name}_stacking.log"
                 )
             stack_log_handlers = [
                 add_session_file_logging(stack_log_file, args.log_level)
@@ -568,21 +650,38 @@ Traitement Siril de mosaique (si --mosaic):
             try:
                 logging.info(
                     "Logs de stack: %s",
-                    ", ".join(str(stack_log_file) for stack_log_file in stack_log_files),
+                    ", ".join(
+                        str(stack_log_file) for stack_log_file in stack_log_files
+                    ),
                 )
                 stack_candidates = [
                     target_stack_dir / f"{root_dir.name}_combined.fit",
                     target_stack_dir / f"{root_dir.name}_combined.fits",
                 ]
-                existing_combined = next((c for c in stack_candidates if c.exists()), None)
+                existing_combined = next(
+                    (c for c in stack_candidates if c.exists()), None
+                )
                 calibrated_dirs = []
-                session_outputs_root = target_output_root(output_base_dir, root_dir) / "sessions"
+                session_outputs_root = (
+                    target_output_root(output_base_dir, root_dir) / "sessions"
+                )
                 for session_dir in discovered:
                     session_root = session_outputs_root / session_dir.name
                     if session_root.exists():
-                        calibrated_dirs.extend([d for d in session_root.rglob("*_calibrated") if d.is_dir()])
+                        calibrated_dirs.extend(
+                            [
+                                d
+                                for d in session_root.rglob("*_calibrated")
+                                if d.is_dir()
+                            ]
+                        )
 
-                if not args.force_stacking and existing_combined and cache_matches(existing_combined, stack_params) and not should_rebuild_stack(existing_combined, calibrated_dirs):
+                if (
+                    not args.force_stacking
+                    and existing_combined
+                    and cache_matches(existing_combined, stack_params)
+                    and not should_rebuild_stack(existing_combined, calibrated_dirs)
+                ):
                     logging.info(
                         "Stack final déjà à jour pour %s (dates répertoires calibrés inchangées): %s",
                         root_dir.name,
@@ -613,26 +712,36 @@ Traitement Siril de mosaique (si --mosaic):
                 )
                 if combined_output:
                     session_stack_outputs[root_dir] = combined_output
-                    logging.info(f"✅ Sortie combinée créée pour la session {root_dir}: {combined_output}")
+                    logging.info(
+                        f"✅ Sortie combinée créée pour la session {root_dir}: {combined_output}"
+                    )
                 else:
-                    logging.error(f"❌ Échec de la sortie combinée pour la session {root_dir}")
+                    logging.error(
+                        f"❌ Échec de la sortie combinée pour la session {root_dir}"
+                    )
             except Exception:
                 logging.exception("Échec du stacking de la session %s", root_dir)
             finally:
                 for stack_log_handler in stack_log_handlers:
                     remove_session_file_logging(stack_log_handler)
         else:
-            logging.warning(f"Aucun FITS calibré trouvé pour le stack final de la session {root_dir}")
+            logging.warning(
+                f"Aucun FITS calibré trouvé pour le stack final de la session {root_dir}"
+            )
 
     # Résumé final
-    logging.info(f"{'='*60}")
-    logging.info(f"RÉSUMÉ DU TRAITEMENT")
-    logging.info(f"{'='*60}")
-    logging.info(f"Sous-sessions calibrées avec succès: {successful_sessions}/{total_sessions}")
+    logging.info(f"{'=' * 60}")
+    logging.info("RÉSUMÉ DU TRAITEMENT")
+    logging.info(f"{'=' * 60}")
+    logging.info(
+        f"Sous-sessions calibrées avec succès: {successful_sessions}/{total_sessions}"
+    )
 
     if target_wcs_totals:
         logging.info("RÉSUMÉ WCS PAR SESSION")
-        for target_root in sorted(target_wcs_totals.keys(), key=lambda p: p.name.lower()):
+        for target_root in sorted(
+            target_wcs_totals.keys(), key=lambda p: p.name.lower()
+        ):
             stats = target_wcs_totals[target_root]
             lights_total = int(stats.get("lights_total", 0) or 0)
             wcs_present = int(stats.get("wcs_present", 0) or 0)
@@ -641,7 +750,9 @@ Traitement Siril de mosaique (si --mosaic):
             sessions_total = int(stats.get("sessions_total", 0) or 0)
             sessions_success = int(stats.get("sessions_success", 0) or 0)
 
-            present_pct = (100.0 * wcs_present / lights_total) if lights_total > 0 else 0.0
+            present_pct = (
+                (100.0 * wcs_present / lights_total) if lights_total > 0 else 0.0
+            )
             logging.info(
                 "Session %s | sous-sessions=%d/%d | lights=%d | WCS present=%d (%.1f%%), missing=%d, unreadable=%d",
                 target_root.name,
@@ -653,31 +764,40 @@ Traitement Siril de mosaique (si --mosaic):
                 wcs_missing,
                 wcs_unreadable,
             )
-    
+
     if failed_sessions:
         logging.error(f"Sous-sessions échouées ({len(failed_sessions)}):")
         for failed_session in failed_sessions:
             logging.error(f"  - {failed_session}")
-    
-    logging.info("Sessions empilées avec succès: %d/%d", len(session_stack_outputs), len(input_roots))
+
+    logging.info(
+        "Sessions empilées avec succès: %d/%d",
+        len(session_stack_outputs),
+        len(input_roots),
+    )
     mosaic_success = not args.create_mosaic
     # La mosaïque reçoit exclusivement un résultat de stacking par session.
     if args.create_mosaic and args.dry_run and len(input_roots) >= 2:
-        logging.info("[DRY-RUN] Mosaïque prévue à partir des stacks des %d sessions", len(input_roots))
+        logging.info(
+            "[DRY-RUN] Mosaïque prévue à partir des stacks des %d sessions",
+            len(input_roots),
+        )
         mosaic_success = True
     elif args.create_mosaic and len(session_stack_outputs) >= 2:
-        logging.info(f"{'='*60}")
-        logging.info(f"CRÉATION DE LA MOSAÏQUE")
-        logging.info(f"{'='*60}")
-        
+        logging.info(f"{'=' * 60}")
+        logging.info("CRÉATION DE LA MOSAÏQUE")
+        logging.info(f"{'=' * 60}")
+
         try:
             successful_session_dirs = list(session_stack_outputs)
             all_output_files = list(session_stack_outputs.values())
 
-            logging.info(f"Total des fichiers pour la mosaïque: {len(all_output_files)}")
+            logging.info(
+                f"Total des fichiers pour la mosaïque: {len(all_output_files)}"
+            )
             for file in all_output_files:
                 logging.info(f"  - {file}")
-            
+
             mosaic_name = args.mosaic_name
 
             # Same processor contract as the other treatments: parsed options,
@@ -687,40 +807,54 @@ Traitement Siril de mosaique (si --mosaic):
             mosaic_args.mosaic_inputs = all_output_files[1:]
             mosaic_args.output_dir = output_base_dir
             mosaic_args.work_dir = work_base_dir
-            mosaic_report = work_base_dir / f'{mosaic_name}_mosaic.json'
+            mosaic_report = work_base_dir / f"{mosaic_name}_mosaic.json"
             mosaic_processor.set_from_args(mosaic_args)
             result = mosaic_processor.post_process(
-                input_path=all_output_files[0], output_path=mosaic_report,
+                input_path=all_output_files[0],
+                output_path=mosaic_report,
             )
-            if result.get('error'):
-                raise RuntimeError(result['error'])
-            mosaic_result = result.get('output_image')
+            if result.get("error"):
+                raise RuntimeError(result["error"])
+            mosaic_result = result.get("output_image")
             if not mosaic_result or not Path(mosaic_result).is_file():
-                raise RuntimeError('La mosaïque ne fournit pas de fichier output_image valide')
+                raise RuntimeError(
+                    "La mosaïque ne fournit pas de fichier output_image valide"
+                )
             mosaic_success = True
-            logging.info('🌟 Mosaïque créée avec succès: %s', mosaic_result)
-            logging.info('Rapport de mosaïque: %s', mosaic_report)
-                
+            logging.info("🌟 Mosaïque créée avec succès: %s", mosaic_result)
+            logging.info("Rapport de mosaïque: %s", mosaic_report)
+
         except Exception as e:
             logging.error(f"Erreur lors de la création de la mosaïque: {e}")
             if args.log_level == "DEBUG":
                 import traceback
+
                 traceback.print_exc()
-    
+
     elif args.create_mosaic:
-        logging.warning("Mosaïque demandée mais moins de 2 résultats de stacking disponibles")
-    
+        logging.warning(
+            "Mosaïque demandée mais moins de 2 résultats de stacking disponibles"
+        )
+
     # Retour final
-    if successful_sessions == total_sessions and (args.dry_run or len(session_stack_outputs) == len(input_roots)) and mosaic_success:
+    if (
+        successful_sessions == total_sessions
+        and (args.dry_run or len(session_stack_outputs) == len(input_roots))
+        and mosaic_success
+    ):
         if args.dry_run:
             logging.info("Simulation terminée avec succès")
         elif args.create_mosaic:
-            logging.info("🎉 Toutes les sessions traitées et mosaïque créée avec succès")
+            logging.info(
+                "🎉 Toutes les sessions traitées et mosaïque créée avec succès"
+            )
         else:
             logging.info("🎉 Toutes les sessions ont été traitées avec succès")
         return 0
     elif successful_sessions > 0:
-        logging.warning(f"⚠️  Traitement incomplet: {successful_sessions}/{total_sessions} sous-sessions calibrées, {len(session_stack_outputs)}/{len(input_roots)} sessions empilées")
+        logging.warning(
+            f"⚠️  Traitement incomplet: {successful_sessions}/{total_sessions} sous-sessions calibrées, {len(session_stack_outputs)}/{len(input_roots)} sessions empilées"
+        )
         return 1
     else:
         logging.error("💥 Aucune session n'a pu être traitée")
@@ -732,7 +866,9 @@ if __name__ == "__main__":
         sys.exit(main())
     except KeyboardInterrupt:
         print("\n⚠️  Traitement interrompu par l'utilisateur.")
-        print("   Les fichiers temporaires peuvent être conservés dans le répertoire de travail.")
+        print(
+            "   Les fichiers temporaires peuvent être conservés dans le répertoire de travail."
+        )
         sys.exit(1)
     except Exception as e:
         logging.error(f"Erreur inattendue: {e}")

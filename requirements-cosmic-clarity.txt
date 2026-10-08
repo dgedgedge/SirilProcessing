@@ -1,0 +1,4 @@
+# Installation optionnelle par postProcess.sh --install-cosmic-clarity.
+# CUDA 12.8 ; Python 3.10 à 3.14. Aucun changement des paquets système.
+--index-url https://download.pytorch.org/whl/cu128
+torch==2.10.0+cu128

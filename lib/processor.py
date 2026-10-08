@@ -1,10 +1,13 @@
 """Interface commune aux traitements d’images et à leurs rapports."""
 
+from __future__ import annotations
+
 import argparse
-from copy import deepcopy
 from abc import ABC, abstractmethod
+from copy import deepcopy
 from pathlib import Path
-from typing import Dict
+
+from lib.type_defs import JSONReport
 
 
 class processor(ABC):
@@ -27,13 +30,14 @@ class processor(ABC):
         """
         self._args = deepcopy(args)
 
-    def _get_args(self, args=None):
+    def _get_args(self, args: argparse.Namespace | None = None) -> argparse.Namespace:
         """Une surcharge ponctuelle ne modifie pas la configuration mémorisée."""
         if args is not None:
             return args
         if self._args is not None:
             return self._args
         from lib.config import Config
+
         return Config().arguments()
 
     def get_prefix(self) -> str:
@@ -45,6 +49,11 @@ class processor(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def post_process(self, input_path: Path, output_path: Path, args=None) -> Dict:
+    def post_process(
+        self,
+        input_path: Path,
+        output_path: Path,
+        args: argparse.Namespace | None = None,
+    ) -> JSONReport:
         """Traite l'image configurée ; args permet une surcharge pour cet appel."""
         raise NotImplementedError

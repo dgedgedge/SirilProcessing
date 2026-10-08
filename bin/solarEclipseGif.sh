@@ -3,55 +3,11 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-VENV_DIR="${PROJECT_ROOT}/.venv"
-PY_SCRIPT="${SCRIPT_DIR}/solarEclipseGif.py"
 
-if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
-  cat <<'EOF'
-Usage: bin/solarEclipseGif.sh [OPTIONS]
+# Compatibilité avec la libstdc++ des extensions VS Code.
+export LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libstdc++.so.6
 
-Creates/uses .venv, installs requirements, then runs bin/solarEclipseGif.py.
-
-Options from docs/SOLAR_ECLIPSE_GIF.md:
-  --input-dir PATH
-  --dark-calib-frames SPEC
-  --manual-seuil-fond-du-ciel NUMBER
-  --full-sun-frames SPEC
-  --first-nearly-full-sun-frames INT
-  --exclude-frames SPEC
-  --debug-dir PATH
-  --debug-full-sun
-  --debug-shifts
-  --debug-gif-frames
-  --debug-watershed
-  --debug-luminosity
-  --background-outside-mask-scale NUMBER
-  --background-mask-dilate-fraction NUMBER
-  --background-s-curve-sigma NUMBER
-  --background-s-curve-target-fraction NUMBER
-  --enable-background-filter
-  --disable-background-filter
-  --rotate-clockwise-deg DEG
-  --target-duration SECONDS
-  --output PATH
-  --log-level {DEBUG,INFO,WARNING,ERROR}
-
-Frame selections are 1-based: "1-10,15,20-25".
-For detailed help:
-  python3 bin/solarEclipseGif.py --help
-EOF
-  exit 0
-fi
-
-if [[ ! -d "${VENV_DIR}" ]]; then
-  echo "[solarEclipseGif] Creation du venv dans ${VENV_DIR}"
-  python3 -m venv "${VENV_DIR}"
-fi
-
-# shellcheck source=/dev/null
-source "${VENV_DIR}/bin/activate"
-
-python -m pip install --upgrade pip >/dev/null
-python -m pip install -r "${PROJECT_ROOT}/requirements.txt" >/dev/null
-
-exec python "${PY_SCRIPT}" "$@"
+# shellcheck source=bin/venv_helpers.sh
+source "${SCRIPT_DIR}/venv_helpers.sh"
+prepare_project_venv "${PROJECT_ROOT}/requirements.txt"
+exec "${SELECTED_VENV}/bin/python" "${SCRIPT_DIR}/solarEclipseGif.py" "$@"

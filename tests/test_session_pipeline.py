@@ -89,7 +89,7 @@ def test_every_session_is_stacked_with_all_its_calibrations(tmp_path, pipeline, 
     assert run([root], *(['--force-stacking'] if force else [])) == 0
     stack.assert_called_once()
     call = stack.call_args.kwargs
-    assert call['output_dir'] == tmp_path / 'out' / 'field' / 'stack'
+    assert call['output_dir'] == tmp_path / 'out' / 'field'
     assert set(call['output_files']) == {path for child in children for path in calibrated[child]}
     mosaic.return_value.post_process.assert_not_called()
 
@@ -114,7 +114,7 @@ def test_mosaic_uses_only_one_stack_per_input_session(tmp_path, pipeline):
         assert stack_call.kwargs['work_dir'] == tmp_path / 'work/field'
     assert args.siril_mode == 'flatpak'
     mosaic.return_value.add_arguments.assert_called_once()
-    assert inputs == [tmp_path / 'work/field' / root.name / 'stack' / f'{root.name}_combined.fits' for root in roots]
+    assert inputs == [tmp_path / 'work/field' / root.name / f'{root.name}_combined.fits' for root in roots]
     assert not set(inputs).intersection(path for files in calibrated.values() for path in files)
     mosaic.return_value.post_process.assert_called_once()
     mosaic.return_value.create_mosaic.assert_not_called()
@@ -152,7 +152,7 @@ def test_mosaic_accepts_cached_session_stacks(tmp_path, pipeline, monkeypatch):
     roots = [make_session(tmp_path, name, 1)[0] for name in ['north', 'south']]
     expected = []
     for root in roots:
-        result = tmp_path / 'work/field' / root.name / 'stack' / f'{root.name}_combined.fits'
+        result = tmp_path / 'work/field' / root.name / f'{root.name}_combined.fits'
         result.parent.mkdir(parents=True)
         result.touch()
         expected.append(result)

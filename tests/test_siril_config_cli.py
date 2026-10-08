@@ -42,7 +42,7 @@ def test_postprocess_save_reload_and_override(tmp_path):
         result = subprocess.run([*command, *options], cwd=tmp_path,
                                 env={**os.environ, 'VENV_DIR': sys.prefix}, capture_output=True, text=True)
         assert result.returncode == 0, result.stderr
-        return (tmp_path / 'report_steps/00_image_postProcess.log').read_text()
+        return (tmp_path / 'image_postprocess_cosmic-clarity/00_image_postProcess.log').read_text()
 
     run('-S', '-m', 'native', '-s', '/example/siril-cli')
     saved = json.loads(config_path.read_text())

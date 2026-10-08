@@ -7,7 +7,7 @@ pour consulter les fichiers `.analyze`, sans navigateur et sans Siril. Un export
 HTML interactif autonome reste disponible. Les fichiers
 sources sont seulement lus. Python 3.10 ou plus récent est nécessaire.
 
-Le lanceur shell crée `.venv` si nécessaire, l’active, puis met à jour pip et
+Le lanceur shell crée le venv si nécessaire, puis met à jour
 les dépendances de `requirements-analyze.txt` à chaque lancement (accès Internet
 nécessaire pour rechercher les mises à jour). Il transmet tous les arguments au
 script Python :
@@ -188,3 +188,8 @@ interruptions restent rouges.
 
 Pour les journaux de guidage `.txt` au format PHD2, utiliser le
 [visualiseur de guide logs](../guideLogAnalyze/README.md).
+
+Le lanceur utilise Python et pip du système pour créer le venv sans pip et
+mettre à jour ses dépendances avant chaque exécution. Il lance ensuite le
+Python du venv. La sélection de l’environnement, les prérequis et l’exécution
+sans mise à jour sont décrits dans [Installation](../../INSTALLATION.md).

@@ -72,3 +72,8 @@ au dépôt Git.
 
 Références GitHub : [lancement manuel d’un workflow](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow)
 et [conservation des artefacts](https://docs.github.com/en/actions/tutorials/store-and-share-data).
+
+Le lanceur utilise Python et pip du système pour créer le venv sans pip et
+mettre à jour ses dépendances avant chaque exécution. Il lance ensuite le
+Python du venv. La sélection de l’environnement, les prérequis et l’exécution
+sans mise à jour sont décrits dans [Installation](../../INSTALLATION.md).
