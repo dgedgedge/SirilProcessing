@@ -15,14 +15,27 @@ from astropy.io import fits
 from PIL import Image, ImageDraw
 from scipy.spatial import cKDTree
 
-from lib.deconvolution_quality import artifact_metrics, assess_quality, select_psf_stars
+from lib.deconvolution_quality import (
+    InsufficientPSFStars, artifact_metrics, assess_quality, select_psf_stars,
+    log_quality_diagnostics,
+)
 from lib.postprocess_paths import reset_ordered_work_dir, treatment_file_prefix
 from lib.siril_utils import create_siril_from_args
+from lib.processor import processor
+from lib.restoration import RestorationComparisonProcessor
 from lib.type_defs import ConfigValue, JSONReport, StarMeasurement
+
+
+# Fractions de chaque dimension : du tiers central au champ entier.
+ADAPTIVE_CROP_FRACTIONS = (1 / 3, 1 / 2, 2 / 3, 1.0)
 
 
 def add_arguments(parser: argparse.ArgumentParser) -> None:
     """Déclare les options de PSF, de recherche du pas et les seuils d’acceptation."""
+    parser.add_argument(
+        "--deconvolution-reference-measurements", action=argparse.BooleanOptionalAction,
+        default=True, help="Mesurer les mêmes étoiles aux positions initiales (SNR ≥ 10)",
+    )
     parser.add_argument("--deconvolution-iterations", type=int, default=10)
     parser.add_argument(
         "--deconvolution-psf-size",
@@ -196,14 +209,28 @@ def compare_star_catalogs(
     min_stars: int,
     min_fraction: float,
     layer: int,
+    *,
+    reference_images: tuple[Path | str, Path | str] | None = None,
 ) -> JSONReport:
     """Apparie les étoiles par voisinage unique réciproque dans le rayon en pixels.
 
     Ne publie les statistiques FWHM et rondeur que si min_stars et la fraction
     minimale sont atteints. Refuse des catalogues de canaux différents.
+    reference_images déclenche une mesure locale commune avant/après, avec
+    sélection des références fiables sur l’entrée ; la détection indépendante
+    après reste un diagnostic. Les flux, SNR et motifs sont conservés dans
+    reference_measurements. Voir postProcess/reference-stars.md.
     Voir docs/scripts/postProcess/README.md pour les critères de déconvolution."""
     before, rejected_before = read_star_catalog(before_path)
     after, rejected_after = read_star_catalog(after_path)
+    reference_audit = None
+    independent_after_count = len(after)
+    if reference_images is not None:
+        from lib.reference_stars import measure_reference_catalog
+
+        before, after, reference_audit = measure_reference_catalog(
+            *reference_images, before, layer, radius,
+        )
     if any(star["layer"] != layer for star in before + after):
         raise ValueError("Les catalogues avant/après ne portent pas sur le même canal")
     pairs = []
@@ -265,6 +292,17 @@ def compare_star_catalogs(
         unmatched_after_ids=[s["id"] for s in after if s["id"] not in used_after],
         pairs=pairs,
     )
+    if reference_audit is not None:
+        result["reference_measurements"] = reference_audit
+        result["independent_after_count"] = independent_after_count
+        logging.info(
+            "Mesure aux positions initiales : %d détections initiales ; %d références fiables ; "
+            "%d mesures candidates ; %d étoiles appariées ; SNR minimal %.1f",
+            reference_audit['initial_count'], len(before), len(after), len(pairs),
+            reference_audit['min_reference_snr'],
+        )
+        logging.info("Mesure aux positions initiales — diagnostics : %s",
+                     reference_audit['failure_summary'])
     # Aucune statistique de comparaison publiée tant que la cohorte n'est pas validée.
     if valid:
 
@@ -629,7 +667,9 @@ def post_process(
             ],
         )
         comparison = compare_star_catalogs(
-            before_catalog, after_catalog, radius, minimum, fraction, layer
+            before_catalog, after_catalog, radius, minimum, fraction, layer,
+            reference_images=(source, candidate)
+            if option("reference_measurements", True) else None,
         )
         attempt = dict(
             number=len(result["attempts"]) + 1,
@@ -699,9 +739,13 @@ def post_process(
                 comparison["matched_count"],
                 100 * comparison["matched_fraction_before"],
             )
-        logging.info(
-            "Déconvolution %s, pas %.7f : %s", label, step_value, attempt["quality"]
+        log_quality_diagnostics(
+            f"Déconvolution {label}", comparison, attempt["quality"], attempt.get("artifacts"),
         )
+        logging.info("Déconvolution %s, pas %.7f : %s ; motifs=%s", label, step_value,
+                     "acceptée" if attempt["quality"]["accepted"] else "rejetée",
+                     ", ".join(attempt["quality"]["reasons"]) or "aucun")
+        logging.debug("Audit de qualité : %s", attempt["quality"])
         return attempt
 
     try:
@@ -737,24 +781,47 @@ def post_process(
             result["simple_psf_error"] = str(error)
             record_failure("simple_psf", error)
         if accepted is None and adaptive:
-            # Le tiers de chaque dimension, issu de l'original, jamais d'un essai déconvolué.
-            crop = work / f"{tag}central_original.fits"
-            with fits.open(snapshot, memmap=False) as hdul:
-                height, width = shape[-2:]
-                crop_h, crop_w = height // 3, width // 3
-                y0, x0 = (height - crop_h) // 2, (width - crop_w) // 2
-                data = hdul[0].data[..., y0 : y0 + crop_h, x0 : x0 + crop_w]
-                crop_header = fits.Header()
-                if "ROWORDER" in hdul[0].header:
-                    crop_header["ROWORDER"] = hdul[0].header["ROWORDER"]
-                fits.writeto(crop, data, crop_header)
-            result["crop"] = dict(
-                path=str(crop), x=x0, y=y0, width=crop_w, height=crop_h
-            )
             try:
-                crop_before = detect(crop, "central_before")
-                psf_catalog = detect(crop, "central_moffat", "Moffat", amplitude=True)
-                psf = build_psf(crop, psf_catalog, "central_moffat", "Moffat", 0.1)
+                result["adaptive_crop_attempts"] = []
+                for crop_index, fraction in enumerate(ADAPTIVE_CROP_FRACTIONS):
+                    label = "central" if crop_index == 0 else f"central_expand_{crop_index}"
+                    crop = work / f"{tag}{label}_original.fits"
+                    with fits.open(snapshot, memmap=False) as hdul:
+                        height, width = shape[-2:]
+                        crop_h = max(1, int(height * fraction))
+                        crop_w = max(1, int(width * fraction))
+                        y0, x0 = (height - crop_h) // 2, (width - crop_w) // 2
+                        data = hdul[0].data[..., y0:y0 + crop_h, x0:x0 + crop_w]
+                        crop_header = fits.Header()
+                        if "ROWORDER" in hdul[0].header:
+                            crop_header["ROWORDER"] = hdul[0].header["ROWORDER"]
+                        fits.writeto(crop, data, crop_header)
+                    crop_info = dict(
+                        path=str(crop), x=x0, y=y0, width=crop_w, height=crop_h,
+                        dimension_fraction=fraction,
+                    )
+                    result["crop"] = crop_info
+                    logging.info(
+                        "PSF adaptative : zone %d/%d, %dx%d pixels (%.1f %% des dimensions)",
+                        crop_index + 1, len(ADAPTIVE_CROP_FRACTIONS),
+                        crop_w, crop_h, 100 * fraction,
+                    )
+                    psf_catalog = detect(crop, label + "_moffat", "Moffat", amplitude=True)
+                    try:
+                        psf = build_psf(crop, psf_catalog, label + "_moffat", "Moffat", 0.1)
+                    except InsufficientPSFStars as error:
+                        result["adaptive_crop_attempts"].append(
+                            dict(**crop_info, status="insufficient_stars", error=str(error))
+                        )
+                        logging.info("PSF adaptative : %s ; élargissement si possible", error)
+                        if crop_index == len(ADAPTIVE_CROP_FRACTIONS) - 1:
+                            raise
+                        continue
+                    result["adaptive_crop_attempts"].append(dict(**crop_info, status="accepted"))
+                    logging.info("PSF adaptative construite sur %dx%d pixels ; début de la recherche du pas",
+                                 crop_w, crop_h)
+                    crop_before = detect(crop, label + "_before")
+                    break
                 best = None
                 for step_number in range(4, int(round(max_step * 10000)) + 1):
                     attempt = trial(
@@ -765,6 +832,8 @@ def post_process(
                         f"central_step_{step_number:02d}",
                     )
                     if attempt["quality"]["artifact_failure"]:
+                        logging.info("Recherche adaptative arrêtée au pas %.7f : artefacts détectés",
+                                     step_number / 10000)
                         result["search_stopped_at_step"] = step_number / 10000
                         break
                     if attempt["quality"]["accepted"]:
@@ -811,3 +880,45 @@ def post_process(
         result["error"] = str(error)
         save_report()
         raise
+
+
+class SirilDeconvolutionProcessor(processor):
+    """Exécute uniquement le moteur Siril et ses contrôles de qualité."""
+
+    parameter_persistence = {"deconvolution_output": False}
+
+    @classmethod
+    def get_prefix(cls) -> str:
+        """Retourne l’identifiant commun de l’étape."""
+        return 'deconvolution'
+
+    @classmethod
+    def add_arguments(cls, parser: argparse.ArgumentParser) -> None:
+        """Expose les paramètres locaux de l’algorithme Siril."""
+        add_arguments(parser)
+
+    def post_process(
+        self, input_path: Path | str, output_path: Path | str,
+        args: argparse.Namespace | None = None,
+    ) -> JSONReport:
+        """Exécute le traitement Siril avec les paramètres de cette instance."""
+        return post_process(input_path, output_path, self._get_args(args))
+
+
+class DeconvolutionProcessor(RestorationComparisonProcessor):
+    """Orchestre les candidats Siril et Cosmic Clarity et conserve le meilleur accepté."""
+
+    parameter_persistence = {'deconvolution_output': False}
+    operation = 'sharpen'
+    siril_processor = SirilDeconvolutionProcessor
+
+    @classmethod
+    def get_prefix(cls) -> str:
+        """Retourne l’identifiant stable des options et rapports."""
+        return 'deconvolution'
+
+    @classmethod
+    def add_arguments(cls, parser: argparse.ArgumentParser) -> None:
+        """Déclare les paramètres communs de l’étape."""
+        cls.add_shared_arguments(parser)
+        cls.siril_processor.add_arguments(parser)

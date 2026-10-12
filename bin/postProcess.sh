@@ -8,7 +8,7 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 export LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libstdc++.so.6
 
 INSTALL_COSMIC=false
-COSMIC_MODEL_DIR="${PROJECT_ROOT}/models/cosmicclarity"
+COSMIC_MODEL_DIR="${PROJECT_ROOT}/tmp/models/cosmicclarity"
 COSMIC_MODEL_DIR_SET=false
 FORWARDED_ARGS=()
 while [[ $# -gt 0 ]]; do

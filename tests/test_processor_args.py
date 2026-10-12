@@ -4,6 +4,9 @@ from unittest.mock import Mock
 
 import pytest
 
+from lib.denoising import SirilNoiseReductionProcessor
+from lib.deconvolution import SirilDeconvolutionProcessor
+
 from lib.postprocess import (
     GradientExtractor, NoiseReductionProcessor, DeconvolutionProcessor,
     PhotometricColorCalibrator, _PostProcessorSequence,
@@ -25,8 +28,8 @@ def test_gradient_stored_options_and_temporary_override(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize('cls,module,option', [
-    (NoiseReductionProcessor, 'lib.denoising', 'denoise_modulation'),
-    (DeconvolutionProcessor, 'lib.deconvolution', 'deconvolution_iterations'),
+    (SirilNoiseReductionProcessor, 'lib.denoising', 'denoise_modulation'),
+    (SirilDeconvolutionProcessor, 'lib.deconvolution', 'deconvolution_iterations'),
 ])
 def test_adapters_forward_stored_options(cls, module, option, monkeypatch, tmp_path):
     delegate = Mock(return_value={})
@@ -61,7 +64,7 @@ def test_sequence_remembers_activation_and_configures_children(tmp_path):
 def test_processor_uses_shared_options_with_explicit_override(tmp_path, monkeypatch):
     from lib.config import Config
     config = Config(tmp_path / 'config.json')
-    treatment = NoiseReductionProcessor()
+    treatment = SirilNoiseReductionProcessor()
     parser = argparse.ArgumentParser()
     config.register(treatment, parser)
     config.parse_args(parser, ['--denoise-modulation', '0.25'])

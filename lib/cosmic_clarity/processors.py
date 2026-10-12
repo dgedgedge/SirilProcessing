@@ -10,7 +10,6 @@ import argparse
 import json
 import logging
 from pathlib import Path
-from shutil import copyfile
 from typing import Literal
 
 import numpy as np
@@ -18,11 +17,80 @@ from astropy.io import fits
 
 from lib.cosmic_clarity.models import DEFAULT_MODEL_DIR
 from lib.deconvolution import _quote, compare_star_catalogs, read_star_catalog
-from lib.deconvolution_quality import artifact_metrics, assess_denoising, assess_quality
+from lib.deconvolution_quality import (
+    artifact_metrics, assess_denoising, assess_quality,
+)
 from lib.postprocess_paths import reset_ordered_work_dir
 from lib.processor import processor
 from lib.siril_utils import create_siril_from_args
 from lib.type_defs import JSONReport
+
+
+# Conserve la frontière historique entre petits et grands catalogues.
+LARGE_MATCH_SAMPLE = 60
+MATCH_FRACTION_WARNING = 0.70
+MIN_REPRESENTATIVE_GROUP = 10
+# Une strate doit conserver au moins la moitié du taux global d’appariement.
+MIN_RELATIVE_GROUP_RETENTION = 0.5
+
+
+def assess_matching_representation(
+    before_catalog: Path, comparison: JSONReport, layer: int,
+) -> JSONReport:
+    """Contrôle couverture spatiale et flux des étoiles appariées d’un grand catalogue.
+
+    Les quadrants sont définis par les médianes X/Y du catalogue initial et les
+    classes de flux par ses quartiles. Le flux relatif gaussien est proportionnel
+    à A*FWHMx*FWHMy : il sert seulement à classer les étoiles avant traitement.
+    Une strate de dix étoiles ou plus doit retenir au moins la moitié du taux
+    global. Ce facteur est une heuristique conservatrice, pas un test statistique
+    calibré ; les strates trop petites sont signalées sans verdict individuel.
+    L’absence d’amplitudes exploitables empêche de valider la représentativité.
+    """
+    stars, _ = read_star_catalog(before_catalog)
+    stars = [star for star in stars if star['layer'] == layer]
+    reference = comparison.get('reference_measurements')
+    if reference is not None:
+        eligible = set(reference['eligible_reference_ids'])
+        stars = [star for star in stars if star['id'] in eligible]
+    matched = {pair['reference_id'] for pair in comparison['pairs']}
+    if not stars:
+        return dict(accepted=False, reasons=['missing_reference_stars'], groups=[])
+    retained = np.array([star['id'] in matched for star in stars])
+    fraction = float(retained.mean())
+    x = np.array([star['x'] for star in stars])
+    y = np.array([star['y'] for star in stars])
+    spatial = (x >= np.median(x)).astype(int) + 2 * (y >= np.median(y)).astype(int)
+    groups = []
+    reasons = []
+
+    def assess_groups(labels: np.ndarray, kind: str) -> None:
+        """Enregistre les taux de rétention des strates initiales non vides."""
+        for label in np.unique(labels):
+            mask = labels == label
+            total = int(mask.sum())
+            count = int(retained[mask].sum())
+            rate = count / total
+            evaluated = total >= MIN_REPRESENTATIVE_GROUP
+            accepted = not evaluated or rate >= fraction * MIN_RELATIVE_GROUP_RETENTION
+            groups.append(dict(kind=kind, index=int(label), reference_count=total,
+                               matched_count=count, retention=rate,
+                               evaluated=evaluated, accepted=accepted))
+            if not accepted:
+                reasons.append(f'underrepresented_{kind}_group_{int(label)}')
+
+    assess_groups(spatial, 'spatial')
+    flux = np.array([star.get('amplitude', np.nan) * star['fwhm_x'] * star['fwhm_y']
+                     for star in stars])
+    if not np.isfinite(flux).all() or np.any(flux <= 0):
+        reasons.append('missing_valid_brightness')
+    else:
+        labels = np.searchsorted(np.quantile(flux, [0.25, 0.5, 0.75]), flux, side='right')
+        assess_groups(labels, 'brightness')
+    return dict(accepted=not reasons, reasons=reasons, groups=groups,
+                matched_fraction=fraction, min_group_size=MIN_REPRESENTATIVE_GROUP,
+                min_relative_retention=MIN_RELATIVE_GROUP_RETENTION,
+                brightness_proxy='A * FWHMx * FWHMy (before)')
 
 
 class _ToggleClarityAction(argparse.Action):
@@ -43,7 +111,8 @@ class _ToggleClarityAction(argparse.Action):
 
 def add_arguments(parser: argparse.ArgumentParser) -> None:
     """Déclare le moteur et les réglages persistants, sans dépendance à PyTorch."""
-    group = parser.add_argument_group('Moteur de restauration')
+    group = (parser.add_argument_group('Moteur de restauration')
+             if isinstance(parser, argparse.ArgumentParser) else parser)
     group.add_argument(
         '--enable-clarity',
         '--disable-clarity',
@@ -56,7 +125,7 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         ),
     )
     group.add_argument('--cosmic-model-dir', default=str(DEFAULT_MODEL_DIR),
-                       help='Dossier des poids installés par --install-cosmic-clarity dans le .sh')
+                       help='Dossier des poids téléchargés à la demande ou préinstallés par le .sh')
     group.add_argument('--cosmic-device', choices=('cuda', 'cpu'), default='cuda',
                        help='CUDA requis par défaut ; aucun repli implicite')
     group.add_argument('--cosmic-stellar-amount', type=float, default=0.5,
@@ -90,13 +159,15 @@ class _CosmicClarityProcessor(processor):
     operation: Literal['sharpen', 'denoise'] = 'sharpen'
     parameter_persistence = {'deconvolution_output': False}
 
-    def get_prefix(self) -> str:
+    @classmethod
+    def get_prefix(cls) -> str:
         """Conserve les noms des rapports et options d'activation historiques."""
-        return 'deconvolution' if self.operation == 'sharpen' else 'denoise'
+        return 'deconvolution' if cls.operation == 'sharpen' else 'denoise'
 
-    def add_arguments(self, parser: argparse.ArgumentParser) -> None:
+    @classmethod
+    def add_arguments(cls, parser: argparse.ArgumentParser) -> None:
         """Expose les seuils historiques pour une utilisation indépendante de la classe."""
-        if self.operation == 'sharpen':
+        if cls.operation == 'sharpen':
             from lib.deconvolution import add_arguments as add_quality_arguments
         else:
             from lib.denoising import add_arguments as add_quality_arguments
@@ -108,9 +179,10 @@ class _CosmicClarityProcessor(processor):
     ) -> tuple[float, int, float, dict[str, float | int | str]]:
         """Calcule des seuils d'appariement adaptés au champ mesuré.
 
-        Le rayon suit la FWHM médiane, et les seuils de volume sont ajustés
-        à la densité du catalogue avant traitement. En absence d'étoiles
-        valides, l'appelant doit revenir aux seuils manuels.
+        Le rayon suit la FWHM médiane et le minimum de correspondances dépend
+        du nombre initial. La référence de fraction reste 70 % : bloquante pour
+        un petit catalogue, alerte avec contrôle de représentativité à partir
+        de LARGE_MATCH_SAMPLE. Sans étoiles valides, retour aux seuils manuels.
         """
         stars, _ = read_star_catalog(before_catalog)
         layer_stars = [star for star in stars if star['layer'] == layer]
@@ -120,12 +192,7 @@ class _CosmicClarityProcessor(processor):
         median_fwhm = float(np.median([star['fwhm'] for star in layer_stars]))
         match_radius = float(np.clip(0.35 * median_fwhm, 0.8, 2.0))
         minimum = int(np.clip(round(count * 0.30), 3, 30))
-        if count < 20:
-            fraction = 0.50
-        elif count < 60:
-            fraction = 0.60
-        else:
-            fraction = 0.70
+        fraction = MATCH_FRACTION_WARNING
         metadata: dict[str, float | int | str] = {
             'mode': 'auto',
             'valid_stars_before': count,
@@ -166,12 +233,10 @@ class _CosmicClarityProcessor(processor):
         self, input_path: Path | str, output_path: Path | str,
         args: argparse.Namespace | None = None,
     ) -> JSONReport:
-        """Évalue Cosmic Clarity et Siril, puis sélectionne le meilleur candidat sûr.
+        """Produit et contrôle uniquement le candidat Cosmic Clarity.
 
-        Conserve dans l’audit les essais Siril, y compris les erreurs locales
-        de PSF et de repli. Sans amélioration Siril sûre, Cosmic Clarity reste
-        sélectionnable ; sans candidat accepté, l’image source est conservée.
-        Journalise les verdicts, mesures, scores et le choix pour chaque étape.
+        Retourne l’entrée si la qualité est refusée, sans évaluer le moteur
+        Siril ni sélectionner un gagnant. L’orchestrateur réalise cette sélection.
         """
         args = self._get_args(args)
         source, report = Path(input_path).resolve(), Path(output_path).resolve()
@@ -209,89 +274,15 @@ class _CosmicClarityProcessor(processor):
         before, after = work / 'before.tsv', work / 'after.tsv'
         result = dict(
             image_path=str(source),
-            engine='dual',
+            engine='cosmic-clarity',
             status='evaluating',
             candidate_image_path=str(candidate),
             layer=layer,
             script_path=str(work / 'quality.sps'),
             log_path=str(work / 'quality.log'),
-            evaluations={},
         )
 
-        def _sharpen_score(report_data: JSONReport) -> float:
-            """Score de netteté : plus élevé = meilleur candidat accepté."""
-            comparison = report_data['comparison']
-            artifacts = report_data['artifacts']
-            mean_gain = (
-                comparison['before_fwhm_px']['mean'] - comparison['after_fwhm_px']['mean']
-            ) / comparison['before_fwhm_px']['mean']
-            ratio_gain = 1 - comparison['paired_ratio']['median']
-            return (
-                2.0 * float(mean_gain)
-                + 2.0 * float(ratio_gain)
-                - 0.2 * float(max(0.0, artifacts['max_noise_ratio'] - 1))
-                - 0.2 * float(artifacts['max_ring_fraction'])
-            )
-
-        def _denoise_score(report_data: JSONReport) -> float:
-            """Score de débruitage : réduction du bruit avec pénalité de flou/anneaux."""
-            comparison = report_data['comparison']
-            artifacts = report_data['artifacts']
-            blur = max(
-                comparison['after_fwhm_px']['mean'] / comparison['before_fwhm_px']['mean'],
-                comparison['paired_ratio']['median'],
-            )
-            return (
-                float(1 - artifacts['max_noise_ratio'])
-                - 0.5 * float(max(0.0, blur - 1.0))
-                - 0.2 * float(artifacts['max_ring_fraction'])
-            )
-
         treatment = 'Déconvolution' if self.operation == 'sharpen' else 'Débruitage'
-        engine_labels = {'cosmic_clarity': 'Cosmic Clarity', 'siril': 'Siril'}
-
-        def log_evaluation(engine_name: str, evaluation: JSONReport) -> None:
-            """Journalise le verdict, les motifs et les mesures disponibles du candidat.
-
-            Les variations sont relatives à l’entrée, en pourcentage ; les
-            FWHM sont en pixels. Une mesure absente reste non évaluée.
-            """
-            reasons = evaluation.get('rejection_reasons') or evaluation.get(
-                'quality', {},
-            ).get('reasons') or []
-            if evaluation.get('error'):
-                reasons = [*reasons, evaluation['error']]
-            logging.info(
-                '%s — évaluation %s : statut=%s ; motifs=%s',
-                treatment, engine_labels[engine_name], evaluation.get('status'),
-                ', '.join(reasons) if reasons else 'aucun',
-            )
-            comparison = evaluation.get('comparison', {})
-            if comparison.get('status') == 'validated':
-                before_mean = comparison['before_fwhm_px']['mean']
-                after_mean = comparison['after_fwhm_px']['mean']
-                logging.info(
-                    '%s — %s : FWHM moyenne %.4f → %.4f px ; '
-                    'gain de finesse moyen %+.2f %% ; gain médian apparié %+.2f %%',
-                    treatment, engine_labels[engine_name], before_mean, after_mean,
-                    100 * (1 - after_mean / before_mean),
-                    100 * (1 - comparison['paired_ratio']['median']),
-                )
-            else:
-                logging.info(
-                    '%s — %s : finesse non évaluée (appariement=%s)',
-                    treatment, engine_labels[engine_name],
-                    comparison.get('status', 'indisponible'),
-                )
-            artifacts = evaluation.get('artifacts')
-            if artifacts:
-                logging.info(
-                    '%s — %s : variation maximale du bruit %+.2f %% ; '
-                    'fraction maximale d’étoiles avec nouveaux anneaux %.2f %%',
-                    treatment, engine_labels[engine_name],
-                    100 * (artifacts['max_noise_ratio'] - 1),
-                    100 * artifacts['max_ring_fraction'],
-                )
 
         def save() -> None:
             """Persiste l'état de l'audit même si l'étape échoue."""
@@ -345,9 +336,43 @@ class _CosmicClarityProcessor(processor):
                     or not np.isfinite([match_radius, minimum, fraction]).all()):
                 raise ValueError('Seuils d’appariement invalides')
             result['matching'] = matching
-            comparison = compare_star_catalogs(
-                before, after, match_radius, minimum, fraction, layer,
+            large_auto = (
+                self.operation == 'sharpen' and matching['mode'] == 'auto'
+                and matching['valid_stars_before'] >= LARGE_MATCH_SAMPLE
             )
+            comparison = compare_star_catalogs(
+                before, after, match_radius, minimum,
+                0.0 if large_auto else fraction, layer,
+                reference_images=(source, candidate)
+                if getattr(args, 'deconvolution_reference_measurements', True) else None,
+            )
+            if large_auto and comparison['valid_before_count'] < LARGE_MATCH_SAMPLE:
+                large_auto = False
+                comparison['min_match_fraction'] = fraction
+                if comparison['matched_fraction_before'] < fraction:
+                    comparison['status'] = 'insufficient_matches'
+
+            if large_auto:
+                matching['fraction_policy'] = 'warning_with_representation_checks'
+                matching['warning_fraction'] = fraction
+                if comparison['matched_fraction_before'] < fraction:
+                    comparison['warnings'] = ['low_matching_fraction']
+                    logging.warning(
+                        'Déconvolution Cosmic Clarity : %d/%d étoiles appariées '
+                        '(%.2f %%), référence %.0f %% ; contrôle de représentativité',
+                        comparison['matched_count'], comparison['valid_before_count'],
+                        100 * comparison['matched_fraction_before'], 100 * fraction,
+                    )
+                if comparison['status'] == 'validated':
+                    representation = assess_matching_representation(before, comparison, layer)
+                    comparison['representation'] = representation
+                    if not representation['accepted']:
+                        comparison['status'] = 'unrepresentative_matches'
+                    logging.info('Représentativité Cosmic Clarity : %s ; motifs=%s',
+                                 representation['accepted'], representation['reasons'])
+            else:
+                matching['fraction_policy'] = 'blocking'
+
             artifacts = {}
             if comparison['status'] == 'validated':
                 artifacts = artifact_metrics(source, candidate, comparison['pairs'])
@@ -375,113 +400,8 @@ class _CosmicClarityProcessor(processor):
                     artifacts=artifacts,
                     rejection_reasons=reasons,
                 )
-            result['evaluations']['cosmic_clarity'] = cosmic_report
-            log_evaluation('cosmic_clarity', cosmic_report)
+            result.update(cosmic_report)
             save()
-            logging.info('%s — début de l’évaluation Siril', treatment)
-
-            siril_report_path = report.with_name(report.stem + '_siril.json')
-            if self.operation == 'sharpen':
-                from lib.deconvolution import post_process as siril_post_process
-
-                try:
-                    siril_report = siril_post_process(source, siril_report_path, args)
-                except RuntimeError as error:
-                    if 'Aucune déconvolution efficace' not in str(error):
-                        raise
-                    siril_report = (
-                        json.loads(siril_report_path.read_text(encoding='utf-8'))
-                        if siril_report_path.is_file() else {}
-                    )
-                    siril_report.update({
-                        'engine': 'siril',
-                        'status': 'no_safe_improvement',
-                        'error': str(error),
-                        'output_image': str(source),
-                    })
-            else:
-                from lib.denoising import post_process as siril_post_process
-
-                siril_report = siril_post_process(source, siril_report_path, args)
-                siril_report = dict(siril_report)
-                siril_report['engine'] = 'siril'
-            result['evaluations']['siril'] = siril_report
-            log_evaluation('siril', siril_report)
-            save()
-
-            candidates = []
-            for engine_name, report_data in result['evaluations'].items():
-                if report_data.get('status') != 'accepted':
-                    continue
-                if self.operation == 'sharpen':
-                    if not report_data.get('comparison') or not report_data.get('artifacts'):
-                        continue
-                    score = _sharpen_score(report_data)
-                else:
-                    if not report_data.get('comparison') or not report_data.get('artifacts'):
-                        continue
-                    score = _denoise_score(report_data)
-                logging.info(
-                    '%s — score %s : %.6f (plus élevé = meilleur)',
-                    treatment, engine_labels[engine_name], score,
-                )
-                candidates.append((score, engine_name, report_data))
-
-            if candidates:
-                candidates.sort(key=lambda item: item[0], reverse=True)
-                score, selected_engine, selected = candidates[0]
-                selected_path = Path(selected['output_image']).resolve()
-                if not selected_path.is_file():
-                    raise FileNotFoundError(
-                        f"Sortie sélectionnée introuvable ({selected_engine}): {selected_path}"
-                    )
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                copyfile(selected_path, destination)
-                result.update(
-                    status='accepted',
-                    output_image=str(destination),
-                    selected_engine=selected_engine,
-                    selection_score=score,
-                    comparison=selected.get('comparison'),
-                    artifacts=selected.get('artifacts'),
-                    rejection_reasons=[],
-                )
-                if 'quality' in selected:
-                    result['quality'] = selected['quality']
-            else:
-                if self.operation == 'sharpen':
-                    result.update(
-                        status='no_safe_improvement',
-                        output_image=str(source),
-                        selected_engine=None,
-                    )
-                else:
-                    result.update(
-                        status='rejected',
-                        output_image=str(source),
-                        selected_engine=None,
-                    )
-                result['rejection_reasons'] = sorted(
-                    {
-                        reason
-                        for report_data in result['evaluations'].values()
-                        for reason in report_data.get('rejection_reasons', [])
-                    }
-                )
-            save()
-            if result['selected_engine'] is not None:
-                logging.info(
-                    '%s — choix final : %s ; score=%.6f ; '
-                    'meilleur score parmi %d candidat(s) accepté(s) ; sortie=%s',
-                    treatment, engine_labels[result['selected_engine']],
-                    result['selection_score'], len(candidates), result['output_image'],
-                )
-            else:
-                logging.info(
-                    '%s — choix final : image d’entrée conservée ; '
-                    'aucun candidat accepté ; statut=%s ; image=%s',
-                    treatment, result['status'], result['output_image'],
-                )
             return result
         except Exception as error:
             if result['status'] != 'no_safe_improvement':
@@ -492,12 +412,12 @@ class _CosmicClarityProcessor(processor):
 
 
 class CosmicClaritySharpenProcessor(_CosmicClarityProcessor):
-    """Remplace la déconvolution Siril par les réseaux stellaire et non stellaire."""
+    """Candidat neuronal de netteté, sans orchestration du moteur Siril."""
 
     operation = 'sharpen'
 
 
 class CosmicClarityDenoiseProcessor(_CosmicClarityProcessor):
-    """Remplace NL-Bayes par le réseau de débruitage, après la netteté."""
+    """Candidat neuronal de débruitage, sans orchestration du moteur Siril."""
 
     operation = 'denoise'

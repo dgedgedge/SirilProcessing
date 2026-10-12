@@ -86,8 +86,8 @@ la séquence poursuit avec l’image précédente.
 |---|---|---|---|
 | 01 | `gradient` | `GradientExtractor` | Soustrait les variations du fond |
 | 02 | `photometry` | `PhotometricColorCalibrator` | Résout l’astrométrie et étalonne les couleurs |
-| 03 | `deconvolution` | `DeconvolutionProcessor` (Siril seul) ou `CosmicClaritySharpenProcessor` (comparatif) | Améliore la finesse avec contrôle des étoiles et des artefacts |
-| 04 | `denoise` | `NoiseReductionProcessor` (Siril seul) ou `CosmicClarityDenoiseProcessor` (comparatif) | Réduit le bruit si les contrôles de qualité sont satisfaits |
+| 03 | `deconvolution` | `DeconvolutionProcessor` (orchestrateur) | Améliore la finesse avec contrôle des étoiles et des artefacts |
+| 04 | `denoise` | `NoiseReductionProcessor` (orchestrateur) | Réduit le bruit si les contrôles de qualité sont satisfaits |
 
 Les indices restent fixes lorsqu’une étape est désactivée. Les options
 `--enable-gradient`, `--enable-photometry`, `--enable-denoise` et
@@ -266,15 +266,22 @@ Le candidat Siril et le candidat Cosmic Clarity sont ensuite comparés :
   conserve l’image d’entrée.
 
 **Le repli adaptatif est activé par défaut.** Si le premier essai échoue, le
-traitement extrait le tiers central de chaque dimension de l’original, construit
-une PSF à partir d’étoiles ajustées par un profil Moffat, puis teste des pas
+traitement commence avec le tiers central de chaque dimension de l’original.
+Si la sélection contient moins de trois étoiles fines et isolées, la zone est
+élargie à la moitié, aux deux tiers, puis au champ entier. Les critères stellaires
+restent identiques. La première zone fournissant assez d’étoiles sert à construire
+la PSF Moffat et à tester les pas
 croissants de `0.0004` à `0.001` par défaut. Chaque essai repart du recadrage
 original. La recherche s’arrête au premier échec des contrôles d’artefacts.
 Le dernier pas accepté est appliqué au champ entier, qui doit à nouveau passer
 les contrôles. Utiliser `--no-deconvolution-adaptive` pour forcer le mode simple.
 Les essais sont numérotés dans le journal et dans `attempts[].number` du
 rapport JSON. Une erreur locale de PSF (par exemple moins de trois étoiles
-Moffat admissibles) est conservée dans l’audit et invalide ce repli seulement.
+Moffat admissibles même sur le champ entier) est conservée dans l’audit et
+invalide ce repli seulement. Les zones testées figurent dans
+`adaptive_crop_attempts`, avec leurs dimensions et leur verdict ; le journal
+indique chaque élargissement. Aucun essai de déconvolution ne précède la
+construction réussie de cette PSF.
 Une erreur d’exécution d’un essai laisse les pas suivants disponibles se
 poursuivre ; un rejet pour artefacts arrête toujours la montée du pas.
 En mode comparatif, le candidat Cosmic Clarity reste évalué et sélectionnable.
@@ -485,3 +492,26 @@ Le lanceur utilise Python et pip du système pour créer le venv sans pip et
 mettre à jour ses dépendances avant chaque exécution. Il lance ensuite le
 Python du venv. La sélection de l’environnement, les prérequis et l’exécution
 sans mise à jour sont décrits dans [Installation](../../INSTALLATION.md).
+
+Les classes des traitements sont enregistrées avant le parsing. Les valeurs
+résolues sont ensuite liées aux classes avant la création des instances, y
+compris les enfants. Voir la [liaison des paramètres](../lightProcess/treatments/postprocess/SEQUENCE_PROCESSOR.md#résolution-et-liaison-hiérarchique-des-paramètres).
+
+Les poids Cosmic Clarity manquants ou corrompus sont téléchargés avant leur
+chargement dans `tmp/models/cosmicclarity/` par défaut, ou dans le dossier
+`--cosmic-model-dir` résolu. Voir [installation et téléchargement](cosmic-clarity.md#installation-et-lancement).
+
+Pour la netteté Cosmic Clarity, les grands catalogues sont contrôlés selon la
+[représentativité spatiale et en flux](cosmic-clarity.md#représentativité-de-lappariement-pour-la-netteté),
+avec une alerte de fraction au lieu du rejet automatique à 70 %.
+
+Les journaux détaillent les mesures, seuils et verdicts de chaque contrôle ; voir
+[la lecture des motifs](cosmic-clarity.md#lecture-des-motifs-dans-le-journal).
+
+La [mesure aux positions initiales](reference-stars.md) est activée par défaut
+pour comparer les candidats Siril et Cosmic Clarity, en déconvolution et en
+débruitage. `--no-deconvolution-reference-measurements` rétablit les catalogues
+indépendants. Le diagnostic conserve le SNR et les motifs d’échec individuels.
+
+La [structure des traitements de restauration](restoration.md) distingue les
+orchestrateurs des moteurs Siril et Cosmic Clarity, tous de type `processor`.

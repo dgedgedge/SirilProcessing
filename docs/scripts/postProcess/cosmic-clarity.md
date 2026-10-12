@@ -29,11 +29,15 @@ bin/postProcess.sh image_RGB.fit --disable-clarity
 script Python ni enregistré dans la configuration. Il installe
 `requirements-cosmic-clarity.txt` (PyTorch 2.10.0 CUDA 12.8) et six poids, environ
 95 Mo au total. Les bibliothèques CUDA/PyTorch occupent plusieurs Go supplémentaires.
-Le téléchargement des modèles ne se produit jamais pendant l'inférence.
-Une nouvelle installation vérifie les poids existants et ne retélécharge que
-les fichiers manquants ou corrompus. Une erreur interrompt le lancement.
+Le moteur télécharge chaque poids nécessaire au moment de son premier chargement
+s’il est absent ou corrompu. Les fichiers conformes sont réutilisés sans accès
+réseau. Taille et SHA-256 sont vérifiés avant installation atomique ; une erreur
+réseau ou d’intégrité interrompt le traitement et conserve le fichier précédent.
+Le journal indique le téléchargement et le chemin utilisé. L’installation
+explicite permet de précharger les six poids, notamment avant un usage hors ligne.
+Le téléchargement automatique des poids n’installe pas PyTorch/CUDA.
 
-Le dossier par défaut est `models/cosmicclarity/` à la racine du projet, ignoré
+Le dossier par défaut est `tmp/models/cosmicclarity/` à la racine du projet, ignoré
 par Git. `--cosmic-model-dir /chemin` change le dossier pour l'installation et
 le traitement ; ce chemin doit aussi être fourni à l'installation si une
 configuration de traitement utilise un dossier personnalisé. Le lanceur ne lit
@@ -60,7 +64,7 @@ Le rapport et le FITS final restent au même niveau que ce dossier.
 |---|---|---|
 | `--enable-clarity` | activé | Active le mode comparatif Cosmic Clarity + Siril |
 | `--disable-clarity` | désactivé | Désactive le comparatif et garde Siril seul |
-| `--cosmic-model-dir` | `<projet>/models/cosmicclarity` | Poids locaux vérifiés |
+| `--cosmic-model-dir` | `<projet>/tmp/models/cosmicclarity` | Poids locaux vérifiés |
 | `--cosmic-device` | `cuda` | `cuda` ou `cpu` |
 | `--cosmic-stellar-amount` | `0.5` | Mélange stellaire, entre 0 et 1 |
 | `--cosmic-nonstellar-amount` | `0.5` | Mélange des structures diffuses, entre 0 et 1 |
@@ -82,8 +86,13 @@ d'appariement, `--deconvolution-layer`, `--deconvolution-output` et
 
 En netteté (`03_deconvolution`), les seuils d’appariement stellaires sont
 automatiques par défaut : ils sont estimés depuis le catalogue `before.tsv`
-(rayon en fonction de la FWHM médiane, volume minimal et fraction minimale
-selon la densité d’étoiles valides). Pour conserver des seuils fixes, fournir
+(rayon en fonction de la FWHM médiane et nombre minimal de correspondances).
+Pour la netteté Cosmic Clarity, avec moins de 60 étoiles initiales, la fraction
+minimale de 70 % reste bloquante. À partir de 60 étoiles, ce pourcentage devient
+un seuil d’alerte : le nombre minimal reste obligatoire, puis des contrôles
+de représentativité conditionnent l’évaluation de finesse et d’artefacts.
+Le mode manuel forcé conserve son seuil de fraction bloquant ; le débruitage
+conserve ses contrôles existants. Pour conserver des seuils fixes, fournir
 les valeurs manuelles et ajouter `--deconvolution-force-manual-matching`.
 Sans cette option de forçage, les valeurs manuelles d’appariement ne
 remplacent pas le mode auto.
@@ -256,3 +265,59 @@ Marek est conservée dans `lib/cosmic_clarity/LICENSE`. Les poids proviennent de
 la [publication Linux officielle](https://github.com/setiastro/cosmicclarity/releases/tag/Linux),
 avec des empreintes figées dans le manifeste du projet. Les scripts d'interface
 Siril, sous une autre licence, ne sont pas incorporés.
+
+## Représentativité de l’appariement pour la netteté
+
+Le rayon automatique reste `clip(0.35 × FWHM_médiane, 0.8, 2.0)` pixels.
+Le nombre minimal reste `clip(round(0.30 × N), 3, 30)`, où N est le nombre
+d’étoiles valides avant traitement. Aucun assouplissement du nombre minimal
+n’est appliqué au grand catalogue.
+
+Pour N ≥ 60, les étoiles initiales sont réparties en quatre quadrants autour
+des médianes X/Y, et en quatre classes définies par les quartiles de leur flux
+relatif. Le classement utilise `A × FWHMx × FWHMy`, proportionnel au flux d’un
+profil gaussien ; A est l’amplitude du catalogue Siril, pas une magnitude.
+Seules les valeurs avant traitement servent au classement pour éviter que la
+restauration change la classe de référence.
+
+Chaque groupe comportant au moins dix étoiles doit conserver un taux
+d’appariement au moins égal à la moitié du taux global. Un groupe perdant toutes
+ses étoiles échoue donc. Les groupes plus petits sont consignés sans verdict
+individuel. Une amplitude absente, non finie ou non positive empêche de valider
+le contrôle de flux. Ces bornes sont des heuristiques explicites, sans calibration
+statistique générale ; elles ne prouvent pas la conservation photométrique,
+ne vérifient pas les distributions conjointes position/flux, et ne remplacent
+pas l’inspection visuelle du candidat.
+
+Le JSON expose `comparison.warnings`, `comparison.representation.groups`, les
+taux par groupe et les motifs `underrepresented_spatial_group_*`,
+`underrepresented_brightness_group_*` ou `missing_valid_brightness`.
+Le statut `unrepresentative_matches` bloque le candidat avant sa sélection.
+Le journal affiche le taux global lorsqu’il est inférieur à 70 %, ainsi que le
+verdict de représentativité. Les autres critères de finesse, bruit, rondeur et
+anneaux restent obligatoires après validation de l’appariement.
+
+### Lecture des motifs dans le journal
+
+Les lignes d’appariement affichent le nombre retrouvé et initial, la proportion,
+le minimum de correspondances, le rayon et le caractère bloquant ou non de la
+fraction. Chaque zone spatiale et classe de flux affiche ses effectifs, son taux,
+le taux minimal et son verdict. Les classes de flux sont numérotées de 0 (plus
+faibles) à 3 (plus fortes).
+
+Les gains moyen et médian sont affichés séparément avec quatre décimales,
+leur seuil et le verdict : un gain moyen de 1,9942 % échoue au minimum de
+2,0000 %, même si le gain médian de 2,0010 % passe. Les contrôles de rondeur,
+bruit et anneaux affichent également valeur et limite. Un rejet global Siril
+mentionne les essais déjà évalués, sans annoncer que leur finesse n’a pas été
+mesurée. Le détail brut du verdict reste disponible au niveau DEBUG et en JSON.
+
+La [mesure locale aux positions initiales](reference-stars.md) remplace par défaut
+la dépendance à une nouvelle détection après traitement. Les contrôles de
+représentativité portent alors sur les références fiables sélectionnées sur
+l’image d’entrée ; une mesure candidate échouée reste comptée dans leur taux
+de rétention.
+
+Les classes Cosmic Clarity produisent uniquement leur candidat neuronal.
+La comparaison avec Siril relève des [orchestrateurs de restauration](restoration.md),
+sans choix de moteur dans la séquence de post-traitement.

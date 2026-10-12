@@ -289,3 +289,29 @@ def test_stretch_decision_is_global_with_common_minimum(
         np.testing.assert_array_equal(captured[0], rgb)
     # La médiane d’un échantillon pair ne commute pas exactement avec T.
     np.testing.assert_allclose(fits.getdata(target), rgb, atol=3e-6)
+
+
+def test_load_downloads_missing_weight(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Le chargement récupère seulement le poids requis et réutilise sa copie conforme."""
+    import hashlib
+    import io
+    from lib.cosmic_clarity import models, inference
+
+    payload = b'checkpoint'
+    entry = {'url': 'https://example.invalid/model', 'size': len(payload),
+             'sha256': hashlib.sha256(payload).hexdigest()}
+    monkeypatch.setattr(models, 'manifest', lambda: {'test.pth': entry})
+    monkeypatch.setattr(inference, 'manifest', models.manifest)
+    download = Mock(side_effect=lambda *args, **kwargs: io.BytesIO(payload))
+    monkeypatch.setattr(models, 'urlopen', download)
+    load = Mock(return_value={'model_state_dict': {}})
+    monkeypatch.setattr(inference.torch, 'load', load)
+    network = Mock()
+    monkeypatch.setattr(inference, 'RestorationCNN', Mock(return_value=network))
+    engine = CosmicClarityEngine(tmp_path / 'custom', 'cpu')
+    engine._load('test.pth')
+    engine._load('test.pth')
+    download.assert_called_once()
+    assert (tmp_path / 'custom/test.pth').read_bytes() == payload
+    load.assert_called_with(tmp_path / 'custom/test.pth', map_location='cpu', weights_only=True)
+    assert engine.used_models['test.pth'] == entry['sha256']

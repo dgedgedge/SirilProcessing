@@ -12,7 +12,7 @@ from astropy.io import fits
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from lib.postprocess import GradientExtractor, extract_gradient_from_fits
+from lib.postprocess import GradientExtractor
 
 
 def test_add_arguments_to_parser():
@@ -171,22 +171,23 @@ def test_extract_gradient_all_orders(tmp_path):
     assert 'simplest_good_fit' in results['recommendations']
 
 
-def test_extract_gradient_from_fits_function(tmp_path):
-    """Test de la fonction utilitaire extract_gradient_from_fits."""
+def test_extract_gradient_with_configured_instance(tmp_path: Path) -> None:
+    """Vérifie l’analyse FITS avec les options du constructeur de l’extracteur."""
     # Créer un fichier FITS de test
     fits_path = tmp_path / "test_extract.fit"
     data = np.random.randint(1000, 5000, size=(50, 50), dtype=np.uint16)
     _create_test_fits_file(fits_path, data=data)
     
-    results = extract_gradient_from_fits(
-        fits_path=fits_path,
+    extractor = GradientExtractor(
         output_dir=tmp_path,
-        min_order=1,
-        max_order=2,
+        min_polynomial_order=1,
+        max_polynomial_order=2,
         create_measurement_image=False,
         n_measurement_points=50
     )
     
+    results = extractor.extract_gradient_from_fits(fits_path)
+
     assert 'image_path' in results
     assert 'results' in results
     assert results['image_path'] == str(fits_path)

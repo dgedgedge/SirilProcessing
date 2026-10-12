@@ -15,6 +15,8 @@ from lib.deconvolution import _quote, compare_star_catalogs
 from lib.deconvolution_quality import artifact_metrics, assess_denoising
 from lib.postprocess_paths import reset_ordered_work_dir
 from lib.siril_utils import create_siril_from_args
+from lib.processor import processor
+from lib.restoration import RestorationComparisonProcessor
 from lib.type_defs import JSONReport
 
 
@@ -107,7 +109,11 @@ def post_process(
             script, str(work), script_name="denoise.sps"
         ):
             raise RuntimeError(f"Échec Siril : {work / 'denoise.log'}")
-        comparison = compare_star_catalogs(before, after, 1.0, 10, 0.7, layer)
+        comparison = compare_star_catalogs(
+            before, after, 1.0, 10, 0.7, layer,
+            reference_images=(source, candidate)
+            if getattr(args, 'deconvolution_reference_measurements', True) else None,
+        )
         result["comparison"] = comparison
         reasons = []
         if comparison["status"] != "validated":
@@ -149,3 +155,42 @@ def post_process(
         result.update(status="failed", error=str(error))
         save()
         raise
+
+
+class SirilNoiseReductionProcessor(processor):
+    """Exécute uniquement le moteur Siril et ses contrôles de qualité."""
+
+    @classmethod
+    def get_prefix(cls) -> str:
+        """Retourne l’identifiant commun de l’étape."""
+        return 'denoise'
+
+    @classmethod
+    def add_arguments(cls, parser: argparse.ArgumentParser) -> None:
+        """Expose les paramètres locaux de l’algorithme Siril."""
+        add_arguments(parser)
+
+    def post_process(
+        self, input_path: Path | str, output_path: Path | str,
+        args: argparse.Namespace | None = None,
+    ) -> JSONReport:
+        """Exécute le traitement Siril avec les paramètres de cette instance."""
+        return post_process(input_path, output_path, self._get_args(args))
+
+
+class NoiseReductionProcessor(RestorationComparisonProcessor):
+    """Orchestre les candidats Siril et Cosmic Clarity et conserve le meilleur accepté."""
+
+    operation = 'denoise'
+    siril_processor = SirilNoiseReductionProcessor
+
+    @classmethod
+    def get_prefix(cls) -> str:
+        """Retourne l’identifiant stable des options et rapports."""
+        return 'denoise'
+
+    @classmethod
+    def add_arguments(cls, parser: argparse.ArgumentParser) -> None:
+        """Déclare les paramètres communs de l’étape."""
+        cls.add_shared_arguments(parser)
+        cls.siril_processor.add_arguments(parser)

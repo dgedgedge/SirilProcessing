@@ -7,6 +7,7 @@ que tous les artefacts visuels sont absents.
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -16,6 +17,10 @@ from scipy.ndimage import gaussian_filter, label, maximum_filter, median_filter
 from scipy.spatial import cKDTree
 
 from lib.type_defs import JSONReport, StarMeasurement
+
+
+class InsufficientPSFStars(ValueError):
+    """La sélection PSF contient moins d’étoiles admissibles que le minimum requis."""
 
 
 def _normalized_data(data: np.ndarray) -> np.ndarray:
@@ -133,7 +138,12 @@ def select_psf_stars(
     max_stars: int = 60,
     layer: int = 0,
 ) -> JSONReport:
-    """Construit une planche ne contenant que les découpes des étoiles retenues."""
+    """Construit une planche ne contenant que les découpes des étoiles retenues.
+
+    Lève InsufficientPSFStars si moins de min_stars passent les contrôles de
+    finesse, rondeur, amplitude, isolation et propreté des pixels. Cette erreur
+    permet au repli adaptatif d’élargir la zone sans relâcher les critères.
+    """
     with fits.open(image_path, memmap=False) as hdul:
         data = _normalized_data(hdul[0].data)
         header = hdul[0].header
@@ -207,7 +217,7 @@ def select_psf_stars(
     )
     audit_path.write_text(json.dumps(audit, indent=2), encoding="utf-8")
     if len(selected) < min_stars:
-        raise ValueError(
+        raise InsufficientPSFStars(
             f"PSF : seulement {len(selected)} étoiles fines et isolées ; minimum {min_stars}"
         )
     tile = 2 * radius + 1 + 10
@@ -332,6 +342,71 @@ def artifact_metrics(
     )
 
 
+def log_quality_diagnostics(
+    label: str, comparison: JSONReport, quality: JSONReport,
+    artifacts: JSONReport | None = None,
+) -> None:
+    """Journalise les valeurs, seuils et verdicts sans inventer de mesure absente.
+
+    Les gains et fractions sont affichés en pourcentage avec quatre décimales
+    pour distinguer un gain juste inférieur au seuil. Les codes JSON restent
+    inchangés ; ce journal complète leur interprétation pour l’utilisateur.
+    """
+    if 'matched_count' in comparison:
+        fraction_rule = (
+            f"fraction minimale {100 * comparison['min_match_fraction']:.2f} % (bloquante)"
+            if comparison['min_match_fraction'] > 0
+            else 'fraction globale non bloquante ; contrôles de représentativité obligatoires'
+        )
+        logging.info(
+            '%s — appariement : %d/%d étoiles (%.4f %%) ; minimum %d ; '
+            '%s ; rayon %.3f px ; verdict=%s',
+            label, comparison['matched_count'], comparison['valid_before_count'],
+            100 * comparison['matched_fraction_before'], comparison['min_stars'],
+            fraction_rule, comparison['match_radius_px'],
+            comparison['status'],
+        )
+    representation = comparison.get('representation', {})
+    if representation:
+        for group in representation['groups']:
+            kind = 'zone spatiale' if group['kind'] == 'spatial' else 'classe de flux'
+            minimum = (representation['matched_fraction']
+                       * representation['min_relative_retention'])
+            verdict = ('non évaluée : effectif trop faible' if not group['evaluated']
+                       else 'conforme' if group['accepted'] else 'REJET : sous-représentée')
+            logging.info(
+                '%s — %s %d : %d/%d étoiles retrouvées (%.2f %%) ; '
+                'minimum %.2f %% ; %s',
+                label, kind, group['index'], group['matched_count'],
+                group['reference_count'], 100 * group['retention'],
+                100 * minimum, verdict,
+            )
+        if 'missing_valid_brightness' in representation['reasons']:
+            logging.info('%s — REJET : amplitudes absentes ou invalides ; '
+                         'représentativité en flux non vérifiable', label)
+    thresholds = quality.get('thresholds', {})
+    if comparison.get('status') == 'validated' and 'min_gain' in thresholds:
+        mean_gain = (1 - comparison['after_fwhm_px']['mean']
+                     / comparison['before_fwhm_px']['mean'])
+        median_gain = 1 - comparison['paired_ratio']['median']
+        for name, gain in [('moyen', mean_gain), ('médian apparié', median_gain)]:
+            logging.info('%s — gain %s : %+.4f %% ; minimum %.4f %% ; %s',
+                         label, name, 100 * gain, 100 * thresholds['min_gain'],
+                         'conforme' if gain >= thresholds['min_gain'] else 'REJET : gain insuffisant')
+        roundness_loss = (comparison['before_roundness']['mean']
+                          - comparison['after_roundness']['mean'])
+        logging.info('%s — perte de rondeur : %+.5f ; maximum %.5f ; %s',
+                     label, roundness_loss, thresholds['roundness_tolerance'],
+                     'conforme' if roundness_loss <= thresholds['roundness_tolerance'] else 'REJET')
+    if artifacts and 'max_noise_ratio' in thresholds:
+        for name, value, limit in [
+            ('rapport de bruit après/avant', artifacts['max_noise_ratio'], thresholds['max_noise_ratio']),
+            ('fraction de nouveaux anneaux', artifacts['max_ring_fraction'], thresholds['max_ring_fraction']),
+        ]:
+            logging.info('%s — %s : %.5f ; maximum %.5f ; %s', label, name,
+                         value, limit, 'conforme' if value <= limit else 'REJET')
+
+
 def assess_quality(
     comparison: JSONReport,
     artifacts: JSONReport,
@@ -344,7 +419,7 @@ def assess_quality(
     """Sépare efficacité et artefacts pour piloter l'arrêt de la recherche de pas."""
     if comparison["status"] != "validated":
         return dict(
-            accepted=False, artifact_failure=False, reasons=["insufficient_matches"]
+            accepted=False, artifact_failure=False, reasons=[comparison.get("status", "insufficient_matches")]
         )
     reasons = []
     before, after = comparison["before_fwhm_px"], comparison["after_fwhm_px"]

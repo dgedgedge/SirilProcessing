@@ -61,7 +61,14 @@ def pipeline(tmp_path, monkeypatch):
     mosaic_mock.return_value.post_process.return_value = {'output_image': str(mosaic_output)}
     monkeypatch.setattr(processing, 'LightProcessor', Processor)
     monkeypatch.setattr(processing, 'stack_session_outputs', stack_mock)
-    monkeypatch.setattr(mosaic, 'Mosaic', mosaic_mock)
+    class TestMosaic(mosaic.Mosaic):
+        """Déclare les options réelles et simule seulement l’exécution."""
+
+        def __new__(cls, *args, **kwargs):
+            """Retourne le double de traitement sans créer de fichiers réels."""
+            return mosaic_mock(*args, **kwargs)
+
+    monkeypatch.setattr(mosaic, 'Mosaic', TestMosaic)
 
     def run(roots, *options):
         monkeypatch.setattr(sys, 'argv', ['lightProcess.py', *map(str, roots), '--no-dark', '--output', str(tmp_path / 'out'), '--work-dir', str(tmp_path / 'work'), *options])
@@ -113,7 +120,7 @@ def test_mosaic_uses_only_one_stack_per_input_session(tmp_path, pipeline):
     for stack_call in stack.call_args_list:
         assert stack_call.kwargs['work_dir'] == tmp_path / 'work/field'
     assert args.siril_mode == 'flatpak'
-    mosaic.return_value.add_arguments.assert_called_once()
+    mosaic.return_value.add_arguments.assert_not_called()
     assert inputs == [tmp_path / 'work/field' / root.name / f'{root.name}_combined.fits' for root in roots]
     assert not set(inputs).intersection(path for files in calibrated.values() for path in files)
     mosaic.return_value.post_process.assert_called_once()

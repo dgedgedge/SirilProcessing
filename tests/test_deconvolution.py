@@ -11,6 +11,7 @@ from astropy.io import fits
 
 from lib.deconvolution import compare_star_catalogs, post_process, read_star_catalog
 from lib.processor import processor
+from lib.deconvolution_quality import InsufficientPSFStars
 from lib.postprocess import DeconvolutionProcessor, PhotometricColorCalibrator, _PostProcessorSequence
 from lib.siril_utils import add_siril_arguments
 
@@ -84,7 +85,7 @@ def arguments(*options):
     parser = argparse.ArgumentParser()
     add_siril_arguments(parser)
     _PostProcessorSequence().add_arguments(parser)
-    return parser.parse_args(options)
+    return parser.parse_args(['--no-deconvolution-reference-measurements', '--disable-clarity', *options])
 
 
 @pytest.fixture
@@ -286,7 +287,7 @@ def test_moffat_failure_keeps_numbered_audit(
     monkeypatch.setattr('lib.deconvolution.assess_quality', lambda *a, **k:
                         dict(accepted=False, artifact_failure=False, reasons=['insufficient_sharpening']))
     monkeypatch.setattr('lib.deconvolution.select_psf_stars', Mock(
-        side_effect=ValueError('PSF : seulement 1 étoiles fines et isolées ; minimum 3')))
+        side_effect=InsufficientPSFStars('PSF : seulement 1 étoiles fines et isolées ; minimum 3')))
     report = tmp_path / 'report.json'
     original = image.read_bytes()
     with pytest.raises(RuntimeError, match='Aucune déconvolution efficace'):
@@ -297,6 +298,8 @@ def test_moffat_failure_keeps_numbered_audit(
     assert audit['attempts'][1]['label'] == 'central_moffat'
     assert audit['attempts'][1]['status'] == 'failed'
     assert 'minimum 3' in audit['adaptive_psf_error']
+    assert len(audit['adaptive_crop_attempts']) == 4
+    assert audit['crop']['dimension_fraction'] == 1.0
     assert image.read_bytes() == original
 
 
@@ -357,7 +360,7 @@ def test_clarity_selected_after_real_moffat_failure(
             return {'device': 'test'}
 
     monkeypatch.setitem(sys.modules, 'lib.cosmic_clarity.inference', SimpleNamespace(CosmicClarityEngine=FakeEngine))
-    monkeypatch.setattr(processors, 'compare_star_catalogs', lambda *a: {
+    monkeypatch.setattr(processors, 'compare_star_catalogs', lambda *a, **k: {
         'status': 'validated', 'pairs': [], 'before_fwhm_px': {'mean': 4},
         'after_fwhm_px': {'mean': 3}, 'paired_ratio': {'median': .75},
         'before_roundness': {'mean': 1}, 'after_roundness': {'mean': 1},
@@ -367,7 +370,7 @@ def test_clarity_selected_after_real_moffat_failure(
     monkeypatch.setattr('lib.deconvolution.assess_quality', lambda *a, **k:
                         dict(accepted=False, artifact_failure=False, reasons=['insufficient_sharpening']))
     monkeypatch.setattr('lib.deconvolution.select_psf_stars', Mock(side_effect=ValueError('PSF : minimum 3')))
-    result = processors.CosmicClaritySharpenProcessor().post_process(image, tmp_path / 'report.json', arguments())
+    result = DeconvolutionProcessor().post_process(image, tmp_path / 'report.json', arguments('--enable-clarity'))
     assert result['status'] == 'accepted'
     assert result['selected_engine'] == 'cosmic_clarity'
     assert Path(result['output_image']).is_file()
@@ -375,3 +378,83 @@ def test_clarity_selected_after_real_moffat_failure(
     assert siril['status'] == 'no_safe_improvement'
     assert siril['attempts'][1]['status'] == 'failed'
     assert siril['attempts'][1]['number'] == 2
+
+
+@pytest.mark.parametrize('minimum_width,expected_fraction', [(50, 0.5), (100, 1.0)])
+def test_adaptive_psf_expands_until_enough_stars(
+    tmp_path: Path,
+    simulated_siril: tuple[Path, Mock, Mock],
+    monkeypatch: pytest.MonkeyPatch,
+    minimum_width: int,
+    expected_fraction: float,
+) -> None:
+    """Une zone centrale pauvre en étoiles est élargie avant la recherche du pas."""
+    import lib.deconvolution as module
+
+    image, _, _ = simulated_siril
+    select = module.select_psf_stars
+    tested_widths = []
+
+    def select_expanded(stars, source, sheet, **kwargs):
+        """Simule le manque d’étoiles jusqu’à la largeur attendue."""
+        width = fits.getdata(source).shape[-1]
+        tested_widths.append(width)
+        if width < minimum_width:
+            raise InsufficientPSFStars('PSF : seulement 2 étoiles fines et isolées ; minimum 3')
+        return select(stars, source, sheet, **kwargs)
+
+    monkeypatch.setattr(module, 'select_psf_stars', select_expanded)
+    verdicts = iter([
+        dict(accepted=False, artifact_failure=False, reasons=['insufficient_sharpening']),
+        dict(accepted=True, artifact_failure=False, reasons=[]),
+        dict(accepted=True, artifact_failure=False, reasons=[]),
+    ])
+    monkeypatch.setattr(module, 'assess_quality', lambda *a, **k: next(verdicts))
+    original = image.read_bytes()
+    result = post_process(image, tmp_path / 'report.json',
+                          arguments('--deconvolution-max-step', '.0004'))
+    assert result['status'] == 'accepted'
+    assert result['crop']['dimension_fraction'] == expected_fraction
+    assert tested_widths == ([33, 50] if minimum_width == 50 else [33, 50, 66, 100])
+    assert result['adaptive_crop_attempts'][-1]['status'] == 'accepted'
+    assert all(attempt['status'] == 'insufficient_stars'
+               for attempt in result['adaptive_crop_attempts'][:-1])
+    assert result['selected_step'] == .0004
+    assert image.read_bytes() == original
+
+
+def test_quality_logs_explain_borderline_gain(caplog: pytest.LogCaptureFixture) -> None:
+    """Le journal distingue un gain moyen sous 2 % du gain médian conforme."""
+    from lib.deconvolution_quality import assess_quality, log_quality_diagnostics
+
+    comparison = dict(status='validated', before_fwhm_px={'mean': 3.707626550385837},
+                      after_fwhm_px={'mean': 3.6336885966762686},
+                      paired_ratio={'median': 0.9799901569832803},
+                      before_roundness={'mean': 0.8995785846915744},
+                      after_roundness={'mean': 0.8973398027981765})
+    artifacts = dict(max_noise_ratio=1.0367, max_ring_fraction=0.0)
+    quality = assess_quality(comparison, artifacts)
+    with caplog.at_level('INFO'):
+        log_quality_diagnostics('Siril', comparison, quality, artifacts)
+    assert 'gain moyen : +1.9942 % ; minimum 2.0000 % ; REJET' in caplog.text
+    assert 'gain médian apparié : +2.0010 % ; minimum 2.0000 % ; conforme' in caplog.text
+    assert 'rapport de bruit après/avant : 1.03670 ; maximum 1.15000 ; conforme' in caplog.text
+
+
+def test_quality_logs_explain_unrepresented_flux(caplog: pytest.LogCaptureFixture) -> None:
+    """Une strate sans correspondance expose ses effectifs et son seuil de rejet."""
+    from lib.deconvolution_quality import log_quality_diagnostics
+
+    comparison = dict(status='unrepresentative_matches', matched_count=1128,
+                      valid_before_count=1852, matched_fraction_before=1128/1852,
+                      min_stars=30, min_match_fraction=0.0, match_radius_px=1.24,
+                      representation=dict(matched_fraction=1128/1852,
+                                          min_relative_retention=0.5, reasons=[], groups=[
+                          dict(kind='brightness', index=0, matched_count=0,
+                               reference_count=463, retention=0.0,
+                               evaluated=True, accepted=False)]))
+    with caplog.at_level('INFO'):
+        log_quality_diagnostics('Clarity', comparison, {})
+    assert '1128/1852 étoiles' in caplog.text
+    assert 'fraction globale non bloquante' in caplog.text
+    assert 'classe de flux 0 : 0/463 étoiles retrouvées (0.00 %) ; minimum 30.45 % ; REJET' in caplog.text

@@ -18,7 +18,7 @@ import torch
 from torch import nn
 
 from lib.cosmic_clarity.models import (
-    DENOISE_MODEL, NONSTELLAR_MODELS, STELLAR_MODEL, manifest, verify_model,
+    DENOISE_MODEL, NONSTELLAR_MODELS, STELLAR_MODEL, manifest, ensure_model,
 )
 from lib.cosmic_clarity.network import RestorationCNN
 from lib.cosmic_clarity.color import extract_luminance, guided_chroma, merge_luminance
@@ -97,14 +97,14 @@ class CosmicClarityEngine:
     """
 
     def __init__(self, directory: Path, device: str = 'cuda') -> None:
-        """Configure les poids locaux et le périphérique sans télécharger de fichier."""
+        """Configure le dossier des poids ; leur téléchargement attend leur chargement."""
         self.directory = directory
         self.device = select_device(device)
         self.used_models: dict[str, str] = {}
 
     def _load(self, name: str) -> nn.Module:
-        """Charge strictement un checkpoint compatible sur le périphérique choisi."""
-        path = verify_model(self.directory, name)
+        """Récupère si nécessaire un poids vérifié puis charge strictement son checkpoint."""
+        path = ensure_model(self.directory, name)
         checkpoint = torch.load(path, map_location='cpu', weights_only=True)
         state = checkpoint.get('model_state_dict', checkpoint)
         model = RestorationCNN()

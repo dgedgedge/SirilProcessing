@@ -27,6 +27,8 @@ from astropy.wcs import WCS
 from PIL import Image, ImageDraw
 
 from lib.postprocess_paths import treatment_file_prefix
+from lib.denoising import NoiseReductionProcessor
+from lib.deconvolution import DeconvolutionProcessor
 from lib.processor import processor
 from lib.siril_utils import create_siril_from_args
 from lib.type_defs import ConfigValue, JSONReport
@@ -114,89 +116,108 @@ class GradientExtractor(processor):
         if self.output_dir:
             self.output_dir.mkdir(parents=True, exist_ok=True)
 
-    def get_prefix(self) -> str:
+    @classmethod
+    def get_prefix(cls) -> str:
         """Retourne l’identifiant de l’étape utilisé dans les options et rapports."""
-        return self.prefix
+        return "gradient"
 
-    def add_arguments(self, parser: argparse.ArgumentParser) -> None:
+    @classmethod
+    def add_arguments(cls, parser: argparse.ArgumentParser) -> None:
         """Déclare les paramètres de cette étape dans le parseur partagé."""
-        prefix = self.get_prefix()
+        prefix = "gradient"
         parser.add_argument(
             f"--{prefix}-method",
             choices=("rbf", "polynomial"),
-            default=self.method,
+            default='rbf',
             help="Méthode de correction du fond (défaut : rbf)",
         )
         parser.add_argument(
             f"--{prefix}-smoothing",
             type=float,
-            default=self.smoothing,
+            default=0.5,
             help="Lissage RBF entre 0 et 1 (défaut : 0.50)",
         )
         parser.add_argument(
             f"--{prefix}-samples-per-line",
             type=int,
-            default=self.samples_per_line,
+            default=20,
             help="Échantillons par ligne (défaut : 20)",
         )
         parser.add_argument(
             f"--{prefix}-grid-tolerance",
             type=float,
-            default=self.grid_tolerance,
+            default=2.0,
             help="Tolérance de rejet des régions brillantes, en sigma (défaut : 2.00)",
         )
         parser.add_argument(
             f"--{prefix}-keep-all-samples",
             action=argparse.BooleanOptionalAction,
-            default=self.keep_all_samples,
+            default=False,
             help="Conserver les échantillons des régions brillantes",
         )
         parser.add_argument(
             f"--{prefix}-min-order",
             type=int,
             choices=range(1, 6),
-            default=self.min_polynomial_order,
+            default=1,
             help="Ordre polynomial minimum",
         )
         parser.add_argument(
             f"--{prefix}-max-order",
             type=int,
             choices=range(1, 6),
-            default=self.max_polynomial_order,
+            default=3,
             help="Ordre polynomial maximum",
         )
         parser.add_argument(
             f"--{prefix}-points",
             dest=f"{prefix}_n_points",
             type=int,
-            default=self.n_measurement_points,
+            default=100,
             help="Nombre de points affichés",
         )
         parser.add_argument(
             f"--{prefix}-sample-fraction",
             type=float,
-            default=self.sample_fraction,
+            default=0.3,
             help="Fraction de pixels ajustés (polynomial), dans ]0, 1]",
         )
         parser.add_argument(
             f"--{prefix}-max-samples",
             type=int,
-            default=self.max_samples,
+            default=10000,
             help="Nombre maximal de pixels ajustés (polynomial)",
         )
         parser.add_argument(
             f"--{prefix}-output",
             dest=f"{prefix}_output_dir",
             type=Path,
-            default=self.output_dir,
+            default=None,
             help="Répertoire de l'image des points",
         )
         parser.add_argument(
             f"--{prefix}-measurement-image",
             action=argparse.BooleanOptionalAction,
-            default=self.create_measurement_image,
+            default=True,
             help="Générer l'image des points",
         )
+
+    def argument_defaults(self) -> dict[str, ConfigValue]:
+        """Expose les défauts du constructeur pour l’enregistrement historique."""
+        return {
+            "gradient_method": self.method,
+            "gradient_smoothing": self.smoothing,
+            "gradient_samples_per_line": self.samples_per_line,
+            "gradient_grid_tolerance": self.grid_tolerance,
+            "gradient_keep_all_samples": self.keep_all_samples,
+            "gradient_min_order": self.min_polynomial_order,
+            "gradient_max_order": self.max_polynomial_order,
+            "gradient_n_points": self.n_measurement_points,
+            "gradient_sample_fraction": self.sample_fraction,
+            "gradient_max_samples": self.max_samples,
+            "gradient_output_dir": self.output_dir,
+            "gradient_measurement_image": self.create_measurement_image,
+        }
 
     def _validate_options(self) -> None:
         """Vérifie les plages des options du gradient avant toute lecture d’image."""
@@ -911,11 +932,13 @@ class PhotometricColorCalibrator(processor):
 
     enabled_by_default = True
 
-    def get_prefix(self) -> str:
+    @classmethod
+    def get_prefix(cls) -> str:
         """Retourne l’identifiant de l’étape utilisé dans les options et rapports."""
         return "photometry"
 
-    def add_arguments(self, parser: argparse.ArgumentParser) -> None:
+    @classmethod
+    def add_arguments(cls, parser: argparse.ArgumentParser) -> None:
         """Déclare les paramètres de cette étape dans le parseur partagé."""
         position = parser.add_mutually_exclusive_group()
         position.add_argument(
@@ -1255,66 +1278,17 @@ class PhotometricColorCalibrator(processor):
         return results
 
 
-class NoiseReductionProcessor(processor):
-    """Réduction du bruit après déconvolution, activée par défaut."""
-
-    def get_prefix(self) -> str:
-        """Retourne l’identifiant de l’étape utilisé dans les options et rapports."""
-        return "denoise"
-
-    def add_arguments(self, parser: argparse.ArgumentParser) -> None:
-        """Déclare les paramètres de cette étape dans le parseur partagé."""
-        from lib.denoising import add_arguments
-
-        add_arguments(parser)
-
-    def post_process(
-        self,
-        input_path: Path | str,
-        output_path: Path | str,
-        args: argparse.Namespace | None = None,
-    ) -> JSONReport:
-        """Délègue le débruitage contrôlé en transmettant les options de cette instance."""
-        from lib.denoising import post_process
-
-        return post_process(input_path, output_path, self._get_args(args))
-
-
-class DeconvolutionProcessor(processor):
-    """Déconvolution et audit de PSF, après la photométrie si elle est activée."""
-
-    parameter_persistence = {"deconvolution_output": False}
-
-    enabled_by_default = True
-
-    def get_prefix(self) -> str:
-        """Retourne l’identifiant de l’étape utilisé dans les options et rapports."""
-        return "deconvolution"
-
-    def add_arguments(self, parser: argparse.ArgumentParser) -> None:
-        """Déclare les paramètres de cette étape dans le parseur partagé."""
-        from lib.deconvolution import add_arguments
-
-        add_arguments(parser)
-
-    def post_process(
-        self,
-        input_path: Path | str,
-        output_path: Path | str,
-        args: argparse.Namespace | None = None,
-    ) -> JSONReport:
-        """Délègue la déconvolution contrôlée et retourne son rapport JSON."""
-        from lib.deconvolution import post_process
-
-        return post_process(input_path, output_path, self._get_args(args))
-
-
-class _PostProcessorSequence:
+class _PostProcessorSequence(processor):
     """Orchestre des processeurs indépendamment de leur type concret."""
 
     def __init__(self, processors: Sequence[processor] | None = None) -> None:
         """Installe les étapes explicites ou la séquence standard gradient/couleur/PSF/bruit."""
-        self._args = None
+        if processors is not None:
+            self.add_arguments = self._add_custom_arguments
+            self.parameter_persistence = {
+                key: value for treatment in processors
+                for key, value in treatment.parameter_persistence.items()
+            }
         self._custom_processors = processors is not None
         self.processors = (
             list(processors)
@@ -1331,22 +1305,8 @@ class _PostProcessorSequence:
             raise ValueError("Chaque processeur doit avoir un préfixe unique")
 
     def _selected_processors(self, args: argparse.Namespace) -> list[processor]:
-        """Choisit les deux étapes de restauration de la séquence standard.
-
-        Une liste de processeurs explicite conserve ses propres instances.
-        """
-        clarity_enabled = getattr(args, 'enable_clarity', True)
-        if self._custom_processors or not clarity_enabled:
-            return list(self.processors)
-        from lib.cosmic_clarity.processors import (
-            CosmicClaritySharpenProcessor, CosmicClarityDenoiseProcessor,
-        )
-        return [
-            self.processors[0],
-            self.processors[1],
-            CosmicClaritySharpenProcessor(),
-            CosmicClarityDenoiseProcessor(),
-        ]
+        """Conserve les instances d’étapes ; leurs moteurs sont choisis en interne."""
+        return list(self.processors)
 
     def set_from_args(self, args: argparse.Namespace) -> None:
         """Configure la sélection et les options de chaque traitement."""
@@ -1388,22 +1348,39 @@ class _PostProcessorSequence:
         result["continued_with_original_image"] = True
         return result
 
-    @property
-    def parameter_persistence(self) -> dict[str, bool]:
-        """Fusionne les règles de persistance des paramètres des étapes configurées."""
-        return {
-            key: value
-            for treatment in self.processors
-            for key, value in treatment.parameter_persistence.items()
-        }
+    parameter_persistence = {
+        **GradientExtractor.parameter_persistence,
+        **PhotometricColorCalibrator.parameter_persistence,
+        **DeconvolutionProcessor.parameter_persistence,
+        **NoiseReductionProcessor.parameter_persistence,
+    }
 
-    def add_arguments(self, parser: argparse.ArgumentParser) -> None:
-        """Déclare les paramètres de cette étape dans le parseur partagé."""
-        if not self._custom_processors:
-            from lib.cosmic_clarity.processors import add_arguments
+    @classmethod
+    def default_processors(cls) -> tuple[type[processor], ...]:
+        """Déclare les étapes Siril dans leur ordre d’exécution."""
+        return (GradientExtractor, PhotometricColorCalibrator,
+                DeconvolutionProcessor, NoiseReductionProcessor)
 
-            add_arguments(parser)
+    @classmethod
+    def parameter_children(cls) -> tuple[type[processor], ...]:
+        """Déclare les étapes ; chacune recense ses propres moteurs enfants."""
+        return cls.default_processors()
 
+    @classmethod
+    def add_arguments(cls, parser: argparse.ArgumentParser) -> None:
+        """Déclare les étapes possibles sans connaître leurs moteurs internes."""
+        cls._declare_processors(parser, cls.default_processors())
+
+    def _add_custom_arguments(self, parser: argparse.ArgumentParser) -> None:
+        """Conserve les options et défauts des instances d’une séquence personnalisée."""
+        self._declare_processors(parser, self.processors)
+
+    @staticmethod
+    def _declare_processors(
+        parser: argparse.ArgumentParser,
+        providers: Sequence[type[processor] | processor],
+    ) -> None:
+        """Déclare activation et options des étapes avec une seule implémentation."""
         class _ToggleTreatmentAction(argparse.Action):
             """Mappe enable/disable d'une étape vers un booléen unique."""
 
@@ -1427,8 +1404,8 @@ class _PostProcessorSequence:
                 )
                 setattr(namespace, self.dest, enabled)
 
-        for processor in self.processors:
-            prefix = processor.get_prefix()
+        for treatment in providers:
+            prefix = treatment.get_prefix()
             group = parser.add_argument_group(f"Traitement {prefix}")
             group.add_argument(
                 f"--enable-{prefix}",
@@ -1437,13 +1414,15 @@ class _PostProcessorSequence:
                 f"--disable_{prefix}",
                 dest=f"enable_{prefix}",
                 action=_ToggleTreatmentAction,
-                default=processor.enabled_by_default,
+                default=treatment.enabled_by_default,
                 help=(
                     f"Activer (--enable-{prefix}) ou désactiver "
                     f"(--disable-{prefix}) {prefix}"
                 ),
             )
-            processor.add_arguments(group)
+            treatment.add_arguments(group)
+            if isinstance(treatment, GradientExtractor):
+                group.set_defaults(**treatment.argument_defaults())
 
     def post_process(
         self,
@@ -1512,26 +1491,3 @@ class _PostProcessorSequence:
                 raise RuntimeError(f"Échec du traitement {prefix}: {error}") from error
         _write_report(output_path, all_results)
         return all_results
-
-
-def extract_gradient_from_fits(
-    fits_path: Path,
-    output_dir: Path | str | None = None,
-    min_order: int = 1,
-    max_order: int = 3,
-    create_measurement_image: bool = True,
-    n_measurement_points: int = 100,
-    sample_fraction: float = 0.3,
-    max_samples: int = 10000,
-    output_path: Path | str | None = None,
-) -> JSONReport:
-    """Raccourci pour utiliser l'extracteur indépendamment de la séquence."""
-    return GradientExtractor(
-        min_polynomial_order=min_order,
-        max_polynomial_order=max_order,
-        output_dir=output_dir,
-        create_measurement_image=create_measurement_image,
-        n_measurement_points=n_measurement_points,
-        sample_fraction=sample_fraction,
-        max_samples=max_samples,
-    ).extract_gradient_from_fits(fits_path, output_path)

@@ -28,7 +28,7 @@ def test_denoise_validation_and_handoff(tmp_path, monkeypatch, noise, width, sta
         return True
     monkeypatch.setattr('lib.denoising.create_siril_from_args',
                         lambda args: SimpleNamespace(run_siril_script=run))
-    monkeypatch.setattr('lib.denoising.compare_star_catalogs', lambda *args:
+    monkeypatch.setattr('lib.denoising.compare_star_catalogs', lambda *args, **kwargs:
                         dict(status='validated', matched_count=20, pairs=[],
                              before_fwhm_px={'mean': 4}, after_fwhm_px={'mean': 4*width},
                              paired_ratio={'median': width}, before_roundness={'mean': .9},

@@ -20,13 +20,14 @@ from lib.cosmic_clarity.processors import (
     CosmicClarityDenoiseProcessor, CosmicClaritySharpenProcessor,
 )
 from lib.postprocess import _PostProcessorSequence, DeconvolutionProcessor
+from lib.denoising import NoiseReductionProcessor
 
 
 def arguments(*options: str) -> argparse.Namespace:
     """Parse les réglages réels de la séquence avec ses valeurs par défaut."""
     parser = argparse.ArgumentParser()
     _PostProcessorSequence().add_arguments(parser)
-    return parser.parse_args(options)
+    return parser.parse_args(['--no-deconvolution-reference-measurements', *options])
 
 
 def test_backend_selection_and_override() -> None:
@@ -34,8 +35,8 @@ def test_backend_selection_and_override() -> None:
     sequence = _PostProcessorSequence()
     selected = sequence._selected_processors(arguments())
     assert [p.get_prefix() for p in selected] == ['gradient', 'photometry', 'deconvolution', 'denoise']
-    assert isinstance(selected[2], CosmicClaritySharpenProcessor)
-    assert isinstance(selected[3], CosmicClarityDenoiseProcessor)
+    assert isinstance(selected[2], DeconvolutionProcessor)
+    assert isinstance(selected[3], NoiseReductionProcessor)
     assert selected[0] is sequence.processors[0]
     assert isinstance(sequence._selected_processors(arguments('--disable-clarity'))[2], DeconvolutionProcessor)
     custom = _PostProcessorSequence([DeconvolutionProcessor()])
@@ -135,7 +136,7 @@ def test_processor_quality_and_source_preservation(
     monkeypatch.setitem(sys.modules, 'lib.cosmic_clarity.inference', SimpleNamespace(CosmicClarityEngine=FakeEngine))
     monkeypatch.setattr(processors, 'create_siril_from_args', lambda args:
                         SimpleNamespace(run_siril_script=lambda *a, **k: True))
-    monkeypatch.setattr(processors, 'compare_star_catalogs', lambda *a: {
+    monkeypatch.setattr(processors, 'compare_star_catalogs', lambda *a, **k: {
         'status': 'validated', 'pairs': [], 'before_fwhm_px': {'mean': 4},
         'after_fwhm_px': {'mean': 4 * width}, 'paired_ratio': {'median': width},
         'before_roundness': {'mean': 1}, 'after_roundness': {'mean': 1},
@@ -199,7 +200,7 @@ def test_processor_quality_and_source_preservation(
                 'rejection_reasons': ['no_noise_reduction'],
             }
         monkeypatch.setattr('lib.denoising.post_process', _siril_denoise)
-    cls = CosmicClaritySharpenProcessor if operation == 'sharpen' else CosmicClarityDenoiseProcessor
+    cls = DeconvolutionProcessor if operation == 'sharpen' else NoiseReductionProcessor
     report = tmp_path / 'report.json'
     stale_parent = tmp_path / 'report_work'
     stale_parent.mkdir(parents=True, exist_ok=True)
@@ -259,8 +260,8 @@ def test_sequence_neural_handoff(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
         shutil.copyfile(input_path, destination)
         return {'output_image': str(destination)}
 
-    monkeypatch.setattr(CosmicClaritySharpenProcessor, 'post_process', process)
-    monkeypatch.setattr(CosmicClarityDenoiseProcessor, 'post_process', process)
+    monkeypatch.setattr(DeconvolutionProcessor, 'post_process', process)
+    monkeypatch.setattr(NoiseReductionProcessor, 'post_process', process)
     args = arguments('--enable-clarity', '--disable-gradient', '--disable-photometry')
     sequence = _PostProcessorSequence()
     sequence.set_from_args(args)
@@ -300,11 +301,11 @@ def test_sequence_continues_when_fallback_has_no_gain(
     monkeypatch.setitem(sys.modules, 'lib.cosmic_clarity.inference', SimpleNamespace(CosmicClarityEngine=FakeEngine))
     monkeypatch.setattr(processors, 'create_siril_from_args', lambda args:
                         SimpleNamespace(run_siril_script=lambda *a, **k: True))
-    monkeypatch.setattr(processors, 'compare_star_catalogs', lambda *a: {'status': 'insufficient_matches'})
+    monkeypatch.setattr(processors, 'compare_star_catalogs', lambda *a, **k: {'status': 'insufficient_matches'})
     monkeypatch.setattr('lib.deconvolution.post_process', lambda *a, **k: (_ for _ in ()).throw(
         RuntimeError('Aucune déconvolution efficace sans dégradation mesurée'),
     ))
-    monkeypatch.setattr(CosmicClarityDenoiseProcessor, 'post_process', denoise)
+    monkeypatch.setattr(NoiseReductionProcessor, 'post_process', denoise)
     args = arguments('--enable-clarity', '--disable-gradient', '--disable-photometry')
     results = _PostProcessorSequence().post_process(source, tmp_path / 'global.json', args)
     assert results['deconvolution']['status'] == 'no_safe_improvement'
@@ -332,7 +333,7 @@ def test_sharpen_uses_auto_matching_by_default(
 
     def compare(
         _before: Path, _after: Path,
-        radius: float, minimum: int, fraction: float, _layer: int,
+        radius: float, minimum: int, fraction: float, _layer: int, **kwargs: object,
     ) -> dict:
         captured.update(radius=radius, minimum=minimum, fraction=fraction)
         return {
@@ -365,7 +366,7 @@ def test_sharpen_uses_auto_matching_by_default(
         },
     )
     result = CosmicClaritySharpenProcessor().post_process(source, tmp_path / 'report.json', arguments())
-    assert captured == {'radius': 1.75, 'minimum': 12, 'fraction': 0.6}
+    assert captured == {'radius': 1.75, 'minimum': 12, 'fraction': 0.7}
     assert result['matching']['mode'] == 'auto'
     assert result['matching']['valid_stars_before'] == 40
 
@@ -390,7 +391,7 @@ def test_sharpen_forced_manual_matching(
 
     def compare(
         _before: Path, _after: Path,
-        radius: float, minimum: int, fraction: float, _layer: int,
+        radius: float, minimum: int, fraction: float, _layer: int, **kwargs: object,
     ) -> dict:
         captured.update(radius=radius, minimum=minimum, fraction=fraction)
         return {
@@ -500,3 +501,83 @@ def test_classic_backend_does_not_require_torch() -> None:
         cwd=root, capture_output=True, text=True,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_ensure_model_network_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Un échec réseau garde le poids existant et nettoie le fichier temporaire."""
+    from urllib.error import URLError
+
+    entry = {'url': 'https://example.invalid/model', 'size': 3,
+             'sha256': hashlib.sha256(b'new').hexdigest()}
+    monkeypatch.setattr(models, 'manifest', lambda: {'test.pth': entry})
+    target = tmp_path / 'test.pth'
+    target.write_bytes(b'old')
+
+    def fail(*args: object, **kwargs: object) -> None:
+        """Simule une interruption réseau avant réception des poids."""
+        raise URLError('offline')
+
+    monkeypatch.setattr(models, 'urlopen', fail)
+    with pytest.raises(URLError):
+        models.ensure_model(tmp_path, 'test.pth')
+    assert target.read_bytes() == b'old'
+    assert not list(tmp_path.glob('*.part'))
+
+
+@pytest.mark.parametrize('selection,accepted', [('balanced', True), ('spatial', False), ('brightness', False)])
+def test_large_matching_representation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, selection: str, accepted: bool,
+) -> None:
+    """Un taux de 60 % passe si l’échantillon reste réparti, pas si une strate disparaît."""
+    from lib.cosmic_clarity import processors
+
+    stars = []
+    for quadrant in range(4):
+        for brightness in range(4):
+            for index in range(10):
+                stars.append(dict(id=len(stars), layer=0,
+                                  x=float(quadrant % 2), y=float(quadrant // 2),
+                                  amplitude=float(brightness + 1), fwhm_x=3.0, fwhm_y=3.0))
+    if selection == 'balanced':
+        ids = {star['id'] for star in stars if star['id'] % 10 < 6}
+    elif selection == 'spatial':
+        ids = {star['id'] for star in stars if star['y'] == 0}
+    else:
+        ids = {star['id'] for star in stars if star['amplitude'] > 2}
+    monkeypatch.setattr(processors, 'read_star_catalog', lambda path: (stars, []))
+    comparison = {'pairs': [{'reference_id': identifier} for identifier in ids]}
+    result = processors.assess_matching_representation(tmp_path / 'before.tsv', comparison, 0)
+    assert result['accepted'] is accepted
+    assert any(group['kind'] == 'spatial' for group in result['groups'])
+    assert any(group['kind'] == 'brightness' for group in result['groups'])
+
+
+def test_auto_small_catalog_keeps_blocking_fraction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Un petit catalogue n’obtient plus une tolérance de 50 % de correspondances."""
+    from lib.cosmic_clarity import processors
+
+    stars = [{'layer': 0, 'fwhm': 4.0} for _ in range(10)]
+    monkeypatch.setattr(processors, 'read_star_catalog', lambda path: (stars, []))
+    _, minimum, fraction, metadata = processors._CosmicClarityProcessor._auto_matching_thresholds(
+        tmp_path / 'before.tsv', 0,
+    )
+    assert minimum == 3
+    assert fraction == 0.7
+    assert metadata['valid_stars_before'] == 10
+
+
+def test_representation_requires_brightness(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Les flux manquants ne permettent pas de prétendre valider les classes stellaires."""
+    from lib.cosmic_clarity import processors
+
+    stars = [dict(id=index, layer=0, x=float(index), y=float(index),
+                  fwhm_x=3.0, fwhm_y=3.0) for index in range(60)]
+    monkeypatch.setattr(processors, 'read_star_catalog', lambda path: (stars, []))
+    comparison = {'pairs': [{'reference_id': index} for index in range(60)]}
+    result = processors.assess_matching_representation(tmp_path / 'before.tsv', comparison, 0)
+    assert result['accepted'] is False
+    assert 'missing_valid_brightness' in result['reasons']

@@ -220,9 +220,8 @@ Traitement Siril de mosaique (si --mosaic):
 
     from lib.mosaic import Mosaic, calculate_common_basename
 
-    mosaic_processor = Mosaic()
     # Panel inputs are produced by this pipeline, not supplied independently.
-    config.register(mosaic_processor, parser, include_inputs=False)
+    config.register(Mosaic, parser, include_inputs=False)
 
     config.add_arguments(parser)
 
@@ -261,6 +260,8 @@ Traitement Siril de mosaique (si --mosaic):
     if args.no_fwhm_reject:
         args.fwhm_reject_percent = 0.0
     config.capture_args(args)
+    config.bind_parameters(args)
+    mosaic_processor = Mosaic()
 
     from lib.lightprocessor import (
         LightProcessor,

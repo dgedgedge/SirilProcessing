@@ -200,7 +200,7 @@ def test_mosaic_owns_and_configures_its_gradient(tmp_path, monkeypatch):
     from unittest.mock import Mock
 
     real_gradient = module.GradientExtractor
-    factory = Mock(side_effect=real_gradient)
+    factory = Mock(side_effect=real_gradient, wraps=real_gradient)
     monkeypatch.setattr(module, 'GradientExtractor', factory)
     mosaic = Mosaic(tmp_path/'out', tmp_path/'work', 'field')
     factory.assert_called_once_with()
