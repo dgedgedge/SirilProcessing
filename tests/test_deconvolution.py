@@ -9,7 +9,9 @@ import numpy as np
 import pytest
 from astropy.io import fits
 
-from lib.deconvolution import compare_star_catalogs, post_process, read_star_catalog
+from lib.deconvolution import (
+    SirilDeconvolutionProcessor, compare_star_catalogs, read_star_catalog,
+)
 from lib.processor import processor
 from lib.deconvolution_quality import InsufficientPSFStars
 from lib.postprocess import DeconvolutionProcessor, PhotometricColorCalibrator, _PostProcessorSequence
@@ -174,7 +176,7 @@ def test_insufficient_matches_keeps_audit_without_publishing_image(tmp_path, sim
     destination.write_bytes(b'old result')
     report = tmp_path/'deconvolution.json'
     with pytest.raises(RuntimeError, match='Aucune déconvolution efficace'):
-        post_process(image, report, arguments('--deconvolution-output', str(destination)))
+        SirilDeconvolutionProcessor().post_process(image, report, arguments('--deconvolution-output', str(destination)))
     audit = json.loads(report.read_text())
     assert audit['status'] == 'no_safe_improvement'
     assert audit['attempts'][0]['comparison']['status'] == 'insufficient_matches'
@@ -191,7 +193,7 @@ def test_insufficient_matches_keeps_audit_without_publishing_image(tmp_path, sim
 def test_invalid_parameters(tmp_path, simulated_siril, options):
     image, _, factory = simulated_siril
     with pytest.raises(ValueError):
-        post_process(image, tmp_path/'report.json', arguments(*options))
+        SirilDeconvolutionProcessor().post_process(image, tmp_path/'report.json', arguments(*options))
     factory.assert_not_called()
 
 
@@ -218,7 +220,7 @@ def test_fallback_stops_at_artifacts_and_reuses_previous_step(tmp_path, simulate
         dict(accepted=True, artifact_failure=False, reasons=[]),
     ])
     monkeypatch.setattr('lib.deconvolution.assess_quality', lambda *a, **k: next(verdicts))
-    result = post_process(image, tmp_path/'report.json', arguments('--deconvolution-adaptive', '--deconvolution-psf-method', 'stars'))
+    result = SirilDeconvolutionProcessor().post_process(image, tmp_path/'report.json', arguments('--deconvolution-adaptive', '--deconvolution-psf-method', 'stars'))
     assert result['selected_step'] == .0004
     assert result['search_stopped_at_step'] == .0005
     attempts = result['attempts']
@@ -228,6 +230,7 @@ def test_fallback_stops_at_artifacts_and_reuses_previous_step(tmp_path, simulate
     assert fits.getdata(result['crop']['path']).shape == (3, 33, 33)
     assert attempts[1]['psf_path'] == attempts[-1]['psf_path']
     assert result['psf_selections'][1]['profile'] == 'Moffat'
+    assert result['attempts'][1]['comparison']['min_match_fraction'] == 0.7
     scripts = '\n'.join(call.args[0] for call in runner.run_siril_script.call_args_list)
     assert '-minA=0.1 -maxA=0.7' in scripts
 
@@ -243,7 +246,7 @@ def test_full_frame_must_pass_after_crop_success(tmp_path, simulated_siril, monk
     destination = tmp_path/'existing.fit'
     destination.write_bytes(b'previous')
     with pytest.raises(RuntimeError, match='Aucune déconvolution efficace'):
-        post_process(image, tmp_path/'report.json', arguments('--deconvolution-adaptive', '--deconvolution-max-step', '.0004', '--deconvolution-output', str(destination)))
+        SirilDeconvolutionProcessor().post_process(image, tmp_path/'report.json', arguments('--deconvolution-adaptive', '--deconvolution-max-step', '.0004', '--deconvolution-output', str(destination)))
     assert destination.read_bytes() == b'previous'
 
 
@@ -252,7 +255,7 @@ def test_default_does_not_escalate_an_ineffective_trial(tmp_path, simulated_siri
     monkeypatch.setattr('lib.deconvolution.assess_quality', lambda *a, **k:
                         dict(accepted=False, artifact_failure=False, reasons=['insufficient_sharpening']))
     with pytest.raises(RuntimeError, match='Aucune déconvolution efficace'):
-        post_process(image, tmp_path/'report.json', arguments('--no-deconvolution-adaptive'))
+        SirilDeconvolutionProcessor().post_process(image, tmp_path/'report.json', arguments('--no-deconvolution-adaptive'))
     report = json.loads((tmp_path/'report.json').read_text())
     assert len(report['attempts']) == 1
     assert 'crop' not in report
@@ -269,7 +272,7 @@ def test_default_enables_adaptive_search(tmp_path, simulated_siril, monkeypatch)
         dict(accepted=True, artifact_failure=False, reasons=[]),
     ])
     monkeypatch.setattr('lib.deconvolution.assess_quality', lambda *a, **k: next(verdicts))
-    result = post_process(image, tmp_path/'report.json', arguments('--deconvolution-psf-method', 'stars'))
+    result = SirilDeconvolutionProcessor().post_process(image, tmp_path/'report.json', arguments('--deconvolution-psf-method', 'stars'))
     assert result['selected_step'] == .0004
     assert result['search_stopped_at_step'] == .0005
     work_dir = Path(result['attempts'][0]['candidate_image_path']).parent
@@ -291,7 +294,7 @@ def test_moffat_failure_keeps_numbered_audit(
     report = tmp_path / 'report.json'
     original = image.read_bytes()
     with pytest.raises(RuntimeError, match='Aucune déconvolution efficace'):
-        post_process(image, report, arguments())
+        SirilDeconvolutionProcessor().post_process(image, report, arguments())
     audit = json.loads(report.read_text())
     assert audit['status'] == 'no_safe_improvement'
     assert [a['number'] for a in audit['attempts']] == [1, 2]
@@ -325,7 +328,7 @@ def test_failed_central_trial_continues_to_next_step(
         dict(accepted=True, artifact_failure=False, reasons=[]),
     ])
     monkeypatch.setattr('lib.deconvolution.assess_quality', lambda *a, **k: next(verdicts))
-    result = post_process(image, tmp_path / 'report.json', arguments('--deconvolution-max-step', '.0005'))
+    result = SirilDeconvolutionProcessor().post_process(image, tmp_path / 'report.json', arguments('--deconvolution-max-step', '.0005'))
     assert result['status'] == 'accepted'
     assert result['selected_step'] == .0005
     assert [a['number'] for a in result['attempts']] == [1, 2, 3, 4]
@@ -411,7 +414,7 @@ def test_adaptive_psf_expands_until_enough_stars(
     ])
     monkeypatch.setattr(module, 'assess_quality', lambda *a, **k: next(verdicts))
     original = image.read_bytes()
-    result = post_process(image, tmp_path / 'report.json',
+    result = SirilDeconvolutionProcessor().post_process(image, tmp_path / 'report.json',
                           arguments('--deconvolution-max-step', '.0004'))
     assert result['status'] == 'accepted'
     assert result['crop']['dimension_fraction'] == expected_fraction
@@ -458,3 +461,21 @@ def test_quality_logs_explain_unrepresented_flux(caplog: pytest.LogCaptureFixtur
     assert '1128/1852 étoiles' in caplog.text
     assert 'fraction globale non bloquante' in caplog.text
     assert 'classe de flux 0 : 0/463 étoiles retrouvées (0.00 %) ; minimum 30.45 % ; REJET' in caplog.text
+
+
+def test_execution_options_are_independent(
+    tmp_path: Path, simulated_siril: tuple[Path, Mock, Mock],
+) -> None:
+    """Chaque exécution capture ses options sans partager les essais ou les mutations du CLI."""
+    from lib.deconvolution import _DeconvolutionExecution
+
+    image, _, _ = simulated_siril
+    args = arguments('--deconvolution-iterations', '12')
+    first = _DeconvolutionExecution(image, tmp_path / 'first.json', args)
+    args.deconvolution_iterations = 24
+    second = _DeconvolutionExecution(image, tmp_path / 'second.json', args)
+    assert first._option('iterations', 10) == 12
+    assert second._option('iterations', 10) == 24
+    first.result['attempts'].append({'number': 1})
+    assert second.result['attempts'] == []
+    assert first.work != second.work

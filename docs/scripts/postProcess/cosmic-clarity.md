@@ -237,18 +237,21 @@ visuelle reste nécessaire avant de préférer ce moteur au traitement classique
 
 ## Vérification reproductible
 
-Tests sans téléchargement des poids :
+Tests de non-régression (les poids manquants sont téléchargés si CUDA est disponible) :
 
 ```bash
 .venv/bin/python -m pytest -q tests/test_cosmic_clarity.py tests/test_cosmic_inference.py
 ```
 
-Les tests d'inférence sont ignorés si PyTorch n'est pas installé. Après
-installation, ce test charge les six vrais poids sur CUDA puis traite un FITS
-synthétique avec les deux opérations :
+Les tests d’inférence sont ignorés si PyTorch n’est pas installé. Le test des
+vrais poids est exécuté automatiquement dans la non-régression lorsque CUDA
+est disponible ; il est ignoré avec une raison explicite sinon. Il charge les
+six poids sur CUDA puis traite un FITS synthétique avec les deux opérations.
+Un modèle manquant est téléchargé ; une erreur réseau, de chargement ou de
+calcul fait échouer le test. Pour le lancer seul :
 
 ```bash
-COSMIC_CUDA_TEST=1 .venv/bin/python -m pytest -q tests/test_cosmic_inference.py
+.venv/bin/python -m pytest -q tests/test_cosmic_inference.py::test_real_weights_cuda
 ```
 
 `COSMIC_MODEL_DIR` peut désigner un autre dossier pour ce test. Celui-ci vérifie

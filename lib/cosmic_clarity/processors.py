@@ -168,10 +168,10 @@ class _CosmicClarityProcessor(processor):
     def add_arguments(cls, parser: argparse.ArgumentParser) -> None:
         """Expose les seuils historiques pour une utilisation indépendante de la classe."""
         if cls.operation == 'sharpen':
-            from lib.deconvolution import add_arguments as add_quality_arguments
+            from lib.deconvolution import SirilDeconvolutionProcessor as quality_processor
         else:
-            from lib.denoising import add_arguments as add_quality_arguments
-        add_quality_arguments(parser)
+            from lib.denoising import SirilNoiseReductionProcessor as quality_processor
+        quality_processor.add_arguments(parser)
 
     @staticmethod
     def _auto_matching_thresholds(

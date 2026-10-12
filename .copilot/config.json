@@ -1,19 +1,25 @@
 {
   "default": {
-    "instructions": [ 
+    "instructions": [
+      "Lire et appliquer .github/copilot-instructions.md et AGENTS.md. Les consignes détaillées de .github/copilot-instructions.md priment en cas de contradiction avec ce fichier.",
       "Toujours écrire du code Python clair et documenté.",
       "Respecter PEP8, utiliser des noms de variables explicites en anglais, et ajouter des docstrings au format NumPy.",
-      "Quand tu génères du code lié à un traitement d'image d'astrophotographie, privilégie les librairies standard (subprocess, pathlib, logging, pysiril et astropi).",
+      "Quand tu génères du code lié à un traitement d'image d'astrophotographie, privilégie la bibliothèque standard (subprocess, pathlib, logging) et les dépendances du projet (notamment Astropy et les interfaces Siril existantes).",
       "Si une solution est spécifique au matériel (I2C, GPIO, GPS, capteurs de température), documente les dépendances nécessaires dans les docstrings.",
       "Améliorer la robustesse du code en ajoutant des vérifications d'erreurs et des exceptions appropriées.",
-      "IMPORTANT: Développer systématiquement des tests unitaires pour toute nouvelle fonctionnalité et les stocker dans le répertoire 'tests/' à la racine du projet. Utiliser pytest comme framework de test et créer des tests complets couvrant les cas normaux, les cas d'erreur et les cas limites."
+      "IMPORTANT: Développer systématiquement des tests unitaires pour toute nouvelle fonctionnalité et les stocker dans le répertoire 'tests/' à la racine du projet. Utiliser pytest comme framework de test et créer des tests complets couvrant les cas normaux, les cas d'erreur et les cas limites.",
+      "Organiser les traitements sous forme de classes Python dans les modules concernés. Les traitements d’image et leurs orchestrateurs doivent hériter de lib.processor.processor ; séparer les moteurs de calcul indépendants de leur orchestration et déclarer leurs paramètres par méthodes de classe."
     ]
   },
   "python": {
-    "instructions": ["Toujours ajouter des exemples d'utilisation simples dans les docstrings, et vérifier que le code est compatible Python 3.9+."]
+    "instructions": [
+      "Ajouter des exemples d’utilisation pertinents dans les docstrings et préserver la compatibilité Python effectivement déclarée et utilisée par le projet ; ne pas annoncer Python 3.9 si le code nécessite Python 3.10 ou plus."
+    ]
   },
   "shell": {
-    "instructions": ["Écrire des scripts Bash portables, avec set -euo pipefail, et commenter chaque étape."]
+    "instructions": [
+      "Écrire des scripts Bash portables, avec set -euo pipefail, et commenter chaque étape."
+    ]
   },
   "testing": {
     "instructions": [
@@ -26,4 +32,3 @@
     ]
   }
 }
-

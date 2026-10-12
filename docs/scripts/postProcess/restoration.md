@@ -41,14 +41,22 @@ débruitage ou `no_safe_improvement` pour la déconvolution comparative.
 
 Les moteurs Cosmic Clarity ne lancent plus le traitement Siril concurrent.
 Siril reste cependant requis par leur propre contrôle des catalogues stellaires.
-Les fonctions historiques `post_process` dans `denoising` et `deconvolution`
-restent les points d’entrée algorithmiques compatibles, appelés par les moteurs
-Siril. Les imports des orchestrateurs depuis `lib.postprocess` restent disponibles,
+Les paramètres sont déclarés par les méthodes de classe des moteurs Siril.
+Les moteurs créent directement un objet d’exécution par appel. Les modules
+`denoising` et `deconvolution` n’exposent pas de fonctions globales
+`add_arguments` ou `post_process` : utiliser les méthodes des classes. Les imports des orchestrateurs depuis `lib.postprocess` restent disponibles,
 mais leurs définitions appartiennent désormais aux modules des traitements.
 
 ```python
 from lib.denoising import NoiseReductionProcessor
-from lib.deconvolution import DeconvolutionProcessor
+from lib.deconvolution import DeconvolutionProcessor, SirilDeconvolutionProcessor
+from lib.denoising import SirilNoiseReductionProcessor
+
+# Déclarer les paramètres du moteur Siril sans créer d’instance :
+SirilNoiseReductionProcessor.add_arguments(parser)
+
+# Exécuter uniquement le moteur Siril avec les arguments déjà résolus :
+result = SirilNoiseReductionProcessor().post_process(image, report, args)
 ```
 
 ## Vérification
@@ -63,3 +71,25 @@ Les tests contrôlent les deux candidats sur la même entrée, leur sélection,
 la conservation de l’original, les rejets et le mode Siril seul sans moteur
 neuronal. Les scénarios comparatifs utilisent des moteurs simulés ; ils ne
 constituent pas une validation supplémentaire avec Siril ou CUDA.
+
+## État et phases d’une exécution Siril
+
+`_DenoisingExecution` et `_DeconvolutionExecution` sont des objets internes à
+usage unique, créés par les moteurs `processor`. Ils portent les options copiées,
+les chemins, les rapports et les étapes de l’appel ; ils ne sont pas des moteurs
+publics supplémentaires et ne sont pas des singletons.
+
+Le débruitage sépare construction du script, exécution Siril, évaluation de
+qualité, publication et sauvegarde de l’audit. La déconvolution sépare détection,
+construction de PSF, exécution et évaluation d’un essai, essai initial, recherche
+adaptative, publication et audit. Ces méthodes remplacent les fonctions imbriquées
+qui partageaient implicitement les variables de leur fonction englobante.
+
+L’élargissement du recadrage utilise une fraction de dimension distincte de la
+fraction minimale d’appariement. Élargir une zone ne change donc pas le seuil
+configuré de correspondances. Le test de régression vérifie ce contrat.
+
+Deux appels sur la même instance de moteur créent des états différents. Les
+chemins de rapports doivent toutefois être distincts pour des exécutions
+concurrentes : leur dossier de travail est déterminé par le rapport et recréé
+au début de chaque appel. Les erreurs d’exécution restent propagées et auditées.

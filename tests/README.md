@@ -69,3 +69,35 @@ Le workflow GitHub **Documentation HTML** exécute les tests du générateur
 avec `unittest`. La suite de non-régression complète s’exécute avec les
 commandes pytest ci-dessus ; aucun workflow GitHub dédié à cette suite
 n’est actuellement configuré.
+
+## Refactoring des moteurs Siril
+
+`test_deconvolution.py` et `test_denoising.py` couvrent les objets d’exécution
+indépendants, les copies des options et l’audit des essais. Le repli adaptatif
+vérifie aussi que le recadrage ne change pas la fraction minimale d’appariement.
+Les tests appellent directement les méthodes des moteurs de type `processor`.
+Les doubles de calcul sont injectés dans ces moteurs ; `test_restoration.py` contrôle leur
+orchestration sur la même entrée.
+
+Pour mesurer la couverture des deux modules sans créer d’artefact dans le dépôt :
+
+```bash
+PIP_NO_INDEX=1 COVERAGE_FILE=/tmp/siril-refactoring.coverage \
+  .venv/bin/python -m pytest -q \
+  --cov=lib.deconvolution --cov=lib.denoising \
+  tests/test_deconvolution.py tests/test_denoising.py \
+  tests/test_restoration.py tests/test_cosmic_clarity.py \
+  tests/test_processor_args.py tests/test_processor_parameters.py
+```
+
+Ce contrôle porte sur ces modules et utilise des exécutions Siril simulées.
+Il ne mesure pas la couverture complète du dépôt ni la validité d’un traitement
+réel sur GPU.
+
+Le test `test_cosmic_inference.py::test_real_weights_cuda` appartient à la
+non-régression et s’exécute automatiquement si PyTorch et CUDA sont disponibles.
+Sans CUDA, pytest affiche explicitement la raison du test ignoré (`-rs`). Il
+charge les six vrais modèles et peut télécharger les poids manquants ; les
+erreurs de téléchargement, de chargement et de calcul font échouer le test.
+Aucune variable d’activation n’est nécessaire. `COSMIC_MODEL_DIR` peut choisir
+le dossier des poids ; sinon le dossier ignoré `tmp/models/cosmicclarity` est utilisé.

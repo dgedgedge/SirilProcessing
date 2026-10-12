@@ -515,3 +515,5 @@ indépendants. Le diagnostic conserve le SNR et les motifs d’échec individuel
 
 La [structure des traitements de restauration](restoration.md) distingue les
 orchestrateurs des moteurs Siril et Cosmic Clarity, tous de type `processor`.
+
+Les moteurs Siril organisent leur calcul en [phases d’exécution indépendantes](restoration.md#état-et-phases-dune-exécution-siril), avec un état propre à chaque appel. L’élargissement de la PSF ne modifie pas le seuil d’appariement configuré.

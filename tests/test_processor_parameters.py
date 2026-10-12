@@ -23,7 +23,7 @@ def test_scoped_snapshot_and_overrides(tmp_path, monkeypatch):
     assert not hasattr(first._get_args(), 'gradient_method')
     first.set_from_args(argparse.Namespace(denoise_modulation=0.4, enable_clarity=False))
     delegate = Mock(return_value={})
-    monkeypatch.setattr('lib.denoising.post_process', delegate)
+    monkeypatch.setattr('lib.denoising.SirilNoiseReductionProcessor._execute', delegate)
     first.post_process(tmp_path / 'image.fit', tmp_path / 'report.json')
     assert delegate.call_args.args[2].denoise_modulation == 0.4
     first.post_process(tmp_path / 'image.fit', tmp_path / 'report.json',

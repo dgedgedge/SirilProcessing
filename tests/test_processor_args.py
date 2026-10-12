@@ -33,7 +33,7 @@ def test_gradient_stored_options_and_temporary_override(tmp_path, monkeypatch):
 ])
 def test_adapters_forward_stored_options(cls, module, option, monkeypatch, tmp_path):
     delegate = Mock(return_value={})
-    monkeypatch.setattr(f'{module}.post_process', delegate)
+    monkeypatch.setattr(cls, '_execute', delegate)
     treatment = cls()
     treatment.set_from_args(argparse.Namespace(**{option: 7}))
     treatment.post_process(tmp_path/'input.fit', tmp_path/'report.json')
@@ -69,7 +69,7 @@ def test_processor_uses_shared_options_with_explicit_override(tmp_path, monkeypa
     config.register(treatment, parser)
     config.parse_args(parser, ['--denoise-modulation', '0.25'])
     delegate = Mock(return_value={})
-    monkeypatch.setattr('lib.denoising.post_process', delegate)
+    monkeypatch.setattr('lib.denoising.SirilNoiseReductionProcessor._execute', delegate)
     paths = tmp_path / 'image.fit', tmp_path / 'report.json'
     treatment.post_process(*paths)
     assert delegate.call_args.args[2].denoise_modulation == 0.25

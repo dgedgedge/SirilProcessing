@@ -146,7 +146,7 @@ def test_processor_quality_and_source_preservation(
     if operation == 'sharpen':
         if status == 'no_safe_improvement':
             monkeypatch.setattr(
-                'lib.deconvolution.post_process',
+                'lib.deconvolution.SirilDeconvolutionProcessor._execute',
                 lambda *a, **k: (_ for _ in ()).throw(RuntimeError(
                     'Aucune déconvolution efficace sans dégradation mesurée'
                 )),
@@ -171,7 +171,7 @@ def test_processor_quality_and_source_preservation(
                     'artifacts': {'max_noise_ratio': noise, 'max_ring_fraction': 0},
                 }
             monkeypatch.setattr(
-                'lib.deconvolution.post_process',
+                'lib.deconvolution.SirilDeconvolutionProcessor._execute',
                 _accepted_siril,
             )
     else:
@@ -199,7 +199,7 @@ def test_processor_quality_and_source_preservation(
                 'output_image': str(source),
                 'rejection_reasons': ['no_noise_reduction'],
             }
-        monkeypatch.setattr('lib.denoising.post_process', _siril_denoise)
+        monkeypatch.setattr('lib.denoising.SirilNoiseReductionProcessor._execute', _siril_denoise)
     cls = DeconvolutionProcessor if operation == 'sharpen' else NoiseReductionProcessor
     report = tmp_path / 'report.json'
     stale_parent = tmp_path / 'report_work'
@@ -302,7 +302,7 @@ def test_sequence_continues_when_fallback_has_no_gain(
     monkeypatch.setattr(processors, 'create_siril_from_args', lambda args:
                         SimpleNamespace(run_siril_script=lambda *a, **k: True))
     monkeypatch.setattr(processors, 'compare_star_catalogs', lambda *a, **k: {'status': 'insufficient_matches'})
-    monkeypatch.setattr('lib.deconvolution.post_process', lambda *a, **k: (_ for _ in ()).throw(
+    monkeypatch.setattr('lib.deconvolution.SirilDeconvolutionProcessor._execute', lambda *a, **k: (_ for _ in ()).throw(
         RuntimeError('Aucune déconvolution efficace sans dégradation mesurée'),
     ))
     monkeypatch.setattr(NoiseReductionProcessor, 'post_process', denoise)
@@ -358,7 +358,7 @@ def test_sharpen_uses_auto_matching_by_default(
     monkeypatch.setattr(processors, 'artifact_metrics', lambda *a: {'max_noise_ratio': 1.0, 'max_ring_fraction': 0.0})
     monkeypatch.setattr(processors, 'assess_quality', lambda *a, **k: {'reasons': []})
     monkeypatch.setattr(
-        'lib.deconvolution.post_process',
+        'lib.deconvolution.SirilDeconvolutionProcessor._execute',
         lambda source, report, args: {
             'status': 'rejected',
             'output_image': str(source),
@@ -416,7 +416,7 @@ def test_sharpen_forced_manual_matching(
     monkeypatch.setattr(processors, 'artifact_metrics', lambda *a: {'max_noise_ratio': 1.0, 'max_ring_fraction': 0.0})
     monkeypatch.setattr(processors, 'assess_quality', lambda *a, **k: {'reasons': []})
     monkeypatch.setattr(
-        'lib.deconvolution.post_process',
+        'lib.deconvolution.SirilDeconvolutionProcessor._execute',
         lambda source, report, args: {
             'status': 'rejected',
             'output_image': str(source),

@@ -1,4 +1,4 @@
-"""Prétraitement, tuilage FITS et inférence facultative avec les vrais poids."""
+"""Prétraitement, tuilage FITS et non-régression des vrais poids sur CUDA."""
 
 import os
 from pathlib import Path
@@ -92,10 +92,14 @@ def test_invalid_fits_fails_before_inference(tmp_path: Path, bad: str) -> None:
     assert not (tmp_path / 'out.fit').exists()
 
 
-@pytest.mark.skipif(os.environ.get('COSMIC_CUDA_TEST') != '1',
-                    reason='Activer explicitement COSMIC_CUDA_TEST=1 après installation')
+@pytest.mark.skipif(not torch.cuda.is_available(),
+                    reason='CUDA indisponible dans cet environnement')
 def test_real_weights_cuda(tmp_path: Path) -> None:
-    """Charge chaque vrai checkpoint sur CUDA et vérifie des FITS synthétiques."""
+    """Vérifie automatiquement les vrais poids lorsque CUDA est disponible.
+
+    Les poids manquants sont téléchargés par le moteur. Une erreur de chargement
+    ou de calcul échoue au lieu d’ignorer le test ; aucune activation manuelle.
+    """
     assert torch.cuda.is_available()
     directory = Path(os.environ.get('COSMIC_MODEL_DIR', DEFAULT_MODEL_DIR))
     engine = CosmicClarityEngine(directory, 'cuda')
