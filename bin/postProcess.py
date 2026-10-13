@@ -119,10 +119,10 @@ def main() -> None:
     config.add_arguments(parser)
 
     # Créer le processeur séquentiel
-    seq_processor = _PostProcessorSequence()
+
 
     # Ajouter les arguments spécifiques
-    config.register(seq_processor, parser)
+    config.register(_PostProcessorSequence, parser)
 
     args = config.parse_args(parser)
     setup_logging(args.log_level)
@@ -157,7 +157,8 @@ def main() -> None:
         logging.info("Dossier des étapes: %s", steps_dir)
         logging.info("Résultat final: %s", result_path)
         # Exécuter la séquence de post-processing
-        seq_processor.set_from_args(args)
+        config.bind_parameters(args)
+        seq_processor = _PostProcessorSequence()
         results = seq_processor.post_process(
             input_path=input_file,
             output_path=output_path,

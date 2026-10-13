@@ -7,6 +7,7 @@ import csv
 import json
 import logging
 from collections.abc import Sequence
+from copy import deepcopy
 from pathlib import Path
 from shutil import copyfile
 
@@ -15,113 +16,19 @@ from astropy.io import fits
 from PIL import Image, ImageDraw
 from scipy.spatial import cKDTree
 
-from lib.deconvolution_quality import artifact_metrics, assess_quality, select_psf_stars
+from lib.deconvolution_quality import (
+    InsufficientPSFStars, artifact_metrics, assess_quality, select_psf_stars,
+    log_quality_diagnostics,
+)
 from lib.postprocess_paths import reset_ordered_work_dir, treatment_file_prefix
 from lib.siril_utils import create_siril_from_args
+from lib.processor import processor
+from lib.restoration import RestorationComparisonProcessor
 from lib.type_defs import ConfigValue, JSONReport, StarMeasurement
 
 
-def add_arguments(parser: argparse.ArgumentParser) -> None:
-    """Déclare les options de PSF, de recherche du pas et les seuils d’acceptation."""
-    parser.add_argument("--deconvolution-iterations", type=int, default=10)
-    parser.add_argument(
-        "--deconvolution-psf-size",
-        type=int,
-        default=15,
-        help="Taille impaire de la PSF en pixels",
-    )
-    parser.add_argument(
-        "--deconvolution-psf-method",
-        choices=["blind", "stars"],
-        default="blind",
-        help="PSF native aveugle l0 (défaut) ou sélection des étoiles",
-    )
-    parser.add_argument(
-        "--deconvolution-adaptive",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help=(
-            "Activer (défaut) ou désactiver (--no-deconvolution-adaptive) "
-            "le repli Moffat et les essais de pas croissants"
-        ),
-    )
-    parser.add_argument(
-        "--deconvolution-alpha",
-        type=float,
-        default=3000,
-        help="Régularisation TV : valeur plus faible = régularisation plus forte",
-    )
-    parser.add_argument(
-        "--deconvolution-layer",
-        type=int,
-        choices=[0, 1, 2],
-        default=None,
-        help="Canal des mesures avant/après : défaut vert RGB (1), mono (0)",
-    )
-    parser.add_argument(
-        "--deconvolution-match-radius",
-        type=float,
-        default=1.0,
-        help="Distance maximale de correspondance, en pixels",
-    )
-    parser.add_argument("--deconvolution-min-stars", type=int, default=10)
-    parser.add_argument(
-        "--deconvolution-min-match-fraction",
-        type=float,
-        default=0.7,
-        help="Fraction minimale des étoiles valides avant retrouvées après",
-    )
-    parser.add_argument(
-        "--deconvolution-force-manual-matching",
-        action="store_true",
-        help=(
-            "Forcer les seuils saisis (--deconvolution-match-radius, "
-            "--deconvolution-min-stars, --deconvolution-min-match-fraction) "
-            "au lieu du mode auto adaptatif"
-        ),
-    )
-    parser.add_argument(
-        "--deconvolution-step",
-        type=float,
-        default=0.0003,
-        help="Pas de descente du premier essai",
-    )
-    parser.add_argument(
-        "--deconvolution-max-step",
-        type=float,
-        default=0.001,
-        help="Dernier pas testé sur le tiers central",
-    )
-    parser.add_argument(
-        "--deconvolution-fine-quantile",
-        type=float,
-        default=0.35,
-        help="Fraction des étoiles les plus fines admissibles à la PSF",
-    )
-    parser.add_argument("--deconvolution-psf-roundness", type=float, default=0.8)
-    parser.add_argument(
-        "--deconvolution-min-gain",
-        type=float,
-        default=0.02,
-        help="Gain relatif minimal de finesse",
-    )
-    parser.add_argument(
-        "--deconvolution-max-noise",
-        type=float,
-        default=1.15,
-        help="Amplification maximale du bruit de fond",
-    )
-    parser.add_argument(
-        "--deconvolution-max-rings",
-        type=float,
-        default=0.1,
-        help="Fraction maximale d’étoiles avec un halo nouveau",
-    )
-    parser.add_argument(
-        "--deconvolution-output",
-        type=Path,
-        help="FITS déconvolué ; défaut dans le dossier du rapport",
-    )
+# Fractions de chaque dimension : du tiers central au champ entier.
+ADAPTIVE_CROP_FRACTIONS = (1 / 3, 1 / 2, 2 / 3, 1.0)
 
 
 def read_star_catalog(
@@ -196,14 +103,28 @@ def compare_star_catalogs(
     min_stars: int,
     min_fraction: float,
     layer: int,
+    *,
+    reference_images: tuple[Path | str, Path | str] | None = None,
 ) -> JSONReport:
     """Apparie les étoiles par voisinage unique réciproque dans le rayon en pixels.
 
     Ne publie les statistiques FWHM et rondeur que si min_stars et la fraction
     minimale sont atteints. Refuse des catalogues de canaux différents.
+    reference_images déclenche une mesure locale commune avant/après, avec
+    sélection des références fiables sur l’entrée ; la détection indépendante
+    après reste un diagnostic. Les flux, SNR et motifs sont conservés dans
+    reference_measurements. Voir postProcess/reference-stars.md.
     Voir docs/scripts/postProcess/README.md pour les critères de déconvolution."""
     before, rejected_before = read_star_catalog(before_path)
     after, rejected_after = read_star_catalog(after_path)
+    reference_audit = None
+    independent_after_count = len(after)
+    if reference_images is not None:
+        from lib.reference_stars import measure_reference_catalog
+
+        before, after, reference_audit = measure_reference_catalog(
+            *reference_images, before, layer, radius,
+        )
     if any(star["layer"] != layer for star in before + after):
         raise ValueError("Les catalogues avant/après ne portent pas sur le même canal")
     pairs = []
@@ -265,6 +186,17 @@ def compare_star_catalogs(
         unmatched_after_ids=[s["id"] for s in after if s["id"] not in used_after],
         pairs=pairs,
     )
+    if reference_audit is not None:
+        result["reference_measurements"] = reference_audit
+        result["independent_after_count"] = independent_after_count
+        logging.info(
+            "Mesure aux positions initiales : %d détections initiales ; %d références fiables ; "
+            "%d mesures candidates ; %d étoiles appariées ; SNR minimal %.1f",
+            reference_audit['initial_count'], len(before), len(after), len(pairs),
+            reference_audit['min_reference_snr'],
+        )
+        logging.info("Mesure aux positions initiales — diagnostics : %s",
+                     reference_audit['failure_summary'])
     # Aucune statistique de comparaison publiée tant que la cohorte n'est pas validée.
     if valid:
 
@@ -328,137 +260,140 @@ def _quote(path: Path | str) -> str:
     return f'"{value}"'
 
 
-def post_process(
-    input_path: Path | str,
-    output_path: Path | str,
-    args: argparse.Namespace | None = None,
-) -> JSONReport:
-    """Déconvolue avec Siril et conserve uniquement une amélioration contrôlée.
+class _DeconvolutionExecution:
+    """État indépendant d’une exécution Siril, sans configuration globale mutable."""
 
-    Écrit le rapport JSON, les catalogues et les essais dans le dossier de
-    output_path ; préserve le FITS source. Les options viennent de args.
+    def __init__(
+        self, input_path: Path | str, output_path: Path | str,
+        args: argparse.Namespace | None,
+    ) -> None:
+        """Valide les options et initialise les chemins et l’audit de cet appel.
 
-    Raises:
-        ValueError: Si les paramètres ou le format FITS sont incompatibles.
-        RuntimeError: Si Siril échoue ou si aucun essai sûr n’est accepté.
+        Parameters
+        ----------
+        input_path : Path or str
+            Image FITS source, conservée intacte.
+        output_path : Path or str
+            Rapport JSON de cet appel.
+        args : argparse.Namespace or None
+            Valeurs déjà résolues par le processeur appelant.
+        """
+        self.args = deepcopy(args)
+        self.input_path = input_path
+        self.output_path = output_path
 
-    Les erreurs locales des essais et des PSF sont auditées ; les autres essais
-    disponibles continuent. Voir docs/scripts/postProcess/README.md pour les seuils
-    et le repli adaptatif."""
+        self.iterations = self._option("iterations", 10)
+        self.size = self._option("psf_size", 15)
+        self.psf_method = self._option("psf_method", "blind")
+        self.adaptive = self._option("adaptive", True)
+        self.alpha = self._option("alpha", 3000)
+        if self.psf_method not in ("blind", "stars") or not np.isfinite(self.alpha) or self.alpha <= 0:
+            raise ValueError("Méthode PSF ou alpha invalide")
+        self.radius = self._option("match_radius", 1.0)
+        self.minimum = self._option("min_stars", 10)
+        self.fraction = self._option("min_match_fraction", 0.7)
+        self.step = self._option("step", 0.0003)
+        self.max_step = self._option("max_step", 0.001)
+        self.fine_quantile = self._option("fine_quantile", 0.35)
+        self.roundness = self._option("psf_roundness", 0.8)
+        self.quality_settings = dict(
+            min_gain=self._option("min_gain", 0.02),
+            max_noise=self._option("max_noise", 1.15),
+            max_rings=self._option("max_rings", 0.1),
+        )
+        if not isinstance(self.iterations, int) or not 1 <= self.iterations <= 1000:
+            raise ValueError("deconvolution-iterations doit être entre 1 et 1000")
+        if not isinstance(self.size, int) or not 3 <= self.size <= 255 or self.size % 2 != 1:
+            raise ValueError("deconvolution-psf-size doit être impair, entre 3 et 255")
+        values = [
+            self.radius,
+            self.fraction,
+            self.step,
+            self.max_step,
+            self.fine_quantile,
+            self.roundness,
+            *self.quality_settings.values(),
+        ]
+        if (
+            not all(np.isfinite(values))
+            or self.radius <= 0
+            or self.minimum < 3
+            or not 0 < self.fraction <= 1
+            or not 0 < self.step <= 0.01
+            or not 0.0004 <= self.max_step <= 0.01
+            or not 0 < self.fine_quantile <= 1
+            or not 0 < self.roundness <= 0.95
+            or not 0 < self.quality_settings["min_gain"] < 1
+            or self.quality_settings["max_noise"] < 1
+            or not 0 <= self.quality_settings["max_rings"] <= 1
+        ):
+            raise ValueError(
+                "Paramètres de sélection, de comparaison ou de recherche du pas invalides"
+            )
+        self.input_path = Path(self.input_path).resolve()
+        self.output_path = Path(self.output_path).resolve()
+        with fits.open(self.input_path, memmap=False) as hdul:
+            self.shape = hdul[0].shape
+            if len(self.shape) not in (2, 3) or (len(self.shape) == 3 and self.shape[0] != 3):
+                raise ValueError("Image FITS mono ou RGB requise")
+            if len(self.shape) == 2 and hdul[0].header.get("BAYERPAT", "").strip():
+                raise ValueError("Déconvolution : dématricer le FITS CFA au préalable")
+        self.layer = self._option("layer", None)
+        self.layer = (1 if len(self.shape) == 3 else 0) if self.layer is None else self.layer
+        if self.layer not in ([0, 1, 2] if len(self.shape) == 3 else [0]):
+            raise ValueError("Canal de mesure incompatible avec cette image")
+        self.tag = treatment_file_prefix(self.output_path)
+        default_image = (
+            f"{self.output_path.stem}.fits" if self.tag else f"{self.input_path.stem}_deconvolved.fits"
+        )
+        self.destination = Path(
+            self._option("output", None) or self.output_path.parent / default_image
+        ).resolve()
+        if self.destination in (self.input_path, self.output_path) or (
+            self.destination.suffix.lower() not in (".fit", ".fits", ".fts")
+        ):
+            raise ValueError("Choisir une sortie FITS différente de l’entrée et du rapport")
+        _quote(self.input_path)
+        self.output_path.parent.mkdir(parents=True, exist_ok=True)
+        self.work = reset_ordered_work_dir(self.output_path)
+        self.runner = create_siril_from_args(self.args)
+        self.snapshot = self.work / f"{self.tag}original.fits"
+        copyfile(self.input_path, self.snapshot)
+        self.result: JSONReport = dict(
+            image_path=str(self.input_path),
+            original_image_path=str(self.snapshot),
+            report_saved_to=str(self.output_path),
+            method="Richardson-Lucy gradient descent",
+            iterations=self.iterations,
+            psf_size=self.size,
+            psf_method=self.psf_method,
+            regularization="TV",
+            alpha=self.alpha,
+            adaptive=self.adaptive,
+            status="evaluating",
+            attempts=[],
+            psf_selections=[],
+            scripts=[],
+            layer=self.layer,
+        )
 
-    def option(name: str, default: ConfigValue) -> ConfigValue:
+    def _option(self, name: str, default: ConfigValue) -> ConfigValue:
         """Lit une option de déconvolution, avec repli sur son défaut local."""
-        return getattr(args, f"deconvolution_{name}", default)
+        return getattr(self.args, f"deconvolution_{name}", default)
 
-    iterations = option("iterations", 10)
-    size = option("psf_size", 15)
-    psf_method = option("psf_method", "blind")
-    adaptive = option("adaptive", True)
-    alpha = option("alpha", 3000)
-    if psf_method not in ("blind", "stars") or not np.isfinite(alpha) or alpha <= 0:
-        raise ValueError("Méthode PSF ou alpha invalide")
-    radius = option("match_radius", 1.0)
-    minimum = option("min_stars", 10)
-    fraction = option("min_match_fraction", 0.7)
-    step = option("step", 0.0003)
-    max_step = option("max_step", 0.001)
-    fine_quantile = option("fine_quantile", 0.35)
-    roundness = option("psf_roundness", 0.8)
-    quality_settings = dict(
-        min_gain=option("min_gain", 0.02),
-        max_noise=option("max_noise", 1.15),
-        max_rings=option("max_rings", 0.1),
-    )
-    if not isinstance(iterations, int) or not 1 <= iterations <= 1000:
-        raise ValueError("deconvolution-iterations doit être entre 1 et 1000")
-    if not isinstance(size, int) or not 3 <= size <= 255 or size % 2 != 1:
-        raise ValueError("deconvolution-psf-size doit être impair, entre 3 et 255")
-    values = [
-        radius,
-        fraction,
-        step,
-        max_step,
-        fine_quantile,
-        roundness,
-        *quality_settings.values(),
-    ]
-    if (
-        not all(np.isfinite(values))
-        or radius <= 0
-        or minimum < 3
-        or not 0 < fraction <= 1
-        or not 0 < step <= 0.01
-        or not 0.0004 <= max_step <= 0.01
-        or not 0 < fine_quantile <= 1
-        or not 0 < roundness <= 0.95
-        or not 0 < quality_settings["min_gain"] < 1
-        or quality_settings["max_noise"] < 1
-        or not 0 <= quality_settings["max_rings"] <= 1
-    ):
-        raise ValueError(
-            "Paramètres de sélection, de comparaison ou de recherche du pas invalides"
-        )
-    input_path, output_path = Path(input_path).resolve(), Path(output_path).resolve()
-    with fits.open(input_path, memmap=False) as hdul:
-        shape = hdul[0].shape
-        if len(shape) not in (2, 3) or (len(shape) == 3 and shape[0] != 3):
-            raise ValueError("Image FITS mono ou RGB requise")
-        if len(shape) == 2 and hdul[0].header.get("BAYERPAT", "").strip():
-            raise ValueError("Déconvolution : dématricer le FITS CFA au préalable")
-    layer = option("layer", None)
-    layer = (1 if len(shape) == 3 else 0) if layer is None else layer
-    if layer not in ([0, 1, 2] if len(shape) == 3 else [0]):
-        raise ValueError("Canal de mesure incompatible avec cette image")
-    tag = treatment_file_prefix(output_path)
-    default_image = (
-        f"{output_path.stem}.fits" if tag else f"{input_path.stem}_deconvolved.fits"
-    )
-    destination = Path(
-        option("output", None) or output_path.parent / default_image
-    ).resolve()
-    if destination in (input_path, output_path) or destination.suffix.lower() not in (
-        ".fit",
-        ".fits",
-        ".fts",
-    ):
-        raise ValueError("Choisir une sortie FITS différente de l’entrée et du rapport")
-    _quote(input_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    work = reset_ordered_work_dir(output_path)
-    runner = create_siril_from_args(args)
-    snapshot = work / f"{tag}original.fits"
-    copyfile(input_path, snapshot)
-    result = dict(
-        image_path=str(input_path),
-        original_image_path=str(snapshot),
-        report_saved_to=str(output_path),
-        method="Richardson-Lucy gradient descent",
-        iterations=iterations,
-        psf_size=size,
-        psf_method=psf_method,
-        regularization="TV",
-        alpha=alpha,
-        adaptive=adaptive,
-        status="evaluating",
-        attempts=[],
-        psf_selections=[],
-        scripts=[],
-        layer=layer,
-    )
-
-    def save_report() -> None:
+    def _save_report(self) -> None:
         """Écrit l’état courant de l’audit JSON pour conserver les diagnostics d’essai."""
-        output_path.write_text(
-            json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8"
+        self.output_path.write_text(
+            json.dumps(self.result, indent=2, ensure_ascii=False), encoding="utf-8"
         )
 
-    def run(name: str, lines: Sequence[str]) -> None:
+    def _run_siril(self, name: str, lines: Sequence[str]) -> None:
         """Écrit et exécute un script Siril ; lève RuntimeError si l’exécution échoue."""
-        name = f"{tag}{name}"
+        name = f"{self.tag}{name}"
         script = "\n".join(
             [
                 "requires 1.4",
-                f"cd {_quote(work)}",
+                f"cd {_quote(self.work)}",
                 "setext fit",
                 "set32bits",
                 *lines,
@@ -466,39 +401,41 @@ def post_process(
                 "",
             ]
         )
-        result["scripts"].append(
+        self.result["scripts"].append(
             dict(
-                script_path=str(work / f"{name}.sps"),
-                log_path=str(work / f"{name}.log"),
+                script_path=str(self.work / f"{name}.sps"),
+                log_path=str(self.work / f"{name}.log"),
             )
         )
-        save_report()
-        if not runner.run_siril_script(script, str(work), script_name=f"{name}.sps"):
-            raise RuntimeError(f"Échec Siril ; consulter {work / f'{name}.log'}")
+        self._save_report()
+        if not self.runner.run_siril_script(script, str(self.work), script_name=f"{name}.sps"):
+            raise RuntimeError(f"Échec Siril ; consulter {self.work / f'{name}.log'}")
 
-    def detect(
+    def _detect(
+        self,
         source: Path | str,
         label: str,
         profile: str = "Gaussian",
         amplitude: bool = False,
     ) -> Path:
         """Produit un catalogue stellaire Siril sur le canal et le profil demandés."""
-        catalog = work / f"{tag}{label}_stars.tsv"
+        catalog = self.work / f"{self.tag}{label}_stars.tsv"
         settings = f"setfindstar -{profile.lower()}"
         if amplitude:
-            settings += f" -minA=0.1 -maxA=0.7 -roundness={roundness}"
-        run(
+            settings += f" -minA=0.1 -maxA=0.7 -roundness={self.roundness}"
+        self._run_siril(
             label,
             [
                 f"load {_quote(source)}",
                 "setfindstar reset",
                 settings,
-                f"findstar -layer={layer} -out={catalog.name}",
+                f"findstar -layer={self.layer} -out={catalog.name}",
             ],
         )
         return catalog
 
-    def build_psf(
+    def _build_psf(
+        self,
         source: Path | str,
         catalog: Path | str,
         label: str,
@@ -507,22 +444,22 @@ def post_process(
     ) -> Path:
         """Sélectionne des étoiles isolées et écrit une PSF FITS avec son aperçu PNG."""
         stars, rejected = read_star_catalog(catalog, profile=profile)
-        sheet = work / f"{tag}{label}_selected_stars.fits"
+        sheet = self.work / f"{self.tag}{label}_selected_stars.fits"
         try:
             selection = select_psf_stars(
                 stars,
                 source,
                 sheet,
-                quantile=fine_quantile,
-                roundness=roundness,
+                quantile=self.fine_quantile,
+                roundness=self.roundness,
                 min_amplitude=amplitude_min,
                 max_amplitude=0.7,
-                layer=layer,
+                layer=self.layer,
             )
         except ValueError:
             stamp_audit = sheet.with_suffix(".json")
             if stamp_audit.exists():
-                result["psf_selections"].append(
+                self.result["psf_selections"].append(
                     dict(
                         profile=profile,
                         catalog_path=str(catalog),
@@ -530,22 +467,23 @@ def post_process(
                         status="insufficient_clean_stars",
                     )
                 )
-                save_report()
+                self._save_report()
             raise
         selection.update(profile=profile, catalog_path=str(catalog), rejected=rejected)
-        result["psf_selections"].append(selection)
-        selection_path = work / f"{tag}{label}_selection.json"
+        self.result["psf_selections"].append(selection)
+        selection_path = self.work / f"{self.tag}{label}_selection.json"
         selection_path.write_text(json.dumps(selection, indent=2), encoding="utf-8")
-        psf = work / f"{tag}{label}_psf.fits"
-        run(
+        psf = self.work / f"{self.tag}{label}_psf.fits"
+        self._run_siril(
             label + "_psf",
             [
                 f"load {_quote(sheet)}",
                 "setfindstar reset",
-                f"setfindstar -{profile.lower()} -roundness={roundness} -minA={amplitude_min} -maxA=0.7",
-                f"findstar -layer=0 -out={tag}{label}_sheet_stars.tsv",
+                f"setfindstar -{profile.lower()} -roundness={self.roundness} "
+                f"-minA={amplitude_min} -maxA=0.7",
+                f"findstar -layer=0 -out={self.tag}{label}_sheet_stars.tsv",
                 "makepsf clear",
-                f"makepsf stars -ks={size}",
+                f"makepsf stars -ks={self.size}",
                 f"makepsf save {psf.name}",
             ],
         )
@@ -564,31 +502,32 @@ def post_process(
             selected_median_fwhm_px=selected_width,
         )
         selection_path.write_text(json.dumps(selection, indent=2), encoding="utf-8")
-        save_report()
+        self._save_report()
         if measured_width > 1.5 * selected_width:
             raise ValueError(
                 "PSF générée trop large par rapport aux étoiles sélectionnées"
             )
         return psf
 
-    def record_failure(label: str, error: ValueError | RuntimeError) -> JSONReport:
+    def _record_failure(self, label: str, error: ValueError | RuntimeError) -> JSONReport:
         """Audite un échec local sans empêcher les autres essais de restauration."""
         attempt = dict(
-            number=len(result["attempts"]) + 1,
+            number=len(self.result["attempts"]) + 1,
             label=label,
             status="failed",
             error=str(error),
             quality=dict(accepted=False, artifact_failure=False, reasons=[str(error)]),
         )
-        result["attempts"].append(attempt)
-        save_report()
+        self.result["attempts"].append(attempt)
+        self._save_report()
         logging.warning(
             "Déconvolution essai %d (%s) échoué : %s",
             attempt["number"], label, error,
         )
         return attempt
 
-    def trial(
+    def _trial(
+        self,
         source: Path | str,
         before_catalog: Path | str,
         psf: Path | str,
@@ -598,14 +537,15 @@ def post_process(
         """Numérote l’essai et conserve ses erreurs comme diagnostics locaux."""
         logging.info(
             "Déconvolution essai %d (%s), pas %.7f",
-            len(result["attempts"]) + 1, label, step_value,
+            len(self.result["attempts"]) + 1, label, step_value,
         )
         try:
-            return evaluate_trial(source, before_catalog, psf, step_value, label)
+            return self._evaluate_trial(source, before_catalog, psf, step_value, label)
         except (ValueError, RuntimeError) as error:
-            return record_failure(label, error)
+            return self._record_failure(label, error)
 
-    def evaluate_trial(
+    def _evaluate_trial(
+        self,
         source: Path | str,
         before_catalog: Path | str,
         psf: Path | str,
@@ -613,26 +553,29 @@ def post_process(
         label: str,
     ) -> JSONReport:
         """Exécute un essai au pas demandé et renvoie l’image avec son audit de qualité."""
-        candidate = work / f"{tag}{label}.fits"
-        after_catalog = work / f"{tag}{label}_stars.tsv"
-        run(
+        candidate = self.work / f"{self.tag}{label}.fits"
+        after_catalog = self.work / f"{self.tag}{label}_stars.tsv"
+        self._run_siril(
             label,
             [
                 f"load {_quote(source)}",
-                f'rl "-loadpsf={psf}" -iters={iterations} -gdstep={step_value:.7f} -tv -alpha={alpha:g}',
+                f'rl "-loadpsf={psf}" -iters={self.iterations} '
+                f'-gdstep={step_value:.7f} -tv -alpha={self.alpha:g}',
                 f"save {candidate.name}",
                 "close",
                 f"load {candidate.name}",
                 "setfindstar reset",
                 "setfindstar -gaussian",
-                f"findstar -layer={layer} -out={after_catalog.name}",
+                f"findstar -layer={self.layer} -out={after_catalog.name}",
             ],
         )
         comparison = compare_star_catalogs(
-            before_catalog, after_catalog, radius, minimum, fraction, layer
+            before_catalog, after_catalog, self.radius, self.minimum, self.fraction, self.layer,
+            reference_images=(source, candidate)
+            if self._option("reference_measurements", True) else None,
         )
         attempt = dict(
-            number=len(result["attempts"]) + 1,
+            number=len(self.result["attempts"]) + 1,
             label=label,
             source_path=str(source),
             candidate_image_path=str(candidate),
@@ -648,7 +591,7 @@ def post_process(
                     source, candidate, comparison["pairs"]
                 )
                 attempt["quality"] = assess_quality(
-                    comparison, attempt["artifacts"], **quality_settings
+                    comparison, attempt["artifacts"], **self.quality_settings
                 )
             except ValueError as error:
                 attempt["quality"] = dict(
@@ -658,8 +601,8 @@ def post_process(
             attempt["quality"] = dict(
                 accepted=False, artifact_failure=True, reasons=["insufficient_matches"]
             )
-        result["attempts"].append(attempt)
-        save_report()
+        self.result["attempts"].append(attempt)
+        self._save_report()
         if comparison["status"] == "validated":
             fb, fa = (
                 comparison["before_fwhm_px"]["mean"],
@@ -699,102 +642,134 @@ def post_process(
                 comparison["matched_count"],
                 100 * comparison["matched_fraction_before"],
             )
-        logging.info(
-            "Déconvolution %s, pas %.7f : %s", label, step_value, attempt["quality"]
+        log_quality_diagnostics(
+            f"Déconvolution {label}", comparison, attempt["quality"], attempt.get("artifacts"),
         )
+        logging.info("Déconvolution %s, pas %.7f : %s ; motifs=%s", label, step_value,
+                     "acceptée" if attempt["quality"]["accepted"] else "rejetée",
+                     ", ".join(attempt["quality"]["reasons"]) or "aucun")
+        logging.debug("Audit de qualité : %s", attempt["quality"])
         return attempt
 
-    try:
-        before = detect(snapshot, "before")
-        accepted = None
+    def _attempt_simple(self, before: Path) -> JSONReport | None:
+        """Construit la PSF initiale et retourne le premier candidat sûr, sinon None."""
         try:
-            if psf_method == "blind":
-                psf = work / f"{tag}blind_psf.fits"
-                run(
+            if self.psf_method == "blind":
+                psf = self.work / f"{self.tag}blind_psf.fits"
+                self._run_siril(
                     "blind_psf",
                     [
-                        f"load {_quote(snapshot)}",
+                        f"load {_quote(self.snapshot)}",
                         "makepsf clear",
-                        f"makepsf blind -l0 -ks={size}",
+                        f"makepsf blind -l0 -ks={self.size}",
                         f"makepsf save {psf.name}",
                     ],
                 )
                 save_psf_preview(psf, psf.with_suffix(".png"))
-                result["psf_selections"].append(
+                self.result["psf_selections"].append(
                     dict(
                         method="blind_l0",
                         psf_path=str(psf),
                         psf_preview_path=str(psf.with_suffix(".png")),
                     )
                 )
-                save_report()
+                self._save_report()
             else:
-                psf = build_psf(snapshot, before, "simple", "Gaussian", 0.01)
-            first = trial(snapshot, before, psf, step, "simple_trial")
+                psf = self._build_psf(self.snapshot, before, "simple", "Gaussian", 0.01)
+            first = self._trial(self.snapshot, before, psf, self.step, "simple_trial")
             if first["quality"]["accepted"]:
-                accepted = first
+                return first
         except (ValueError, RuntimeError) as error:
-            result["simple_psf_error"] = str(error)
-            record_failure("simple_psf", error)
-        if accepted is None and adaptive:
-            # Le tiers de chaque dimension, issu de l'original, jamais d'un essai déconvolué.
-            crop = work / f"{tag}central_original.fits"
-            with fits.open(snapshot, memmap=False) as hdul:
-                height, width = shape[-2:]
-                crop_h, crop_w = height // 3, width // 3
-                y0, x0 = (height - crop_h) // 2, (width - crop_w) // 2
-                data = hdul[0].data[..., y0 : y0 + crop_h, x0 : x0 + crop_w]
-                crop_header = fits.Header()
-                if "ROWORDER" in hdul[0].header:
-                    crop_header["ROWORDER"] = hdul[0].header["ROWORDER"]
-                fits.writeto(crop, data, crop_header)
-            result["crop"] = dict(
-                path=str(crop), x=x0, y=y0, width=crop_w, height=crop_h
-            )
-            try:
-                crop_before = detect(crop, "central_before")
-                psf_catalog = detect(crop, "central_moffat", "Moffat", amplitude=True)
-                psf = build_psf(crop, psf_catalog, "central_moffat", "Moffat", 0.1)
-                best = None
-                for step_number in range(4, int(round(max_step * 10000)) + 1):
-                    attempt = trial(
-                        crop,
-                        crop_before,
-                        psf,
-                        step_number / 10000,
-                        f"central_step_{step_number:02d}",
+            self.result["simple_psf_error"] = str(error)
+            self._record_failure("simple_psf", error)
+        return None
+
+    def _attempt_adaptive(self, before: Path) -> JSONReport | None:
+        """Élargit la PSF puis cherche le pas sûr sur l’original, sans modifier les seuils."""
+        accepted = None
+        try:
+            self.result["adaptive_crop_attempts"] = []
+            for crop_index, crop_fraction in enumerate(ADAPTIVE_CROP_FRACTIONS):
+                label = "central" if crop_index == 0 else f"central_expand_{crop_index}"
+                crop = self.work / f"{self.tag}{label}_original.fits"
+                with fits.open(self.snapshot, memmap=False) as hdul:
+                    height, width = self.shape[-2:]
+                    crop_h = max(1, int(height * crop_fraction))
+                    crop_w = max(1, int(width * crop_fraction))
+                    y0, x0 = (height - crop_h) // 2, (width - crop_w) // 2
+                    data = hdul[0].data[..., y0:y0 + crop_h, x0:x0 + crop_w]
+                    crop_header = fits.Header()
+                    if "ROWORDER" in hdul[0].header:
+                        crop_header["ROWORDER"] = hdul[0].header["ROWORDER"]
+                    fits.writeto(crop, data, crop_header)
+                crop_info = dict(
+                    path=str(crop), x=x0, y=y0, width=crop_w, height=crop_h,
+                    dimension_fraction=crop_fraction,
+                )
+                self.result["crop"] = crop_info
+                logging.info(
+                    "PSF adaptative : zone %d/%d, %dx%d pixels (%.1f %% des dimensions)",
+                    crop_index + 1, len(ADAPTIVE_CROP_FRACTIONS),
+                    crop_w, crop_h, 100 * crop_fraction,
+                )
+                psf_catalog = self._detect(crop, label + "_moffat", "Moffat", amplitude=True)
+                try:
+                    psf = self._build_psf(crop, psf_catalog, label + "_moffat", "Moffat", 0.1)
+                except InsufficientPSFStars as error:
+                    self.result["adaptive_crop_attempts"].append(
+                        dict(**crop_info, status="insufficient_stars", error=str(error))
                     )
-                    if attempt["quality"]["artifact_failure"]:
-                        result["search_stopped_at_step"] = step_number / 10000
-                        break
-                    if attempt["quality"]["accepted"]:
-                        # Dernier pas efficace avant le premier essai excessif.
-                        best = attempt
-                if best is not None:
-                    full = trial(snapshot, before, psf, best["step"], "full_trial")
-                    if full["quality"]["accepted"]:
-                        accepted = full
-            except (ValueError, RuntimeError) as error:
-                result["adaptive_psf_error"] = str(error)
-                record_failure("central_moffat", error)
-        if accepted is None:
-            result["status"] = "no_safe_improvement"
-            save_report()
-            raise RuntimeError(
-                f"Aucune déconvolution efficace sans dégradation mesurée ; original conservé, audit : {output_path}"
-            )
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        copyfile(accepted["candidate_image_path"], destination)
-        pairs_path = work / f"{tag}matched_stars.csv"
+                    logging.info("PSF adaptative : %s ; élargissement si possible", error)
+                    if crop_index == len(ADAPTIVE_CROP_FRACTIONS) - 1:
+                        raise
+                    continue
+                self.result["adaptive_crop_attempts"].append(dict(**crop_info, status="accepted"))
+                logging.info(
+                    "PSF adaptative construite sur %dx%d pixels ; "
+                    "début de la recherche du pas", crop_w, crop_h,
+                )
+                crop_before = self._detect(crop, label + "_before")
+                break
+            best = None
+            for step_number in range(4, int(round(self.max_step * 10000)) + 1):
+                attempt = self._trial(
+                    crop,
+                    crop_before,
+                    psf,
+                    step_number / 10000,
+                    f"central_step_{step_number:02d}",
+                )
+                if attempt["quality"]["artifact_failure"]:
+                    logging.info("Recherche adaptative arrêtée au pas %.7f : artefacts détectés",
+                                 step_number / 10000)
+                    self.result["search_stopped_at_step"] = step_number / 10000
+                    break
+                if attempt["quality"]["accepted"]:
+                    # Dernier pas efficace avant le premier essai excessif.
+                    best = attempt
+            if best is not None:
+                full = self._trial(self.snapshot, before, psf, best["step"], "full_trial")
+                if full["quality"]["accepted"]:
+                    accepted = full
+        except (ValueError, RuntimeError) as error:
+            self.result["adaptive_psf_error"] = str(error)
+            self._record_failure("central_moffat", error)
+        return accepted
+
+    def _publish_accepted(self, accepted: JSONReport) -> JSONReport:
+        """Copie le candidat validé, exporte les étoiles appariées et écrit l’audit."""
+        self.destination.parent.mkdir(parents=True, exist_ok=True)
+        copyfile(accepted["candidate_image_path"], self.destination)
+        pairs_path = self.work / f"{self.tag}matched_stars.csv"
         with pairs_path.open("w", newline="", encoding="utf-8") as stream:
             writer = csv.DictWriter(
                 stream, fieldnames=list(accepted["comparison"]["pairs"][0])
             )
             writer.writeheader()
             writer.writerows(accepted["comparison"]["pairs"])
-        result.update(
+        self.result.update(
             status="accepted",
-            output_image=str(destination),
+            output_image=str(self.destination),
             selected_step=accepted["step"],
             psf_path=accepted["psf_path"],
             psf_preview_path=str(Path(accepted["psf_path"]).with_suffix(".png")),
@@ -803,11 +778,191 @@ def post_process(
             artifacts=accepted["artifacts"],
             matched_stars_path=str(pairs_path),
         )
-        save_report()
-        return result
-    except Exception as error:
-        if result["status"] == "evaluating":
-            result["status"] = "failed"
-        result["error"] = str(error)
-        save_report()
-        raise
+        self._save_report()
+        return self.result
+
+    def execute(self) -> JSONReport:
+        """Orchestre les essais simples/adaptatifs et conserve chaque échec dans l’audit.
+
+        Returns
+        -------
+        dict
+            Mesures, essais et image retenue, sans modifier la source.
+
+        Raises
+        ------
+        RuntimeError
+            Si aucune amélioration sûre n’est disponible ou si Siril échoue.
+        """
+        try:
+            before = self._detect(self.snapshot, "before")
+            accepted = self._attempt_simple(before)
+            if accepted is None and self.adaptive:
+                accepted = self._attempt_adaptive(before)
+            if accepted is None:
+                self.result["status"] = "no_safe_improvement"
+                self._save_report()
+                raise RuntimeError(
+                    "Aucune déconvolution efficace sans dégradation mesurée ; "
+                    f"original conservé, audit : {self.output_path}"
+                )
+            return self._publish_accepted(accepted)
+        except Exception as error:
+            if self.result["status"] == "evaluating":
+                self.result["status"] = "failed"
+            self.result["error"] = str(error)
+            self._save_report()
+            raise
+
+
+class SirilDeconvolutionProcessor(processor):
+    """Exécute uniquement le moteur Siril et ses contrôles de qualité."""
+
+    parameter_persistence = {"deconvolution_output": False}
+
+    @classmethod
+    def get_prefix(cls) -> str:
+        """Retourne l’identifiant commun de l’étape."""
+        return 'deconvolution'
+
+    @classmethod
+    def add_arguments(cls, parser: argparse.ArgumentParser) -> None:
+        """Expose les paramètres locaux de l’algorithme Siril."""
+        parser.add_argument(
+            "--deconvolution-reference-measurements", action=argparse.BooleanOptionalAction,
+            default=True, help="Mesurer les mêmes étoiles aux positions initiales (SNR ≥ 10)",
+        )
+        parser.add_argument("--deconvolution-iterations", type=int, default=10)
+        parser.add_argument(
+            "--deconvolution-psf-size",
+            type=int,
+            default=15,
+            help="Taille impaire de la PSF en pixels",
+        )
+        parser.add_argument(
+            "--deconvolution-psf-method",
+            choices=["blind", "stars"],
+            default="blind",
+            help="PSF native aveugle l0 (défaut) ou sélection des étoiles",
+        )
+        parser.add_argument(
+            "--deconvolution-adaptive",
+            action=argparse.BooleanOptionalAction,
+            default=True,
+            help=(
+                "Activer (défaut) ou désactiver (--no-deconvolution-adaptive) "
+                "le repli Moffat et les essais de pas croissants"
+            ),
+        )
+        parser.add_argument(
+            "--deconvolution-alpha",
+            type=float,
+            default=3000,
+            help="Régularisation TV : valeur plus faible = régularisation plus forte",
+        )
+        parser.add_argument(
+            "--deconvolution-layer",
+            type=int,
+            choices=[0, 1, 2],
+            default=None,
+            help="Canal des mesures avant/après : défaut vert RGB (1), mono (0)",
+        )
+        parser.add_argument(
+            "--deconvolution-match-radius",
+            type=float,
+            default=1.0,
+            help="Distance maximale de correspondance, en pixels",
+        )
+        parser.add_argument("--deconvolution-min-stars", type=int, default=10)
+        parser.add_argument(
+            "--deconvolution-min-match-fraction",
+            type=float,
+            default=0.7,
+            help="Fraction minimale des étoiles valides avant retrouvées après",
+        )
+        parser.add_argument(
+            "--deconvolution-force-manual-matching",
+            action="store_true",
+            help=(
+                "Forcer les seuils saisis (--deconvolution-match-radius, "
+                "--deconvolution-min-stars, --deconvolution-min-match-fraction) "
+                "au lieu du mode auto adaptatif"
+            ),
+        )
+        parser.add_argument(
+            "--deconvolution-step",
+            type=float,
+            default=0.0003,
+            help="Pas de descente du premier essai",
+        )
+        parser.add_argument(
+            "--deconvolution-max-step",
+            type=float,
+            default=0.001,
+            help="Dernier pas testé sur le tiers central",
+        )
+        parser.add_argument(
+            "--deconvolution-fine-quantile",
+            type=float,
+            default=0.35,
+            help="Fraction des étoiles les plus fines admissibles à la PSF",
+        )
+        parser.add_argument("--deconvolution-psf-roundness", type=float, default=0.8)
+        parser.add_argument(
+            "--deconvolution-min-gain",
+            type=float,
+            default=0.02,
+            help="Gain relatif minimal de finesse",
+        )
+        parser.add_argument(
+            "--deconvolution-max-noise",
+            type=float,
+            default=1.15,
+            help="Amplification maximale du bruit de fond",
+        )
+        parser.add_argument(
+            "--deconvolution-max-rings",
+            type=float,
+            default=0.1,
+            help="Fraction maximale d’étoiles avec un halo nouveau",
+        )
+        parser.add_argument(
+            "--deconvolution-output",
+            type=Path,
+            help="FITS déconvolué ; défaut dans le dossier du rapport",
+        )
+
+    def post_process(
+        self, input_path: Path | str, output_path: Path | str,
+        args: argparse.Namespace | None = None,
+    ) -> JSONReport:
+        """Exécute le traitement Siril avec les paramètres de cette instance."""
+        return type(self)._execute(input_path, output_path, self._get_args(args))
+
+
+    @staticmethod
+    def _execute(
+        input_path: Path | str, output_path: Path | str,
+        args: argparse.Namespace | None,
+    ) -> JSONReport:
+        """Crée l’état de cet appel sans réutiliser les essais d’une exécution précédente."""
+        return _DeconvolutionExecution(input_path, output_path, args).execute()
+
+
+class DeconvolutionProcessor(RestorationComparisonProcessor):
+    """Orchestre les candidats Siril et Cosmic Clarity et conserve le meilleur accepté."""
+
+    parameter_persistence = {'deconvolution_output': False}
+    operation = 'sharpen'
+    siril_processor = SirilDeconvolutionProcessor
+
+    @classmethod
+    def get_prefix(cls) -> str:
+        """Retourne l’identifiant stable des options et rapports."""
+        return 'deconvolution'
+
+    @classmethod
+    def add_arguments(cls, parser: argparse.ArgumentParser) -> None:
+        """Déclare les paramètres communs de l’étape."""
+        cls.add_shared_arguments(parser)
+        cls.siril_processor.add_arguments(parser)

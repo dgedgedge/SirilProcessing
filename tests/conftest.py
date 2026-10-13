@@ -22,6 +22,15 @@ from fits_info import FitsInfo
 def isolate_config(monkeypatch):
     """Chaque test dispose de sa propre instance de configuration."""
     monkeypatch.setattr(Config, '_instance', None)
+    from lib.processor import processor
+
+    def reset(cls):
+        """Isole les instantanés de classe, y compris les adaptateurs chargés."""
+        monkeypatch.setattr(cls, '_class_parameters', None)
+        for child in cls.__subclasses__():
+            reset(child)
+
+    reset(processor)
 
 
 @pytest.fixture

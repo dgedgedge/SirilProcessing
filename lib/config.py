@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import inspect
 import json
 import logging
 import os
@@ -13,6 +14,7 @@ from copy import deepcopy
 from pathlib import Path
 from threading import Lock
 
+from lib.processor import processor
 from lib.type_defs import ArgumentProvider, ConfigValue
 
 
@@ -66,6 +68,7 @@ class Config:
                 self._config = {}
                 self._runtime = {}
                 self._parameters = {}
+                self._parameter_classes: dict[type[processor], set[str]] = {}
                 self._path_parameters = set()
                 self.load()
             elif config_file is not None:
@@ -112,6 +115,23 @@ class Config:
         """
         previous = set(parser._actions)
         provider.add_arguments(parser, **kwargs)
+        provider_class = provider if isinstance(provider, type) else type(provider)
+        if not isinstance(provider, type):
+            defaults = getattr(provider, "argument_defaults", lambda: {})()
+            for action in parser._actions:
+                if action not in previous and action.dest in defaults:
+                    action.default = defaults[action.dest]
+        if isinstance(provider_class, type) and issubclass(provider_class, processor):
+            self._register_parameter_classes(provider_class)
+            self._parameter_classes[provider_class].update(
+                action.dest for action in parser._actions if action not in previous
+            )
+        if (
+            not isinstance(provider, type)
+            and getattr(provider, "_custom_processors", False) is True
+        ):
+            for child in provider.processors:
+                self._register_parameter_classes(type(child))
         persistence = getattr(provider, "parameter_persistence", {})
         aliases = getattr(provider, "config_keys", {})
         self._path_parameters.update(getattr(provider, "config_path_parameters", ()))
@@ -141,6 +161,48 @@ class Config:
                         parser.error(f"Configuration invalide pour {dest}: {exc}")
                 action.default = value
         return provider
+
+    def _register_parameter_classes(self, cls: type[processor]) -> None:
+        """Recense récursivement les classes et leurs destinations propres."""
+        if cls in self._parameter_classes:
+            return
+        declarations = argparse.ArgumentParser(add_help=False)
+        # Les classes historiques personnalisées peuvent encore déclarer par instance.
+        method = getattr(cls, "add_arguments")
+        if inspect.ismethod(method):
+            method(declarations)
+            destinations = {action.dest for action in declarations._actions}
+        else:
+            destinations = set()
+        self._parameter_classes[cls] = destinations
+        for child in cls.parameter_children():
+            self._register_parameter_classes(child)
+
+    def bind_parameters(self, args: argparse.Namespace) -> None:
+        """Capture les valeurs pour les classes et leurs futurs enfants.
+
+        Chaque classe reçoit ses destinations propres et les services communs.
+        Les instances existantes conservent leur instantané. Aucune sauvegarde
+        n’est effectuée ; save_requested reste responsable de la rémanence.
+        """
+        common = {name for name in vars(args) if name.startswith("siril_")}
+        common.update({
+            "cpu_threads", "work_dir", "output_dir", "keep_intermediate",
+            "postprocess_steps_dir", "deconvolution_reference_measurements",
+        })
+        for cls, destinations in self._parameter_classes.items():
+            names = destinations | common | getattr(cls, 'parameter_dependencies', set())
+            prefixes = getattr(cls, 'parameter_prefixes', ())
+            names |= {name for name in vars(args) if prefixes and name.startswith(prefixes)}
+            if cls.__module__ == "lib.cosmic_clarity.processors":
+                names |= {
+                    name for name in vars(args)
+                    if name.startswith(("cosmic_", "deconvolution_", "denoise_"))
+                }
+            cls.bind_parameters(argparse.Namespace(**{
+                name: deepcopy(value) for name, value in vars(args).items()
+                if name in names
+            }))
 
     def parse_args(
         self, parser: argparse.ArgumentParser, argv: Sequence[str] | None = None

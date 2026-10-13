@@ -1,4 +1,4 @@
-"""Prétraitement, tuilage FITS et inférence facultative avec les vrais poids."""
+"""Prétraitement, tuilage FITS et non-régression des vrais poids sur CUDA."""
 
 import os
 from pathlib import Path
@@ -92,10 +92,14 @@ def test_invalid_fits_fails_before_inference(tmp_path: Path, bad: str) -> None:
     assert not (tmp_path / 'out.fit').exists()
 
 
-@pytest.mark.skipif(os.environ.get('COSMIC_CUDA_TEST') != '1',
-                    reason='Activer explicitement COSMIC_CUDA_TEST=1 après installation')
+@pytest.mark.skipif(not torch.cuda.is_available(),
+                    reason='CUDA indisponible dans cet environnement')
 def test_real_weights_cuda(tmp_path: Path) -> None:
-    """Charge chaque vrai checkpoint sur CUDA et vérifie des FITS synthétiques."""
+    """Vérifie automatiquement les vrais poids lorsque CUDA est disponible.
+
+    Les poids manquants sont téléchargés par le moteur. Une erreur de chargement
+    ou de calcul échoue au lieu d’ignorer le test ; aucune activation manuelle.
+    """
     assert torch.cuda.is_available()
     directory = Path(os.environ.get('COSMIC_MODEL_DIR', DEFAULT_MODEL_DIR))
     engine = CosmicClarityEngine(directory, 'cuda')
@@ -289,3 +293,29 @@ def test_stretch_decision_is_global_with_common_minimum(
         np.testing.assert_array_equal(captured[0], rgb)
     # La médiane d’un échantillon pair ne commute pas exactement avec T.
     np.testing.assert_allclose(fits.getdata(target), rgb, atol=3e-6)
+
+
+def test_load_downloads_missing_weight(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Le chargement récupère seulement le poids requis et réutilise sa copie conforme."""
+    import hashlib
+    import io
+    from lib.cosmic_clarity import models, inference
+
+    payload = b'checkpoint'
+    entry = {'url': 'https://example.invalid/model', 'size': len(payload),
+             'sha256': hashlib.sha256(payload).hexdigest()}
+    monkeypatch.setattr(models, 'manifest', lambda: {'test.pth': entry})
+    monkeypatch.setattr(inference, 'manifest', models.manifest)
+    download = Mock(side_effect=lambda *args, **kwargs: io.BytesIO(payload))
+    monkeypatch.setattr(models, 'urlopen', download)
+    load = Mock(return_value={'model_state_dict': {}})
+    monkeypatch.setattr(inference.torch, 'load', load)
+    network = Mock()
+    monkeypatch.setattr(inference, 'RestorationCNN', Mock(return_value=network))
+    engine = CosmicClarityEngine(tmp_path / 'custom', 'cpu')
+    engine._load('test.pth')
+    engine._load('test.pth')
+    download.assert_called_once()
+    assert (tmp_path / 'custom/test.pth').read_bytes() == payload
+    load.assert_called_with(tmp_path / 'custom/test.pth', map_location='cpu', weights_only=True)
+    assert engine.used_models['test.pth'] == entry['sha256']

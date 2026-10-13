@@ -4,6 +4,9 @@ from unittest.mock import Mock
 
 import pytest
 
+from lib.denoising import SirilNoiseReductionProcessor
+from lib.deconvolution import SirilDeconvolutionProcessor
+
 from lib.postprocess import (
     GradientExtractor, NoiseReductionProcessor, DeconvolutionProcessor,
     PhotometricColorCalibrator, _PostProcessorSequence,
@@ -25,12 +28,12 @@ def test_gradient_stored_options_and_temporary_override(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize('cls,module,option', [
-    (NoiseReductionProcessor, 'lib.denoising', 'denoise_modulation'),
-    (DeconvolutionProcessor, 'lib.deconvolution', 'deconvolution_iterations'),
+    (SirilNoiseReductionProcessor, 'lib.denoising', 'denoise_modulation'),
+    (SirilDeconvolutionProcessor, 'lib.deconvolution', 'deconvolution_iterations'),
 ])
 def test_adapters_forward_stored_options(cls, module, option, monkeypatch, tmp_path):
     delegate = Mock(return_value={})
-    monkeypatch.setattr(f'{module}.post_process', delegate)
+    monkeypatch.setattr(cls, '_execute', delegate)
     treatment = cls()
     treatment.set_from_args(argparse.Namespace(**{option: 7}))
     treatment.post_process(tmp_path/'input.fit', tmp_path/'report.json')
@@ -61,12 +64,12 @@ def test_sequence_remembers_activation_and_configures_children(tmp_path):
 def test_processor_uses_shared_options_with_explicit_override(tmp_path, monkeypatch):
     from lib.config import Config
     config = Config(tmp_path / 'config.json')
-    treatment = NoiseReductionProcessor()
+    treatment = SirilNoiseReductionProcessor()
     parser = argparse.ArgumentParser()
     config.register(treatment, parser)
     config.parse_args(parser, ['--denoise-modulation', '0.25'])
     delegate = Mock(return_value={})
-    monkeypatch.setattr('lib.denoising.post_process', delegate)
+    monkeypatch.setattr('lib.denoising.SirilNoiseReductionProcessor._execute', delegate)
     paths = tmp_path / 'image.fit', tmp_path / 'report.json'
     treatment.post_process(*paths)
     assert delegate.call_args.args[2].denoise_modulation == 0.25

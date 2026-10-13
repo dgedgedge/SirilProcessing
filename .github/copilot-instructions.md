@@ -32,6 +32,28 @@ instructions explicites de l'utilisateur et les règles de l'environnement.
 - Conserver la cohérence entre interface native, ligne de commande et export
   HTML pour les mesures et les comportements communs.
 
+## Organisation des traitements en classes Python
+
+- Organiser les traitements sous forme de classes Python dans les modules qui
+  portent leur responsabilité. Pour les traitements d’image et leurs
+  orchestrateurs, utiliser l’interface commune `lib.processor.processor`.
+- Séparer les moteurs de calcul indépendants de l’orchestration : chaque moteur
+  produit et contrôle son propre candidat ; l’orchestrateur organise les appels,
+  compare les résultats et sélectionne la sortie. Une séquence de haut niveau
+  connaît ses étapes, pas les détails de leurs moteurs internes.
+- Déclarer les options et leurs défauts localement aux classes, par méthodes de
+  classe `add_arguments`. Déclarer les enfants avec `parameter_children`, puis
+  résoudre et lier les valeurs via `Config` avant de créer les instances.
+- Conserver la priorité CLI > configuration sauvegardée > défauts locaux, les
+  instantanés indépendants par instance et les surcharges explicites. Ne pas
+  transformer les traitements en singletons ni partager leur état d’exécution.
+- Les fonctions utilitaires sans état restent appropriées pour les calculs
+  élémentaires. Les points d’entrée fonctionnels existants peuvent être conservés
+  pour compatibilité ; les nouveaux traitements sont exposés par des classes.
+- Lire aussi `.copilot/config.json` selon `AGENTS.md`. Les règles détaillées
+  présentes ici priment en cas de divergence ; documenter les dépendances,
+  ajouter les tests pertinents et vérifier la compatibilité Python réelle.
+
 ## Qualité du code Python et documentation intégrée
 
 - Appliquer PEP 8 pour le style et PEP 257 pour les docstrings, en respectant

@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 from astropy.io import fits
 
-from lib.denoising import post_process
+from lib.denoising import SirilNoiseReductionProcessor
 
 
 @pytest.mark.parametrize('noise,width,status', [
@@ -28,14 +28,14 @@ def test_denoise_validation_and_handoff(tmp_path, monkeypatch, noise, width, sta
         return True
     monkeypatch.setattr('lib.denoising.create_siril_from_args',
                         lambda args: SimpleNamespace(run_siril_script=run))
-    monkeypatch.setattr('lib.denoising.compare_star_catalogs', lambda *args:
+    monkeypatch.setattr('lib.denoising.compare_star_catalogs', lambda *args, **kwargs:
                         dict(status='validated', matched_count=20, pairs=[],
                              before_fwhm_px={'mean': 4}, after_fwhm_px={'mean': 4*width},
                              paired_ratio={'median': width}, before_roundness={'mean': .9},
                              after_roundness={'mean': .9}))
     monkeypatch.setattr('lib.denoising.artifact_metrics', lambda *args:
                         dict(max_noise_ratio=noise, max_ring_fraction=0))
-    result = post_process(source, tmp_path/'03_denoise.json')
+    result = SirilNoiseReductionProcessor().post_process(source, tmp_path/'03_denoise.json')
     assert result['status'] == status
     assert not (stale_parent / 'stale.txt').exists()
     candidate = Path(result['candidate_image_path'])
@@ -52,5 +52,25 @@ def test_failed_siril_is_reported(tmp_path, monkeypatch):
     monkeypatch.setattr('lib.denoising.create_siril_from_args',
                         lambda args: SimpleNamespace(run_siril_script=Mock(return_value=False)))
     with pytest.raises(RuntimeError, match='Échec Siril'):
-        post_process(source, tmp_path/'report.json')
+        SirilNoiseReductionProcessor().post_process(source, tmp_path/'report.json')
     assert '"status": "failed"' in (tmp_path/'report.json').read_text()
+
+
+def test_execution_options_are_independent(tmp_path: Path) -> None:
+    """Deux calculs débruitent avec des paramètres et rapports indépendants."""
+    import argparse
+    from lib.denoising import _DenoisingExecution
+
+    source = tmp_path / 'input.fits'
+    fits.writeto(source, np.ones((20, 20), dtype='float32'))
+    args = argparse.Namespace(denoise_modulation=.25)
+    first = _DenoisingExecution(source, tmp_path / 'first.json', args)
+    args.denoise_modulation = .75
+    second = _DenoisingExecution(source, tmp_path / 'second.json', args)
+    assert first.args.denoise_modulation == .25
+    assert second.args.denoise_modulation == .75
+    assert '-mod=0.25' in first._build_script()
+    assert '-mod=0.75' in second._build_script()
+    first.result['error'] = 'first only'
+    assert 'error' not in second.result
+    assert first.work != second.work

@@ -124,10 +124,16 @@ class Mosaic(processor):
         self.mosaic_input_dir = self.mosaic_work_dir / "input"
         self.mosaic_output_dir = self.mosaic_work_dir / "output"
 
+    @classmethod
+    def parameter_children(cls) -> tuple[type[processor], ...]:
+        """Déclare le gradient enfant de la mosaïque."""
+        return (GradientExtractor,)
+
+    @classmethod
     def add_arguments(
-        self, parser: argparse.ArgumentParser, include_inputs: bool = True
+        cls, parser: argparse.ArgumentParser, include_inputs: bool = True
     ) -> None:
-        self.gradient_processor.add_arguments(parser)
+        GradientExtractor.add_arguments(parser)
         parser.add_argument(
             "--mosaic-gradient",
             action=argparse.BooleanOptionalAction,

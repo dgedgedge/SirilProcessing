@@ -3,7 +3,7 @@
 [Guide utilisateur de postProcess](../../../postProcess/README.md)
 
 `_PostProcessorSequence` orchestre une liste ordonnée de `processor`.
-Par défaut, cette liste contient `GradientExtractor()`, `PhotometricColorCalibrator()`, `NoiseReductionProcessor()` puis `DeconvolutionProcessor()`. La séquence ne comporte
+Par défaut, cette liste contient `GradientExtractor()`, `PhotometricColorCalibrator()`, `DeconvolutionProcessor()` puis `NoiseReductionProcessor()`. La séquence ne comporte
 aucune branche dépendant de la classe concrète d'un traitement.
 
 ## Contrat commun
@@ -33,13 +33,55 @@ rapport = traitement.post_process(image, chemin_rapport)
 
 La séquence expose également `set_from_args(args)` et configure chacun de ses traitements.
 
-Le programme principal enregistre la séquence avec
-`config.register(sequence, parser)`, puis appelle `config.parse_args(parser)`.
-Les déclarations restent dans `add_arguments` de chaque traitement.
+## Résolution et liaison hiérarchique des paramètres
+
+Les méthodes `add_arguments` des traitements standard sont des méthodes de
+classe. Le programme principal déclare les classes avant de créer les instances :
+
+```python
+import argparse
+from lib.config import Config
+from lib.postprocess import _PostProcessorSequence
+
+config = Config("settings.json")
+parser = argparse.ArgumentParser()
+config.add_arguments(parser)
+config.register(_PostProcessorSequence, parser)
+args = config.parse_args(parser, ["--denoise-modulation", "0.25"])
+config.bind_parameters(args)
+sequence = _PostProcessorSequence()
+```
+
+`parse_args` applique la priorité CLI > fichier JSON > défaut local et conserve
+les valeurs dans `Config`. `bind_parameters` interroge ensuite `args` pour
+capturer les destinations propres de chaque classe et les paramètres communs
+Siril et de travail. Les enfants sont déclarés par `parameter_children`, y
+compris les moteurs Cosmic Clarity susceptibles d’être créés tardivement.
+Leurs paramètres incluent les réglages neuronaux et les seuils de qualité des
+deux moteurs. Les constructeurs des traitements ne sont pas exécutés pendant
+cet enregistrement.
+
+Chaque instance créée après la liaison reçoit une copie indépendante des valeurs
+de sa classe. Modifier `args`, résoudre d’autres arguments ou refaire la liaison
+ne change pas les instances existantes. Les traitements ne sont pas des
+singletons. `ProcessorParameters` est une enveloppe dataclass figée et typée
+avec `ConfigValue`, avec un instantané propre à chaque classe ; elle restitue des copies de
+Namespace pour préserver les API existantes. Les valeurs ne sont pas encore des
+champs d’une dataclass métier différente pour chaque algorithme.
+
+Les surcharges restent prioritaires : `args` explicite pour un appel, puis
+`set_from_args` sur l’instance, puis instantané de classe. Les instances créées
+sans liaison conservent le repli historique vers `Config.arguments()`.
+Les options du constructeur du gradient restent utilisées lorsque ces valeurs
+ne sont pas remplacées par les paramètres résolus. L’enregistrement d’une
+instance avec `config.register(instance, parser)` conserve ses défauts de
+constructeur ; les séquences personnalisées restent déclarées par instance.
+
 `parameter_persistence` associe les destinations argparse non rémanentes à
 `False` ; les autres options sont rémanentes par défaut. La séquence rassemble
 ces déclarations. `config.save_requested(args)` sauvegarde les réglages si
-`--save-config` est présent. Les choix d’activation sont également rémanents.
+`--save-config` est présent. La liaison ne sauvegarde rien. Les choix
+d’activation sont également rémanents.
 
 
 La séquence écrit les rapports individuels dans `<rapport>_steps/<index>_<prefixe>.json`,
@@ -112,7 +154,8 @@ class NouveauTraitement(processor):
     def get_prefix(self):
         return "nouveau"
 
-    def add_arguments(self, parser):
+    @classmethod
+    def add_arguments(cls, parser):
         parser.add_argument("--nouveau-intensite", type=float, default=1.0)
 
     def post_process(self, input_path, output_path, args=None):
@@ -128,3 +171,9 @@ sequence = _PostProcessorSequence([GradientExtractor(), NouveauTraitement()])
 Pour intégrer ce traitement au CLI, ajouter son instance à la liste par défaut
 construite dans `_PostProcessorSequence.__init__`. Ses options sont alors exposées
 sans modification du script CLI ni de la boucle d'exécution.
+
+Les candidats utilisent par défaut la [mesure stellaire aux positions initiales](../../../postProcess/reference-stars.md), avec un diagnostic distinct des catalogues de détection.
+
+La séquence conserve les instances de ses étapes. `DeconvolutionProcessor` et
+`NoiseReductionProcessor` déclarent leurs propres moteurs enfants et organisent
+leur comparaison. Voir [les classes de restauration](../../../postProcess/restoration.md).

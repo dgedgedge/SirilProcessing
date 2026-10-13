@@ -13,7 +13,7 @@ configurées. Pour toute session, avec une ou plusieurs sous-sessions :
   sessions/<sous-session>/<sous-session>_<groupe>_calibrated/
     pp_light_*.fit(s)
     pp_light_*.seq
-  <session>_combined.fit(s)
+  <session>_combined.fits
   <session>_combined.drizzle.json
 
 <travail>/<session>/
@@ -78,3 +78,7 @@ celles de `final_selection` sont effectivement créées pour l’empilement.
 fractions concordantes et motifs de rejet. Les résultats non concluants y sont
 explicites. Voir [les critères de sélection](../filter/stacking/IMAGE_SELECTION.md)
 pour les limites de traçabilité de chaque mesure.
+
+Le résultat combiné nouvellement produit utilise explicitement `.fits`, y compris
+avec Drizzle. Les anciennes sorties `.fit` restent reconnues pour la reprise
+des traitements ; si les deux extensions existent, `.fits` est prioritaire.

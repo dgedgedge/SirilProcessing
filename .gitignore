@@ -43,5 +43,5 @@ Thumbs.db
 generated_doc/
 out/
 
-# Poids Cosmic Clarity installés explicitement, sans versionner les binaires
+# Ancien emplacement des poids Cosmic Clarity ; tmp/ est aussi ignoré
 /models/cosmicclarity/
