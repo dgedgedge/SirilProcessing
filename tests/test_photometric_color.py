@@ -35,14 +35,14 @@ def fake_siril(monkeypatch, rgb):
 
     runner.run_siril_script.side_effect = run
     factory = Mock(return_value=runner)
-    monkeypatch.setattr('lib.siril_utils.Siril', factory)
+    monkeypatch.setattr('lib.postprocess.Siril', factory)
     return factory, runner
 
 
 def arguments(*options):
     parser = argparse.ArgumentParser()
-    from lib.siril_utils import add_siril_arguments
-    add_siril_arguments(parser, photometry_aliases=True)
+    from lib.siril_utils import Siril
+    Siril.add_arguments(parser, photometry_aliases=True)
     _PostProcessorSequence().add_arguments(parser)
     return parser.parse_args(['--disable-denoise', '--disable-deconvolution', *options])
 
@@ -92,7 +92,7 @@ def test_existing_header_and_explicit_coordinates(rgb, tmp_path, fake_siril, mon
 
 def test_photometry_explicitly_disabled(rgb, tmp_path, monkeypatch):
     factory = Mock(side_effect=AssertionError('Siril must not start'))
-    monkeypatch.setattr('lib.siril_utils.Siril', factory)
+    monkeypatch.setattr('lib.postprocess.Siril', factory)
     results = _PostProcessorSequence().post_process(rgb, tmp_path / 'report.json', arguments('--disable-photometry'))
     assert set(results) == {'gradient'}
     gradient = results['gradient']

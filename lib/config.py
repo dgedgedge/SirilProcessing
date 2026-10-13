@@ -14,7 +14,7 @@ from copy import deepcopy
 from pathlib import Path
 from threading import Lock
 
-from lib.processor import processor
+from lib.parameterized_component import ParameterizedComponent
 from lib.type_defs import ArgumentProvider, ConfigValue
 
 
@@ -68,7 +68,7 @@ class Config:
                 self._config = {}
                 self._runtime = {}
                 self._parameters = {}
-                self._parameter_classes: dict[type[processor], set[str]] = {}
+                self._parameter_classes: dict[type[ParameterizedComponent], set[str]] = {}
                 self._path_parameters = set()
                 self.load()
             elif config_file is not None:
@@ -121,7 +121,10 @@ class Config:
             for action in parser._actions:
                 if action not in previous and action.dest in defaults:
                     action.default = defaults[action.dest]
-        if isinstance(provider_class, type) and issubclass(provider_class, processor):
+        if (
+            isinstance(provider_class, type)
+            and issubclass(provider_class, ParameterizedComponent)
+        ):
             self._register_parameter_classes(provider_class)
             self._parameter_classes[provider_class].update(
                 action.dest for action in parser._actions if action not in previous
@@ -162,7 +165,7 @@ class Config:
                 action.default = value
         return provider
 
-    def _register_parameter_classes(self, cls: type[processor]) -> None:
+    def _register_parameter_classes(self, cls: type[ParameterizedComponent]) -> None:
         """Recense récursivement les classes et leurs destinations propres."""
         if cls in self._parameter_classes:
             return

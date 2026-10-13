@@ -15,7 +15,7 @@ from astropy.io import fits
 from lib.deconvolution import _quote, compare_star_catalogs
 from lib.deconvolution_quality import artifact_metrics, assess_denoising
 from lib.postprocess_paths import reset_ordered_work_dir
-from lib.siril_utils import create_siril_from_args
+from lib.siril_utils import Siril
 from lib.processor import processor
 from lib.restoration import RestorationComparisonProcessor
 from lib.type_defs import JSONReport
@@ -107,7 +107,10 @@ class _DenoisingExecution:
 
     def _run_siril(self) -> None:
         """Exécute le script du candidat ; un échec technique est propagé."""
-        if not create_siril_from_args(self.args).run_siril_script(
+        if not Siril(
+            siril_path=getattr(self.args, "siril_path", None),
+            siril_mode=getattr(self.args, "siril_mode", None),
+        ).run_siril_script(
             self._build_script(), str(self.work), script_name="denoise.sps"
         ):
             raise RuntimeError(f"Échec Siril : {self.work / 'denoise.log'}")

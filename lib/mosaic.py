@@ -20,7 +20,7 @@ from pathlib import Path
 from lib.mosaic_crop import crop_mosaic
 from lib.postprocess import GradientExtractor
 from lib.processor import processor
-from lib.siril_utils import Siril, create_siril_from_args
+from lib.siril_utils import Siril
 from lib.type_defs import JSONReport
 
 
@@ -427,7 +427,10 @@ close"""
 
         # Exécuter le script Siril
         siril = (
-            create_siril_from_args(args)
+            Siril(
+                siril_path=getattr(args, "siril_path", None),
+                siril_mode=getattr(args, "siril_mode", None),
+            )
             if args is not None
             else Siril.create_with_defaults()
         )

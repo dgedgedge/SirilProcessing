@@ -134,7 +134,7 @@ def test_processor_quality_and_source_preservation(
             return {'device': 'cuda', 'operation': operation}
 
     monkeypatch.setitem(sys.modules, 'lib.cosmic_clarity.inference', SimpleNamespace(CosmicClarityEngine=FakeEngine))
-    monkeypatch.setattr(processors, 'create_siril_from_args', lambda args:
+    monkeypatch.setattr(processors, 'Siril', lambda **kwargs:
                         SimpleNamespace(run_siril_script=lambda *a, **k: True))
     monkeypatch.setattr(processors, 'compare_star_catalogs', lambda *a, **k: {
         'status': 'validated', 'pairs': [], 'before_fwhm_px': {'mean': 4},
@@ -299,7 +299,7 @@ def test_sequence_continues_when_fallback_has_no_gain(
         return {'output_image': str(destination)}
 
     monkeypatch.setitem(sys.modules, 'lib.cosmic_clarity.inference', SimpleNamespace(CosmicClarityEngine=FakeEngine))
-    monkeypatch.setattr(processors, 'create_siril_from_args', lambda args:
+    monkeypatch.setattr(processors, 'Siril', lambda **kwargs:
                         SimpleNamespace(run_siril_script=lambda *a, **k: True))
     monkeypatch.setattr(processors, 'compare_star_catalogs', lambda *a, **k: {'status': 'insufficient_matches'})
     monkeypatch.setattr('lib.deconvolution.SirilDeconvolutionProcessor._execute', lambda *a, **k: (_ for _ in ()).throw(
@@ -347,7 +347,7 @@ def test_sharpen_uses_auto_matching_by_default(
         }
 
     monkeypatch.setitem(sys.modules, 'lib.cosmic_clarity.inference', SimpleNamespace(CosmicClarityEngine=FakeEngine))
-    monkeypatch.setattr(processors, 'create_siril_from_args', lambda args:
+    monkeypatch.setattr(processors, 'Siril', lambda **kwargs:
                         SimpleNamespace(run_siril_script=lambda *a, **k: True))
     monkeypatch.setattr(processors, 'read_star_catalog', lambda path: ([
         {'id': idx, 'layer': 0, 'x': float(idx), 'y': 10.0, 'fwhm_x': 5.0,
@@ -405,7 +405,7 @@ def test_sharpen_forced_manual_matching(
         }
 
     monkeypatch.setitem(sys.modules, 'lib.cosmic_clarity.inference', SimpleNamespace(CosmicClarityEngine=FakeEngine))
-    monkeypatch.setattr(processors, 'create_siril_from_args', lambda args:
+    monkeypatch.setattr(processors, 'Siril', lambda **kwargs:
                         SimpleNamespace(run_siril_script=lambda *a, **k: True))
     monkeypatch.setattr(processors, 'read_star_catalog', lambda path: ([
         {'id': idx, 'layer': 0, 'x': float(idx), 'y': 10.0, 'fwhm_x': 5.0,

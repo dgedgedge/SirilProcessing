@@ -7,14 +7,14 @@ import sys
 from pathlib import Path
 
 from lib.config import Config
-from lib.siril_utils import Siril, add_siril_arguments, create_siril_from_args
+from lib.siril_utils import Siril
 
 
 def test_shared_parameters_and_service(tmp_path, monkeypatch):
     config = Config(str(tmp_path / 'config.json'))
     config.update(siril_path='/configured/siril-cli', siril_mode='appimage')
     parser = argparse.ArgumentParser()
-    add_siril_arguments(parser, config, photometry_aliases=True)
+    Siril.add_arguments(parser, config, photometry_aliases=True)
     args = parser.parse_args([])
     assert (args.siril_path, args.siril_mode) == ('/configured/siril-cli', 'appimage')
     args = parser.parse_args(['-s', '/override/siril-cli', '-m', 'native'])
@@ -22,10 +22,10 @@ def test_shared_parameters_and_service(tmp_path, monkeypatch):
     legacy = parser.parse_args(['--photometry-siril-path', '/legacy/siril-cli', '--photometry-siril-mode', 'native'])
     assert (legacy.siril_path, legacy.siril_mode) == ('/legacy/siril-cli', 'native')
     monkeypatch.setattr(Siril, '_validate_configuration', lambda self: True)
-    service = create_siril_from_args(args)
+    service = Siril(siril_path=args.siril_path, siril_mode=args.siril_mode)
     assert (service.siril_path, service.siril_mode) == ('/override/siril-cli', 'native')
     monkeypatch.setattr(Siril, '_default_siril_path', '/global/siril')
-    assert create_siril_from_args().siril_path == '/global/siril'
+    assert Siril().siril_path == '/global/siril'
 
 
 def test_postprocess_save_reload_and_override(tmp_path):
@@ -56,7 +56,7 @@ def test_postprocess_save_reload_and_override(tmp_path):
     assert json.loads(config_path.read_text()) == saved  # Pas d'écriture implicite.
     loaded = Config.from_command_line(['--config', str(config_path)])
     parser = argparse.ArgumentParser()
-    add_siril_arguments(parser, loaded)
+    Siril.add_arguments(parser, loaded)
     assert parser.parse_args([]).siril_path == '/example/siril-cli'
 
 

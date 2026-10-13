@@ -103,7 +103,7 @@ def test_mosaic_uses_parsed_options_and_cleans_operation(tmp_path, monkeypatch, 
     service = Mock()
     service.run_siril_script.side_effect = run
     factory = Mock(return_value=service)
-    monkeypatch.setattr(module, 'create_siril_from_args', factory)
+    monkeypatch.setattr(module, 'Siril', factory)
     report = tmp_path/'report.json'
     mosaic.set_from_args(args)
     if success:
@@ -116,7 +116,9 @@ def test_mosaic_uses_parsed_options_and_cleans_operation(tmp_path, monkeypatch, 
         with pytest.raises(RuntimeError, match='création'):
             mosaic.post_process(first, report)
         assert not report.exists()
-    factory.assert_called_once_with(args)
+    factory.assert_called_once_with(
+        siril_path=args.siril_path, siril_mode=args.siril_mode
+    )
     assert work.exists()
     assert (work/'input').exists() == keep
     assert (work/'output').exists() == keep
@@ -302,7 +304,7 @@ def test_full_mosaic_survives_cleanup_and_crop_failure(tmp_path, monkeypatch, gr
         return True
     service = Mock()
     service.run_siril_script.side_effect = run
-    monkeypatch.setattr(module, 'create_siril_from_args', lambda args: service)
+    monkeypatch.setattr(module, 'Siril', lambda **kwargs: service)
     def fail(*args, **kwargs):
         raise OSError('crop failed')
     monkeypatch.setattr(module, 'crop_mosaic', fail)
@@ -351,7 +353,7 @@ def test_excessive_crop_returns_full_mosaic_and_report_after_cleanup(tmp_path, m
         return True
     service = Mock()
     service.run_siril_script.side_effect = run
-    monkeypatch.setattr(module, 'create_siril_from_args', lambda args: service)
+    monkeypatch.setattr(module, 'Siril', lambda **kwargs: service)
     report = tmp_path/'report.json'
     result = mosaic.post_process(panels[0], report)
     assert result['output_image'] == result['uncropped_image']

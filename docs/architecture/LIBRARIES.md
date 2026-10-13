@@ -4,6 +4,8 @@
 
 | Module | Rôle général |
 |---|---|
+| [parameterized_component.py](../../lib/parameterized_component.py) | Partager la déclaration et la capture des paramètres entre services et traitements |
+| [processor.py](../../lib/processor.py) | Ajouter le contrat de traitement d’image aux composants configurables |
 | [config.py](../../lib/config.py) | Centraliser les réglages, leurs valeurs par défaut et leur persistance |
 | [fits_info.py](../../lib/fits_info.py) | Donner accès aux caractéristiques des FITS et aux informations nécessaires à leur regroupement et à leur validation |
 | [siril_utils.py](../../lib/siril_utils.py) | Encapsuler la configuration et l’exécution de Siril |
