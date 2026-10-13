@@ -49,3 +49,7 @@ sans mise à jour sont décrits dans [Installation](../../INSTALLATION.md).
 Les classes des traitements sont enregistrées avant le parsing. Les valeurs
 résolues sont ensuite liées aux classes avant la création des instances, y
 compris les enfants. Voir la [liaison des paramètres](treatments/postprocess/SEQUENCE_PROCESSOR.md#résolution-et-liaison-hiérarchique-des-paramètres).
+
+Le résultat empilé est écrit sous `<cible>_combined.fits`. Les anciens résultats
+`.fit` restent utilisables en reprise ; `--force-stacking` demande de reconstruire
+le résultat avec la nouvelle extension. Voir [les sorties](treatments/OUTPUTS.md).

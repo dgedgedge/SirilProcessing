@@ -1699,7 +1699,12 @@ def stack_session_outputs(
     force_stacking: bool = False,
     stack_report: dict | None = None,
 ) -> Path | None:
-    """Empile les résultats traités de plusieurs sessions de même cible."""
+    """Empile les résultats d’une cible vers <target_name>_combined.fits.
+
+    Le nom complet est transmis à Siril pour fixer l’extension sans changer
+    celle des intermédiaires. Les anciennes sorties .fit restent reconnues,
+    avec priorité à .fits. Une entrée unique est retournée sans nouvel empilement.
+    """
     valid_files = [
         Path(file).absolute() for file in output_files if Path(file).exists()
     ]
@@ -1836,17 +1841,17 @@ def stack_session_outputs(
 
     if method in {"median", "med"}:
         stack_line = (
-            f"stack {stack_sequence_prefix} median -output_norm -out={output_path}"
+            f"stack {stack_sequence_prefix} median -output_norm -out={output_path}.fits"
         )
     elif rejection == "none":
         stack_line = (
-            f"stack {stack_sequence_prefix} mean -output_norm -out={output_path}"
+            f"stack {stack_sequence_prefix} mean -output_norm -out={output_path}.fits"
         )
     else:
         # Siril 1.4: la forme 'rej <low> <high>' réalise une moyenne avec rejet.
         stack_line = (
             f"stack {stack_sequence_prefix} rej {rejection_low} {rejection_high} "
-            f"-output_norm -out={output_path}"
+            f"-output_norm -out={output_path}.fits"
         )
 
     platesolve_lines = ""
@@ -1882,8 +1887,8 @@ seqfindstar {sequence_prefix}
         return None
 
     combined_candidates = [
-        output_path.with_suffix(".fit"),
         output_path.with_suffix(".fits"),
+        output_path.with_suffix(".fit"),
     ]
     for candidate in combined_candidates:
         if candidate.exists():

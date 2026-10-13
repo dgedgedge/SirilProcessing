@@ -322,7 +322,8 @@ def test_stack_selection_only_after_registration(tmp_path, monkeypatch, method, 
                 assert report['quality_selection']['independent_retained'] == retained
                 assert report['quality_selection']['effective_stack_entries'] == effective
                 assert [r['fwhm_multiplicity'] for r in report['frames']] == ([3,2,1] if retained == 3 else [1,1])
-                (tmp_path/'out/target_name_combined.fit').touch()
+                assert '-out=' + str(tmp_path/'out/target_name_combined.fits') in script_content
+                (tmp_path/'out/target_name_combined.fits').touch()
             else:
                 raise AssertionError(script_name)
             return True
@@ -335,7 +336,7 @@ def test_stack_selection_only_after_registration(tmp_path, monkeypatch, method, 
         cfg['enable_stack_platesolve'] = platesolve
     report = {}
     result = stack_session_outputs(sources, tmp_path/'out', tmp_path/'work', 'target_name', cfg, stack_report=report)
-    assert result == tmp_path/'out/target_name_combined.fit'
+    assert result == tmp_path/'out/target_name_combined.fits'
     assert calls == ['01_registration.sps', '04_realign.sps', '04_applyreg.sps', '04_stacking.sps']
     assert selections == [4]
     assert report['total_input'] == 4

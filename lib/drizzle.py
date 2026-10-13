@@ -531,7 +531,11 @@ def run_stack(
     framing: str,
     stack_report: JSONReport | None = None,
 ) -> bool:
-    """Register untouched inputs, diagnose, then apply exactly one resampling."""
+    """Register untouched inputs, diagnose, then apply exactly one resampling.
+
+    Output discovery prefers .fits while accepting legacy .fit files; output_path
+    remains the extensionless base for the associated drizzle report.
+    """
     if not siril.run_siril_script(
         prepare + "\nclose", str(input_dir), script_name="01_registration.sps"
     ):
@@ -965,14 +969,14 @@ def run_stack(
     )
     success = execute([final_stack], "04_stacking.sps")
     success = success and any(
-        Path(str(output_path) + ext).exists() for ext in (".fit", ".fits")
+        Path(str(output_path) + ext).exists() for ext in (".fits", ".fit")
     )
     report["status"] = "completed" if success else "failed"
     if success:
         report["output"] = str(
             next(
                 Path(str(output_path) + ext)
-                for ext in (".fit", ".fits")
+                for ext in (".fits", ".fit")
                 if Path(str(output_path) + ext).exists()
             )
         )

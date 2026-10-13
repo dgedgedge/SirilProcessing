@@ -656,8 +656,8 @@ Traitement Siril de mosaique (si --mosaic):
                     ),
                 )
                 stack_candidates = [
-                    target_stack_dir / f"{root_dir.name}_combined.fit",
                     target_stack_dir / f"{root_dir.name}_combined.fits",
+                    target_stack_dir / f"{root_dir.name}_combined.fit",
                 ]
                 existing_combined = next(
                     (c for c in stack_candidates if c.exists()), None
