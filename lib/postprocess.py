@@ -30,7 +30,7 @@ from lib.postprocess_paths import treatment_file_prefix
 from lib.denoising import NoiseReductionProcessor
 from lib.deconvolution import DeconvolutionProcessor
 from lib.processor import processor
-from lib.siril_utils import create_siril_from_args
+from lib.siril_utils import Siril
 from lib.type_defs import ConfigValue, JSONReport
 
 
@@ -1153,7 +1153,10 @@ class PhotometricColorCalibrator(processor):
             )
         self._quote_path(input_path)
         self._quote_path(output_image)
-        siril = create_siril_from_args(args)
+        siril = Siril(
+            siril_path=getattr(args, "siril_path", None),
+            siril_mode=getattr(args, "siril_mode", None),
+        )
         if object_name:
             try:
                 center = SkyCoord.from_name(object_name, cache=False)

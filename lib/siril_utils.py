@@ -21,9 +21,10 @@ from datetime import datetime
 from pathlib import Path
 
 from lib.cpu_config import CpuConfig
+from lib.parameterized_component import ParameterizedComponent
 
 
-class Siril:
+class Siril(ParameterizedComponent):
     """
     Classe pour gérer l'exécution de Siril avec validation et mémorisation des configurations.
     """
@@ -75,20 +76,25 @@ class Siril:
         self, siril_path: str | None = None, siril_mode: str | None = None
     ) -> None:
         """
-        Initialise une instance Siril.
+        Initialise et valide Siril : constructeur > paramètres liés > défauts.
 
         Args:
-            siril_path: Chemin vers l'exécutable Siril (utilise la config de classe si None)
-            siril_mode: Mode d'exécution ('native', 'flatpak', ou 'appimage') (utilise la config de classe si None)
+            siril_path: Chemin explicite ; sinon paramètres liés, puis défauts globaux
+            siril_mode: Mode explicite ; sinon paramètres liés, puis défauts globaux
 
         Raises:
             ValueError: Si la configuration n'est pas valide
         """
+        bound = self._args
         self._siril_path = (
-            siril_path if siril_path is not None else self._default_siril_path
+            siril_path
+            if siril_path is not None
+            else getattr(bound, "siril_path", self._default_siril_path)
         )
         self._siril_mode = (
-            siril_mode if siril_mode is not None else self._default_siril_mode
+            siril_mode
+            if siril_mode is not None
+            else getattr(bound, "siril_mode", self._default_siril_mode)
         )
         self._validated = False
 
@@ -119,7 +125,10 @@ class Siril:
             cls._default_siril_mode = siril_mode
 
         # Validation immédiate de la nouvelle configuration
-        temp_instance = cls()
+        temp_instance = cls(
+            siril_path=cls._default_siril_path,
+            siril_mode=cls._default_siril_mode,
+        )
         if not temp_instance._validated:
             # Restaurer les anciennes valeurs en cas d'échec
             if siril_path is not None:
@@ -152,7 +161,10 @@ class Siril:
         Returns:
             Instance Siril configurée avec les valeurs par défaut
         """
-        return cls()
+        return cls(
+            siril_path=cls._default_siril_path,
+            siril_mode=cls._default_siril_mode,
+        )
 
     @property
     def siril_path(self) -> str:
@@ -391,40 +403,3 @@ class Siril:
         except Exception as e:
             logging.error(f"Erreur lors de l'exécution du script Siril: {e}")
             return False
-
-
-# Fonction de compatibilité pour maintenir l'ancienne interface
-def run_siril_script(
-    siril_script_content: str,
-    working_dir: str,
-    siril_path: str = "siril",
-    siril_mode: str = "flatpak",
-) -> bool:
-    """
-    Fonction de compatibilité pour exécuter un script Siril temporaire.
-
-    DEPRECATED: Utilisez la classe Siril à la place pour une meilleure gestion des configurations.
-
-    Args:
-        siril_script_content: Contenu du script Siril à exécuter
-        working_dir: Répertoire de travail pour l'exécution du script
-        siril_path: Chemin vers l'exécutable Siril
-        siril_mode: Mode d'exécution de Siril ('native', 'flatpak', ou 'appimage')
-
-    Returns:
-        True si l'exécution a réussi, False sinon
-    """
-    siril_instance = Siril(siril_path=siril_path, siril_mode=siril_mode)
-    return siril_instance.run_siril_script(siril_script_content, working_dir)
-
-
-# Alias lié à la déclaration, conservé pour les anciens appelants.
-add_siril_arguments = Siril.add_arguments
-
-
-def create_siril_from_args(args: argparse.Namespace | None = None) -> Siril:
-    """Crée le service validé ; sans arguments, conserve les défauts globaux Siril."""
-    return Siril(
-        siril_path=getattr(args, "siril_path", None),
-        siril_mode=getattr(args, "siril_mode", None),
-    )

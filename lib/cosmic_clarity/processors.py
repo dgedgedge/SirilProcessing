@@ -22,7 +22,7 @@ from lib.deconvolution_quality import (
 )
 from lib.postprocess_paths import reset_ordered_work_dir
 from lib.processor import processor
-from lib.siril_utils import create_siril_from_args
+from lib.siril_utils import Siril
 from lib.type_defs import JSONReport
 
 
@@ -316,7 +316,10 @@ class _CosmicClarityProcessor(processor):
             for image, catalog in ((source, before), (candidate, after)):
                 lines += [f'load {_quote(image)}', 'setfindstar reset', 'setfindstar -gaussian',
                           f'findstar -layer={layer} -out={catalog.name}', 'close']
-            if not create_siril_from_args(args).run_siril_script(
+            if not Siril(
+                siril_path=getattr(args, "siril_path", None),
+                siril_mode=getattr(args, "siril_mode", None),
+            ).run_siril_script(
                 '\n'.join(lines) + '\n', str(work), script_name='quality.sps',
             ):
                 raise RuntimeError(f'Échec Siril : {work / "quality.log"}')

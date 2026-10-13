@@ -26,8 +26,8 @@ def test_denoise_validation_and_handoff(tmp_path, monkeypatch, noise, width, sta
         assert 'set32bits' in script
         fits.writeto(Path(work)/'candidate.fits', fits.getdata(source)*.99)
         return True
-    monkeypatch.setattr('lib.denoising.create_siril_from_args',
-                        lambda args: SimpleNamespace(run_siril_script=run))
+    monkeypatch.setattr('lib.denoising.Siril',
+                        lambda **kwargs: SimpleNamespace(run_siril_script=run))
     monkeypatch.setattr('lib.denoising.compare_star_catalogs', lambda *args, **kwargs:
                         dict(status='validated', matched_count=20, pairs=[],
                              before_fwhm_px={'mean': 4}, after_fwhm_px={'mean': 4*width},
@@ -49,8 +49,8 @@ def test_denoise_validation_and_handoff(tmp_path, monkeypatch, noise, width, sta
 def test_failed_siril_is_reported(tmp_path, monkeypatch):
     source = tmp_path/'input.fit'
     fits.writeto(source, np.ones((30, 30)))
-    monkeypatch.setattr('lib.denoising.create_siril_from_args',
-                        lambda args: SimpleNamespace(run_siril_script=Mock(return_value=False)))
+    monkeypatch.setattr('lib.denoising.Siril',
+                        lambda **kwargs: SimpleNamespace(run_siril_script=Mock(return_value=False)))
     with pytest.raises(RuntimeError, match='Échec Siril'):
         SirilNoiseReductionProcessor().post_process(source, tmp_path/'report.json')
     assert '"status": "failed"' in (tmp_path/'report.json').read_text()

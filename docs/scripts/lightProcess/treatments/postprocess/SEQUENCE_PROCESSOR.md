@@ -35,6 +35,27 @@ La séquence expose également `set_from_args(args)` et configure chacun de ses 
 
 ## Résolution et liaison hiérarchique des paramètres
 
+`ParameterizedComponent` (`lib.parameterized_component`) porte la déclaration
+abstraite `add_arguments`, les enfants `parameter_children`, la liaison
+`bind_parameters`, la persistance et les instantanés indépendants des instances.
+Cette base n’exige aucun traitement d’image. `processor` en hérite et ajoute
+`post_process` ; `Siril` en hérite directement pour utiliser les mêmes paramètres.
+Les nouveaux services recevant des options peuvent donc hériter de cette base,
+être enregistrés avec `Config.register`, puis configurés par
+`Config.bind_parameters(args)` avant leur instanciation.
+
+`Siril()` choisit les valeurs explicites de son constructeur, puis les valeurs
+liées, puis ses défauts globaux, et valide l’exécutable. Une nouvelle liaison ne
+modifie pas les instances déjà créées. `Siril.create_with_defaults()` utilise
+explicitement les défauts globaux pour les appelants qui demandent ce comportement.
+
+Les scripts créent directement `Siril()` après la liaison, ou
+`Siril(siril_path=args.siril_path, siril_mode=args.siril_mode)` pour transmettre
+les réglages d’un appel explicite. Ils exécutent ensuite le script par la méthode
+`service.run_siril_script(contenu, dossier, script_name="traitement.sps")`.
+Il n’existe plus de fonction de module pour exécuter un script ou créer le service.
+
+
 Les méthodes `add_arguments` des traitements standard sont des méthodes de
 classe. Le programme principal déclare les classes avant de créer les instances :
 

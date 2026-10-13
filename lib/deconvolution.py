@@ -21,7 +21,7 @@ from lib.deconvolution_quality import (
     log_quality_diagnostics,
 )
 from lib.postprocess_paths import reset_ordered_work_dir, treatment_file_prefix
-from lib.siril_utils import create_siril_from_args
+from lib.siril_utils import Siril
 from lib.processor import processor
 from lib.restoration import RestorationComparisonProcessor
 from lib.type_defs import ConfigValue, JSONReport, StarMeasurement
@@ -356,7 +356,10 @@ class _DeconvolutionExecution:
         _quote(self.input_path)
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
         self.work = reset_ordered_work_dir(self.output_path)
-        self.runner = create_siril_from_args(self.args)
+        self.runner = Siril(
+            siril_path=getattr(self.args, "siril_path", None),
+            siril_mode=getattr(self.args, "siril_mode", None),
+        )
         self.snapshot = self.work / f"{self.tag}original.fits"
         copyfile(self.input_path, self.snapshot)
         self.result: JSONReport = dict(

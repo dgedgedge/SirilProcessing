@@ -15,7 +15,7 @@ from lib.deconvolution import (
 from lib.processor import processor
 from lib.deconvolution_quality import InsufficientPSFStars
 from lib.postprocess import DeconvolutionProcessor, PhotometricColorCalibrator, _PostProcessorSequence
-from lib.siril_utils import add_siril_arguments
+from lib.siril_utils import Siril
 
 
 def catalog(path, stars, layer=0, profile="Gaussian"):
@@ -85,7 +85,7 @@ def test_malformed_catalog_fails(tmp_path):
 
 def arguments(*options):
     parser = argparse.ArgumentParser()
-    add_siril_arguments(parser)
+    Siril.add_arguments(parser)
     _PostProcessorSequence().add_arguments(parser)
     return parser.parse_args(['--no-deconvolution-reference-measurements', '--disable-clarity', *options])
 
@@ -123,7 +123,8 @@ def simulated_siril(tmp_path, monkeypatch):
         return True
     runner.run_siril_script.side_effect = run
     factory = Mock(return_value=runner)
-    monkeypatch.setattr('lib.siril_utils.Siril', factory)
+    monkeypatch.setattr('lib.deconvolution.Siril', factory)
+    monkeypatch.setattr('lib.cosmic_clarity.processors.Siril', factory)
     def select(stars, source, sheet, **kwargs):
         fits.writeto(sheet, np.ones((100, 100), dtype='float32'))
         return dict(stars=stars, selected_count=len(stars), sheet_path=str(sheet))
