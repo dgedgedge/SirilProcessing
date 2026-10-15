@@ -584,4 +584,7 @@ def test_default_output_uses_general_name_and_indexed_files(tmp_path):
     assert (work / '00_target_postProcess.log').exists()
     assert (work / '01_gradient.json').exists()
     assert (work / '01_gradient_target_measurement_points.png').exists()
+    assert (work / 'quality_masks.png').exists()
+    assert (work / 'quality_masks.json').exists()
+    assert (work / 'quality_gradient_points.png').exists()
     assert not (tmp_path / 'target_gradient_steps').exists()

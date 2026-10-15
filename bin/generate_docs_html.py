@@ -10,6 +10,7 @@ import re
 import shutil
 import sys
 from pathlib import Path
+from urllib.parse import unquote, urlsplit
 
 
 def add_project_venv_to_path() -> None:
@@ -38,6 +39,7 @@ except Exception:
 
 DEFAULT_OUTPUT_DIR = "out"
 MARKDOWN_EXTENSIONS = {".md", ".markdown"}
+DOCUMENT_SOURCE_EXTENSIONS = frozenset({".py", ".sh", ".json"})
 
 
 def parse_args() -> argparse.Namespace:
@@ -244,26 +246,6 @@ def render_markdown(
     return "\n".join(out), toc
 
 
-def extract_toc(markdown: str) -> list[tuple[int, str, str]]:
-    """Extrait les niveaux, ancres et libellés des titres hors blocs de code."""
-    toc: list[tuple[int, str, str]] = []
-    seen: dict[str, int] = {}
-    for line in markdown.splitlines():
-        match = re.match(r"^(#{1,6})\s+(.+?)\s*$", line)
-        if not match:
-            continue
-        level = len(match.group(1))
-        text = match.group(2).strip()
-        anchor = slugify(text)
-        if anchor in seen:
-            seen[anchor] += 1
-            anchor = f"{anchor}_{seen[anchor]}"
-        else:
-            seen[anchor] = 0
-        toc.append((level, text, anchor))
-    return toc
-
-
 def rewrite_markdown_links(rendered: str) -> str:
     """Rewrite links to Markdown files so they target generated HTML files."""
 
@@ -281,6 +263,39 @@ def rewrite_markdown_links(rendered: str) -> str:
         return f"href={quote}{html.escape(href, quote=True)}{quote}"
 
     return re.sub(r"href=(['\"])([^'\"]+)\1", repl, rendered)
+
+
+def copy_referenced_sources(
+    source_root: Path, output_dir: Path, document_rel: Path, rendered: str
+) -> None:
+    """Copie les sources et configurations liées pour un export HTML autonome.
+
+    Seuls les fichiers .py, .sh et .json explicitement liés, situés dans le
+    dépôt après résolution des liens symboliques, sont copiés à leur chemin
+    relatif d’origine. Les liens externes, hors dépôt et vers des poids binaires
+    restent exclus. Les fichiers déjà copiés ne sont pas dupliqués.
+    """
+    for _, target in re.findall(r"href=(['\"])([^'\"]+)\1", rendered):
+        link = urlsplit(html.unescape(target))
+        if link.scheme or link.netloc or not link.path:
+            continue
+        relative = Path(unquote(link.path))
+        if relative.is_absolute():
+            continue
+        source = (source_root / document_rel.parent / relative).resolve()
+        if (
+            not source.is_relative_to(source_root)
+            or source.is_relative_to(output_dir)
+            or source.suffix not in DOCUMENT_SOURCE_EXTENSIONS
+            or not source.is_file()
+        ):
+            continue
+        # Conserver le chemin du lien, même pour un alias symbolique du dépôt.
+        destination = (output_dir / document_rel.parent / relative).resolve()
+        if not destination.is_relative_to(output_dir) or destination.exists():
+            continue
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, destination)
 
 
 def convert_mermaid_blocks(rendered: str) -> str:
@@ -306,7 +321,11 @@ def preprocess_mermaid_blocks(markdown: str) -> str:
 def render_markdown_document(
     markdown: str, current_rel: Path
 ) -> tuple[str, list[tuple[int, str, str]]]:
-    """Render Markdown using Python-Markdown when available, fallback otherwise."""
+    """Rend le document et son sommaire à partir des titres effectivement rendus.
+
+    Python-Markdown fournit ses ancres et ignore les commentaires des blocs de
+    code. Le moteur interne assure le repli lorsque cette dépendance manque.
+    """
     if markdown_lib is None:
         return render_markdown(markdown, current_rel)
 
@@ -327,7 +346,12 @@ def render_markdown_document(
     rendered = md.convert(preprocess_mermaid_blocks(markdown))
     rendered = convert_mermaid_blocks(rendered)
     rendered = rewrite_markdown_links(rendered)
-    toc = extract_toc(markdown)
+    toc: list[tuple[int, str, str]] = []
+    pending = list(reversed(md.toc_tokens))
+    while pending:
+        token = pending.pop()
+        toc.append((int(token["level"]), str(token["name"]), str(token["id"])))
+        pending.extend(reversed(token["children"]))
     return rendered, toc
 
 
@@ -549,16 +573,19 @@ def discover_markdown_files(source_root: Path, output_dir: Path) -> list[Path]:
         "ENV",
         "env",
         "venv",
+        "tmp",
+        "out",
+        "site",
+        "node_modules",
         output_dir.name,
     }
     files: list[Path] = []
-    for path in source_root.rglob("*"):
-        if not path.is_file() or path.suffix.lower() not in MARKDOWN_EXTENSIONS:
-            continue
-        rel = path.relative_to(source_root)
-        if any(part in ignored_parts for part in rel.parts):
-            continue
-        files.append(rel)
+    for directory, children, names in os.walk(source_root):
+        children[:] = [child for child in children if child not in ignored_parts]
+        for name in names:
+            path = Path(directory) / name
+            if path.is_file() and path.suffix.lower() in MARKDOWN_EXTENSIONS:
+                files.append(path.relative_to(source_root))
     return sorted(files)
 
 
@@ -664,6 +691,7 @@ def main() -> int:
         markdown = source_path.read_text(encoding="utf-8")
         doc_title = title_from_markdown(markdown, rel)
         body, toc = render_markdown_document(markdown, rel)
+        copy_referenced_sources(source_root, output_dir, rel, body)
 
         output_rel = markdown_path_to_html(rel)
         output_path = output_dir / output_rel

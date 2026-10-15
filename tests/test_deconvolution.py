@@ -129,7 +129,7 @@ def simulated_siril(tmp_path, monkeypatch):
         fits.writeto(sheet, np.ones((100, 100), dtype='float32'))
         return dict(stars=stars, selected_count=len(stars), sheet_path=str(sheet))
     monkeypatch.setattr('lib.deconvolution.select_psf_stars', select)
-    monkeypatch.setattr('lib.deconvolution.artifact_metrics', lambda *a: dict(max_noise_ratio=1, max_ring_fraction=0))
+    monkeypatch.setattr('lib.deconvolution.artifact_metrics', lambda *a, **k: dict(max_noise_ratio=1, max_ring_fraction=0))
     return image, runner, factory
 
 
@@ -147,16 +147,16 @@ def test_process_saves_psf_preview_audit_and_next_input(tmp_path, simulated_siri
     deconv = result['deconvolution']
     factory.assert_called_once_with(siril_path='/test/siril', siril_mode='native')
     scripts = '\n'.join(call.args[0] for call in runner.run_siril_script.call_args_list)
-    assert 'findstar -layer=1 -out=01_deconvolution_before_stars.tsv' in scripts
-    assert 'makepsf save 01_deconvolution_blind_psf.fits' in scripts
+    assert 'findstar -layer=1 -out=01_deconvolution_siril_before_stars.tsv' in scripts
+    assert 'makepsf save 01_deconvolution_siril_blind_psf.fits' in scripts
     assert 'makepsf blind -l0 -ks=15' in scripts
     assert '-iters=15 -gdstep=0.0003000 -tv -alpha=3000' in scripts
-    assert 'save 01_deconvolution_simple_trial.fits\nclose\nload 01_deconvolution_simple_trial.fits' in scripts
+    assert 'save 01_deconvolution_siril_simple_trial.fits\nclose\nload 01_deconvolution_siril_simple_trial.fits' in scripts
     for key in ('psf_path', 'psf_preview_path', 'matched_stars_path', 'output_image'):
         assert Path(deconv[key]).is_file()
     first_script = Path(deconv['scripts'][0]['script_path'])
     assert first_script.parent.name == '001'
-    assert first_script.parent.parent.name == '01_deconvolution_work'
+    assert first_script.parent.parent.name == '01_deconvolution_siril_work'
     assert deconv['comparison']['matched_count'] == 10
     assert result['next']['seen'] == deconv['output_image']
     assert image.read_bytes() == source_bytes
@@ -369,7 +369,7 @@ def test_clarity_selected_after_real_moffat_failure(
         'after_fwhm_px': {'mean': 3}, 'paired_ratio': {'median': .75},
         'before_roundness': {'mean': 1}, 'after_roundness': {'mean': 1},
     })
-    monkeypatch.setattr(processors, 'artifact_metrics', lambda *a:
+    monkeypatch.setattr(processors, 'artifact_metrics', lambda *a, **k:
                         dict(max_noise_ratio=1, max_ring_fraction=0))
     monkeypatch.setattr('lib.deconvolution.assess_quality', lambda *a, **k:
                         dict(accepted=False, artifact_failure=False, reasons=['insufficient_sharpening']))

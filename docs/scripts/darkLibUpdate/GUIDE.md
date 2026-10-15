@@ -7,10 +7,12 @@
 - [Vue d'ensemble](#vue-densemble)
 - [Options principales](#options-principales)
 - [Exemples d'utilisation](#exemples-dutilisation)
-- [Workflow recommandé](#workflow-recommandé)
+- [Workflow recommandé](#workflow-recommande)
 - [Options courtes (raccourcis)](#options-courtes-raccourcis)
-- [Configuration par défaut](#configuration-par-défaut)
+- [Configuration par défaut](#configuration-par-defaut)
 - [Codes de sortie](#codes-de-sortie)
+
+<a id="vue-densemble"></a>
 
 ## Vue d'ensemble
 
@@ -226,6 +228,8 @@ python bin/darkLibUpdate.py [OPTIONS]
 - **Description** : Log les fichiers ignorés (non-DARK, invalides)
 - **Usage** : Diagnostique des problèmes de fichiers
 
+<a id="exemples-dutilisation"></a>
+
 ## Exemples d'utilisation
 
 ### Configuration initiale
@@ -275,6 +279,8 @@ python bin/darkLibUpdate.py \
     --rejection-param1 2.5 \
     -v -R
 ```
+
+<a id="workflow-recommande"></a>
 
 ## Workflow recommandé
 
@@ -352,6 +358,8 @@ python bin/darkLibUpdate.py -f -R
 | `-f` | `--force-recalc` | Force recalcul |
 | `-v` | `--validate-darks` | Validation |
 | `-R` | `--report` | Rapport |
+
+<a id="configuration-par-defaut"></a>
 
 ## Configuration par défaut
 

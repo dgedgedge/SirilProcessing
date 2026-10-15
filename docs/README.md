@@ -18,3 +18,4 @@ mosaïques. Les wrappers shell sont documentés avec leur script Python.
 
 Pour consulter une version HTML, voir la
 [génération locale ou sur GitHub](scripts/generate_docs_html/README.md).
+Le site MkDocs propose aussi la documentation complète en PDF et en HTML autonome.

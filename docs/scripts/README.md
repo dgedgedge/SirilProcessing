@@ -14,7 +14,7 @@
 | `pyecho.py` | [Messages](pyecho/README.md) |
 | `pydir.py` | [Liste de répertoire](pydir/README.md) |
 | `trouve_doublons.py` | [Doublons](trouve_doublons/README.md) |
-| `generate_docs_html.py`, `build_docs.sh` | [Génération de documentation](generate_docs_html/README.md) |
+| `build_documentation.py`, `build_docs.sh`, `generate_docs_html.py` | [MkDocs, PDF et HTML autonome](generate_docs_html/README.md) |
 
 Pour comprendre les responsabilités des modules communs, consulter
 l’[architecture](../architecture/README.md).

@@ -6,6 +6,7 @@ que tous les artefacts visuels sont absents.
 
 from __future__ import annotations
 
+import argparse
 import json
 import logging
 from collections.abc import Sequence
@@ -246,15 +247,22 @@ def select_psf_stars(
 
 
 def artifact_metrics(
-    before_path: Path | str, after_path: Path | str, pairs: Sequence[dict[str, float]]
+    before_path: Path | str, after_path: Path | str, pairs: Sequence[dict[str, float]],
+    *, args: argparse.Namespace | None = None,
 ) -> JSONReport:
-    """Bruit sur les mêmes pixels de ciel, anneaux sur les mêmes étoiles et tous canaux."""
+    """Bruit sur masques fixes, audit historique et anneaux sur tous les canaux.
+
+    Le mode reliable utilise une segmentation indépendante du gradient. Le ratio
+    historique reste dans legacy_noise_ratio ; un ciel insuffisant produit None.
+    """
     original = _normalized_data(fits.getdata(before_path))
     changed = _normalized_data(fits.getdata(after_path))
     if original.shape != changed.shape or not np.isfinite(changed).all():
         raise ValueError("Image candidate de dimensions différentes ou non finie")
     if original.ndim == 2:
         original, changed = original[None], changed[None]
+    top_down = (getattr(args, 'quality_mode', 'reliable') == 'legacy'
+                or fits.getheader(before_path).get('ROWORDER', 'BOTTOM-UP') == 'TOP-DOWN')
     channels = []
     for before, after in zip(original, changed):
         finite = np.isfinite(before)
@@ -277,7 +285,7 @@ def artifact_metrics(
         for pair in pairs:
             radius = max(8, int(np.ceil(3 * pair["fwhm_before_px"])))
             x = int(round(pair["x_before"] - 0.5))
-            y = int(round(before.shape[0] - pair["y_before"] - 0.5))
+            y = int(round(before.shape[0] - pair["y_before"] - .5 if top_down else pair["y_before"] - .5))
             if (
                 min(x, y) < radius
                 or x + radius >= before.shape[1]
@@ -321,7 +329,7 @@ def artifact_metrics(
                         added=max(0, ra - rb),
                     )
                 )
-        if not scores or mask.sum() < 100:
+        if (not scores or mask.sum() < 100) and getattr(args, 'quality_mode', 'reliable') == 'legacy':
             raise ValueError(
                 "Pas assez de ciel ou d’étoiles intérieures pour contrôler les artefacts"
             )
@@ -332,14 +340,26 @@ def artifact_metrics(
                 noise_ratio=ratio,
                 background_pixels=int(mask.sum()),
                 rings=scores,
-                ring_fraction=float(np.mean([s["added"] > 0.02 for s in scores])),
+                ring_fraction=float(np.mean([s["added"] > 0.02 for s in scores])) if scores else None,
             )
         )
-    return dict(
+    result = dict(
         channels=channels,
         max_noise_ratio=max(c["noise_ratio"] for c in channels),
-        max_ring_fraction=max(c["ring_fraction"] for c in channels),
+        max_ring_fraction=max(c["ring_fraction"] for c in channels) if all(c["ring_fraction"] is not None for c in channels) else None,
+        legacy_noise_ratio=max(c["noise_ratio"] for c in channels),
+        high_frequency_residual=channels,
+        quality_mode=getattr(args, 'quality_mode', 'reliable'),
     )
+    if result['quality_mode'] != 'legacy':
+        from lib.restoration_quality import reference_for
+
+        reference = reference_for(before_path, args)
+        diagnostics = reference.evaluate(after_path, list(pairs))
+        result.update(diagnostics)
+        result['max_noise_ratio'] = diagnostics['noise']['max_noise_ratio']
+        result['enforce_significance'] = reference.enforce_significance
+    return result
 
 
 def log_quality_diagnostics(
@@ -382,7 +402,7 @@ def log_quality_diagnostics(
                 100 * minimum, verdict,
             )
         if 'missing_valid_brightness' in representation['reasons']:
-            logging.info('%s — REJET : amplitudes absentes ou invalides ; '
+            logging.info('%s — UNKNOWN : amplitudes absentes ou invalides ; '
                          'représentativité en flux non vérifiable', label)
     thresholds = quality.get('thresholds', {})
     if comparison.get('status') == 'validated' and 'min_gain' in thresholds:
@@ -403,8 +423,11 @@ def log_quality_diagnostics(
             ('rapport de bruit après/avant', artifacts['max_noise_ratio'], thresholds['max_noise_ratio']),
             ('fraction de nouveaux anneaux', artifacts['max_ring_fraction'], thresholds['max_ring_fraction']),
         ]:
-            logging.info('%s — %s : %.5f ; maximum %.5f ; %s', label, name,
-                         value, limit, 'conforme' if value <= limit else 'REJET')
+            if value is None:
+                logging.info('%s — %s : UNKNOWN ; échantillon fiable insuffisant', label, name)
+            else:
+                logging.info('%s — %s : %.5f ; maximum %.5f ; %s', label, name,
+                             value, limit, 'conforme' if value <= limit else 'REJET')
 
 
 def assess_quality(
@@ -432,15 +455,25 @@ def assess_quality(
     ra = comparison["after_roundness"]["mean"]
     if ra < rb - roundness_tolerance:
         reasons.append("roundness_degraded")
-    if artifacts["max_noise_ratio"] > max_noise:
+    if artifacts["max_noise_ratio"] is not None and artifacts["max_noise_ratio"] > max_noise:
         reasons.append("noise_amplification")
-    if artifacts["max_ring_fraction"] > max_rings:
+    if artifacts["max_ring_fraction"] is None:
+        reasons.append("rings_unknown")
+    elif artifacts["max_ring_fraction"] > max_rings:
         reasons.append("stellar_rings")
     artifact_failure = any(
         r in reasons
         for r in ("roundness_degraded", "noise_amplification", "stellar_rings")
     )
+    diffuse = artifacts.get('diffuse', {})
+    if artifacts.get('stellar_flux', {}).get('blocking') and artifacts['stellar_flux'].get('status') == 'FAIL':
+        reasons.append('stellar_flux_change')
+        artifact_failure = True
+    if diffuse.get('blocking') and diffuse.get('status') == 'FAIL':
+        reasons.append('diffuse_signal_loss')
+        artifact_failure = True
     return dict(
+        criteria=quality_criteria(comparison, artifacts, min_gain, max_noise, max_rings),
         accepted=not reasons,
         artifact_failure=artifact_failure,
         reasons=reasons,
@@ -472,8 +505,93 @@ def assess_denoising(
         reasons.append('stellar_blurring')
     if comparison['after_roundness']['mean'] < comparison['before_roundness']['mean'] - 0.01:
         reasons.append('roundness_degraded')
-    if artifacts['max_noise_ratio'] >= 1:
+    if artifacts['max_noise_ratio'] is None:
+        reasons.append('noise_unknown')
+    elif artifacts['max_noise_ratio'] >= 1:
         reasons.append('no_noise_reduction')
-    if artifacts['max_ring_fraction'] > 0.1:
+    if artifacts.get('enforce_significance') and artifacts.get('noise', {}).get('status') != 'PASS':
+        reasons.append('noise_gain_not_significant')
+    if artifacts.get('diffuse', {}).get('blocking') and artifacts['diffuse'].get('status') == 'FAIL':
+        reasons.append('diffuse_signal_loss')
+    if artifacts.get('stellar_flux', {}).get('blocking') and artifacts['stellar_flux'].get('status') == 'FAIL':
+        reasons.append('stellar_flux_change')
+    if artifacts['max_ring_fraction'] is None:
+        reasons.append('rings_unknown')
+    elif artifacts['max_ring_fraction'] > 0.1:
         reasons.append('stellar_rings')
     return reasons
+
+
+def quality_criteria(
+    comparison: JSONReport, artifacts: JSONReport, min_gain: float = .02,
+    max_noise: float = 1.15, max_rings: float = .1,
+) -> JSONReport:
+    """Expose PASS/FAIL/UNKNOWN et l’incertitude du gain stellaire par groupes.
+
+    Le bootstrap spatial est diagnostique tant que sa calibration n’est pas
+    établie. Les seuils stellaires historiques restent bloquants.
+    """
+    from lib.restoration_quality import criterion, bootstrap_interval
+
+    noise = artifacts.get('max_noise_ratio')
+    result = dict(
+        noise=criterion('UNKNOWN' if noise is None else 'PASS' if noise <= max_noise else 'FAIL',
+                        'NO_RELIABLE_SKY' if noise is None else 'NOISE_LIMIT',
+                        value=noise, threshold=max_noise),
+        rings=criterion('UNKNOWN' if artifacts['max_ring_fraction'] is None else 'PASS' if artifacts['max_ring_fraction'] <= max_rings else 'FAIL',
+                        'RING_LIMIT', value=artifacts['max_ring_fraction'], threshold=max_rings),
+        diffuse=artifacts.get('diffuse', criterion('UNKNOWN', 'LEGACY_MODE')),
+    )
+    if comparison.get('status') == 'validated':
+        mean = 1 - comparison['after_fwhm_px']['mean'] / comparison['before_fwhm_px']['mean']
+        median = 1 - comparison['paired_ratio']['median']
+        loss = comparison['before_roundness']['mean'] - comparison['after_roundness']['mean']
+        result['fwhm_mean'] = criterion('PASS' if mean >= min_gain else 'FAIL', 'FWHM_GAIN', value=mean, threshold=min_gain)
+        result['fwhm_median'] = criterion('PASS' if median >= min_gain else 'FAIL', 'FWHM_GAIN', value=median, threshold=min_gain)
+        result['roundness'] = criterion('PASS' if loss <= .01 else 'FAIL', 'ROUNDNESS_LOSS', value=loss, threshold=.01)
+    pairs = comparison.get('pairs', [])
+    groups = {}
+    for pair in pairs:
+        if 'ratio_after_before' not in pair:
+            continue
+        # Blocs de 128 pixels : étoiles proches non considérées indépendantes.
+        key = int(pair['x_before'] // 128), int(pair['y_before'] // 128)
+        groups.setdefault(key, []).append(1 - pair['ratio_after_before'])
+    gains = np.array([np.median(values) for values in groups.values()])
+    if len(gains) >= 4:
+        lo, hi = bootstrap_interval(gains)
+        result['fwhm_significance'] = dict(criterion(
+            'PASS' if lo >= min_gain else 'UNKNOWN', 'GROUP_BOOTSTRAP',
+            value=float(np.median(gains)), threshold=min_gain,
+            uncertainty=(hi - lo) / 2, sample_count=len(gains)), interval=[lo, hi])
+    else:
+        result['fwhm_significance'] = criterion('UNKNOWN', 'TOO_FEW_STAR_GROUPS', sample_count=len(gains))
+    return result
+
+
+def denoising_criteria(
+    comparison: JSONReport, artifacts: JSONReport, max_blur: float = .03,
+) -> JSONReport:
+    """Décrit séparément les contrôles de débruitage et leurs mesures absentes."""
+    from lib.restoration_quality import criterion
+
+    if comparison.get('status') != 'validated':
+        return dict(stars=comparison.get('criterion', criterion('UNKNOWN', 'INSUFFICIENT_MATCHES')))
+    ratio = max(comparison['after_fwhm_px']['mean'] / comparison['before_fwhm_px']['mean'],
+                comparison['paired_ratio']['median'])
+    loss = comparison['before_roundness']['mean'] - comparison['after_roundness']['mean']
+    noise, rings = artifacts['max_noise_ratio'], artifacts['max_ring_fraction']
+    return dict(
+        stars=comparison.get('criterion', criterion('PASS', 'VALIDATED_MATCHES')),
+        blur=criterion('PASS' if ratio <= 1 + max_blur else 'FAIL', 'STELLAR_BLUR',
+                       value=ratio - 1, threshold=max_blur),
+        roundness=criterion('PASS' if loss <= .01 else 'FAIL', 'ROUNDNESS_LOSS',
+                            value=loss, threshold=.01),
+        noise=criterion('UNKNOWN' if noise is None else 'PASS' if noise < 1 else 'FAIL',
+                        'NO_RELIABLE_SKY' if noise is None else 'NOISE_REDUCTION', value=noise, threshold=1),
+        useful_noise_gain=artifacts.get('noise', criterion('UNKNOWN', 'LEGACY_MODE')),
+        rings=criterion('UNKNOWN' if rings is None else 'PASS' if rings <= .1 else 'FAIL',
+                        'RINGS', value=rings, threshold=.1),
+        diffuse=artifacts.get('diffuse', criterion('UNKNOWN', 'LEGACY_MODE')),
+        stellar_flux=artifacts.get('stellar_flux', criterion('UNKNOWN', 'LEGACY_MODE')),
+    )

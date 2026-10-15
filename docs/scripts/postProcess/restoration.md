@@ -4,7 +4,12 @@
 
 La séquence connaît les étapes gradient, photométrie, déconvolution et débruitage.
 Elle conserve leurs instances et ne sélectionne pas leurs moteurs internes.
-Chaque étape de restauration déclare et organise ses propres enfants.
+Par défaut, elle remplace les deux dernières étapes par
+`RestorationChainProcessor`. Chaque orchestrateur organise ses propres enfants.
+`--no-restoration-compare-chains` retrouve les comparaisons par étape.
+Le service `RestorationSummary` produit une
+[synthèse des essais et des éliminations](quality.md#synthèse-des-essais-et-des-éliminations)
+à partir des audits, sans recalculer les verdicts.
 
 | Module | Classe | Responsabilité |
 |---|---|---|
@@ -14,6 +19,8 @@ Chaque étape de restauration déclare et organise ses propres enfants.
 | `lib/deconvolution.py` | `SirilDeconvolutionProcessor` | Produire et contrôler uniquement les essais Siril |
 | `lib/cosmic_clarity/processors.py` | `CosmicClarityDenoiseProcessor` | Produire et contrôler uniquement le candidat neuronal de débruitage |
 | `lib/cosmic_clarity/processors.py` | `CosmicClaritySharpenProcessor` | Produire et contrôler uniquement le candidat neuronal de netteté |
+| `lib/graxpert.py` | `GraXpertDenoiseProcessor` | Débruitage ONNX natif, automatique si des poids locaux valides sont présents |
+| `lib/restoration_chains.py` | `RestorationChainProcessor` | Comparer les chaînes finales sur une référence commune |
 | `lib/restoration.py` | `RestorationComparisonProcessor` | Mutualiser l’orchestration, les scores, les journaux et la publication |
 
 Toutes ces classes héritent de `processor`. Les orchestrateurs concrets déclarent
@@ -26,16 +33,22 @@ paramètres prépare les classes des moteurs qui seront créés lors du traiteme
 
 `post_process(input_path, output_path, args=None)` reçoit l’image source et le
 chemin de rapport JSON ; les surcharges suivent le contrat de `processor`.
-Avec Clarity actif, les deux enfants reçoivent la même image. Chaque moteur
+Les moteurs actifs reçoivent la même image et sont exécutés séquentiellement :
+Cosmic Clarity, Siril, puis GraXpert pour le débruitage lorsqu’il est activé.
+Chaque moteur
 retourne son statut, son candidat, les mesures et les motifs de qualité.
 L’orchestrateur retient seulement les candidats acceptés, calcule leurs scores,
-copie le gagnant vers la sortie de l’étape et écrit les deux évaluations dans
-le rapport global de l’étape. Les scores et leurs limites restent décrits dans
-[Cosmic Clarity](cosmic-clarity.md).
+copie le gagnant vers la sortie de l’étape et écrit les évaluations dans
+le rapport de l’étape. En mode fiable, le gagnant doit avoir un score strictement
+positif pour battre l’identité. Les scores sont décrits dans
+[Cosmic Clarity](cosmic-clarity.md#score-de-sélection-utilisé), et les masques,
+incertitudes et états UNKNOWN dans [Qualité astrophotographique](quality.md).
 
-Sans Clarity, l’orchestrateur utilise uniquement le moteur Siril et conserve son
-rapport historique. Aucun moteur neuronal n’est créé. Un refus de déconvolution
-Siril permet d’évaluer l’autre candidat ; un échec technique reste bloquant.
+Sans Clarity ni GraXpert, l’orchestrateur utilise uniquement le moteur Siril.
+Le rapport historique direct reste disponible en mode `legacy`. Aucun moteur neuronal n’est créé. Un refus de déconvolution
+Siril permet d’évaluer l’autre candidat. En mode fiable, un échec technique d’un
+moteur est audité puis les autres moteurs sont essayés ; le mode `legacy`
+conserve le contrat historique des erreurs.
 Sans candidat accepté, l’image d’entrée est conservée, avec `rejected` pour le
 débruitage ou `no_safe_improvement` pour la déconvolution comparative.
 
@@ -72,6 +85,8 @@ la conservation de l’original, les rejets et le mode Siril seul sans moteur
 neuronal. Les scénarios comparatifs utilisent des moteurs simulés ; ils ne
 constituent pas une validation supplémentaire avec Siril ou CUDA.
 
+<a id="siril-execution-phases"></a>
+
 ## État et phases d’une exécution Siril
 
 `_DenoisingExecution` et `_DeconvolutionExecution` sont des objets internes à
@@ -93,3 +108,9 @@ Deux appels sur la même instance de moteur créent des états différents. Les
 chemins de rapports doivent toutefois être distincts pour des exécutions
 concurrentes : leur dossier de travail est déterminé par le rapport et recréé
 au début de chaque appel. Les erreurs d’exécution restent propagées et auditées.
+
+Les nouveaux masques, états UNKNOWN, diagnostics photométriques, options GraXpert
+et règles des chaînes sont décrits dans [Qualité astrophotographique](quality.md).
+
+Le moteur [GraXpert natif](graxpert.md) déclare ses services d’inférence et de
+modèles dans la même hiérarchie de paramètres.

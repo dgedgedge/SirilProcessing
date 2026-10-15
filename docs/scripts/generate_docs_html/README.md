@@ -1,79 +1,118 @@
-# Génération de la documentation HTML et PDF
+# MkDocs, PDF et HTML autonome
 
 [Documentation](../../README.md)
 
+`bin/build_documentation.py` construit le site MkDocs et ses téléchargements
+à partir des mêmes Markdown. L’accueil reprend le README du projet ; les pages
+maîtresses des scripts et de l’architecture restent leurs points d’entrée.
+MkDocs fournit navigation et recherche, avec le thème Read the Docs en français.
+`mkdocs.yml` configure le thème, le rendu Markdown et l’adresse du site.
 
-`generate_docs_html.py` transforme les Markdown du dépôt en pages HTML.
-L’accueil HTML (`index.html`) reprend le `README.md` du projet. Les liens
-conduisent ensuite aux mêmes pages maîtresses et aux mêmes sous-ensembles
-qu’en Markdown, en conservant les chemins relatifs. Aucune seconde hiérarchie
-n’est construite pour le site. Sans README racine, le générateur utilise un
-catalogue automatique des documents comme accueil.
-`build_docs.sh` active le venv du projet et lance le générateur avec export PDF.
+L’accueil propose deux téléchargements :
 
-## Utilisation locale
+- `downloads/documentation.html` : toute la documentation dans un seul HTML,
+  avec styles intégrés, ancres uniques et diagrammes SVG, consultable hors ligne ;
+- `downloads/documentation.pdf` : la même documentation en PDF A4, avec diagrammes
+  et signets.
 
-Pour installer uniquement les dépendances HTML :
+Le monofichier conserve les liens internes entre chapitres et embarque les
+sources Python/shell/JSON et images locales explicitement liées. Les liens vers
+des sites externes restent externes. Les fichiers non liés, les poids `.onnx`/
+`.pth`, les FITS et les caches ne sont pas embarqués. Le site propose aussi les
+pages HTML individuelles et leurs sources liées.
+
+## Construire localement
+
+Depuis la racine du projet :
 
 ```bash
-python3 -m venv .venv
-.venv/bin/pip install -r requirements-docs.txt
+bin/build_docs.sh
 ```
 
+Le lanceur prépare le venv avec `requirements-docs.txt`, installe Chromium dans
+`tmp/docs-browsers/`, puis construit les trois formats dans `out/`. Il ne nécessite
+ni Siril ni les bibliothèques astronomiques. Avec les prérequis déjà installés :
 
 ```bash
-.venv/bin/python bin/generate_docs_html.py
-./bin/build_docs.sh
+.venv/bin/python bin/build_documentation.py
+.venv/bin/python -m http.server --bind 127.0.0.1 --directory out 8000
 ```
 
-Les sorties sont `out/index.html`, les pages individuelles et
-`out/all_docs.html`. Avec `--pdf`, le générateur tente aussi de produire
-`out/documentation.pdf` via WeasyPrint.
+Ouvrir `http://127.0.0.1:8000/`. Pour préparer manuellement les prérequis :
 
-| Option | Effet |
+```bash
+python3 -m pip --python .venv/bin/python install -r requirements-docs.txt
+PLAYWRIGHT_BROWSERS_PATH="$PWD/tmp/docs-browsers" \
+  .venv/bin/python -m playwright install chromium
+```
+
+Sous Linux, des bibliothèques système peuvent être nécessaires ; la commande
+`python -m playwright install --with-deps chromium` les installe avec les droits
+administrateur. Le workflow l’utilise sur son runner GitHub.
+
+| Option du constructeur | Effet |
 |---|---|
-| `--source-root` | Racine des sources Markdown ; répertoire courant par défaut |
-| `--output-dir` | Dossier généré ; `out` par défaut |
-| `--title` | Titre du site |
-| `--pdf` | Demande l’export PDF |
-| `--pdf-output` | Nom du PDF dans le dossier généré |
+| `--source-root` | Racine du dépôt ; défaut : projet contenant le script |
+| `--output-dir` | Dossier généré ; défaut : `out/` dans ce projet |
+| `--no-pdf` | Construire le site et le HTML autonome sans PDF |
 
-Le dossier de sortie est recréé à chaque génération : il est réservé aux
-fichiers générés. Les liens Markdown sont convertis vers les pages HTML et
-les ancres de section sont normalisées. Les blocs Mermaid sont conservés pour
-leur rendu dans le navigateur.
+Chromium reste nécessaire au HTML autonome pour rendre les diagrammes.
+Le premier lancement récupère Mermaid 10.9.5 via HTTPS dans
+`tmp/documentation/` ; les suivants réutilisent ce cache. Les caches et `out/`
+sont ignorés par Git. Le dossier de sortie est nettoyé par MkDocs et doit être
+réservé à la génération ; les dossiers des sources et du cache sont refusés.
+Une copie temporaire permet d’ajouter téléchargements et ressources sans modifier
+les guides. Un échec de téléchargement, de navigateur, de rendu ou de construction
+MkDocs bloque la CI ; elle ne publie pas un site privé des exports demandés.
 
-Le wrapper choisit `VENV_DIR` s’il est défini, sinon `.venv` puis `venv` dans
-le projet. Les arguments supplémentaires sont transmis au générateur.
+## Publication GitHub Pages
 
-## Génération sur GitHub
+Le workflow **Documentation MkDocs** (`.github/workflows/documentation.yml`)
+construit et teste les trois formats après une modification documentaire,
+de configuration ou du générateur. L’archive **documentation** reste téléchargeable
+pendant 30 jours dans les artefacts GitHub Actions. Les pull requests et branches
+de travail construisent cette archive sans remplacer le site publié.
 
-Le workflow **Documentation HTML** (`.github/workflows/documentation.yml`)
-génère le site lorsqu’un push ou une pull request modifie les Markdown, le
-générateur, ses tests ou ses dépendances. Il utilise Python et les dépendances
-HTML seules, sans exécuter Siril.
+Pour activer la publication :
 
-Pour une génération manuelle :
+1. Ouvrir **Settings → Pages** dans le dépôt GitHub.
+2. Sélectionner **GitHub Actions** dans **Build and deployment → Source**.
+3. Intégrer le workflow sur la branche par défaut, puis lancer
+   **Actions → Documentation MkDocs → Run workflow**, ou pousser une modification
+   documentaire sur cette branche.
 
-1. Ouvrir l’onglet **Actions** du dépôt.
-2. Choisir **Documentation HTML**, puis **Run workflow**.
-3. À la fin de l’exécution, télécharger l’artefact **documentation-html**.
-4. Extraire l’archive entière et ouvrir `index.html` dans le navigateur.
+Le job `deploy` utilise `actions/deploy-pages` et les permissions `pages: write`
+et `id-token: write`. Seuls les lancements sur la branche par défaut publient.
+L’environnement `github-pages` affiche l’adresse du site. L’adresse prévue est
+[dgedgedge.github.io/SirilProcessing](https://dgedgedge.github.io/SirilProcessing/) ;
+elle devient disponible après le premier déploiement réussi.
 
-Le bouton manuel est disponible une fois le workflow présent sur la branche
-par défaut, avec les droits nécessaires pour lancer une exécution.
-L’archive est conservée pendant 30 jours. Le workflow génère les pages
-individuelles et `all_docs.html`, sans PDF. Les diagrammes Mermaid nécessitent
-un accès réseau au CDN lors de leur affichage.
+GitHub Pages reçoit uniquement `out/`, sans modèles, FITS d’exemple ni caches
+Chromium. Aucun HTML généré n’est commité dans `docs/`, qui conserve les sources
+Markdown. Une construction locale ne publie pas le site distant.
 
-Cette automatisation fournit une archive téléchargeable ; elle ne publie pas
-un site GitHub Pages. Les fichiers HTML restent générés et ne sont pas ajoutés
-au dépôt Git.
+## Classes et vérification
 
-Références GitHub : [lancement manuel d’un workflow](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow)
-et [conservation des artefacts](https://docs.github.com/en/actions/tutorials/store-and-share-data).
+`DocumentationBuilder` prépare les sources, les exports et MkDocs.
+`SingleFileLinks` convertit les liens et embarque les ressources autorisées.
+Playwright/Chromium rend Mermaid en SVG et imprime le même document en PDF.
+Le HTML autonome sauvegardé ne dépend d’aucun script ou fichier de style externe.
+Le site utilise une copie locale du script Mermaid pour afficher ses diagrammes.
 
-Le lanceur utilise Python et pip du système pour créer le venv sans pip et
-mettre à jour ses dépendances avant chaque exécution. Il lance ensuite le
-Python du venv. La sélection de l’environnement, les prérequis et l’exécution
-sans mise à jour sont décrits dans [Installation](../../INSTALLATION.md).
+`generate_docs_html.py` reste le moteur de rendu partagé des exports et conserve
+son ancien point d’entrée. Ses options `--pdf` et `--pdf-output` utilisent
+WeasyPrint ; elles ne sont pas celles du nouveau constructeur MkDocs.
+
+```bash
+.venv/bin/python -m unittest discover -s tests -p 'test_doc*.py'
+```
+
+Les tests utilisent des documents synthétiques et vérifient ancres, liens,
+ressources embarquées, exclusions, sommaires et protection des dossiers, sans
+installer de navigateur. Une construction complète vérifie en plus le rendu
+Chromium et les vrais exports. Les scripts Mermaid des pages individuelles
+s’exécutent dans le navigateur du lecteur ; les exports contiennent leur SVG.
+
+Références : [MkDocs](https://www.mkdocs.org/),
+[GitHub Pages](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages),
+[Playwright](https://playwright.dev/python/docs/browsers).

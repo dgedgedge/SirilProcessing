@@ -33,7 +33,7 @@ def test_denoise_validation_and_handoff(tmp_path, monkeypatch, noise, width, sta
                              before_fwhm_px={'mean': 4}, after_fwhm_px={'mean': 4*width},
                              paired_ratio={'median': width}, before_roundness={'mean': .9},
                              after_roundness={'mean': .9}))
-    monkeypatch.setattr('lib.denoising.artifact_metrics', lambda *args:
+    monkeypatch.setattr('lib.denoising.artifact_metrics', lambda *args, **kwargs:
                         dict(max_noise_ratio=noise, max_ring_fraction=0))
     result = SirilNoiseReductionProcessor().post_process(source, tmp_path/'03_denoise.json')
     assert result['status'] == status

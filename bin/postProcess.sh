@@ -8,11 +8,16 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 export LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libstdc++.so.6
 
 INSTALL_COSMIC=false
+INSTALL_GRAXPERT=false
 COSMIC_MODEL_DIR="${PROJECT_ROOT}/tmp/models/cosmicclarity"
 COSMIC_MODEL_DIR_SET=false
 FORWARDED_ARGS=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --install-graxpert)
+      INSTALL_GRAXPERT=true
+      shift
+      ;;
     --install-cosmic-clarity)
       INSTALL_COSMIC=true
       shift
@@ -39,6 +44,7 @@ while [[ $# -gt 0 ]]; do
     -h|--help)
       echo "Option du lanceur : --install-cosmic-clarity installe PyTorch CUDA et les poids."
       echo "Utilisable seule ou avant un traitement ; --cosmic-model-dir choisit le dossier."
+      echo "--install-graxpert installe ONNX Runtime CPU ; les poids sont acquis à la demande."
       FORWARDED_ARGS+=("$1")
       shift
       ;;
@@ -59,6 +65,15 @@ if [[ "${INSTALL_COSMIC}" == true ]]; then
     -r "${PROJECT_ROOT}/requirements-cosmic-clarity.txt"
   "${SELECTED_VENV}/bin/python" "${PROJECT_ROOT}/lib/cosmic_clarity/models.py" \
     --directory "${COSMIC_MODEL_DIR}"
+  if [[ ${#FORWARDED_ARGS[@]} -eq 0 && "${INSTALL_GRAXPERT}" == false ]]; then
+    exit 0
+  fi
+fi
+if [[ "${INSTALL_GRAXPERT}" == true ]]; then
+  GRAXPERT_SYSTEM_PYTHON="$(python3 -c 'import sys; print(sys._base_executable)')"
+  "${GRAXPERT_SYSTEM_PYTHON}" -m pip --python "${SELECTED_VENV}/bin/python" \
+    install --upgrade --quiet --disable-pip-version-check \
+    -r "${PROJECT_ROOT}/requirements-graxpert.txt"
   if [[ ${#FORWARDED_ARGS[@]} -eq 0 ]]; then
     exit 0
   fi

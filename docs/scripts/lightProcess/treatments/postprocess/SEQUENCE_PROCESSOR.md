@@ -3,8 +3,14 @@
 [Guide utilisateur de postProcess](../../../postProcess/README.md)
 
 `_PostProcessorSequence` orchestre une liste ordonnée de `processor`.
-Par défaut, cette liste contient `GradientExtractor()`, `PhotometricColorCalibrator()`, `DeconvolutionProcessor()` puis `NoiseReductionProcessor()`. La séquence ne comporte
-aucune branche dépendant de la classe concrète d'un traitement.
+Par défaut, cette liste contient `GradientExtractor()`, `PhotometricColorCalibrator()`,
+`DeconvolutionProcessor()` puis `NoiseReductionProcessor()`. Le choix des moteurs
+appartient aux orchestrateurs des traitements. Par défaut,
+la séquence remplace les deux dernières étapes par
+`RestorationChainProcessor`, après le gradient et la photométrie.
+`--no-restoration-compare-chains` rétablit les comparaisons par étape.
+Une liste de processeurs fournie explicitement au constructeur reste exécutée
+telle quelle ; la fusion automatique concerne la séquence standard.
 
 ## Contrat commun
 
@@ -77,9 +83,9 @@ sequence = _PostProcessorSequence()
 les valeurs dans `Config`. `bind_parameters` interroge ensuite `args` pour
 capturer les destinations propres de chaque classe et les paramètres communs
 Siril et de travail. Les enfants sont déclarés par `parameter_children`, y
-compris les moteurs Cosmic Clarity susceptibles d’être créés tardivement.
-Leurs paramètres incluent les réglages neuronaux et les seuils de qualité des
-deux moteurs. Les constructeurs des traitements ne sont pas exécutés pendant
+compris les moteurs Cosmic Clarity et GraXpert susceptibles d’être créés tardivement.
+Leurs paramètres incluent les réglages des moteurs et les seuils de qualité
+communs. Les constructeurs des traitements ne sont pas exécutés pendant
 cet enregistrement.
 
 Chaque instance créée après la liaison reçoit une copie indépendante des valeurs
@@ -105,8 +111,13 @@ ces déclarations. `config.save_requested(args)` sauvegarde les réglages si
 d’activation sont également rémanents.
 
 
-La séquence écrit les rapports individuels dans `<rapport>_steps/<index>_<prefixe>.json`,
-puis le rapport global `{ "prefixe": { ... }, ... }` au chemin demandé par le CLI.
+En usage Python autonome, la séquence écrit les rapports individuels dans
+`<rapport>_steps/<index>_<prefixe>.json`, puis le rapport global
+`{ "prefixe": { ... }, ... }` au chemin demandé.
+Le CLI configure plutôt le dossier `<image>_postprocess_<backend>/`, avec rapport
+global et FITS final au même niveau ; voir [les sorties de postProcess](../../../postProcess/README.md#rapports-images-et-journaux).
+En comparaison des chaînes, la clé `restoration` et `03_restoration.json`
+remplacent les clés et rapports `deconvolution`/`denoise`.
 Le processeur peut aussi écrire son propre rapport pour permettre l'usage autonome.
 
 ## Passage des images
@@ -161,25 +172,39 @@ Un chemin relatif est résolu depuis le dossier du rapport individuel. La séque
 vérifie que le fichier existe et le transmet au prochain traitement actif.
 Le chemin d'un rapport JSON n'est jamais utilisé comme entrée image.
 
-Une exception ou une clé `error` dans un résultat interrompt la séquence en
-identifiant le traitement concerné. Les sorties déjà produites restent disponibles.
+Une exception non prise en charge ou une clé `error` dans le résultat d’une étape
+interrompt la séquence en identifiant le traitement concerné. Un refus de
+déconvolution identifié comme `no_safe_improvement` conserve l’image reçue et
+permet de poursuivre. Les orchestrateurs de restauration en mode fiable
+consignent les erreurs isolées des moteurs et essaient les autres candidats.
+Les sorties déjà produites restent disponibles.
 
 ## Ajouter un traitement
 
 ```python
+import argparse
 from pathlib import Path
 from lib.processor import processor
 from lib.postprocess import GradientExtractor, _PostProcessorSequence
 
 class NouveauTraitement(processor):
-    def get_prefix(self):
+    """Analyse d’exemple sans modification de l’image courante."""
+
+    @classmethod
+    def get_prefix(cls) -> str:
+        """Identifie les options et le rapport de cette étape."""
         return "nouveau"
 
     @classmethod
-    def add_arguments(cls, parser):
+    def add_arguments(cls, parser: argparse.ArgumentParser) -> None:
+        """Déclare l’intensité locale, persistante par défaut."""
         parser.add_argument("--nouveau-intensite", type=float, default=1.0)
 
-    def post_process(self, input_path, output_path, args=None):
+    def post_process(
+        self, input_path: Path, output_path: Path,
+        args: argparse.Namespace | None = None,
+    ) -> dict[str, float | str]:
+        """Retourne un rapport d’analyse ; la séquence conserve l’entrée."""
         args = self._get_args(args)
         intensite = getattr(args, "nouveau_intensite", 1.0)
         # Exécuter ici le traitement et retourner des valeurs sérialisables.
@@ -189,9 +214,11 @@ class NouveauTraitement(processor):
 sequence = _PostProcessorSequence([GradientExtractor(), NouveauTraitement()])
 ```
 
-Pour intégrer ce traitement au CLI, ajouter son instance à la liste par défaut
-construite dans `_PostProcessorSequence.__init__`. Ses options sont alors exposées
-sans modification du script CLI ni de la boucle d'exécution.
+Pour intégrer ce traitement au CLI standard, ajouter sa classe à
+`_PostProcessorSequence.default_processors()` pour déclarer et lier ses options,
+et son instance à la liste construite dans `_PostProcessorSequence.__init__`.
+Les deux listes doivent conserver le même ordre. Le script CLI et la boucle
+d’exécution n’ont pas besoin de connaître ses paramètres internes.
 
 Les candidats utilisent par défaut la [mesure stellaire aux positions initiales](../../../postProcess/reference-stars.md), avec un diagnostic distinct des catalogues de détection.
 

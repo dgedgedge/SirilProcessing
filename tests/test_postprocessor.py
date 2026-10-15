@@ -16,6 +16,7 @@ from lib.postprocess import (
 )
 from lib.processor import processor
 from lib.type_defs import JSONReport
+from lib.restoration_chains import RestorationChainProcessor
 
 
 def _args(*options: str) -> argparse.Namespace:
@@ -37,9 +38,15 @@ def test_default_postprocess_order() -> None:
 
 
 def test_standard_backend_selection() -> None:
-    """Le backend Siril conserve les processeurs standards."""
+    """Le backend Siril compare les chaînes ; le mode par étape reste accessible."""
     sequence = _PostProcessorSequence()
     selected = sequence._selected_processors(_args("--disable-clarity"))
+    assert [type(step) for step in selected] == [
+        GradientExtractor, PhotometricColorCalibrator, RestorationChainProcessor,
+    ]
+    selected = sequence._selected_processors(
+        _args("--disable-clarity", "--no-restoration-compare-chains")
+    )
     assert [type(step) for step in selected] == [
         GradientExtractor,
         PhotometricColorCalibrator,

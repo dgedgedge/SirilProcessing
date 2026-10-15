@@ -55,6 +55,70 @@ class DocumentationHTMLTests(unittest.TestCase):
         self.assertIn('<pre class="mermaid">', body)
         self.assertIn('A --&gt; B', body)
 
+    def test_toc_ignores_comments_in_code_blocks(self) -> None:
+        """Les commentaires shell ne créent pas d’ancres inexistantes au sommaire."""
+        document = '# Guide\n\n```bash\n# Faux titre\necho ok\n```\n\n## Section\n'
+        for markdown_module in (generator.markdown_lib, None):
+            with self.subTest(markdown=markdown_module):
+                with patch.object(generator, 'markdown_lib', markdown_module):
+                    body, toc = generator.render_markdown_document(document, Path('guide.md'))
+                self.assertEqual([title for _, title, _ in toc], ['Guide', 'Section'])
+                for _, _, anchor in toc:
+                    self.assertIn(f'id="{anchor}"', body)
+
+    def test_linked_project_sources_are_available_offline(self) -> None:
+        """L’export copie les fichiers référencés et conserve les chemins relatifs."""
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = self.build(root, {
+                'README.md': '[Module](lib/model%20manager.py)\n',
+                'lib/model manager.py': 'MODEL_VERSION = "3.0.2"\n',
+                '.copilot/config.json': '{"instructions": []}\n',
+                'bin/run.sh': '#!/bin/sh\nexit 0\n',
+                'docs/guide.md': (
+                    '[Configuration](../.copilot/config.json)\n'
+                    '[Lanceur](../bin/run.sh)\n'
+                    '[Module](../lib/model%20manager.py#L1)\n'
+                ),
+            })
+            for relative in (
+                'lib/model manager.py', '.copilot/config.json', 'bin/run.sh',
+            ):
+                self.assertEqual(
+                    (output / relative).read_bytes(),
+                    (root / 'source' / relative).read_bytes(),
+                )
+            self.assertIn(
+                'href="../bin/run.sh"', (output / 'docs/guide.html').read_text(),
+            )
+
+    def test_export_excludes_weights_and_files_outside_project(self) -> None:
+        """Les poids, liens externes et cibles hors dépôt ne sont pas embarqués."""
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / 'source'
+            source.mkdir()
+            outside = root / 'outside.py'
+            outside.write_text('PRIVATE = True\n')
+            (source / 'outside-link.py').symlink_to(outside)
+            (source / 'model.onnx').write_bytes(b'weights')
+            (source / 'model.pth').write_bytes(b'weights')
+            output = self.build(root, {
+                'README.md': (
+                    '[Hors dépôt](../outside.py)\n'
+                    '[Alias hors dépôt](outside-link.py)\n'
+                    f'[Absolu]({outside})\n'
+                    '[Distant](https://example.invalid/remote.py)\n'
+                    '[Poids ONNX](model.onnx)\n'
+                    '[Poids PyTorch](model.pth)\n'
+                ),
+            })
+            self.assertFalse((output / 'outside-link.py').exists())
+            self.assertFalse((output / 'model.onnx').exists())
+            self.assertFalse((output / 'model.pth').exists())
+            self.assertFalse((output / 'remote.py').exists())
+            self.assertEqual(outside.read_text(), 'PRIVATE = True\n')
+
 
 if __name__ == '__main__':
     unittest.main()

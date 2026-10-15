@@ -38,7 +38,9 @@ avec `--help`. Pour exécuter sans mise à jour, appeler directement le script :
 `requirements.txt` inclut les traitements, les visualiseurs, la documentation
 HTML/PDF et les tests. Les lanceurs KStars et guide logs utilisent seulement
 `requirements-analyze.txt`. Le fichier `requirements-docs.txt` permet une
-installation HTML seule. Tkinter reste une dépendance système (`python3-tk`
+installation documentaire seule, avec MkDocs et Playwright. Chromium est installé
+séparément pour les exports HTML/PDF ; voir le [guide documentaire](scripts/generate_docs_html/README.md).
+Tkinter reste une dépendance système (`python3-tk`
 sous Debian/Ubuntu).
 
 Les traitements astronomiques utilisent une installation de Siril accessible
@@ -56,3 +58,13 @@ Les dépendances CUDA sont optionnelles et séparées de `requirements.txt` :
 `bin/postProcess.sh --install-cosmic-clarity` installe PyTorch CUDA et les poids
 nécessaires dans le projet. Voir [Cosmic Clarity](scripts/postProcess/cosmic-clarity.md)
 pour les prérequis GPU, les options et les vérifications.
+
+Le débruitage GraXpert utilise une autre dépendance optionnelle,
+`requirements-graxpert.txt`. `bin/postProcess.sh --install-graxpert` installe
+ONNX Runtime CPU dans le venv choisi ; cette commande n’acquiert pas les poids.
+Le moteur s’active automatiquement si des poids locaux valides sont présents,
+sauf désactivation explicite. `--enable-graxpert` autorise leur acquisition
+s’ils manquent. À défaut de cache, celle-ci nécessite un exécutable GraXpert
+configuré par `--graxpert-path` ; l’inférence est ensuite native Python/ONNX.
+Les poids restent dans `tmp/models/graxpert/`, exclus de Git et de l’archive.
+Voir [GraXpert : modèles, activation et périphériques](scripts/postProcess/graxpert.md).

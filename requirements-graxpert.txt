@@ -1,0 +1,2 @@
+# Inférence GraXpert native CPU ; installation optionnelle du lanceur.
+onnxruntime>=1.22,<2

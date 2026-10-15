@@ -5,10 +5,10 @@ Script de post-traitement extensible pour une image FITS unique.
 Ce script prend UNE SEULE image FITS calibrée en entrée et exécute les
 traitements activés par défaut : analyse du gradient, résolution
 astrométrique Gaia suivie de l'étalonnage spectrophotométrique SPCC des couleurs, puis
-déconvolution avec audit de PSF et comparaison stellaire avant/après,
-puis réduction du bruit contrôlée. Le mode comparatif Cosmic Clarity + Siril
-est activé par défaut pour ces deux dernières étapes et peut être désactivé
-avec --disable-clarity.
+comparaison des chaînes complètes de débruitage et de déconvolution,
+avec contrôles locaux et finaux sur une référence commune. L’option
+--no-restoration-compare-chains rétablit la comparaison par étape.
+Cosmic Clarity et Siril participent par défaut ; --disable-clarity écarte Clarity.
 
 Le script utilise _PostProcessorSequence pour exécuter les traitements.
 Les chemins relatifs sont résolus depuis le dossier de lancement.
@@ -40,6 +40,8 @@ from lib.logging_utils import (
     setup_logging,
 )
 from lib.postprocess import _PostProcessorSequence
+from lib.quality_preview import QualityMaskPreview
+from lib.power_guard import PowerGuard
 from lib.siril_utils import Siril
 
 
@@ -87,7 +89,11 @@ def _resolve_final_image(results: dict, fallback: Path) -> Path:
 
 
 def main() -> None:
-    """Exécute les étapes actives sur un FITS et écrit rapports et journal de session."""
+    """Exécute les étapes, diagnostics et export sous protection énergétique facultative.
+
+    Les services D-Bus indisponibles ne bloquent pas le calcul ; leurs demandes
+    sont libérées avant de fermer le journal, y compris après une interruption.
+    """
     config = Config.from_command_line()
     parser = argparse.ArgumentParser(
         description="Séquence de post-traitements sur une image FITS calibrée",
@@ -149,6 +155,17 @@ def main() -> None:
         logging.info("Configuration: %s", config.config_file)
         logging.info("Siril: mode=%s, path=%s", args.siril_mode, args.siril_path)
         logging.info("Backend: %s", backend)
+        if getattr(args, "restoration_compare_chains", True):
+            logging.info(
+                "Restauration : comparaison des chaînes complètes ; "
+                "référence commune après gradient/photométrie ; ordre inverse=%s",
+                getattr(args, "restoration_reverse_order", False),
+            )
+        else:
+            logging.info(
+                "Restauration : comparaison par étapes isolées ; "
+                "activer --restoration-compare-chains pour comparer les chaînes complètes"
+            )
         if args.save_config:
             if not config.save_requested(args):
                 return 1
@@ -157,26 +174,41 @@ def main() -> None:
         logging.info("Dossier des étapes: %s", steps_dir)
         logging.info("Résultat final: %s", result_path)
         # Exécuter la séquence de post-processing
-        config.bind_parameters(args)
-        seq_processor = _PostProcessorSequence()
-        results = seq_processor.post_process(
-            input_path=input_file,
-            output_path=output_path,
-        )
-        final_image = _resolve_final_image(results, input_file)
-        if not final_image.is_file():
-            raise FileNotFoundError(f"Image finale introuvable: {final_image}")
-        result_path.parent.mkdir(parents=True, exist_ok=True)
-        if final_image != result_path.resolve():
-            copyfile(final_image, result_path)
-        logging.info("Image finale exportée: %s", result_path)
+        with PowerGuard():
+            config.bind_parameters(args)
+            seq_processor = _PostProcessorSequence()
+            results = seq_processor.post_process(
+                input_path=input_file,
+                output_path=output_path,
+            )
+            quality_preview = QualityMaskPreview.ensure_for_run(
+                results, input_file, steps_dir, args
+            )
+            gradient_preview = QualityMaskPreview.write_gradient_points(results, steps_dir)
+            if gradient_preview:
+                import json
+
+                output_path.write_text(json.dumps(results, indent=2), encoding="utf-8")
+            final_image = _resolve_final_image(results, input_file)
+            if not final_image.is_file():
+                raise FileNotFoundError(f"Image finale introuvable: {final_image}")
+            result_path.parent.mkdir(parents=True, exist_ok=True)
+            if final_image != result_path.resolve():
+                copyfile(final_image, result_path)
+            logging.info("Image finale exportée: %s", result_path)
 
         logging.info(f"\n{'=' * 60}")
         logging.info("RÉSULTATS")
+        logging.info("Image des zones de qualité : %s", quality_preview)
+        if gradient_preview:
+            logging.info("Points du gradient original : %s", gradient_preview)
         logging.info(f"{'=' * 60}")
 
         for processor_name in results:
             logging.info("Traitement terminé: %s", processor_name)
+            summary_path = results[processor_name].get("summary_path")
+            if summary_path:
+                logging.info("Synthèse des essais %s : %s", processor_name, summary_path)
 
         logging.info(f"\nRapport sauvegardé: {output_path}")
         logging.info("Post-traitements terminés")

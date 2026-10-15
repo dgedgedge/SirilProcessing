@@ -6,6 +6,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+import numpy as np
+from astropy.io import fits
+
 from lib.config import Config
 from lib.siril_utils import Siril
 
@@ -28,17 +31,20 @@ def test_shared_parameters_and_service(tmp_path, monkeypatch):
     assert Siril().siril_path == '/global/siril'
 
 
-def test_postprocess_save_reload_and_override(tmp_path):
+def test_postprocess_save_reload_and_override(tmp_path: Path) -> None:
+    """Les paramètres sauvegardés restent prioritaires ; le diagnostic accepte un FITS valide."""
     root = Path(__file__).resolve().parents[1]
     config_path = tmp_path / 'settings/config.json'
     config_path.parent.mkdir()
     config_path.write_text(json.dumps({'dark_library_path': str(tmp_path / 'darks'), 'custom': 42}))
     image = tmp_path / 'image.fit'
-    image.touch()  # Aucun traitement actif : inutile de produire un FITS.
+    # L’aperçu de qualité est désormais produit même sans traitement actif.
+    fits.writeto(image, np.zeros((64, 64), dtype=np.float32))
     command = [str(root / 'bin/postProcess.sh'), str(image), str(tmp_path / 'report.json'),
                '--config', str(config_path), '--disable-gradient', '--disable-photometry', '--disable-denoise', '--disable-deconvolution']
 
-    def run(*options):
+    def run(*options: str) -> str:
+        """Exécute le lanceur avec les surcharges et retourne son journal de session."""
         result = subprocess.run([*command, *options], cwd=tmp_path,
                                 env={**os.environ, 'VENV_DIR': sys.prefix}, capture_output=True, text=True)
         assert result.returncode == 0, result.stderr

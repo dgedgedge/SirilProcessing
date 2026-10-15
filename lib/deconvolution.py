@@ -105,6 +105,7 @@ def compare_star_catalogs(
     layer: int,
     *,
     reference_images: tuple[Path | str, Path | str] | None = None,
+    quality_mode: str = 'reliable',
 ) -> JSONReport:
     """Apparie les étoiles par voisinage unique réciproque dans le rayon en pixels.
 
@@ -197,6 +198,23 @@ def compare_star_catalogs(
         )
         logging.info("Mesure aux positions initiales — diagnostics : %s",
                      reference_audit['failure_summary'])
+    if quality_mode != 'legacy' and valid:
+        from lib.cosmic_clarity.processors import assess_matching_representation
+
+        representation = assess_matching_representation(before_path, result, layer)
+        result['representation'] = representation
+        representation['status'] = (
+            'UNKNOWN' if representation['reasons'] == ['missing_valid_brightness']
+            else 'PASS' if representation['accepted'] else 'FAIL'
+        )
+        if representation['status'] == 'FAIL':
+            valid = False
+            result['status'] = 'unrepresentative_matches'
+    result['criterion'] = dict(
+        status='PASS' if valid else 'UNKNOWN' if len(before) < min_stars else 'FAIL',
+        reason=result['status'], value=fraction, threshold=min_fraction,
+        uncertainty=None, sample_count=len(before),
+    )
     # Aucune statistique de comparaison publiée tant que la cohorte n'est pas validée.
     if valid:
 
@@ -576,6 +594,7 @@ class _DeconvolutionExecution:
             before_catalog, after_catalog, self.radius, self.minimum, self.fraction, self.layer,
             reference_images=(source, candidate)
             if self._option("reference_measurements", True) else None,
+            quality_mode=getattr(self.args, "quality_mode", "reliable"),
         )
         attempt = dict(
             number=len(self.result["attempts"]) + 1,
@@ -591,7 +610,7 @@ class _DeconvolutionExecution:
         if comparison["status"] == "validated":
             try:
                 attempt["artifacts"] = artifact_metrics(
-                    source, candidate, comparison["pairs"]
+                    source, candidate, comparison["pairs"], args=self.args
                 )
                 attempt["quality"] = assess_quality(
                     comparison, attempt["artifacts"], **self.quality_settings
@@ -630,7 +649,7 @@ class _DeconvolutionExecution:
                 ra - rb,
             )
             artifacts = attempt.get("artifacts")
-            if artifacts:
+            if artifacts and artifacts.get("max_noise_ratio") is not None:
                 logging.info(
                     "Déconvolution %s : variation maximale du bruit %+.2f %% ; "
                     "fraction maximale d’étoiles avec nouveaux anneaux %.2f %% (tous canaux)",
@@ -822,6 +841,8 @@ class SirilDeconvolutionProcessor(processor):
     """Exécute uniquement le moteur Siril et ses contrôles de qualité."""
 
     parameter_persistence = {"deconvolution_output": False}
+
+    parameter_prefixes = ('quality_', 'deconvolution_', 'denoise_', 'cosmic_')
 
     @classmethod
     def get_prefix(cls) -> str:

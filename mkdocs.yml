@@ -1,0 +1,30 @@
+site_name: SirilProcessing
+site_description: Guides des traitements astronomiques et des visualiseurs KStars
+site_url: https://dgedgedge.github.io/SirilProcessing/
+repo_url: https://github.com/dgedgedge/SirilProcessing
+edit_uri: edit/main/
+docs_dir: docs
+site_dir: out
+use_directory_urls: false
+theme:
+  name: readthedocs
+  locale: fr
+  highlightjs: false
+plugins:
+  - search:
+      lang: fr
+markdown_extensions:
+  - extra
+  - toc:
+      permalink: true
+      slugify: !!python/name:markdown.extensions.toc.slugify_unicode
+  - codehilite:
+      guess_lang: false
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+extra_javascript:
+  - assets/mermaid.min.js
+  - assets/documentation.js
