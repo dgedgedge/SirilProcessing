@@ -31,14 +31,14 @@ def arguments(*options: str) -> argparse.Namespace:
 
 
 def test_backend_selection_and_override() -> None:
-    """Le moteur optionnel remplace deux étapes, sans import de PyTorch ni cumul."""
+    """Les chaînes sont actives par défaut ; les étapes explicites restent disponibles."""
     sequence = _PostProcessorSequence()
     selected = sequence._selected_processors(arguments())
-    assert [p.get_prefix() for p in selected] == ['gradient', 'photometry', 'deconvolution', 'denoise']
+    assert [p.get_prefix() for p in selected] == ['gradient', 'photometry', 'restoration']
+    assert selected[0] is sequence.processors[0]
+    selected = sequence._selected_processors(arguments('--disable-clarity', '--no-restoration-compare-chains'))
     assert isinstance(selected[2], DeconvolutionProcessor)
     assert isinstance(selected[3], NoiseReductionProcessor)
-    assert selected[0] is sequence.processors[0]
-    assert isinstance(sequence._selected_processors(arguments('--disable-clarity'))[2], DeconvolutionProcessor)
     custom = _PostProcessorSequence([DeconvolutionProcessor()])
     assert isinstance(custom._selected_processors(arguments('--enable-clarity'))[0], DeconvolutionProcessor)
 
@@ -141,7 +141,7 @@ def test_processor_quality_and_source_preservation(
         'after_fwhm_px': {'mean': 4 * width}, 'paired_ratio': {'median': width},
         'before_roundness': {'mean': 1}, 'after_roundness': {'mean': 1},
     })
-    monkeypatch.setattr(processors, 'artifact_metrics', lambda *a:
+    monkeypatch.setattr(processors, 'artifact_metrics', lambda *a, **k:
                         {'max_noise_ratio': noise, 'max_ring_fraction': 0})
     if operation == 'sharpen':
         if status == 'no_safe_improvement':
@@ -239,11 +239,11 @@ def test_processor_quality_and_source_preservation(
         assert Path(result['output_image']) == (final if status == 'accepted' else source)
     audit = json.loads(report.read_text())
     assert audit['status'] == status
-    assert Path(audit['candidate_image_path']).is_file()
-    candidate = Path(audit['candidate_image_path'])
+    assert Path(audit['evaluations']['cosmic_clarity']['candidate_image_path']).is_file()
+    candidate = Path(audit['evaluations']['cosmic_clarity']['candidate_image_path'])
     assert candidate.parent.name == '001'
-    assert candidate.parent.parent == tmp_path / 'report_work'
-    assert not (tmp_path / 'report_work' / 'stale.txt').exists()
+    assert candidate.parent.parent == tmp_path / 'report_cosmic_clarity_work'
+    assert not (tmp_path / 'report_cosmic_clarity_work' / 'stale.txt').exists()
     assert source.read_bytes() == original
 
 
@@ -262,7 +262,8 @@ def test_sequence_neural_handoff(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 
     monkeypatch.setattr(DeconvolutionProcessor, 'post_process', process)
     monkeypatch.setattr(NoiseReductionProcessor, 'post_process', process)
-    args = arguments('--enable-clarity', '--disable-gradient', '--disable-photometry')
+    args = arguments('--enable-clarity', '--disable-gradient', '--disable-photometry',
+                     '--no-restoration-compare-chains')
     sequence = _PostProcessorSequence()
     sequence.set_from_args(args)
     result = sequence.post_process(source, tmp_path / 'global.json')
@@ -306,7 +307,8 @@ def test_sequence_continues_when_fallback_has_no_gain(
         RuntimeError('Aucune déconvolution efficace sans dégradation mesurée'),
     ))
     monkeypatch.setattr(NoiseReductionProcessor, 'post_process', denoise)
-    args = arguments('--enable-clarity', '--disable-gradient', '--disable-photometry')
+    args = arguments('--enable-clarity', '--disable-gradient', '--disable-photometry',
+                     '--no-restoration-compare-chains')
     results = _PostProcessorSequence().post_process(source, tmp_path / 'global.json', args)
     assert results['deconvolution']['status'] == 'no_safe_improvement'
     assert results['deconvolution']['selected_engine'] is None
@@ -355,7 +357,7 @@ def test_sharpen_uses_auto_matching_by_default(
         for idx in range(1, 41)
     ], []))
     monkeypatch.setattr(processors, 'compare_star_catalogs', compare)
-    monkeypatch.setattr(processors, 'artifact_metrics', lambda *a: {'max_noise_ratio': 1.0, 'max_ring_fraction': 0.0})
+    monkeypatch.setattr(processors, 'artifact_metrics', lambda *a, **k: {'max_noise_ratio': 1.0, 'max_ring_fraction': 0.0})
     monkeypatch.setattr(processors, 'assess_quality', lambda *a, **k: {'reasons': []})
     monkeypatch.setattr(
         'lib.deconvolution.SirilDeconvolutionProcessor._execute',
@@ -366,9 +368,9 @@ def test_sharpen_uses_auto_matching_by_default(
         },
     )
     result = CosmicClaritySharpenProcessor().post_process(source, tmp_path / 'report.json', arguments())
-    assert captured == {'radius': 1.75, 'minimum': 12, 'fraction': 0.7}
-    assert result['matching']['mode'] == 'auto'
-    assert result['matching']['valid_stars_before'] == 40
+    assert captured == {'radius': 1.0, 'minimum': 10, 'fraction': 0.7}
+    assert result['matching']['mode'] == 'common'
+    assert result['matching']['min_stars'] == 10
 
 
 def test_sharpen_forced_manual_matching(
@@ -413,7 +415,7 @@ def test_sharpen_forced_manual_matching(
         for idx in range(1, 41)
     ], []))
     monkeypatch.setattr(processors, 'compare_star_catalogs', compare)
-    monkeypatch.setattr(processors, 'artifact_metrics', lambda *a: {'max_noise_ratio': 1.0, 'max_ring_fraction': 0.0})
+    monkeypatch.setattr(processors, 'artifact_metrics', lambda *a, **k: {'max_noise_ratio': 1.0, 'max_ring_fraction': 0.0})
     monkeypatch.setattr(processors, 'assess_quality', lambda *a, **k: {'reasons': []})
     monkeypatch.setattr(
         'lib.deconvolution.SirilDeconvolutionProcessor._execute',
@@ -431,7 +433,7 @@ def test_sharpen_forced_manual_matching(
     )
     result = CosmicClaritySharpenProcessor().post_process(source, tmp_path / 'report.json', args)
     assert captured == {'radius': 1.2, 'minimum': 9, 'fraction': 0.42}
-    assert result['matching']['mode'] == 'forced-manual'
+    assert result['matching']['mode'] == 'common'
 
 
 @pytest.mark.parametrize('install,run,fail', [(True, False, False), (True, True, False),

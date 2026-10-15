@@ -1308,8 +1308,25 @@ class _PostProcessorSequence(processor):
             raise ValueError("Chaque processeur doit avoir un préfixe unique")
 
     def _selected_processors(self, args: argparse.Namespace) -> list[processor]:
-        """Conserve les instances d’étapes ; leurs moteurs sont choisis en interne."""
-        return list(self.processors)
+        """Fusionne la restauration standard ; respecte les séquences personnalisées."""
+        if self._custom_processors or not getattr(
+            args, "restoration_compare_chains", True
+        ):
+            return list(self.processors)
+        from lib.restoration_chains import RestorationChainProcessor
+
+        selected, inserted = [], False
+        for treatment in self.processors:
+            if isinstance(treatment, (DeconvolutionProcessor, NoiseReductionProcessor)):
+                if not inserted and (
+                    getattr(args, "enable_denoise", True)
+                    or getattr(args, "enable_deconvolution", True)
+                ):
+                    selected.append(RestorationChainProcessor())
+                    inserted = True
+            else:
+                selected.append(treatment)
+        return selected
 
     def set_from_args(self, args: argparse.Namespace) -> None:
         """Configure la sélection et les options de chaque traitement."""

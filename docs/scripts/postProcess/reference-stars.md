@@ -5,9 +5,11 @@
 ## Objectif et activation
 
 Par défaut, la comparaison des candidats de déconvolution et de débruitage
-Siril et Cosmic Clarity mesure les mêmes étoiles dans les images avant et après.
+Siril, Cosmic Clarity et GraXpert mesure les mêmes étoiles dans les images avant et après.
 L’option `--no-deconvolution-reference-measurements` rétablit l’appariement des
-catalogues de détection indépendants. Ce réglage est rémanent avec `-S`, comme
+catalogues de détection indépendants pour Siril et Cosmic Clarity. GraXpert et
+les contrôles finaux des chaînes conservent les positions initiales.
+Ce réglage est rémanent avec `-S`, comme
 les autres options du traitement. Il concerne aussi le débruitage dans la
 séquence postProcess, malgré son préfixe historique `deconvolution`.
 
@@ -76,9 +78,10 @@ références et les motifs sans imprimer une ligne par étoile.
 
 Les contrôles de représentativité en flux et position utilisent uniquement les
 références fiables. Les seuils minimaux d’appariement et les contrôles de gain,
-rondeur, bruit et anneaux restent actifs. Le nombre minimal automatique conserve
-sa définition depuis le catalogue initial ; un nombre trop faible de références
-fiables peut donc toujours empêcher la validation.
+rondeur, bruit et anneaux restent actifs. En mode fiable, les moteurs partagent
+le minimum configuré, dix références par défaut. Le nombre minimal automatique
+de netteté Clarity concerne le mode `legacy` et reste calculé depuis le catalogue
+initial. Un nombre trop faible de références fiables peut empêcher la validation.
 
 Deux plans flottants sont chargés en mémoire, et deux ajustements locaux sont
 nécessaires par référence fiable, pour chaque essai. Le temps augmente avec le

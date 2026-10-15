@@ -18,7 +18,7 @@ from astropy.io import fits
 from lib.cosmic_clarity.models import DEFAULT_MODEL_DIR
 from lib.deconvolution import _quote, compare_star_catalogs, read_star_catalog
 from lib.deconvolution_quality import (
-    artifact_metrics, assess_denoising, assess_quality,
+    artifact_metrics, assess_denoising, denoising_criteria, assess_quality,
 )
 from lib.postprocess_paths import reset_ordered_work_dir
 from lib.processor import processor
@@ -72,7 +72,7 @@ def assess_matching_representation(
             count = int(retained[mask].sum())
             rate = count / total
             evaluated = total >= MIN_REPRESENTATIVE_GROUP
-            accepted = not evaluated or rate >= fraction * MIN_RELATIVE_GROUP_RETENTION
+            accepted = not evaluated or rate >= max(fraction, comparison.get("min_match_fraction", 0)) * MIN_RELATIVE_GROUP_RETENTION
             groups.append(dict(kind=kind, index=int(label), reference_count=total,
                                matched_count=count, retention=rate,
                                evaluated=evaluated, accepted=accepted))
@@ -159,6 +159,8 @@ class _CosmicClarityProcessor(processor):
     operation: Literal['sharpen', 'denoise'] = 'sharpen'
     parameter_persistence = {'deconvolution_output': False}
 
+    parameter_prefixes = ('quality_', 'deconvolution_', 'denoise_', 'cosmic_')
+
     @classmethod
     def get_prefix(cls) -> str:
         """Conserve les noms des rapports et options d'activation historiques."""
@@ -212,6 +214,14 @@ class _CosmicClarityProcessor(processor):
         manual_minimum = int(getattr(args, 'deconvolution_min_stars', 10))
         manual_fraction = float(getattr(args, 'deconvolution_min_match_fraction', 0.7))
         forced_manual = bool(getattr(args, 'deconvolution_force_manual_matching', False))
+        if getattr(args, 'quality_mode', 'reliable') != 'legacy':
+            radius = getattr(args, 'deconvolution_match_radius', 1.0)
+            minimum = getattr(args, 'deconvolution_min_stars', 10)
+            fraction = getattr(args, 'deconvolution_min_match_fraction', .7)
+            return radius, minimum, fraction, dict(
+                mode='common', match_radius_px=radius, min_stars=minimum,
+                min_match_fraction=fraction,
+            )
         if forced_manual:
             return manual_radius, manual_minimum, manual_fraction, {
                 'mode': 'forced-manual',
@@ -264,7 +274,7 @@ class _CosmicClarityProcessor(processor):
             shape = hdul[0].shape
         if len(shape) not in (2, 3) or (len(shape) == 3 and shape[0] != 3):
             raise ValueError('Image FITS mono ou RGB requise')
-        layer = getattr(args, 'deconvolution_layer', None) if self.operation == 'sharpen' else None
+        layer = getattr(args, 'deconvolution_layer', None)
         layer = (1 if len(shape) == 3 else 0) if layer is None else layer
         if layer not in ([0, 1, 2] if len(shape) == 3 else [0]):
             raise ValueError('Canal de mesure incompatible avec cette image')
@@ -328,7 +338,9 @@ class _CosmicClarityProcessor(processor):
                     args, before, layer,
                 )
             else:
-                match_radius, minimum, fraction = 1.0, 10, 0.7
+                match_radius = getattr(args, 'deconvolution_match_radius', 1.0)
+                minimum = getattr(args, 'deconvolution_min_stars', 10)
+                fraction = getattr(args, 'deconvolution_min_match_fraction', .7)
                 matching = {
                     'mode': 'fixed-default',
                     'match_radius_px': match_radius,
@@ -348,6 +360,7 @@ class _CosmicClarityProcessor(processor):
                 0.0 if large_auto else fraction, layer,
                 reference_images=(source, candidate)
                 if getattr(args, 'deconvolution_reference_measurements', True) else None,
+                quality_mode=getattr(args, 'quality_mode', 'reliable'),
             )
             if large_auto and comparison['valid_before_count'] < LARGE_MATCH_SAMPLE:
                 large_auto = False
@@ -378,7 +391,7 @@ class _CosmicClarityProcessor(processor):
 
             artifacts = {}
             if comparison['status'] == 'validated':
-                artifacts = artifact_metrics(source, candidate, comparison['pairs'])
+                artifacts = artifact_metrics(source, candidate, comparison['pairs'], args=args)
             if self.operation == 'sharpen':
                 verdict = assess_quality(comparison, artifacts, **quality)
                 reasons = verdict['reasons']
@@ -394,6 +407,7 @@ class _CosmicClarityProcessor(processor):
                 )
             else:
                 reasons = assess_denoising(comparison, artifacts, max_blur=maximum_blur)
+                result['criteria'] = denoising_criteria(comparison, artifacts, maximum_blur)
                 cosmic_report = dict(
                     engine='cosmic-clarity',
                     status='accepted' if not reasons else 'rejected',

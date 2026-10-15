@@ -1,0 +1,9 @@
+{
+  "3.0.2": {
+    "size": 477703971,
+    "sha256": "e61c880e7fb955917e91141660e66801c9de5c4f3d9946dc449e5a7dd7346563",
+    "provenance": "GraXpert denoising 3.0.2, installed through the Siril model manager; checksum observed locally and ONNX inference verified",
+    "reference": "https://gitlab.com/free-astro/siril-scripts/-/blob/main/processing/GraXpert-AI.py",
+    "license": "CC-BY-NC-SA-4.0"
+  }
+}

@@ -15,6 +15,10 @@ est plafonnée au nombre de processeurs du PC.
 - [Documentation des scripts](docs/scripts/README.md)
 - [Architecture des bibliothèques](docs/architecture/README.md)
 
+Le [site documentaire MkDocs](https://dgedgedge.github.io/SirilProcessing/)
+propose les guides HTML et leurs versions complètes PDF et HTML autonome après
+publication sur GitHub Pages. Voir [la construction et la publication](docs/scripts/generate_docs_html/README.md).
+
 - [Visualiseur graphique des analyses KStars / Ekos](docs/scripts/kstarsAnalyze/README.md)
 
 - [Visualiseur des guide logs KStars / Ekos](docs/scripts/guideLogAnalyze/README.md)

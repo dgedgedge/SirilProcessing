@@ -21,10 +21,13 @@ vers les sommaires maîtres. `docs/README.md` présente les ensembles,
 présente l’architecture. Les détails d’installation sont dans
 [Installation](INSTALLATION.md).
 
-L’accueil HTML est généré à partir du README du projet ; chaque autre Markdown
-conserve son emplacement, avec l’extension `.html`. Ajouter une page demande
+L’accueil MkDocs est généré à partir du README du projet ; chaque autre Markdown
+conserve son emplacement. MkDocs convertit `README.md` en `index.html` dans
+chaque dossier, et les autres pages en `.html`. Ajouter une page demande
 donc de la relier depuis le README de son ensemble, pour qu’elle soit accessible
-dans les deux formats. La navigation HTML ne fournit pas de sommaire parallèle.
+dans les deux formats. La navigation du site est déduite des sources et ne
+demande pas de liste de pages distincte à maintenir. Les mêmes Markdown
+alimentent le PDF et le HTML autonome téléchargeables.
 
 ## Mise à jour
 

@@ -1,4 +1,5 @@
 """Garde-fous mesurables sur profils synthétiques, halos et bruit."""
+import argparse
 import numpy as np
 import pytest
 from astropy.io import fits
@@ -73,7 +74,7 @@ def test_pixel_metrics_detect_noise_and_dark_rings(tmp_path, artifact):
     b, a = tmp_path/'before.fit', tmp_path/'after.fit'
     fits.writeto(b, before.astype('float32'))
     fits.writeto(a, after.astype('float32'))
-    result = artifact_metrics(b, a, pairs)
+    result = artifact_metrics(b, a, pairs, args=argparse.Namespace(quality_mode='legacy'))
     if artifact == 'noise':
         assert result['max_noise_ratio'] > 1.15
     elif artifact == 'ring':
@@ -92,7 +93,7 @@ def test_noise_comparison_normalizes_uint16_and_float_fits(tmp_path):
     fits.writeto(original, integer)
     fits.writeto(candidate, integer.astype('float32')/65535)
     pairs = [dict(reference_id=1, x_before=40.5, y_before=39.5, fwhm_before_px=4.71)]
-    result = artifact_metrics(original, candidate, pairs)
+    result = artifact_metrics(original, candidate, pairs, args=argparse.Namespace(quality_mode='legacy'))
     assert result['max_noise_ratio'] == pytest.approx(1)
     assert result['max_ring_fraction'] == 0
 

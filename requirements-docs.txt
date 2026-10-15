@@ -1,3 +1,6 @@
-# Dépendances du site HTML uniquement (sans Siril ni export PDF).
+# Documentation MkDocs et exports HTML/PDF, sans dépendances astronomiques.
 Markdown>=3.6,<4
 Pygments>=2.18,<3
+mkdocs[i18n]>=1.6,<2
+pymdown-extensions>=10.12,<11
+playwright>=1.51,<2

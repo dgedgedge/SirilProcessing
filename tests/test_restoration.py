@@ -7,7 +7,16 @@ import pytest
 from lib.denoising import NoiseReductionProcessor, SirilNoiseReductionProcessor
 from lib.cosmic_clarity.processors import CosmicClarityDenoiseProcessor
 from lib.processor import processor
+from lib.parameterized_component import ParameterizedComponent
 from lib.type_defs import JSONReport
+
+
+@pytest.fixture(autouse=True)
+def isolate_graxpert_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Isole ces scénarios à deux moteurs des poids GraXpert installés localement."""
+    from lib.graxpert_models import GraXpertModels
+
+    monkeypatch.setattr(GraXpertModels, "find_local_model", lambda self: None)
 
 
 def test_noise_orchestrates_two_independent_processors(
@@ -41,13 +50,13 @@ def test_noise_orchestrates_two_independent_processors(
     monkeypatch.setattr(CosmicClarityDenoiseProcessor, 'post_process', cosmic)
     monkeypatch.setattr(SirilNoiseReductionProcessor, 'post_process', siril)
     result = NoiseReductionProcessor().post_process(
-        source, tmp_path / 'report.json', argparse.Namespace(enable_clarity=True),
+        source, tmp_path / 'report.json', argparse.Namespace(enable_clarity=True, quality_mode='legacy'),
     )
     assert calls == [('cosmic', source), ('siril', source)]
     assert result['selected_engine'] == 'siril'
     assert (tmp_path / 'report.fits').read_bytes() == b'siril'
     assert source.read_bytes() == b'original'
-    assert all(issubclass(cls, processor) for cls in NoiseReductionProcessor.parameter_children())
+    assert all(issubclass(cls, ParameterizedComponent) for cls in NoiseReductionProcessor.parameter_children())
     assert NoiseReductionProcessor.__module__ == 'lib.denoising'
 
 
@@ -65,7 +74,7 @@ def test_noise_disabled_clarity_runs_only_siril(tmp_path: Path, monkeypatch: pyt
     monkeypatch.setattr(SirilNoiseReductionProcessor, 'post_process', siril)
     source = tmp_path / 'source.fits'
     result = NoiseReductionProcessor().post_process(
-        source, tmp_path / 'report.json', argparse.Namespace(enable_clarity=False),
+        source, tmp_path / 'report.json', argparse.Namespace(enable_clarity=False, quality_mode='legacy'),
     )
     assert result['status'] == 'rejected'
     assert result['output_image'] == str(source)
@@ -89,8 +98,51 @@ def test_neural_failure_preserves_child_audit(tmp_path: Path, monkeypatch: pytes
     report = tmp_path / 'report.json'
     with pytest.raises(RuntimeError, match='checkpoint incompatible'):
         NoiseReductionProcessor().post_process(
-            tmp_path / 'source.fits', report, argparse.Namespace(enable_clarity=True),
+            tmp_path / 'source.fits', report, argparse.Namespace(enable_clarity=True, quality_mode='legacy'),
         )
     audit = json.loads(report.read_text())
     assert audit['status'] == 'failed'
     assert audit['evaluations']['cosmic_clarity']['detail'] == 'checkpoint'
+
+
+def test_failure_does_not_prevent_other_engine_and_reference_is_fixed(tmp_path, monkeypatch):
+    """Le mode fiable écarte une erreur technique et réutilise ses masques figés."""
+    import numpy as np
+    from astropy.io import fits
+
+    source = tmp_path / 'source.fits'
+    noise = np.random.default_rng(89).normal(0, .001, (256, 256))
+    fits.writeto(source, (.1 + noise).astype('float32'))
+    references = []
+
+    def cosmic(self, input_path, output_path, args):
+        """Simule une indisponibilité après capture du contexte partagé."""
+        references.append(args._quality_reference)
+        raise RuntimeError('GPU absent')
+
+    def siril(self, input_path, output_path, args):
+        """Réduit un bruit connu et obtient ses métriques sur les mêmes masques."""
+        references.append(args._quality_reference)
+        destination = output_path.with_suffix('.fits')
+        fits.writeto(destination, (.1 + .5 * noise).astype('float32'))
+        audit = args._quality_reference.evaluate(destination)
+        return dict(status='accepted', output_image=str(destination), comparison=dict(
+            status='validated', before_fwhm_px={'mean': 4}, after_fwhm_px={'mean': 4},
+            paired_ratio={'median': 1}), artifacts=dict(
+                max_noise_ratio=audit['noise']['max_noise_ratio'], noise=audit['noise'], max_ring_fraction=0))
+
+    monkeypatch.setattr(CosmicClarityDenoiseProcessor, 'post_process', cosmic)
+    monkeypatch.setattr(SirilNoiseReductionProcessor, 'post_process', siril)
+    result = NoiseReductionProcessor().post_process(source, tmp_path / 'report.json')
+    assert result['selected_engine'] == 'siril'
+    assert result['evaluations']['cosmic_clarity']['status'] == 'failed'
+    assert references[0] is references[1]
+    assert references[0].mask_fingerprint == result['quality_reference']['masks_sha256']
+
+
+def test_unknown_noise_cannot_reward_denoising():
+    """Une métrique manquante ne devient pas une réduction de bruit de 100 %."""
+    report = dict(comparison=dict(before_fwhm_px={'mean': 4}, after_fwhm_px={'mean': 4},
+                                 paired_ratio={'median': 1}),
+                  artifacts=dict(max_noise_ratio=None, max_ring_fraction=0, noise={'proven_gain': None}))
+    assert NoiseReductionProcessor.score(report, 'denoise') == 0

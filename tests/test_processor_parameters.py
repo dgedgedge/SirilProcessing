@@ -1,10 +1,27 @@
 """Instantanés de classe, hiérarchie et isolation des traitements configurés."""
 import argparse
+from pathlib import Path
 from unittest.mock import Mock
 
 from lib.config import Config
 from lib.postprocess import NoiseReductionProcessor, GradientExtractor, _PostProcessorSequence
 from lib.cosmic_clarity.processors import CosmicClarityDenoiseProcessor
+
+
+def test_chain_mode_defaults_and_configuration_priority(tmp_path: Path) -> None:
+    """Les chaînes sont actives par défaut ; configuration et CLI restent prioritaires."""
+    config = Config(tmp_path / 'settings.json')
+    parser = argparse.ArgumentParser()
+    config.register(_PostProcessorSequence, parser)
+    assert config.parse_args(parser, []).restoration_compare_chains is True
+    disabled = config.parse_args(parser, ['--no-restoration-compare-chains'])
+    assert disabled.restoration_compare_chains is False
+    config.set('restoration_compare_chains', False)
+    parser = argparse.ArgumentParser()
+    config.register(_PostProcessorSequence, parser)
+    assert config.parse_args(parser, []).restoration_compare_chains is False
+    enabled = config.parse_args(parser, ['--restoration-compare-chains'])
+    assert enabled.restoration_compare_chains is True
 
 
 def test_scoped_snapshot_and_overrides(tmp_path, monkeypatch):
@@ -21,13 +38,21 @@ def test_scoped_snapshot_and_overrides(tmp_path, monkeypatch):
     assert first._get_args().denoise_modulation == 0.25
     assert second._get_args().denoise_modulation == 0.8
     assert not hasattr(first._get_args(), 'gradient_method')
-    first.set_from_args(argparse.Namespace(denoise_modulation=0.4, enable_clarity=False))
+    first.set_from_args(argparse.Namespace(
+        denoise_modulation=0.4, enable_clarity=False,
+        enable_graxpert=False, quality_mode="legacy",
+    ))
     delegate = Mock(return_value={})
     monkeypatch.setattr('lib.denoising.SirilNoiseReductionProcessor._execute', delegate)
     first.post_process(tmp_path / 'image.fit', tmp_path / 'report.json')
     assert delegate.call_args.args[2].denoise_modulation == 0.4
-    first.post_process(tmp_path / 'image.fit', tmp_path / 'report.json',
-                       argparse.Namespace(denoise_modulation=0.6, enable_clarity=False))
+    first.post_process(
+        tmp_path / 'image.fit', tmp_path / 'report.json',
+        argparse.Namespace(
+            denoise_modulation=0.6, enable_clarity=False,
+            enable_graxpert=False, quality_mode="legacy",
+        ),
+    )
     assert delegate.call_args.args[2].denoise_modulation == 0.6
     assert first._get_args().denoise_modulation == 0.4
 

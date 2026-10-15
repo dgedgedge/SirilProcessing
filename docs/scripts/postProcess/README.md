@@ -2,9 +2,17 @@
 
 [Documentation](../../README.md) › [Scripts](../README.md) › postProcess
 
-`bin/postProcess.py` traite une image FITS à travers quatre étapes ordonnées :
-**correction du gradient → étalonnage spectrophotométrique → déconvolution → débruitage**.
+`bin/postProcess.py` traite une image FITS dans cet ordre :
+**correction du gradient → étalonnage spectrophotométrique → comparaison des chaînes complètes de restauration**.
 Chaque étape reçoit l’image retenue par la précédente et produit un rapport JSON.
+La [qualité astrophotographique](quality.md) utilise par défaut des masques fixes,
+des mesures de bruit avec incertitude et des diagnostics du signal diffus.
+`--quality-mode legacy --no-restoration-compare-chains` retrouve les métriques
+historiques et les comparaisons par étape.
+La comparaison des chaînes débruitage → netteté est active par défaut ;
+l’ordre inverse reste optionnel. `--no-restoration-compare-chains` rétablit
+les comparaisons par étape, déconvolution puis débruitage. Voir la
+[synthèse des essais et des éliminations](quality.md#synthèse-des-essais-et-des-éliminations).
 Les quatre traitements sont activés par défaut ; leur activation peut être
 modifiée par la ligne de commande ou par la configuration mémorisée.
 
@@ -13,7 +21,17 @@ par exemple après [lightProcess](../lightProcess/README.md). Elle ne réalise n
 la calibration des poses brutes, ni leur empilement, ni un étirement final de
 l’histogramme.
 
+GraXpert est ajouté automatiquement à la comparaison lorsque des poids locaux
+valides sont présents, sauf désactivation explicite (`--no-enable-graxpert` ou
+configuration sauvegardée). ONNX Runtime s’installe avec
+`bin/postProcess.sh --install-graxpert`. `--enable-graxpert` force l’activation et
+l’acquisition des poids manquants ; voir [GraXpert et ses modèles](graxpert.md).
+
 ## Lancer un traitement
+
+Le script demande automatiquement le profil performance et inhibe la veille
+pendant le calcul. Cette [protection énergétique](power-guard.md) est facultative :
+si D-Bus ou ses services sont indisponibles, le traitement continue normalement.
 
 Depuis la racine du projet :
 
@@ -59,28 +77,33 @@ Voir [l’installation](../../INSTALLATION.md) pour l’environnement du projet.
 flowchart TD
     A["FITS source"] --> G["01 · Correction du gradient"]
     G --> P["02 · Astrométrie Gaia et couleurs SPCC"]
-    P --> C{"Clarity actif ?"}
-    C -->|Non| D1["03 · Déconvolution Siril"]
-    C -->|Oui| D2["03 · Déconvolution :\nCosmic Clarity + Siril\n(évaluation comparative)"]
-    D1 --> V{"Déconvolution acceptée ?"}
-    D2 --> V
-    V -->|Oui| N0{"Clarity actif ?"}
-    V -->|Non| E["Poursuite avec l’image précédente ; audit conservé"]
-    N0 -->|Non| N1["04 · Débruitage Siril"]
-    N0 -->|Oui| N2["04 · Débruitage :\nCosmic Clarity + Siril\n(évaluation comparative)"]
-    N1 --> Q{"Débruitage accepté ?"}
-    N2 --> Q
-    Q -->|Oui| R["FITS final et rapport global"]
-    Q -->|Non| O["Conserver l’image reçue par le débruitage"]
+    P --> C{"Comparer les chaînes ?"}
+    C -->|Non| D["03 · Évaluation séquentielle des moteurs de netteté actifs"]
+    D --> V{"Candidat accepté avec score positif ?"}
+    V -->|Oui| S["Retenir le meilleur candidat"]
+    V -->|Non| E["Conserver l’entrée de la déconvolution"]
+    S --> N["04 · Évaluation séquentielle des débruiteurs actifs"]
+    E --> N
+    N --> Q{"Candidat accepté avec score positif ?"}
+    Q -->|Oui| B["Retenir le meilleur candidat"]
+    Q -->|Non| O["Conserver l’entrée du débruitage"]
+    C -->|Oui, par défaut| H["03 · Chaînes : identité, moteurs seuls et associations"]
+    H --> I["Contrôles locaux, puis comparaison finale à la référence commune"]
+    I --> T["Retenir la meilleure chaîne sûre de score positif, sinon l’identité"]
+    B --> R["FITS final et rapport global"]
     O --> R
+    T --> R
 ```
 
-Le schéma suppose les quatre étapes actives. Une étape désactivée est sautée et
-l’image courante est transmise à la suivante. Une erreur d’exécution interrompt
-la séquence, sauf le cas `no_safe_improvement` de la déconvolution : l’audit est
-conservé et l’image d’entrée de l’étape est transmise à la suivante. Le refus
-d’un candidat de débruitage pour qualité insuffisante est un résultat normal :
-la séquence poursuit avec l’image précédente.
+Le schéma décrit le mode `reliable`, avec les quatre traitements actifs.
+Siril et Cosmic Clarity produisent les candidats de netteté ; GraXpert peut
+s’ajouter au débruitage. Les activations des moteurs sont respectées.
+Une étape désactivée transmet l’image courante à la suivante. En mode fiable,
+une erreur technique d’un moteur est auditée, puis les autres sont essayés.
+Les erreurs de gradient, photométrie ou de publication restent bloquantes.
+Un refus de qualité conserve l’entrée et permet de poursuivre. Le mode
+`legacy` conserve les exceptions bloquantes historiques des moteurs et peut
+retenir un candidat accepté même si son score n’est pas positif.
 
 | Position | Traitement | Classe | Effet sur l’image |
 |---|---|---|---|
@@ -93,29 +116,37 @@ Les indices restent fixes lorsqu’une étape est désactivée. Les options
 `--enable-gradient`, `--enable-photometry`, `--enable-denoise` et
 `--enable-deconvolution` activent explicitement les étapes correspondantes ; les
 options `--disable-…` les désactivent. Les variantes `--enable_<préfixe>` et
-`--disable_<préfixe>` sont également acceptées. Le CLI ne change pas leur ordre.
+`--disable_<préfixe>` sont également acceptées. Hors comparaison des chaînes,
+leur ordre reste fixe. La comparaison des chaînes, active par défaut, remplace les étapes 03/04
+par `03_restoration`, en respectant leurs activations ; voir les
+[chaînes complètes](quality.md#chaînes-complètes).
 
 ## Moteur Cosmic Clarity optionnel
 
-Le mode comparatif Cosmic Clarity + Siril est activé par défaut.
-Chaque étape `deconvolution` et `denoise` évalue **les deux moteurs** (Cosmic
-Clarity et Siril) et conserve automatiquement la meilleure sortie acceptée.
+Cosmic Clarity et Siril sont activés par défaut. Chaque étape de restauration
+évalue séquentiellement ses moteurs actifs sur la même entrée : deux moteurs
+de netteté et jusqu’à trois débruiteurs avec GraXpert. `--disable-clarity`
+désactive Cosmic Clarity ; `--no-restoration-siril` écarte Siril en mode fiable.
+Pour utiliser uniquement le moteur Siril, désactiver aussi GraXpert avec
+`--no-enable-graxpert`.
 Si aucune déconvolution n’est acceptée, le statut reste
 `no_safe_improvement` et l’image reçue est conservée. Si aucun débruitage n’est
 accepté, l’image reçue est également conservée.
 
 Algorithme appliqué en mode comparatif :
 
-1. exécution des deux moteurs ;
-2. contrôles de qualité sur chaque candidat (mêmes métriques stellaires) ;
+1. exécution séquentielle des moteurs actifs ;
+2. contrôles de qualité sur chaque candidat, avec mêmes références stellaires
+   et mêmes masques de ciel en mode fiable ;
 3. conservation des seuls candidats `accepted` ;
 4. calcul d’un score interne par candidat (netteté ou débruitage) ;
-5. sélection du score maximal, sinon conservation de l’image d’entrée.
+5. en mode fiable, sélection du score maximal strictement positif, sinon
+   conservation de l’image d’entrée.
 
 ```bash
 bin/postProcess.sh --install-cosmic-clarity
 bin/postProcess.sh image_RGB.fit --enable-clarity
-bin/postProcess.sh image_RGB.fit --disable-clarity
+bin/postProcess.sh image_RGB.fit --disable-clarity --no-enable-graxpert
 ```
 
 L'option d'installation est capturée par le `.sh` ; elle utilise pip système
@@ -124,9 +155,9 @@ pour installer les dépendances dans le venv et récupérer les poids vérifiés
 peuvent être mémorisées avec `-S`.
 Les noms des rapports, l'ordre et les contrôles d'acceptation restent les mêmes.
 Les algorithmes détaillés ci-dessous décrivent le moteur Siril.
-Quand Clarity est actif, les sections 03/04 sont exécutées en double
-(Cosmic Clarity + Siril), puis une sélection automatique conserve le meilleur
-candidat accepté.
+Quand Clarity est actif, un candidat Cosmic Clarity est ajouté à chaque étape
+de restauration. GraXpert ajoute son propre candidat de débruitage lorsque ses
+poids sont présents ou que son activation est forcée.
 Voir [Cosmic Clarity](cosmic-clarity.md) pour les classes, modèles, paramètres,
 ressources, différences avec l'amont et limites de validation.
 
@@ -224,9 +255,9 @@ La déconvolution cherche à réduire l’étalement des détails. Elle utilise
 Richardson–Lucy par descente de gradient avec régularisation TV, sur une copie
 de l’image reçue. La PSF est le noyau représentant cet étalement.
 
-Ce paragraphe décrit le traitement **Siril** (`--disable-clarity`) ; en mode
-comparatif (par défaut), un candidat **Cosmic Clarity** est évalué en parallèle
-et soumis aux mêmes contrôles d’acceptation.
+Ce paragraphe décrit le traitement **Siril** ; en mode comparatif, le candidat
+**Cosmic Clarity** est évalué séparément et séquentiellement, puis soumis aux
+mêmes contrôles d’acceptation.
 
 Par défaut, la PSF est estimée par Siril avec `makepsf blind -l0`. L’option
 `--deconvolution-psf-method stars` utilise une sélection d’étoiles fines, rondes
@@ -238,6 +269,11 @@ sur la FWHM moyenne et le ratio médian apparié, sans perte de rondeur moyenne
 supérieure à `0.01`. Le bruit ne doit pas dépasser 1,15 fois son niveau initial,
 et la fraction de nouveaux anneaux ne doit pas dépasser 10 %. Les contrôles
 d’artefacts portent sur tous les canaux.
+Le bruit est mesuré sur les masques fixes décrits dans
+[Qualité astrophotographique](quality.md). Un bruit `UNKNOWN` n’est pas validé,
+mais n’interdit pas à lui seul une amélioration stellaire en déconvolution.
+Des anneaux impossibles à mesurer rejettent le candidat. Les nouveaux contrôles
+de flux sont diagnostiques, sauf activation de `--quality-enforce-diffuse`.
 
 ### Détail du candidat Cosmic Clarity (mode comparatif)
 
@@ -259,10 +295,10 @@ En mode comparatif, l’étape produit aussi un candidat neuronal :
 Le candidat Siril et le candidat Cosmic Clarity sont ensuite comparés :
 
 - seuls les candidats au statut `accepted` sont éligibles ;
-- un score de netteté est calculé pour chaque candidat accepté :
-  `2*mean_gain + 2*ratio_gain - 0.2*noise_penalty - 0.2*ring_penalty` ;
+- un [score de netteté](cosmic-clarity.md#score-de-sélection-utilisé) est calculé
+  pour chaque candidat accepté ;
 - le candidat au score maximal devient `03_deconvolution.fits` ;
-- si aucun candidat n’est accepté, l’étape renvoie `no_safe_improvement` et
+- si aucun candidat accepté ne bat l’identité en mode fiable, l’étape renvoie `no_safe_improvement` et
   conserve l’image d’entrée.
 
 **Le repli adaptatif est activé par défaut.** Si le premier essai échoue, le
@@ -286,12 +322,14 @@ Une erreur d’exécution d’un essai laisse les pas suivants disponibles se
 poursuivre ; un rejet pour artefacts arrête toujours la montée du pas.
 En mode comparatif, le candidat Cosmic Clarity reste évalué et sélectionnable.
 Pour les étapes de déconvolution et de débruitage, le journal `INFO` présente
-les deux évaluations, leurs mesures et verdicts, les scores des candidats
+les évaluations actives, leurs mesures et verdicts, les scores des candidats
 acceptés puis le choix final. Voir le [détail du journal comparatif](cosmic-clarity.md#déroulé-comparatif-des-étapes-03-et-04).
 
-Avant le démarrage de l’étape, le dossier `03_deconvolution_work/` est supprimé
-puis recréé ; l’exécution courante écrit dans `03_deconvolution_work/001/`.
-Cela évite les reliquats d’un lancement précédent et garde un ordre lisible.
+Chaque moteur recrée son dossier de travail :
+`03_deconvolution_siril_work/001/` ou
+`03_deconvolution_cosmic_clarity_work/001/`. Le nom sans suffixe de moteur
+(`03_deconvolution_work/001/`) concerne l’appel direct Siril historique en
+mode `legacy`, sans Clarity. Cela évite les reliquats d’un lancement précédent.
 
 | Option | Défaut local | Rôle |
 |---|---|---|
@@ -327,9 +365,9 @@ stabilisatrice de variance Anscombe, en flottant 32 bits. Il compare les
 catalogues stellaires avant et après sur les mêmes étoiles : canal vert pour
 une image RGB, canal unique pour une image monochrome.
 
-Ce paragraphe décrit le traitement **Siril** (`--disable-clarity`) ; en mode
-comparatif (par défaut), un candidat **Cosmic Clarity** est évalué en parallèle
-et départagé automatiquement.
+Ce paragraphe décrit le traitement **Siril**. Les candidats **Cosmic Clarity**
+et **GraXpert**, lorsqu’ils sont actifs, sont évalués séparément et
+séquentiellement, puis départagés automatiquement.
 
 Le candidat est accepté seulement si les contrôles suivants sont satisfaits :
 
@@ -340,22 +378,37 @@ Le candidat est accepté seulement si les contrôles suivants sont satisfaits :
 - diminution mesurée du bruit sur tous les canaux et fraction de nouveaux anneaux
   stellaires ne dépassant pas 10 %.
 
-### Détail du candidat Cosmic Clarity (mode comparatif)
+En mode fiable, le bruit utilise les masques fixes et l’incertitude bootstrap
+de [Qualité astrophotographique](quality.md), avec `noise_unknown` si le ciel
+fiable manque. Une baisse numérique ne suffit pas à la sélection : le score
+doit rester positif après pénalités. `--quality-enforce-significance` exige
+en plus le gain utile configuré, 5 % par défaut, avec sa significativité.
+Les contrôles de flux restent en observation sauf `--quality-enforce-diffuse`.
+Les anneaux non mesurables rejettent également le candidat.
+
+### Comparaison des candidats de débruitage
 
 En mode comparatif, l’étape calcule aussi un candidat neuronal de débruitage
 (`--cosmic-denoise-amount`, modèle AI3.6), puis applique les mêmes mesures
 stellaires Siril et contrôles d’artefacts que pour Siril.
-Avant le démarrage de l’étape, le dossier `04_denoise_work/` est supprimé puis
-recréé ; l’exécution courante écrit dans `04_denoise_work/001/`.
+[GraXpert natif](graxpert.md) produit un troisième candidat lorsque ses poids
+locaux sont valides ou que son activation est forcée, sauf désactivation explicite.
+Chaque moteur recrée son
+propre dossier `04_denoise_<moteur>_work/001/`. Le dossier sans suffixe
+`04_denoise_work/001/` concerne le mode direct Siril historique, sans Clarity
+ni GraXpert, avec `--quality-mode legacy`.
 
 La sélection suit la même logique que pour la déconvolution :
 
 - seuls les candidats `accepted` participent ;
-- score de débruitage par candidat accepté :
-  `(1 - max_noise_ratio) - 0.5*blur_penalty - 0.2*ring_penalty` ;
-- le score maximal est retenu et copié en `04_denoise.fits` ;
-- sans candidat accepté, le rapport final de l’étape garde `status: "rejected"`
+- le [score de débruitage](cosmic-clarity.md#score-de-sélection-utilisé) utilise
+  la borne conservative du gain de bruit en mode fiable ;
+- le score maximal strictement positif est retenu et copié en `04_denoise.fits` ;
+- sans candidat accepté de score positif, le rapport final de l’étape garde `status: "rejected"`
   et transmet l’image reçue à l’étape.
+
+En mode `legacy`, le score utilise le ratio de bruit historique et l’identité
+n’impose pas un score positif aux candidats acceptés.
 
 | Option | Défaut local | Rôle |
 |---|---|---|
@@ -365,8 +418,8 @@ La sélection suit la même logique que pour la déconvolution :
 Si le candidat est accepté, `04_denoise.fits` devient le FITS final.
 Sinon, le rapport indique `status: "rejected"`, détaille `rejection_reasons` et
 renvoie l’image précédente dans `output_image`. Les candidats et diagnostics
-restent disponibles dans un dossier de travail unique. Un échec technique de
-Siril, en revanche, arrête la séquence.
+restent disponibles dans les dossiers des moteurs. En mode fiable, un échec
+technique Siril est audité et écarte ce candidat ; les autres moteurs continuent.
 
 ## Configuration et mémorisation
 
@@ -409,11 +462,14 @@ bin/postProcess.sh autre_image_RGB.fit rapports/autre.json \
 La sauvegarde intervient avant les traitements, après vérification de la présence
 de l’image d’entrée. Les réglages peuvent donc être mémorisés même si une étape
 échoue ensuite. Un échec de sauvegarde arrête le programme.
+Les réglages de qualité et des chaînes sont également rémanents. Pour GraXpert,
+`enable_graxpert: null` conserve l’activation automatique ; `false` reste une
+désactivation explicite, même avec des poids présents.
 
 ## Rapports, images et journaux
 
 Pour `bin/postProcess.sh image_RGB.fit rapports/`, avec toutes les
-étapes actives et acceptées (mode comparatif activé par défaut) :
+étapes actives et acceptées, en mode fiable et avec les poids GraXpert présents :
 
 ```text
 rapports/
@@ -429,37 +485,62 @@ rapports/
     ├── 02_photometry_<identifiant>/
     ├── 03_deconvolution.json
     ├── 03_deconvolution.fits
-    ├── 03_deconvolution_work/
-    │   └── 001/
+    ├── 03_deconvolution_masks.fits
+    ├── 03_deconvolution_cosmic_clarity.json
+    ├── 03_deconvolution_cosmic_clarity_work/001/
+    ├── 03_deconvolution_siril.json
+    ├── 03_deconvolution_siril_work/001/
     ├── 04_denoise.json
     ├── 04_denoise.fits
-    └── 04_denoise_work/
-        └── 001/
+    ├── 04_denoise_masks.fits
+    ├── 04_denoise_cosmic_clarity.json
+    ├── 04_denoise_cosmic_clarity_work/001/
+    ├── 04_denoise_siril.json
+    ├── 04_denoise_siril_work/001/
+    ├── 04_denoise_graxpert.json
+    └── 04_denoise_graxpert_work/001/
 ```
 
-Le PNG est facultatif. Les chemins explicites de sortie peuvent déplacer les
-images. Le FITS d’origine n’est pas modifié par les sorties par défaut.
-Les dossiers uniques des traitements Siril conservent leurs scripts `.sps`,
-journaux `.log`, catalogues stellaires et images candidates. Pour la
-déconvolution et le débruitage, ces dossiers sont maintenant déterministes
-(`03_deconvolution_work/001` et `04_denoise_work/001`), recréés à chaque
-exécution ; pour la déconvolution, ils contiennent aussi l’original de l’étape,
+Cet arbre omet les copies FITS publiées par chaque moteur accepté
+(`03_deconvolution_<moteur>.fits`, `04_denoise_<moteur>.fits`). Un moteur absent
+ou désactivé ne produit pas tous ces fichiers. Le PNG est facultatif.
+Les chemins explicites de sortie peuvent déplacer les images. Le FITS d’origine
+n’est pas modifié par les sorties par défaut.
+Les dossiers des moteurs conservent scripts `.sps`, journaux `.log`, catalogues
+stellaires et images candidates. Ils sont déterministes et recréés à chaque
+exécution ; pour la déconvolution Siril, ils contiennent aussi l’original de l’étape,
 les PSF et leurs aperçus, ainsi que `matched_stars.csv` préfixé par le nom de
 l’étape en cas de succès.
 
+Par défaut, `03_restoration.json`, `03_restoration_summary.txt` et le dossier
+`03_restoration_work/001/` remplacent les rapports des étapes 03/04. Ce dossier
+contient `common_masks.fits`, les rapports numérotés des opérations et les
+aperçus PNG des zones de qualité (`common_masks.png`, étoiles rouges, signal
+diffus orange, zones incertaines bleues et tuiles de ciel retenues vertes), puis les
+contrôles finaux. `03_restoration.fits` est publié si une chaîne bat l’identité ;
+sinon, l’image amont est conservée. Les détails sont dans
+[Chaînes complètes](quality.md#chaînes-complètes).
+
+Le dossier des étapes contient aussi `quality_gradient_points.png` lorsque les
+points du gradient sont enregistrés : cet aperçu montre les points sur le FITS
+original, pour comparaison avec le diagnostic des exclusions de qualité.
+
 Le rapport global est un objet JSON dont les clés sont les préfixes des étapes
-exécutées : `gradient`, `photometry`, `deconvolution`, `denoise`. Chaque résultat
+exécutées : `gradient`, `photometry`, `deconvolution`, `denoise`, ou
+`restoration` à la place des deux dernières en comparaison des chaînes. Chaque résultat
 indique son `output_image` lorsqu’une image doit être transmise. Le FITS final est
 celui référencé par la dernière étape active, recopié au niveau du rapport global
 sous le nom `<image>_postprocess_<backend>.fits`.
 
 Le log principal est recréé à chaque lancement. Avec `--log-level DEBUG`, les
-exceptions y incluent leur traceback. Une erreur interrompt les étapes suivantes
-et empêche l’écriture du rapport global de cette exécution, sauf pour le statut
-`no_safe_improvement` de la déconvolution qui est traité comme un refus contrôlé.
-Dans ce cas, la séquence continue avec l’image précédente et le rapport global
-est bien écrit. Les sorties déjà produites et les audits disponibles restent sur
-disque. Un rapport global d’un lancement précédent peut donc encore exister :
+exceptions levées y incluent leur traceback. Une erreur non prise en charge au
+niveau d’une étape interrompt les suivantes et empêche l’écriture du rapport
+global de cette exécution. En mode fiable, l’échec isolé d’un moteur est conservé
+dans `evaluations` et n’arrête pas les autres moteurs. Le statut
+`no_safe_improvement` de la déconvolution est un refus contrôlé : la séquence
+continue avec l’image précédente et écrit le rapport global.
+Les sorties déjà produites et les audits disponibles restent sur disque.
+Un rapport global d’un lancement précédent peut donc encore exister :
 vérifier le code de sortie et les journaux. Le programme retourne `0` en cas de
 succès, `1` pour une erreur de traitement et `130` pour une interruption clavier ;
 argparse retourne `2` pour une ligne de commande invalide.
@@ -501,19 +582,21 @@ Les poids Cosmic Clarity manquants ou corrompus sont téléchargés avant leur
 chargement dans `tmp/models/cosmicclarity/` par défaut, ou dans le dossier
 `--cosmic-model-dir` résolu. Voir [installation et téléchargement](cosmic-clarity.md#installation-et-lancement).
 
-Pour la netteté Cosmic Clarity, les grands catalogues sont contrôlés selon la
-[représentativité spatiale et en flux](cosmic-clarity.md#représentativité-de-lappariement-pour-la-netteté),
+En mode `--quality-mode legacy`, pour la netteté Cosmic Clarity, les grands catalogues sont contrôlés selon la
+[représentativité spatiale et en flux](cosmic-clarity.md#matching-representation),
 avec une alerte de fraction au lieu du rejet automatique à 70 %.
 
 Les journaux détaillent les mesures, seuils et verdicts de chaque contrôle ; voir
 [la lecture des motifs](cosmic-clarity.md#lecture-des-motifs-dans-le-journal).
 
 La [mesure aux positions initiales](reference-stars.md) est activée par défaut
-pour comparer les candidats Siril et Cosmic Clarity, en déconvolution et en
-débruitage. `--no-deconvolution-reference-measurements` rétablit les catalogues
-indépendants. Le diagnostic conserve le SNR et les motifs d’échec individuels.
+pour comparer les candidats Siril, Cosmic Clarity et GraXpert. Les moteurs Siril
+et Clarity acceptent `--no-deconvolution-reference-measurements` pour rétablir
+les catalogues indépendants ; GraXpert et les contrôles finaux des chaînes
+conservent les mesures aux positions initiales. Le diagnostic conserve le SNR
+et les motifs d’échec individuels.
 
 La [structure des traitements de restauration](restoration.md) distingue les
-orchestrateurs des moteurs Siril et Cosmic Clarity, tous de type `processor`.
+orchestrateurs des moteurs Siril, Cosmic Clarity et GraXpert, tous de type `processor`.
 
-Les moteurs Siril organisent leur calcul en [phases d’exécution indépendantes](restoration.md#état-et-phases-dune-exécution-siril), avec un état propre à chaque appel. L’élargissement de la PSF ne modifie pas le seuil d’appariement configuré.
+Les moteurs Siril organisent leur calcul en [phases d’exécution indépendantes](restoration.md#siril-execution-phases), avec un état propre à chaque appel. L’élargissement de la PSF ne modifie pas le seuil d’appariement configuré.

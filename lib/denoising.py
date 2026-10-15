@@ -13,7 +13,7 @@ import numpy as np
 from astropy.io import fits
 
 from lib.deconvolution import _quote, compare_star_catalogs
-from lib.deconvolution_quality import artifact_metrics, assess_denoising
+from lib.deconvolution_quality import artifact_metrics, assess_denoising, denoising_criteria
 from lib.postprocess_paths import reset_ordered_work_dir
 from lib.siril_utils import Siril
 from lib.processor import processor
@@ -57,7 +57,10 @@ class _DenoisingExecution:
                 raise ValueError("Image mono ou RGB requise")
             if len(self.shape) == 2 and hdul[0].header.get("BAYERPAT", "").strip():
                 raise ValueError("Dématricer le FITS CFA avant réduction du bruit")
-        self.layer = 1 if len(self.shape) == 3 else 0
+        self.layer = getattr(self.args, 'deconvolution_layer', None)
+        self.layer = (1 if len(self.shape) == 3 else 0) if self.layer is None else self.layer
+        if self.layer not in ([0, 1, 2] if len(self.shape) == 3 else [0]):
+            raise ValueError('Canal de mesure incompatible avec l’image')
         self.report.parent.mkdir(parents=True, exist_ok=True)
         self.work = reset_ordered_work_dir(self.report)
         self.candidate = self.work / "candidate.fits"
@@ -118,16 +121,20 @@ class _DenoisingExecution:
     def _evaluate_candidate(self) -> list[str]:
         """Mesure les mêmes étoiles et retourne les motifs de rejet."""
         comparison = compare_star_catalogs(
-            self.before, self.after, 1.0, 10, 0.7, self.layer,
+            self.before, self.after,
+            getattr(self.args, 'deconvolution_match_radius', 1.0),
+            getattr(self.args, 'deconvolution_min_stars', 10),
+            getattr(self.args, 'deconvolution_min_match_fraction', .7), self.layer,
             reference_images=(self.source, self.candidate)
             if getattr(self.args, 'deconvolution_reference_measurements', True) else None,
+            quality_mode=getattr(self.args, 'quality_mode', 'reliable'),
         )
         self.result["comparison"] = comparison
         reasons = []
         if comparison["status"] != "validated":
             reasons.append("insufficient_matches")
         else:
-            metrics = artifact_metrics(self.source, self.candidate, comparison["pairs"])
+            metrics = artifact_metrics(self.source, self.candidate, comparison["pairs"], args=self.args)
             self.result["artifacts"] = metrics
             mean_ratio = (
                 comparison["after_fwhm_px"]["mean"]
@@ -135,14 +142,22 @@ class _DenoisingExecution:
             )
             median_ratio = comparison["paired_ratio"]["median"]
             reasons = assess_denoising(comparison, metrics, max_blur=self.max_blur)
+            noise_gain = (
+                f"{100 * (1 - metrics['max_noise_ratio']):+.2f} %"
+                if metrics['max_noise_ratio'] is not None
+                else "UNKNOWN (ciel fiable insuffisant)"
+            )
             logging.info(
-                "Réduction du bruit : %d étoiles appariées ; gain de bruit minimal %+.2f %% ; "
+                "Réduction du bruit : %d étoiles appariées ; gain de bruit (pire canal) %s ; "
                 "variation FWHM moyenne %+.2f %% ; variation médiane appariée %+.2f %%",
                 comparison["matched_count"],
-                100 * (1 - metrics["max_noise_ratio"]),
+                noise_gain,
                 100 * (mean_ratio - 1),
                 100 * (median_ratio - 1),
             )
+        self.result["criteria"] = denoising_criteria(
+            comparison, self.result.get("artifacts", {}), self.max_blur
+        )
         self.result["rejection_reasons"] = reasons
         return reasons
 
@@ -185,6 +200,8 @@ class _DenoisingExecution:
 
 class SirilNoiseReductionProcessor(processor):
     """Exécute uniquement le moteur Siril et ses contrôles de qualité."""
+
+    parameter_prefixes = ('quality_', 'deconvolution_', 'denoise_', 'cosmic_')
 
     @classmethod
     def get_prefix(cls) -> str:
