@@ -6,6 +6,11 @@
 |---|---|
 | [parameterized_component.py](../../lib/parameterized_component.py) | Partager la déclaration et la capture des paramètres entre services et traitements |
 | [processor.py](../../lib/processor.py) | Ajouter le contrat de traitement d’image aux composants configurables |
+| [final_render.py](../../lib/final_render.py) | Orchestrer et publier le [rendu final AutoGHS](../scripts/postProcess/auto-ghs.md) après les traitements linéaires |
+| [auto_ghs.py](../../lib/auto_ghs.py) | Calculer les étirements et rechercher leurs paramètres sur histogrammes |
+| [star_separation.py](../../lib/star_separation.py) | Adapter StarNet V2 via le service Siril existant |
+| [star_rendering.py](../../lib/star_rendering.py) | Étendre modérément les étoiles et recomposer les branches |
+| [compute_config.py](../../lib/compute_config.py) | Partager la [politique CPU/GPU](../scripts/postProcess/compute-backend.md) et les surcharges des moteurs |
 | [config.py](../../lib/config.py) | Centraliser les réglages, leurs valeurs par défaut et leur persistance |
 | [fits_info.py](../../lib/fits_info.py) | Donner accès aux caractéristiques des FITS et aux informations nécessaires à leur regroupement et à leur validation |
 | [restoration_quality.py](../../lib/restoration_quality.py) | Évaluer les candidats sur des masques indépendants des moteurs et du gradient |

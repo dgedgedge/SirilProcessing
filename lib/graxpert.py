@@ -96,9 +96,11 @@ class GraXpertDenoiseProcessor(processor):
                 detail="Installer avec bin/postProcess.sh --install-graxpert",
             )
         providers = ort.get_available_providers()
+        requested = GraXpertEngine.requested_backend(args)
+        required = ('CUDAExecutionProvider',) if requested == 'cuda' else GPU_PROVIDERS
         if (
-            getattr(args, "graxpert_gpu", False)
-            and not any(provider in GPU_PROVIDERS for provider in providers)
+            requested in ('cuda', 'gpu')
+            and not any(provider in required for provider in providers)
             and not getattr(args, "graxpert_cpu_fallback", False)
         ):
             return dict(available=False, reason="GPU_UNAVAILABLE", providers=providers)

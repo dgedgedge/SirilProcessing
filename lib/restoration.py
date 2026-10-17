@@ -64,6 +64,9 @@ class RestorationComparisonProcessor(processor):
     @classmethod
     def add_shared_arguments(cls, parser: argparse.ArgumentParser) -> None:
         """Déclare une seule fois services, moteurs optionnels et modes de chaînes."""
+        from lib.compute_config import ComputeConfig
+
+        ComputeConfig.add_arguments(parser)
         if not any(action.dest == "enable_clarity" for action in parser._actions):
             from lib.cosmic_clarity.processors import add_arguments
 

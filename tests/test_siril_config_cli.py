@@ -41,14 +41,14 @@ def test_postprocess_save_reload_and_override(tmp_path: Path) -> None:
     # L’aperçu de qualité est désormais produit même sans traitement actif.
     fits.writeto(image, np.zeros((64, 64), dtype=np.float32))
     command = [str(root / 'bin/postProcess.sh'), str(image), str(tmp_path / 'report.json'),
-               '--config', str(config_path), '--disable-gradient', '--disable-photometry', '--disable-denoise', '--disable-deconvolution']
+               '--config', str(config_path), '--disable-gradient', '--disable-photometry', '--disable-denoise', '--disable-autoghs', '--disable-deconvolution']
 
     def run(*options: str) -> str:
         """Exécute le lanceur avec les surcharges et retourne son journal de session."""
         result = subprocess.run([*command, *options], cwd=tmp_path,
                                 env={**os.environ, 'VENV_DIR': sys.prefix}, capture_output=True, text=True)
         assert result.returncode == 0, result.stderr
-        return (tmp_path / 'image_postprocess_cosmic-clarity/00_image_postProcess.log').read_text()
+        return (tmp_path / 'image_postprocess/00_image_postProcess.log').read_text()
 
     run('-S', '-m', 'native', '-s', '/example/siril-cli')
     saved = json.loads(config_path.read_text())

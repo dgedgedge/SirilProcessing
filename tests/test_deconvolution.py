@@ -199,15 +199,17 @@ def test_invalid_parameters(tmp_path, simulated_siril, options):
 
 
 def test_order_and_default_activation() -> None:
-    """Vérifie que la déconvolution précède le débruitage, actifs par défaut."""
+    """La restauration et le rendu final sont actifs par défaut."""
     sequence = _PostProcessorSequence()
-    assert isinstance(sequence.processors[-3], PhotometricColorCalibrator)
-    assert isinstance(sequence.processors[-2], DeconvolutionProcessor)
-    assert sequence.processors[-1].get_prefix() == 'denoise'
+    assert isinstance(sequence.processors[-4], PhotometricColorCalibrator)
+    assert isinstance(sequence.processors[-3], DeconvolutionProcessor)
+    assert sequence.processors[-2].get_prefix() == 'denoise'
+    assert sequence.processors[-1].get_prefix() == 'autoghs'
     assert arguments().enable_denoise is True
     assert arguments().enable_deconvolution is True
     assert arguments().enable_photometry is True
-    assert all(processor.enabled_by_default for processor in sequence.processors)
+    assert all(processor.enabled_by_default for processor in sequence.processors[:-1])
+    assert arguments().enable_autoghs is True
     assert arguments('--disable-deconvolution').enable_deconvolution is False
     assert arguments('--disable-photometry').enable_photometry is False
 

@@ -419,3 +419,31 @@ def test_real_model_on_m33_crop_when_available(tmp_path, monkeypatch, project_ro
     QualityReference.validate_metadata(source, candidate)
     assert report["providers"] == ["CPUExecutionProvider"]
     assert report["model_version"] == "3.0.2"
+
+
+def test_auto_gpu_inference_failure_does_not_restart_cpu(
+    tmp_path: Path, native_engine: argparse.Namespace, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Auto peut choisir CPU au démarrage, mais ne reprend pas une inférence échouée."""
+    import onnxruntime as ort
+
+    source = tmp_path/'image.fits'
+    fits.writeto(source, np.random.default_rng(51).normal(.1, .001, (32, 32)).astype(np.float32))
+    native_engine.graxpert_gpu = None
+    native_engine.compute_backend = 'auto'
+    native_engine.graxpert_cpu_fallback = False
+    calls = []
+    class FailedSession(Session):
+        """Simule une panne après création réussie de la session GPU."""
+        def run(self, names: list[str], feed: dict[str, np.ndarray]) -> list[np.ndarray]:
+            """Échoue pendant le premier lot de calcul."""
+            raise RuntimeError('inference GPU failure')
+    def create(self: GraXpertEngine, model: Path, gpu: bool) -> FailedSession:
+        """Enregistre le périphérique sélectionné avant calcul."""
+        calls.append(gpu)
+        return FailedSession()
+    monkeypatch.setattr(ort, 'get_available_providers', lambda: ['CUDAExecutionProvider', 'CPUExecutionProvider'])
+    monkeypatch.setattr(GraXpertEngine, '_create_session', create)
+    with pytest.raises(RuntimeError, match='inference GPU failure'):
+        GraXpertEngine(native_engine).process(source, tmp_path/'candidate.fits')
+    assert calls == [True]

@@ -31,10 +31,12 @@ def arguments(*options: str) -> argparse.Namespace:
 
 
 def test_backend_selection_and_override() -> None:
-    """Les chaînes sont actives par défaut ; les étapes explicites restent disponibles."""
+    """Les chaînes restent suivies d'AutoGHS facultatif ; les étapes restent accessibles."""
     sequence = _PostProcessorSequence()
     selected = sequence._selected_processors(arguments())
-    assert [p.get_prefix() for p in selected] == ['gradient', 'photometry', 'restoration']
+    assert [p.get_prefix() for p in selected] == [
+        'gradient', 'photometry', 'restoration', 'autoghs',
+    ]
     assert selected[0] is sequence.processors[0]
     selected = sequence._selected_processors(arguments('--disable-clarity', '--no-restoration-compare-chains'))
     assert isinstance(selected[2], DeconvolutionProcessor)
@@ -248,7 +250,7 @@ def test_processor_quality_and_source_preservation(
 
 
 def test_sequence_neural_handoff(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """La séquence transmet la netteté au débruitage avec les indices historiques."""
+    """Isole la transmission netteté/débruitage sans lancer le rendu AutoGHS."""
     calls = []
     source = tmp_path / 'source.fit'
     source.write_bytes(b'image')
@@ -263,7 +265,7 @@ def test_sequence_neural_handoff(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(DeconvolutionProcessor, 'post_process', process)
     monkeypatch.setattr(NoiseReductionProcessor, 'post_process', process)
     args = arguments('--enable-clarity', '--disable-gradient', '--disable-photometry',
-                     '--no-restoration-compare-chains')
+                     '--no-restoration-compare-chains', '--disable-autoghs')
     sequence = _PostProcessorSequence()
     sequence.set_from_args(args)
     result = sequence.post_process(source, tmp_path / 'global.json')
@@ -279,7 +281,7 @@ def test_sequence_neural_handoff(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 def test_sequence_continues_when_fallback_has_no_gain(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Un échec de gain en déconvolution (Cosmic puis Siril) laisse passer le débruitage."""
+    """Un échec de gain laisse passer le débruitage ; AutoGHS est hors de ce test."""
     from lib.cosmic_clarity import processors
     source = tmp_path / 'source.fit'
     fits.writeto(source, np.arange(1024, dtype='float32').reshape(32, 32) / 1024)
@@ -308,7 +310,7 @@ def test_sequence_continues_when_fallback_has_no_gain(
     ))
     monkeypatch.setattr(NoiseReductionProcessor, 'post_process', denoise)
     args = arguments('--enable-clarity', '--disable-gradient', '--disable-photometry',
-                     '--no-restoration-compare-chains')
+                     '--no-restoration-compare-chains', '--disable-autoghs')
     results = _PostProcessorSequence().post_process(source, tmp_path / 'global.json', args)
     assert results['deconvolution']['status'] == 'no_safe_improvement'
     assert results['deconvolution']['selected_engine'] is None

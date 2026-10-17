@@ -35,9 +35,15 @@ DENOISE_STRETCH_THRESHOLD = 0.05
 
 
 def select_device(name: str) -> torch.device:
-    """Choisit CPU ou CUDA explicitement, sans repli silencieux vers le CPU."""
-    if name not in ('cpu', 'cuda'):
-        raise ValueError('cosmic-device doit être cpu ou cuda')
+    """Choisit CUDA disponible en auto, CPU sinon, avant tout calcul.
+
+    CUDA forcé indisponible reste une erreur ; aucune panne d'inférence ne
+    déclenche une reprise CPU. Aucun modèle n'est chargé pour cette détection.
+    """
+    if name not in ('auto', 'cpu', 'cuda'):
+        raise ValueError('cosmic-device doit être auto, cpu ou cuda')
+    if name == 'auto':
+        name = 'cuda' if torch.cuda.is_available() else 'cpu'
     if name == 'cuda' and not torch.cuda.is_available():
         raise RuntimeError(
             'CUDA indisponible. Vérifier le pilote NVIDIA et installer avec '
@@ -96,8 +102,12 @@ class CosmicClarityEngine:
     Les données sont traitées en float32 ; les HDU et en-têtes sont conservés.
     """
 
-    def __init__(self, directory: Path, device: str = 'cuda') -> None:
-        """Configure le dossier des poids ; leur téléchargement attend leur chargement."""
+    def __init__(self, directory: Path, device: str = 'auto') -> None:
+        """Choisit le périphérique (auto par défaut) avant de charger les poids.
+
+        Le téléchargement attend le chargement du modèle ; une erreur après
+        cette sélection n'entraîne pas de reprise avec un autre périphérique.
+        """
         self.directory = directory
         self.device = select_device(device)
         self.used_models: dict[str, str] = {}

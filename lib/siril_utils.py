@@ -281,7 +281,12 @@ class Siril(ParameterizedComponent):
             return False
 
     def run_siril_script(
-        self, siril_script_content: str, working_dir: str, script_name: str = None
+        self,
+        siril_script_content: str,
+        working_dir: str,
+        script_name: str | None = None,
+        *,
+        initfile: Path | None = None,
     ) -> bool:
         """
         Exécute un script Siril et conserve stdout/stderr dans le fichier .log associé.
@@ -289,6 +294,8 @@ class Siril(ParameterizedComponent):
         Args:
             siril_script_content: Contenu du script Siril à exécuter
             working_dir: Répertoire de travail pour l'exécution du script
+            initfile: Préférences isolées facultatives, passées avec -i ; permet
+                de configurer un outil externe sans modifier les préférences utilisateur.
 
         Returns:
             True si l'exécution a réussi, False sinon
@@ -360,6 +367,8 @@ class Siril(ParameterizedComponent):
                 logging.error(f"Mode Siril inconnu: {self._siril_mode}")
                 return False
 
+            if initfile is not None:
+                cmd.extend(["-i", str(Path(initfile).resolve())])
             with log_path.open("w", encoding="utf-8") as log_file:
                 result = subprocess.run(
                     cmd,

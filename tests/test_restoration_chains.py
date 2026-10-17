@@ -18,8 +18,9 @@ from lib.type_defs import JSONReport
     "reverse,variants,operations", [(False, 12, 11), (True, 18, 17)]
 )
 def test_all_chains_are_evaluated_and_intermediates_cached(
-    tmp_path, monkeypatch, reverse, variants, operations
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reverse: bool,
+    variants: int, operations: int,
+) -> None:
     """Trois débruiteurs/deux moteurs de netteté, aucun top-N ni score local sommé."""
     source = tmp_path / "source.fits"
     data = np.random.default_rng(1).normal(0.1, 0.001, (128, 128)).astype("float32")
@@ -37,8 +38,12 @@ def test_all_chains_are_evaluated_and_intermediates_cached(
             def add_arguments(cls, parser):
                 """Aucune option propre au faux moteur."""
 
-            def post_process(self, input_path, output_path, args=None):
+            def post_process(
+                self, input_path: Path, output_path: Path,
+                args: argparse.Namespace | None = None,
+            ) -> JSONReport:
                 """Encode l’entrée effective et l’opération dans un vrai FITS."""
+                assert Path(output_path).parent == tmp_path / "report_work"
                 calls.append((code, Path(input_path)))
                 changed = fits.getdata(input_path).copy()
                 changed[0, 0] = changed[0, 0] * 10 + code
@@ -94,10 +99,14 @@ def test_all_chains_are_evaluated_and_intermediates_cached(
     assert "CHAÎNES COMPLÈTES" in Path(result["summary_path"]).read_text()
     assert Path(result["quality_preview_path"]).is_file()
     assert Path(result["quality_preview_path"]).name == "common_masks.png"
+    work = tmp_path / "report_work"
+    assert Path(result["quality_preview_path"]).parent == work
+    assert not (work / "001").exists()
+    assert any(work.glob("*_denoise_*.fits"))
 
 
-def test_sequence_uses_one_restoration_after_gradient_and_photometry():
-    """La compétition aval ne multiplie pas les gradients ni la photométrie."""
+def test_sequence_uses_one_restoration_after_gradient_and_photometry() -> None:
+    """Les deux modes gardent une seule restauration avant AutoGHS facultatif."""
     sequence = _PostProcessorSequence()
     historic = sequence._selected_processors(
         argparse.Namespace(restoration_compare_chains=False)
@@ -107,17 +116,21 @@ def test_sequence_uses_one_restoration_after_gradient_and_photometry():
         "photometry",
         "deconvolution",
         "denoise",
+        "autoghs",
     ]
     competitive = sequence._selected_processors(argparse.Namespace())
     assert [step.get_prefix() for step in competitive] == [
         "gradient",
         "photometry",
         "restoration",
+        "autoghs",
     ]
 
 
-def test_identity_remains_selectable(tmp_path, monkeypatch):
-    """Un score final nul n’évince jamais la référence inchangée."""
+def test_identity_remains_selectable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Préserve l'identité et la source, même après nettoyage d'une ancienne arborescence."""
     source = tmp_path / "source.fits"
     fits.writeto(
         source,
@@ -130,6 +143,19 @@ def test_identity_remains_selectable(tmp_path, monkeypatch):
     assert result["output_image"] == str(source)
     assert result["selected_chain"] == []
     assert result["operation_count"] == 0
+    work = tmp_path / "report_work"
+    legacy = work / "001"
+    legacy.mkdir()
+    (legacy / "obsolete.fits").write_bytes(b"obsolete")
+    result = RestorationChainProcessor().post_process(source, tmp_path / "report.json")
+    assert not legacy.exists()
+    assert Path(result["quality_preview_path"]).parent == work
+    assert source.is_file()
+    protected = work / "source.fits"
+    protected.write_bytes(source.read_bytes())
+    with pytest.raises(ValueError, match="réinitialisé"):
+        RestorationChainProcessor().post_process(protected, tmp_path / "report.json")
+    assert protected.is_file()
 
 
 def test_final_catalogs_use_relative_siril_output_names(tmp_path, monkeypatch):

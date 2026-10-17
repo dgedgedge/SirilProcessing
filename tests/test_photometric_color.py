@@ -44,7 +44,7 @@ def arguments(*options):
     from lib.siril_utils import Siril
     Siril.add_arguments(parser, photometry_aliases=True)
     _PostProcessorSequence().add_arguments(parser)
-    return parser.parse_args(['--disable-denoise', '--disable-deconvolution', *options])
+    return parser.parse_args(['--disable-denoise', '--disable-autoghs', '--disable-deconvolution', *options])
 
 
 def test_object_resolution_and_all_options(rgb, tmp_path, monkeypatch, fake_siril):
@@ -419,3 +419,24 @@ def test_filter_metadata_does_not_override_pcc_or_mono_profiles(
     )
     assert result['filter_source'] is None
     assert 'oscfilter' not in result['spectral_profiles']
+
+
+def test_photometry_reuses_ordered_directory(
+    rgb: Path, tmp_path: Path, fake_siril: tuple[Mock, Mock]
+) -> None:
+    """Les relances réinitialisent le même dossier visible sans sortie périmée."""
+    calibrator = PhotometricColorCalibrator()
+    report = tmp_path / "02_photometry.json"
+    calibrator.post_process(rgb, report)
+    work = Path(fake_siril[1].run_siril_script.call_args.args[1])
+    assert work == tmp_path / "02_photometry_work/001"
+    stale = work / "obsolete.fits"
+    stale.write_bytes(b"obsolete")
+    calibrator.post_process(rgb, report)
+    assert Path(fake_siril[1].run_siril_script.call_args.args[1]) == work
+    assert not stale.exists()
+    protected = work / "source.fits"
+    protected.write_bytes(rgb.read_bytes())
+    with pytest.raises(ValueError, match="réinitialisé"):
+        calibrator.post_process(protected, report)
+    assert protected.is_file()

@@ -184,13 +184,14 @@ class Config:
     def bind_parameters(self, args: argparse.Namespace) -> None:
         """Capture les valeurs pour les classes et leurs futurs enfants.
 
-        Chaque classe reçoit ses destinations propres et les services communs.
+        Chaque classe reçoit ses destinations propres et les services communs,
+        dont compute_backend pour conserver le choix global dans les enfants.
         Les instances existantes conservent leur instantané. Aucune sauvegarde
         n’est effectuée ; save_requested reste responsable de la rémanence.
         """
         common = {name for name in vars(args) if name.startswith("siril_")}
         common.update({
-            "cpu_threads", "work_dir", "output_dir", "keep_intermediate",
+            "cpu_threads", "compute_backend", "work_dir", "output_dir", "keep_intermediate",
             "postprocess_steps_dir", "deconvolution_reference_measurements",
         })
         for cls, destinations in self._parameter_classes.items():

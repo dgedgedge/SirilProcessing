@@ -215,6 +215,14 @@ Ce lancement conserve une seule correction de gradient et une seule photométrie
 amont. Il nécessite les moteurs configurés ; l’exemple est une commande de
 lancement, pas une annonce de validation scientifique de M33.
 
+Les produits de comparaison des chaînes sont rangés directement dans
+`03_restoration_work/` : masques communs, opérations numérotées de débruitage et
+netteté, ainsi que dossiers `final_<numéro>` pour les contrôles finaux. Il n’y a
+pas de sous-niveau `001` autour de cet ensemble : la comparaison n’est pas une
+boucle de restauration successive. La réinitialisation à chaque lancement
+remplace les produits précédents ; les éventuels essais internes d’un moteur
+restent dans le dossier propre à ce moteur.
+
 Avec trois débruiteurs et deux moteurs de netteté, la liste contient 12 chaînes :
 identité, trois débruitages seuls, deux nettetés seules et six associations.
 `--restoration-reverse-order` ajoute les six associations inversées, soit 18.

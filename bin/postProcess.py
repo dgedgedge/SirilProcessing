@@ -11,6 +11,8 @@ avec contrôles locaux et finaux sur une référence commune. L’option
 Cosmic Clarity et Siril participent par défaut ; --disable-clarity écarte Clarity.
 
 Le script utilise _PostProcessorSequence pour exécuter les traitements.
+Le rendu final AutoGHS avec séparation StarNet est activé par défaut
+(--disable-autoghs le désactive) et produit des FITS et JPEG.
 Les chemins relatifs sont résolus depuis le dossier de lancement.
 Le second argument facultatif choisit le répertoire de sortie.
 
@@ -43,11 +45,7 @@ from lib.postprocess import _PostProcessorSequence
 from lib.quality_preview import QualityMaskPreview
 from lib.power_guard import PowerGuard
 from lib.siril_utils import Siril
-
-
-def _sanitize_backend_name(name: str) -> str:
-    """Retourne un identifiant de backend sûr pour les noms de chemins."""
-    return "".join(char if char.isalnum() or char in ("-", "_") else "_" for char in name)
+from lib.star_separation import StarNetSeparator
 
 
 def _effective_backend_name(args: argparse.Namespace) -> str:
@@ -56,16 +54,16 @@ def _effective_backend_name(args: argparse.Namespace) -> str:
 
 
 def _build_postprocess_layout(
-    input_file: Path, output_arg: str | None, backend: str,
+    input_file: Path, output_arg: str | None,
 ) -> tuple[Path, Path, Path, str]:
     """Construit les chemins de rapport, dossier d'étapes et résultat final.
 
     Les étapes intermédiaires sont rangées dans un dossier nommé avec l'image
-    traitée et le backend. Le rapport JSON global et le FITS final sont écrits
+    traitée suivie de _postprocess, indépendamment des moteurs utilisés.
+    Le rapport JSON global et le FITS final sont écrits
     au même niveau, avec le même nom de base.
     """
-    backend_name = _sanitize_backend_name(backend)
-    run_name = f"{input_file.stem}_postprocess_{backend_name}"
+    run_name = f"{input_file.stem}_postprocess"
     if output_arg:
         provided = Path(output_arg)
         base_dir = provided if provided.suffix == "" else provided.parent
@@ -88,11 +86,12 @@ def _resolve_final_image(results: dict, fallback: Path) -> Path:
     return final_image.resolve()
 
 
-def main() -> None:
+def main() -> int:
     """Exécute les étapes, diagnostics et export sous protection énergétique facultative.
 
     Les services D-Bus indisponibles ne bloquent pas le calcul ; leurs demandes
     sont libérées avant de fermer le journal, y compris après une interruption.
+    Retourne 0 en cas de succès, 1 pour une erreur ou 130 pour une interruption.
     """
     config = Config.from_command_line()
     parser = argparse.ArgumentParser(
@@ -136,7 +135,7 @@ def main() -> None:
     input_file = Path(args.input_file).resolve()
     backend = _effective_backend_name(args)
     output_path, steps_dir, result_path, run_name = _build_postprocess_layout(
-        input_file, args.output_file, backend,
+        input_file, args.output_file,
     )
     args.postprocess_steps_dir = steps_dir
     log_file = steps_dir / f"00_{input_file.stem}_postProcess.log"
@@ -155,6 +154,7 @@ def main() -> None:
         logging.info("Configuration: %s", config.config_file)
         logging.info("Siril: mode=%s, path=%s", args.siril_mode, args.siril_path)
         logging.info("Backend: %s", backend)
+        logging.info("Politique de calcul commune : %s", args.compute_backend)
         if getattr(args, "restoration_compare_chains", True):
             logging.info(
                 "Restauration : comparaison des chaînes complètes ; "
@@ -167,6 +167,8 @@ def main() -> None:
                 "activer --restoration-compare-chains pour comparer les chaînes complètes"
             )
         if args.save_config:
+            if getattr(args, "enable_autoghs", False):
+                args.starnet_path = StarNetSeparator.resolve_executable(args)
             if not config.save_requested(args):
                 return 1
         logging.info("Analyse de: %s", input_file)
@@ -196,6 +198,13 @@ def main() -> None:
             if final_image != result_path.resolve():
                 copyfile(final_image, result_path)
             logging.info("Image finale exportée: %s", result_path)
+            jpeg = results.get("autoghs", {}).get("output_jpeg")
+            if jpeg:
+                jpeg_path = Path(jpeg).resolve()
+                jpeg_export = result_path.with_suffix(".jpg")
+                if jpeg_path != jpeg_export.resolve():
+                    copyfile(jpeg_path, jpeg_export)
+                logging.info("Image finale JPEG exportée: %s", jpeg_export)
 
         logging.info(f"\n{'=' * 60}")
         logging.info("RÉSULTATS")

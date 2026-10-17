@@ -46,18 +46,20 @@ le traitement ; ce chemin doit aussi être fourni à l'installation si une
 configuration de traitement utilise un dossier personnalisé. Le lanceur ne lit
 pas le JSON de configuration pour installer les poids.
 
-Un GPU NVIDIA avec pilote compatible CUDA 12.8 est requis par défaut. Le module
-`torch` vérifie CUDA au lancement ; il n'y a pas de repli silencieux vers le CPU.
-`--cosmic-device cpu` autorise explicitement une exécution CPU. Siril 1.4 reste
+Le calcul hérite de `--compute-backend auto` : PyTorch choisit CUDA disponible,
+CPU sinon, avant de charger les modèles. `--cosmic-device auto|cpu|cuda` est
+une surcharge facultative (`null` par défaut). CUDA forcé indisponible reste
+une erreur ; une panne en cours d'inférence ne déclenche pas de reprise CPU.
+Siril 1.4 reste
 nécessaire pour les mesures stellaires, même avec les réseaux. Le traitement
 reste local, sans service distant ni entraînement.
 
 Les sorties de `postProcess` sont regroupées par exécution sous le nom
-`<image>_postprocess_<backend>`. Avec ce backend, on obtient donc par défaut :
+`<image>_postprocess`. Quel que soit le moteur utilisé, on obtient par défaut :
 
-- dossier d’étapes : `<image>_postprocess_cosmic-clarity/`
-- rapport global : `<image>_postprocess_cosmic-clarity.json`
-- FITS final : `<image>_postprocess_cosmic-clarity.fits`
+- dossier d’étapes : `<image>_postprocess/`
+- rapport global : `<image>_postprocess.json`
+- FITS final : `<image>_postprocess.fits`
 
 Le rapport et le FITS final restent au même niveau que ce dossier.
 
@@ -68,7 +70,7 @@ Le rapport et le FITS final restent au même niveau que ce dossier.
 | `--enable-clarity` | activé | Active le mode comparatif Cosmic Clarity + Siril |
 | `--disable-clarity` | désactivé | Écarte Cosmic Clarity ; GraXpert peut rester actif en débruitage |
 | `--cosmic-model-dir` | `<projet>/tmp/models/cosmicclarity` | Poids locaux vérifiés |
-| `--cosmic-device` | `cuda` | `cuda` ou `cpu` |
+| `--cosmic-device` | `null` (hérite du choix général `auto`) | Surcharge `auto`, `cuda` ou `cpu` |
 | `--cosmic-stellar-amount` | `0.5` | Mélange stellaire, entre 0 et 1 |
 | `--cosmic-nonstellar-amount` | `0.5` | Mélange des structures diffuses, entre 0 et 1 |
 | `--cosmic-nonstellar-radius` | `3.0` | Rayon en pixels, entre 1 et 8 |
