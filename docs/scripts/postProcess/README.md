@@ -13,19 +13,30 @@ La comparaison des chaînes débruitage → netteté est active par défaut ;
 l’ordre inverse reste optionnel. `--no-restoration-compare-chains` rétablit
 les comparaisons par étape, déconvolution puis débruitage. Voir la
 [synthèse des essais et des éliminations](quality.md#synthèse-des-essais-et-des-éliminations).
-Les quatre traitements sont activés par défaut ; leur activation peut être
+Les cinq traitements sont activés par défaut ; leur activation peut être
 modifiée par la ligne de commande ou par la configuration mémorisée.
 
 Cette commande s’utilise séparément sur un résultat de stacking ou une mosaïque,
 par exemple après [lightProcess](../lightProcess/README.md). Elle ne réalise ni
-la calibration des poses brutes, ni leur empilement, ni un étirement final de
-l’histogramme.
+la calibration des poses brutes, ni leur empilement. Le
+[rendu final AutoGHS](auto-ghs.md) est exécuté après la restauration :
+il sépare les étoiles avec StarNet et produit deux images finales étoilées
+(`range` et `peak`), en FITS et JPEG, accompagnées de
+[comparatifs enregistrés dans le dossier GHS](render-exports.md). Il est activé par défaut ; `--disable-autoghs` conserve la sortie linéaire.
 
 GraXpert est ajouté automatiquement à la comparaison lorsque des poids locaux
 valides sont présents, sauf désactivation explicite (`--no-enable-graxpert` ou
 configuration sauvegardée). ONNX Runtime s’installe avec
 `bin/postProcess.sh --install-graxpert`. `--enable-graxpert` force l’activation et
 l’acquisition des poids manquants ; voir [GraXpert et ses modèles](graxpert.md).
+
+## Choix du calcul CPU/GPU
+
+`--compute-backend auto|cpu|cuda` s'applique aux moteurs de postProcess et se
+sauvegarde avec `-S`. Le défaut `auto` choisit l'accélérateur disponible pour
+chaque moteur, CPU sinon, avant calcul. Les options propres aux moteurs restent
+des surcharges explicites, y compris dans les anciens JSON. Voir la
+[politique commune, ses priorités et ses limites](compute-backend.md).
 
 ## Lancer un traitement
 
@@ -45,12 +56,13 @@ Le premier argument est le FITS d’entrée. Le second, facultatif, choisit le
 dossier parent est utilisé). Sans cet argument, les sorties sont écrites à côté
 du fichier source.
 
-Chaque exécution crée un nom de base `<image>_postprocess_<backend>` :
+Chaque exécution crée un nom de base `<image>_postprocess` :
 
 - dossier d’étapes et d’artefacts intermédiaires :
-  `<image>_postprocess_<backend>/`
-- rapport global : `<image>_postprocess_<backend>.json`
-- FITS final : `<image>_postprocess_<backend>.fits`
+  `<image>_postprocess/`
+- rapport global : `<image>_postprocess.json`
+- FITS final : `<image>_postprocess.fits`
+- JPEG final si AutoGHS est actif : `<image>_postprocess.jpg`
 
 Le rapport global et le FITS final sont donc au même niveau que le dossier
 d’étapes et partagent son nom de base.
@@ -67,7 +79,7 @@ Les étapes utilisant Siril génèrent des scripts exigeant **Siril 1.4 au minim
 L’entrée de la séquence complète doit être une image **RGB linéaire déjà
 dématricée**, nécessaire à la photométrie. Le débruitage et la déconvolution
 acceptent aussi les images monochromes, mais refusent une image CFA encore
-identifiée par `BAYERPAT`. Pour une image monochrome, désactiver la photométrie.
+identifiée par `BAYERPAT`. Pour une image monochrome, désactiver la photométrie et AutoGHS.
 La recherche d’objet au CDS et les catalogues distants nécessitent un accès réseau.
 Voir [l’installation](../../INSTALLATION.md) pour l’environnement du projet.
 
@@ -198,7 +210,7 @@ Pour ne lancer que cette étape :
 
 ```bash
 bin/postProcess.sh image.fit rapports/gradient.json \
-  --enable-gradient --disable-photometry --disable-denoise --disable-deconvolution \
+  --enable-gradient --disable-photometry --disable-denoise --disable-deconvolution --disable-autoghs \
   --gradient-method polynomial --gradient-max-order 2
 ```
 
@@ -437,7 +449,7 @@ défauts locaux des classes**. Les défauts des tableaux ci-dessus peuvent donc
 | `-l`, `--log-level` | `INFO` par défaut ; aussi `DEBUG`, `WARNING`, `ERROR`, `CRITICAL` |
 
 `-S` mémorise les paramètres Siril, les activations/désactivations et les réglages
-rémanents des **quatre traitements**, y compris ceux désactivés. Les clés déjà
+rémanents des **cinq traitements**, y compris ceux désactivés. Les clés déjà
 présentes concernant d’autres traitements sont conservées. Sans `-S`, aucune
 écriture du fichier de configuration n’est effectuée.
 
@@ -473,39 +485,44 @@ Pour `bin/postProcess.sh image_RGB.fit rapports/`, avec toutes les
 
 ```text
 rapports/
-├── image_RGB_postprocess_cosmic-clarity.fits
-├── image_RGB_postprocess_cosmic-clarity.json
-└── image_RGB_postprocess_cosmic-clarity/
+├── image_RGB_postprocess.fits
+├── image_RGB_postprocess.jpg
+├── image_RGB_postprocess.json
+└── image_RGB_postprocess/
     ├── 00_image_RGB_postProcess.log
     ├── 01_gradient.json
     ├── 01_gradient_image_RGB_gradient_corrected.fits
     ├── 01_gradient_image_RGB_measurement_points.png
     ├── 02_photometry.json
     ├── 02_photometry.fits
-    ├── 02_photometry_<identifiant>/
-    ├── 03_deconvolution.json
-    ├── 03_deconvolution.fits
-    ├── 03_deconvolution_masks.fits
-    ├── 03_deconvolution_cosmic_clarity.json
-    ├── 03_deconvolution_cosmic_clarity_work/001/
-    ├── 03_deconvolution_siril.json
-    ├── 03_deconvolution_siril_work/001/
-    ├── 04_denoise.json
-    ├── 04_denoise.fits
-    ├── 04_denoise_masks.fits
-    ├── 04_denoise_cosmic_clarity.json
-    ├── 04_denoise_cosmic_clarity_work/001/
-    ├── 04_denoise_siril.json
-    ├── 04_denoise_siril_work/001/
-    ├── 04_denoise_graxpert.json
-    └── 04_denoise_graxpert_work/001/
+    ├── 02_photometry_work/001/
+    ├── 03_restoration.json
+    ├── 03_restoration.fits
+    ├── 03_restoration_summary.txt
+    ├── 03_restoration_work/
+    ├── 05_autoghs.json
+    └── 05_autoghs_work/
+        ├── 001/separation_work/
+        ├── 002_stars/
+        ├── 003_ghs/
+        │   ├── 03_restoration_starless_ghs_range.fits
+        │   ├── 03_restoration_starless_ghs_peak.fits
+        │   ├── 03_restoration_ghs_comparison_starless.png
+        │   └── 03_restoration_ghs_comparison_with_stars.png
+        ├── 004_recomposition/
+        │   ├── 03_restoration_render_range.fits
+        │   ├── 03_restoration_render_range.jpg
+        │   ├── 03_restoration_render_peak.fits
+        │   └── 03_restoration_render_peak.jpg
+        └── 005_diagnostics/
 ```
 
-Cet arbre omet les copies FITS publiées par chaque moteur accepté
-(`03_deconvolution_<moteur>.fits`, `04_denoise_<moteur>.fits`). Un moteur absent
-ou désactivé ne produit pas tous ces fichiers. Le PNG est facultatif.
-Les chemins explicites de sortie peuvent déplacer les images. Le FITS d’origine
-n’est pas modifié par les sorties par défaut.
+Cet arbre omet les copies FITS et audits propres à chaque moteur de restauration.
+Un moteur absent ou désactivé ne produit pas tous les fichiers. Les rendus
+AutoGHS portent le nom de leur image amont ; ici `03_restoration` puisque la
+restauration a retenu un candidat. Le mode `--no-restoration-compare-chains`
+produit à la place les étapes séparées `03_deconvolution` et `04_denoise`.
+
 Les dossiers des moteurs conservent scripts `.sps`, journaux `.log`, catalogues
 stellaires et images candidates. Ils sont déterministes et recréés à chaque
 exécution ; pour la déconvolution Siril, ils contiennent aussi l’original de l’étape,
@@ -513,8 +530,8 @@ les PSF et leurs aperçus, ainsi que `matched_stars.csv` préfixé par le nom de
 l’étape en cas de succès.
 
 Par défaut, `03_restoration.json`, `03_restoration_summary.txt` et le dossier
-`03_restoration_work/001/` remplacent les rapports des étapes 03/04. Ce dossier
-contient `common_masks.fits`, les rapports numérotés des opérations et les
+`03_restoration_work/` remplacent les rapports des étapes 03/04. Ce dossier
+contient directement `common_masks.fits`, les rapports numérotés des opérations et les
 aperçus PNG des zones de qualité (`common_masks.png`, étoiles rouges, signal
 diffus orange, zones incertaines bleues et tuiles de ciel retenues vertes), puis les
 contrôles finaux. `03_restoration.fits` est publié si une chaîne bat l’identité ;
@@ -530,7 +547,7 @@ exécutées : `gradient`, `photometry`, `deconvolution`, `denoise`, ou
 `restoration` à la place des deux dernières en comparaison des chaînes. Chaque résultat
 indique son `output_image` lorsqu’une image doit être transmise. Le FITS final est
 celui référencé par la dernière étape active, recopié au niveau du rapport global
-sous le nom `<image>_postprocess_<backend>.fits`.
+sous le nom `<image>_postprocess.fits`.
 
 Le log principal est recréé à chaque lancement. Avec `--log-level DEBUG`, les
 exceptions levées y incluent leur traceback. Une erreur non prise en charge au
@@ -549,20 +566,20 @@ argparse retourne `2` pour une ligne de commande invalide.
 
 ```bash
 # Image monochrome : pas d’étalonnage photométrique RGB.
-bin/postProcess.sh image_mono.fit rapports/mono.json --disable-photometry
+bin/postProcess.sh image_mono.fit rapports/mono.json --disable-photometry --disable-autoghs
 
 # Photométrie seule, avec une focale et une taille de pixel données en exemple.
 bin/postProcess.sh image_RGB.fit rapports/couleurs.json \
-  --disable-gradient --enable-photometry --disable-denoise --disable-deconvolution \
+  --disable-gradient --enable-photometry --disable-denoise --disable-deconvolution --disable-autoghs \
   --photometry-object M20 --photometry-focal 750 --photometry-pixelsize 3.76
 
 # Débruitage seul, sans modifier les réglages mémorisés.
 bin/postProcess.sh image.fit rapports/bruit.json \
-  --disable-gradient --disable-photometry --enable-denoise --disable-deconvolution
+  --disable-gradient --disable-photometry --enable-denoise --disable-deconvolution --disable-autoghs
 
 # Déconvolution seule avec PSF stellaire et repli adaptatif autorisé.
 bin/postProcess.sh image.fit rapports/details.json \
-  --disable-gradient --disable-photometry --disable-denoise --enable-deconvolution \
+  --disable-gradient --disable-photometry --disable-denoise --enable-deconvolution --disable-autoghs \
   --deconvolution-psf-method stars --deconvolution-adaptive
 ```
 
@@ -600,3 +617,16 @@ La [structure des traitements de restauration](restoration.md) distingue les
 orchestrateurs des moteurs Siril, Cosmic Clarity et GraXpert, tous de type `processor`.
 
 Les moteurs Siril organisent leur calcul en [phases d’exécution indépendantes](restoration.md#siril-execution-phases), avec un état propre à chaque appel. L’élargissement de la PSF ne modifie pas le seuil d’appariement configuré.
+
+Le [rendu final AutoGHS](auto-ghs.md) termine cette séquence par défaut.
+Voir aussi son [moteur et ses histogrammes](auto-ghs-algorithm.md) et le
+[traitement séparé des étoiles](star-rendering.md). Une panne de cette phase
+est fatale, sans reprise automatique ni substitution de rendu.
+
+### Ordre des produits AutoGHS
+
+AutoGHS conserve le numéro `05`, y compris lorsque `03_restoration` regroupe les
+étapes 03/04. Ses produits sont écrits dans `05_autoghs_work/`, avec des
+sous-dossiers numérotés pour la séparation, les étoiles, GHS, la recomposition et
+les diagnostics. La photométrie utilise `02_photometry_work/001/`. Ces dossiers
+visibles sont réinitialisés à chaque lancement ; voir [AutoGHS](auto-ghs.md).

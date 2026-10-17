@@ -18,7 +18,7 @@ from lib.processor import processor
 from lib.restoration import RestorationComparisonProcessor
 from lib.restoration_quality import QualityReference
 from lib.type_defs import JSONReport
-from lib.postprocess_paths import reset_ordered_work_dir
+from lib.postprocess_paths import reset_work_dir
 from lib.restoration_summary import RestorationSummary
 
 
@@ -325,7 +325,12 @@ class RestorationChainProcessor(processor):
         output_path: Path | str,
         args: argparse.Namespace | None = None,
     ) -> JSONReport:
-        """Évalue toutes les variantes autorisées ; garde les audits et l’original."""
+        """Évalue les variantes et garde les audits directement dans <rapport>_work.
+
+        Les opérations et contrôles finaux y sont numérotés ; aucun niveau de
+        répétition artificiel n'est créé. Le dossier est réinitialisé à chaque
+        appel et une entrée qui s'y trouve est refusée avant suppression.
+        """
         args = copy(self._get_args(args))
         if getattr(args, "quality_mode", "reliable") == "legacy":
             raise ValueError(
@@ -340,7 +345,7 @@ class RestorationChainProcessor(processor):
             raise ValueError(
                 "L’entrée ne peut pas se trouver dans le dossier de travail réinitialisé"
             )
-        work = reset_ordered_work_dir(report)
+        work = reset_work_dir(report)
         reference = QualityReference(source, args)
         preview = reference.save_masks(work / "common_masks.fits")
         configurations = {

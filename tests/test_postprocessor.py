@@ -17,6 +17,7 @@ from lib.postprocess import (
 from lib.processor import processor
 from lib.type_defs import JSONReport
 from lib.restoration_chains import RestorationChainProcessor
+from lib.final_render import AutoGHSFinalRenderer
 
 
 def _args(*options: str) -> argparse.Namespace:
@@ -27,13 +28,14 @@ def _args(*options: str) -> argparse.Namespace:
 
 
 def test_default_postprocess_order() -> None:
-    """La séquence standard conserve l'ordre gradient → photo → déconvolution → débruitage."""
+    """AutoGHS facultatif suit les traitements linéaires sans changer leur ordre."""
     sequence = _PostProcessorSequence()
     assert [type(step) for step in sequence.processors] == [
         GradientExtractor,
         PhotometricColorCalibrator,
         DeconvolutionProcessor,
         NoiseReductionProcessor,
+        AutoGHSFinalRenderer,
     ]
 
 
@@ -43,6 +45,7 @@ def test_standard_backend_selection() -> None:
     selected = sequence._selected_processors(_args("--disable-clarity"))
     assert [type(step) for step in selected] == [
         GradientExtractor, PhotometricColorCalibrator, RestorationChainProcessor,
+        AutoGHSFinalRenderer,
     ]
     selected = sequence._selected_processors(
         _args("--disable-clarity", "--no-restoration-compare-chains")
@@ -52,6 +55,7 @@ def test_standard_backend_selection() -> None:
         PhotometricColorCalibrator,
         DeconvolutionProcessor,
         NoiseReductionProcessor,
+        AutoGHSFinalRenderer,
     ]
 
 
@@ -130,3 +134,27 @@ def test_deconvolution_no_safe_improvement_continues_sequence(tmp_path: Path) ->
     assert results["deconvolution"]["continued_with_original_image"] is True
     assert Path(results["deconvolution"]["output_image"]) == source.resolve()
     assert "denoise" in results
+
+
+def test_standard_step_numbers_survive_restoration_merge(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AutoGHS reste l'étape 05 après la restauration groupée 03/04."""
+    paths = []
+
+    def record(
+        self: processor, input_path: Path, output_path: Path,
+        args: argparse.Namespace | None = None,
+    ) -> JSONReport:
+        """Enregistre les chemins sans invoquer les moteurs externes."""
+        paths.append(Path(output_path).name)
+        return {"output_image": str(input_path)}
+
+    for provider in (GradientExtractor, PhotometricColorCalibrator,
+                     RestorationChainProcessor, AutoGHSFinalRenderer):
+        monkeypatch.setattr(provider, "post_process", record)
+    source = tmp_path / "source.fits"
+    source.write_bytes(b"source")
+    _PostProcessorSequence().post_process(source, tmp_path / "report.json", _args())
+    assert paths == ["01_gradient.json", "02_photometry.json",
+                     "03_restoration.json", "05_autoghs.json"]

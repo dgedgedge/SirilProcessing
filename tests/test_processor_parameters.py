@@ -94,7 +94,7 @@ def test_bound_sequence_executes_with_saved_activation(tmp_path):
     import json
 
     config = Config(tmp_path / 'settings.json')
-    for prefix in ('gradient', 'photometry', 'deconvolution', 'denoise'):
+    for prefix in ('gradient', 'photometry', 'deconvolution', 'denoise', 'autoghs'):
         config.set(f'enable_{prefix}', False)
     config.set('enable_clarity', False)
     parser = argparse.ArgumentParser()

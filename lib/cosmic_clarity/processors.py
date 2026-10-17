@@ -15,6 +15,7 @@ from typing import Literal
 import numpy as np
 from astropy.io import fits
 
+from lib.compute_config import ComputeConfig
 from lib.cosmic_clarity.models import DEFAULT_MODEL_DIR
 from lib.deconvolution import _quote, compare_star_catalogs, read_star_catalog
 from lib.deconvolution_quality import (
@@ -110,7 +111,8 @@ class _ToggleClarityAction(argparse.Action):
 
 
 def add_arguments(parser: argparse.ArgumentParser) -> None:
-    """Déclare le moteur et les réglages persistants, sans dépendance à PyTorch."""
+    """Déclare moteur, politique de calcul et réglages sans charger PyTorch."""
+    ComputeConfig.add_arguments(parser)
     group = (parser.add_argument_group('Moteur de restauration')
              if isinstance(parser, argparse.ArgumentParser) else parser)
     group.add_argument(
@@ -126,8 +128,8 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     )
     group.add_argument('--cosmic-model-dir', default=str(DEFAULT_MODEL_DIR),
                        help='Dossier des poids téléchargés à la demande ou préinstallés par le .sh')
-    group.add_argument('--cosmic-device', choices=('cuda', 'cpu'), default='cuda',
-                       help='CUDA requis par défaut ; aucun repli implicite')
+    group.add_argument('--cosmic-device', choices=('auto', 'cuda', 'cpu'), default=None,
+                       help='Surcharge Cosmic Clarity ; sinon --compute-backend')
     group.add_argument('--cosmic-stellar-amount', type=float, default=0.5,
                        help='Mélange stellaire entre 0 et 1')
     group.add_argument('--cosmic-nonstellar-amount', type=float, default=0.5,
@@ -309,7 +311,7 @@ class _CosmicClarityProcessor(processor):
                 ) from error
             engine = CosmicClarityEngine(
                 Path(getattr(args, 'cosmic_model_dir', DEFAULT_MODEL_DIR)).expanduser().resolve(),
-                getattr(args, 'cosmic_device', 'cuda'),
+                ComputeConfig.requested(args, 'cosmic_device'),
             )
             logging.info('%s — début de l’évaluation Cosmic Clarity', treatment)
             result['inference'] = engine.process(

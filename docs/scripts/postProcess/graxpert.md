@@ -93,7 +93,7 @@ explicite. Dès que les poids sont installés, l’inférence fonctionne sans Gr
 | `--graxpert-path` | `GraXpert-linux` | Exécutable utilisé seulement pour l’acquisition |
 | `--graxpert-strength` | 0,5 | Mélange relatif, de 0 à 1 |
 | `--graxpert-batch-size` | 1 | Nombre de tuiles par appel ONNX, de 1 à 32 |
-| `--graxpert-gpu` | faux | Demander un fournisseur GPU disponible |
+| `--graxpert-gpu` / `--no-graxpert-gpu` | `null` (hérite du choix général) | Surcharge GPU/CPU explicite |
 | `--graxpert-cpu-fallback` | faux | Autoriser un redémarrage complet sur CPU |
 
 Un modèle local conforme rend `--graxpert-path` inutile. Les options booléennes
@@ -154,3 +154,11 @@ Références : [script officiel Siril](https://gitlab.com/free-astro/siril-scrip
 [API ONNX Runtime](https://onnxruntime.ai/docs/api/python/api_summary.html).
 Les conventions d’inférence sont adaptées du script GPL-3.0-or-later d’Adrian
 Knagg-Baugh ; les poids GraXpert indiquent la licence CC-BY-NC-SA-4.0.
+
+Le périphérique hérite de la [politique générale de calcul](README.md#choix-du-calcul-cpugpu).
+En `auto`, ONNX utilise un fournisseur GPU fonctionnel ou CPU, avec résolution
+au démarrage de la session avant toute inférence. Un fournisseur annoncé mais
+non initialisable (pilote absent, par exemple) permet encore le choix CPU à ce
+stade. `cuda` exige `CUDAExecutionProvider` ; les surcharges historiques GPU/CPU
+restent prioritaires. Une erreur pendant l'inférence ne relance pas l'image sur
+CPU, sauf activation explicite de `--graxpert-cpu-fallback`.

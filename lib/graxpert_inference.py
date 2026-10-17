@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 from astropy.io import fits
 
+from lib.compute_config import ComputeConfig
 from lib.cpu_config import CpuConfig
 from lib.graxpert_models import GraXpertModels
 from lib.parameterized_component import ParameterizedComponent
@@ -43,12 +44,17 @@ class GraXpertEngine(ParameterizedComponent):
     parameter_prefixes = ("graxpert_",)
 
     def __init__(self, args: argparse.Namespace | None = None) -> None:
-        """Résout les options sans charger de modèle ni importer ONNX avant usage."""
+        """Capture politique commune et surcharges sans importer ONNX.
+
+        En auto, le choix GPU/CPU attend le démarrage de la session. Une
+        surcharge graxpert_gpu non nulle garde son comportement historique.
+        """
         self.args = self._get_args(args)
         self.models = GraXpertModels(self.args)
         self.cpu_fallback = False
         self.session: ort.InferenceSession | None = None
-        self.gpu = getattr(self.args, "graxpert_gpu", False)
+        self.backend = self.requested_backend(self.args)
+        self.gpu = None if self.backend == 'auto' else self.backend != 'cpu'
         self.allow_cpu = getattr(self.args, "graxpert_cpu_fallback", False)
         self.batch_size = getattr(self.args, "graxpert_batch_size", 1)
         self.strength = getattr(self.args, "graxpert_strength", 0.5)
@@ -66,20 +72,30 @@ class GraXpertEngine(ParameterizedComponent):
 
     @classmethod
     def add_arguments(cls, parser: argparse.ArgumentParser) -> None:
-        """Expose les paramètres du gestionnaire de modèles."""
+        """Expose modèles, politique commune et surcharges historiques persistantes."""
+        ComputeConfig.add_arguments(parser)
         GraXpertModels.add_arguments(parser)
         if any(action.dest == "graxpert_strength" for action in parser._actions):
             return
         parser.add_argument("--graxpert-strength", type=float, default=0.5)
         parser.add_argument("--graxpert-batch-size", type=int, default=1)
         parser.add_argument(
-            "--graxpert-gpu", action=argparse.BooleanOptionalAction, default=False
+            "--graxpert-gpu", action=argparse.BooleanOptionalAction, default=None,
+            help="Surcharge GPU/CPU GraXpert ; sinon --compute-backend"
         )
         parser.add_argument(
             "--graxpert-cpu-fallback",
             action=argparse.BooleanOptionalAction,
             default=False,
         )
+
+    @staticmethod
+    def requested_backend(args: argparse.Namespace) -> str:
+        """Conserve les surcharges booléennes historiques, sinon la politique commune."""
+        explicit = getattr(args, 'graxpert_gpu', None)
+        if explicit is not None:
+            return 'gpu' if explicit else 'cpu'
+        return ComputeConfig.requested(args)
 
     def _create_session(self, model: Path, gpu: bool) -> ort.InferenceSession:
         """Crée une session sans repli CPU implicite lorsque le GPU est exigé."""
@@ -93,6 +109,7 @@ class GraXpertEngine(ParameterizedComponent):
         if gpu:
             providers = [
                 provider for provider in GPU_PROVIDERS if provider in available
+                and (self.backend != 'cuda' or provider == 'CUDAExecutionProvider')
             ]
             if not providers:
                 raise RuntimeError("Aucun fournisseur ONNX GPU disponible")
@@ -117,6 +134,25 @@ class GraXpertEngine(ParameterizedComponent):
         ):
             raise ValueError("Contrat ONNX GraXpert NHWC 256×256×3 incompatible")
         return session
+
+    def _initialize_session(self, model: Path) -> ort.InferenceSession:
+        """Résout auto au démarrage ; ne reprend jamais une inférence déjà commencée.
+
+        Un fournisseur annoncé par ONNX peut manquer de pilote au chargement.
+        Seul auto autorise alors une session CPU avant le premier calcul.
+        Les erreurs de contrat/modèle ValueError restent fatales.
+        """
+        import onnxruntime as ort
+
+        if self.backend != 'auto' or not self.gpu:
+            return self._create_session(model, bool(self.gpu))
+        try:
+            return self._create_session(model, True)
+        except (RuntimeError, ort.capi.onnxruntime_pybind11_state.Fail,
+                ort.capi.onnxruntime_pybind11_state.RuntimeException) as error:
+            logging.info('GraXpert : accélérateur indisponible au démarrage, CPU choisi : %s', error)
+            self.gpu = False
+            return self._create_session(model, False)
 
     @staticmethod
     def _append_tail(image: np.ndarray, count: int, axis: int) -> np.ndarray:
@@ -226,10 +262,14 @@ class GraXpertEngine(ParameterizedComponent):
             mono = image.shape[-1] == 1
             if mono:
                 image = np.repeat(image, 3, axis=-1)
+            if self.gpu is None:
+                self.gpu = any(provider in GPU_PROVIDERS for provider in ort.get_available_providers())
+                logging.info("GraXpert : mode auto, périphérique choisi avant calcul : %s",
+                             'GPU' if self.gpu else 'CPU')
             model = self.models.ensure_model()
             start = time.monotonic()
             try:
-                self.session = self._create_session(model, self.gpu)
+                self.session = self._initialize_session(model)
                 denoised = self._denoise(image)
             except (
                 RuntimeError,
@@ -270,6 +310,7 @@ class GraXpertEngine(ParameterizedComponent):
             checksum_provenance=self.models.entry["provenance"],
             providers=self.session.get_providers(),
             cpu_fallback=self.cpu_fallback,
+            requested_backend=self.backend,
             duration_seconds=time.monotonic() - start,
             strength=self.strength,
             batch_size=self.batch_size,

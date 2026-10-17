@@ -104,3 +104,8 @@ et présence d’un WCS céleste. Les fichiers sources sont conservés.
 - [SPCC dans Siril](https://siril.readthedocs.io/en/stable/processing/color-calibration/spcc.html).
 - [Commandes Siril](https://siril.readthedocs.io/en/stable/Commands.html).
 - [Ares-C Pro et capteur IMX533](https://www.player-one-astronomy.com/product/ares-c-pro-usb3-0-color-camera-imx533/).
+
+Les produits de photométrie sont conservés dans `<rapport>_work/001/`, par exemple
+`02_photometry_work/001/`. Ce dossier visible est réinitialisé à chaque lancement,
+sans suffixe aléatoire ni répertoire temporaire. Une entrée située dans le dossier
+réinitialisé est refusée ; les fichiers sources extérieurs sont préservés.

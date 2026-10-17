@@ -388,15 +388,17 @@ def test_postprocessor_abstract_methods():
         processor()
 
 
-def test_seq_postprocessor_initialization():
-    """Test de l'initialisation de _PostProcessorSequence."""
+def test_seq_postprocessor_initialization() -> None:
+    """La séquence conserve le gradient en tête et ajoute AutoGHS facultatif à la fin."""
     from lib.postprocess import _PostProcessorSequence, GradientExtractor
     
     seq_processor = _PostProcessorSequence()
     
     # Vérifier que la liste des processeurs contient GradientExtractor
-    assert len(seq_processor.processors) == 4
+    assert len(seq_processor.processors) == 5
     assert isinstance(seq_processor.processors[0], GradientExtractor)
+    assert seq_processor.processors[-1].get_prefix() == 'autoghs'
+    assert seq_processor.processors[-1].enabled_by_default
 
 
 def test_seq_postprocessor_add_arguments():
@@ -428,7 +430,7 @@ def test_wrapper_options_reach_processing(tmp_path, image_enabled):
     import subprocess
     root = Path(__file__).resolve().parents[1]
     _create_test_fits_file(tmp_path / "image.fit")
-    options = ["--gradient-method", "polynomial", "--disable-photometry", "--disable-denoise", "--disable-deconvolution", "--gradient-min-order", "2", "--gradient-max-order", "2",
+    options = ["--gradient-method", "polynomial", "--disable-photometry", "--disable-denoise", "--disable-autoghs", "--disable-deconvolution", "--gradient-min-order", "2", "--gradient-max-order", "2",
                "--gradient-points", "7", "--gradient-sample-fraction", "0.1",
                "--gradient-max-samples", "80", "--gradient-output", "points"]
     if not image_enabled:
@@ -438,7 +440,7 @@ def test_wrapper_options_reach_processing(tmp_path, image_enabled):
                             env={**os.environ, "VENV_DIR": sys.prefix},
                             capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
-    report = json.loads((tmp_path / "reports/image_postprocess_cosmic-clarity.json").read_text())["gradient"]
+    report = json.loads((tmp_path / "reports/image_postprocess.json").read_text())["gradient"]
     assert list(report["results"]) == ["order_2"]
     assert report["results"]["order_2"]["n_samples"] == 80
     assert (tmp_path / "points/01_gradient_image_measurement_points.png").exists() == image_enabled
@@ -483,7 +485,7 @@ def test_disabled_gradient(tmp_path):
     parser = argparse.ArgumentParser()
     sequence.add_arguments(parser)
     assert sequence.post_process(tmp_path / "unused.fit", tmp_path / "report.json",
-                                 parser.parse_args(["--disable-gradient", "--disable-photometry", "--disable-denoise", "--disable-deconvolution"])) == {}
+                                 parser.parse_args(["--disable-gradient", "--disable-photometry", "--disable-denoise", "--disable-autoghs", "--disable-deconvolution"])) == {}
     assert (tmp_path / "report.json").read_text() == "{}"
 
 
@@ -550,13 +552,13 @@ def test_wrapper_file_logging(tmp_path, failure, level):
         image.write_text("not FITS")
     else:
         _create_test_fits_file(image)
-    log_file = tmp_path / "image_postprocess_cosmic-clarity/00_image_postProcess.log"
+    log_file = tmp_path / "image_postprocess/00_image_postProcess.log"
     log_file.parent.mkdir()
     log_file.write_text("old invocation")
     result = subprocess.run([
         str(root / "bin/postProcess.sh"), "image.fit", "report.json",
         "--log-level", level, "--no-gradient-measurement-image",
-        "--disable-photometry", "--disable-denoise", "--disable-deconvolution",
+        "--disable-photometry", "--disable-denoise", "--disable-autoghs", "--disable-deconvolution",
     ], cwd=tmp_path, env={**os.environ, "VENV_DIR": sys.prefix}, capture_output=True, text=True)
     assert result.returncode == (1 if failure else 0), result.stderr
     log = log_file.read_text()
@@ -569,18 +571,23 @@ def test_wrapper_file_logging(tmp_path, failure, level):
     assert ("Traceback (most recent call last)" in log) == (failure and level == "DEBUG")
 
 
-def test_default_output_uses_general_name_and_indexed_files(tmp_path):
+@pytest.mark.parametrize("clarity_options", [[], ["--disable-clarity"]])
+def test_default_output_uses_general_name_and_indexed_files(
+    tmp_path: Path, clarity_options: list[str]
+) -> None:
+    """Le nom général et les étapes indexées sont indépendants de Clarity."""
     import os
     import subprocess
     root = Path(__file__).resolve().parents[1]
     _create_test_fits_file(tmp_path / 'target.fit')
-    result = subprocess.run([str(root / 'bin/postProcess.sh'), 'target.fit',
-                             '--disable-photometry', '--disable-denoise', '--disable-deconvolution'], cwd=tmp_path,
+    result = subprocess.run([sys.executable, str(root / 'bin/postProcess.py'), 'target.fit',
+                             '--disable-photometry', '--disable-denoise', '--disable-autoghs', '--disable-deconvolution',
+                             *clarity_options], cwd=tmp_path,
                             env={**os.environ, 'VENV_DIR': sys.prefix}, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
-    assert (tmp_path / 'target_postprocess_cosmic-clarity.json').exists()
-    assert (tmp_path / 'target_postprocess_cosmic-clarity.fits').exists()
-    work = tmp_path / 'target_postprocess_cosmic-clarity'
+    assert (tmp_path / 'target_postprocess.json').exists()
+    assert (tmp_path / 'target_postprocess.fits').exists()
+    work = tmp_path / 'target_postprocess'
     assert (work / '00_target_postProcess.log').exists()
     assert (work / '01_gradient.json').exists()
     assert (work / '01_gradient_target_measurement_points.png').exists()
@@ -588,3 +595,4 @@ def test_default_output_uses_general_name_and_indexed_files(tmp_path):
     assert (work / 'quality_masks.json').exists()
     assert (work / 'quality_gradient_points.png').exists()
     assert not (tmp_path / 'target_gradient_steps').exists()
+    assert not list(tmp_path.glob('target_postprocess_*'))

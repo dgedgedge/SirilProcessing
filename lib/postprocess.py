@@ -18,7 +18,6 @@ import logging
 from collections.abc import Sequence
 from copy import copy, deepcopy
 from pathlib import Path
-from tempfile import mkdtemp
 
 import numpy as np
 from astropy.coordinates import SkyCoord
@@ -26,9 +25,11 @@ from astropy.io import fits
 from astropy.wcs import WCS
 from PIL import Image, ImageDraw
 
-from lib.postprocess_paths import treatment_file_prefix
+from lib.postprocess_paths import reset_ordered_work_dir, treatment_file_prefix
 from lib.denoising import NoiseReductionProcessor
 from lib.deconvolution import DeconvolutionProcessor
+from lib.final_render import AutoGHSFinalRenderer
+from lib.compute_config import ComputeConfig
 from lib.processor import processor
 from lib.siril_utils import Siril
 from lib.type_defs import ConfigValue, JSONReport
@@ -1056,7 +1057,8 @@ class PhotometricColorCalibrator(processor):
         Le retournement est autorisé sauf noflip. Le rapport et le journal
         décrivent les commandes exécutées.
 
-        Conserve scripts et journaux, écrit le FITS de sortie et le rapport JSON.
+        Conserve scripts et journaux dans <rapport>_work/001, réinitialisé à
+        chaque lancement ; écrit le FITS de sortie et le rapport JSON.
         Lève ValueError pour une entrée ou des paramètres incompatibles et
         RuntimeError si Siril échoue. Voir docs/scripts/postProcess/photometry.md."""
         args = self._get_args(args)
@@ -1207,9 +1209,12 @@ class PhotometricColorCalibrator(processor):
                 {name: value for name, value in spectral_options.items() if value is not None},
             )
 
-        # Un dossier neuf évite de confondre une ancienne sortie avec un succès.
+        # Réinitialiser les produits de cette étape évite les sorties périmées.
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        work_dir = Path(mkdtemp(prefix=tag or "photometry_", dir=output_path.parent))
+        parent_work = output_path.parent / f"{output_path.stem}_work"
+        if Path(input_path).resolve().is_relative_to(parent_work.resolve()):
+            raise ValueError("L’entrée se trouve dans le dossier de travail réinitialisé")
+        work_dir = reset_ordered_work_dir(output_path)
         staged_image = work_dir / f"{tag}calibrated.fits"
         script = "\n".join(
             [
@@ -1285,7 +1290,7 @@ class _PostProcessorSequence(processor):
     """Orchestre des processeurs indépendamment de leur type concret."""
 
     def __init__(self, processors: Sequence[processor] | None = None) -> None:
-        """Installe les étapes explicites ou la séquence standard gradient/couleur/PSF/bruit."""
+        """Installe les étapes standard linéaires puis le rendu AutoGHS facultatif."""
         if processors is not None:
             self.add_arguments = self._add_custom_arguments
             self.parameter_persistence = {
@@ -1301,6 +1306,7 @@ class _PostProcessorSequence(processor):
                 PhotometricColorCalibrator(),
                 DeconvolutionProcessor(),
                 NoiseReductionProcessor(),
+                AutoGHSFinalRenderer(),
             ]
         )
         prefixes = [processor.get_prefix() for processor in self.processors]
@@ -1374,12 +1380,13 @@ class _PostProcessorSequence(processor):
         **DeconvolutionProcessor.parameter_persistence,
         **NoiseReductionProcessor.parameter_persistence,
     }
+    config_path_parameters = AutoGHSFinalRenderer.config_path_parameters
 
     @classmethod
     def default_processors(cls) -> tuple[type[processor], ...]:
         """Déclare les étapes Siril dans leur ordre d’exécution."""
         return (GradientExtractor, PhotometricColorCalibrator,
-                DeconvolutionProcessor, NoiseReductionProcessor)
+                DeconvolutionProcessor, NoiseReductionProcessor, AutoGHSFinalRenderer)
 
     @classmethod
     def parameter_children(cls) -> tuple[type[processor], ...]:
@@ -1389,10 +1396,12 @@ class _PostProcessorSequence(processor):
     @classmethod
     def add_arguments(cls, parser: argparse.ArgumentParser) -> None:
         """Déclare les étapes possibles sans connaître leurs moteurs internes."""
+        ComputeConfig.add_arguments(parser)
         cls._declare_processors(parser, cls.default_processors())
 
     def _add_custom_arguments(self, parser: argparse.ArgumentParser) -> None:
         """Conserve les options et défauts des instances d’une séquence personnalisée."""
+        ComputeConfig.add_arguments(parser)
         self._declare_processors(parser, self.processors)
 
     @staticmethod
@@ -1454,6 +1463,8 @@ class _PostProcessorSequence(processor):
 
         Chaque traitement reçoit son propre chemin de rapport dans un sous-dossier
         <nom du rapport>_steps, et le même Namespace d'arguments parsés une fois.
+        Les numéros standard restent fixes, notamment 05 pour AutoGHS lorsque
+        la restauration regroupe les étapes 03/04.
         """
         if args is None:
             from lib.config import Config
@@ -1474,6 +1485,11 @@ class _PostProcessorSequence(processor):
             prefix = processor.get_prefix()
             if not getattr(args, f"enable_{prefix}", processor.enabled_by_default):
                 continue
+            if not self._custom_processors:
+                index = {
+                    treatment.get_prefix(): position
+                    for position, treatment in enumerate(self.processors, start=1)
+                }.get(prefix, index)
             report_path = steps_dir / f"{index:02d}_{prefix}.json"
             logging.info("Exécution de %s sur %s", prefix, current_path)
             try:

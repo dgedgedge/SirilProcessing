@@ -133,6 +133,8 @@ sans réseau. L’activation automatique est vérifiée sur les caches locaux va
 absents, corrompus ou inaccessibles, ainsi que ses priorités CLI/configuration,
 sa sauvegarde et son intégration aux comparaisons et aux chaînes.
 Les scénarios à deux moteurs isolent les caches utilisateur.
+Les tests de transmission entre déconvolution et débruitage désactivent
+explicitement AutoGHS, dont le rendu est couvert par ses propres tests.
 Une inférence CPU réelle conditionnelle sur un extrait de M33 est
 exécutée lorsque ONNX Runtime, les poids et l’image exemple sont disponibles.
 Les nouveaux contrôles de flux sont diagnostiques par défaut : ces tests ne
@@ -147,3 +149,110 @@ hors dépôt restent exclus ; la génération n’exécute pas les sources copi�
 liens internes, les ressources embarquées du monofichier et la protection des
 dossiers. Une construction MkDocs complète rend les diagrammes dans Chromium
 et génère le PDF avant de publier les téléchargements sur le site.
+
+## AutoGHS, StarNet et rendu final
+
+Les tests `test_star_separation.py`, `test_star_rendering.py`, `test_auto_ghs.py`
+et `test_final_render.py` couvrent respectivement l'adaptateur externe, le rendu
+stellaire/fusion, les mathématiques/recherches et le contrat du pipeline :
+
+```bash
+.venv/bin/python -m pytest -q tests/test_star_separation.py tests/test_star_rendering.py tests/test_auto_ghs.py tests/test_final_render.py tests/test_postprocessor.py
+```
+
+Le contrat `both` exige une séparation, un rendu stellaire, deux traitements du
+même fond initial et deux fusions avec la même couche d'étoiles ; les valeurs des
+FITS finaux sont vérifiées, ainsi que les métadonnées, extensions et la source
+inchangée. Les pannes d'extraction, calcul, fusion et publication sont injectées
+sans autoriser de reprise. La configuration vérifie priorité, sauvegarde
+explicite et instantanés d'instance. Les histogrammes constants, gaussiens,
+points noirs ambigus/sûrs, limites des courbes, convergence et déterminisme sont
+vérifiés ; la chroma RGB optionnelle conserve la direction au gris et le gamut.
+
+`tests/data/auto_ghs_siril_1_4_4.json` contient des références **réellement
+calculées par Siril 1.4.4**, et non par une deuxième copie de l'implémentation
+Python. L'écart maximal GHS observé d'environ `1.02e-6` motive la tolérance absolue `2e-6`.
+Le point noir de référence donne un écart nul. Les branches B négatives passent
+les tests mathématiques, mais la CLI Siril locale les refuse.
+
+La validation réelle est volontairement opt-in : elle nécessite Siril Flatpak,
+StarNet V2, ses poids, et un dossier temporaire accessible depuis Flatpak. La
+commande suivante crée ses FITS et rapports **dans `tmp/autoghs-validation/`**,
+qui est réinitialisé par pytest et ne doit contenir que ces données de test :
+
+```bash
+SIRIL_AUTOGHS_INTEGRATION=1 .venv/bin/python -m pytest -q tests/test_auto_ghs_integration.py --basetemp=tmp/autoghs-validation
+```
+
+Le test CLI utilise un extrait RGB 512 × 512 de `imagesExample/M_33_combined.fits`.
+Le chemin StarNet vient des préférences Siril ; `STARNET_PATH` permet une
+surcharge pour cette validation. La CLI désactive les traitements amont pour
+ne pas les réexécuter et conserve le chemin réellement résolu dans un JSON
+isolé avec `-S`. Elle vérifie les deux sorties **avec étoiles**, les deux fonds,
+le rendu stellaire, les histogrammes, la reconstruction linéaire, l'absence
+d'écrêtage, les indicateurs non linéaires et les données originales intactes.
+Un second test recalcule les oracles mathématiques dans le Siril installé et
+compare la recomposition screen à la commande PixelMath réelle ; l’écart screen
+mesuré est de `5.96e-8` environ.
+
+Le test CuPy est ignoré sans CUDA/CuPy fonctionnel. Des doubles couvrent
+l'absence initiale de CUDA et une panne après initialisation ; ils ne valident
+pas une exécution matérielle GPU. Une inspection astrophotographique sur
+nébuleuse, IFN, bande étroite, ciel bruité et étoiles très brillantes reste
+nécessaire pour qualifier les heuristiques de rendu. Voir
+[AutoGHS](../docs/scripts/postProcess/auto-ghs.md), son
+[algorithme](../docs/scripts/postProcess/auto-ghs-algorithm.md) et le
+[traitement des étoiles](../docs/scripts/postProcess/star-rendering.md).
+
+La politique générale de calcul est vérifiée par `test_compute_config.py` :
+déclaration unique, défaut auto, transmission aux moteurs créés tardivement,
+sauvegarde, surcharges historiques et choix CPU/CUDA selon la disponibilité.
+Les doubles de disponibilité ne constituent pas une validation matérielle GPU.
+
+```bash
+.venv/bin/python -m pytest -q tests/test_compute_config.py
+```
+
+Les tests de `test_final_render.py` vérifient aussi la publication de deux PNG
+distincts (sans étoiles et avec étoiles recomposées), l’absence de mélange de
+leurs courbes et les axes logarithmiques, y compris avec des classes vides.
+
+Les encarts AutoGHS sont vérifiés sur des recherches acceptées, refusées et
+un arrêt avant recherche, avec distinction des candidats et corrections BP.
+
+Les tests AutoGHS vérifient les dossiers visibles et ordonnés, le numéro fixe 05
+même après fusion des étapes de restauration, la conservation des produits
+partiels accompagnés d’un rapport ERROR et la réinitialisation sans produits
+périmés lors d’une relance. Une source dans le dossier réinitialisé est protégée.
+
+Le test CLI du nom de sortie vérifie le dossier, le rapport et le FITS
+`<image>_postprocess`, avec Clarity activé puis désactivé.
+
+La boucle d’expansion AutoGHS est vérifiée pour RANGE et PEAK avec les cibles
+0,8/0,9, le gain borné, les images déjà étendues ou constantes, la limite de
+passages et les paramètres invalides. Les tests vérifient BP sur le premier RGB
+strictement positif, la conservation des valeurs supérieures et la sérialisation
+du rapport complet, avec les deux boucles distinguées dans les figures.
+
+L’égalisation partielle AutoGHS est vérifiée sur un histogramme concentré :
+diminution de la dispersion des effectifs, étalement des intensités, monotonie,
+respect des bornes, conservation des ratios RGB, désactivation et cas constant.
+Le renforcement stellaire vérifie le gain des faibles intensités, le plafond,
+l’absence de nouveaux pixels stellaires et la reproduction du rendu antérieur
+avec un facteur 1. Les gardes de largeur et de couleur restent actives.
+
+Les tests des chaînes de restauration vérifient que masques et opérations sont
+placés directement dans `<rapport>_work/`, sans niveau `001`, y compris après
+une relance sur une ancienne arborescence. Une entrée située dans le dossier
+réinitialisé est refusée avant toute suppression.
+
+Le défaut stellaire `star_faint_boost=5` est vérifié contre le facteur 3 : gain
+des très faibles intensités proche de 5/3, même support positif, ratios RGB et
+plafond conservés. Les profils gaussiens sont contrôlés aux deux réglages.
+
+`test_render_exports.py` vérifie les exports JPEG RGB pleine résolution, les
+intensités directes, l’orientation ROWORDER, l’intégrité du FITS, les entrées
+invalides et la copie du JPEG principal par le CLI. Les comparatifs vérifient
+que les pixels précédents sont capturés avant nettoyage et que les catégories
+sans/avec étoiles restent séparées. Le contrat AutoGHS vérifie les nouveaux
+chemins et le premier lancement, puis une relance avec historique disponible.

@@ -4,11 +4,14 @@
 
 `_PostProcessorSequence` orchestre une liste ordonnée de `processor`.
 Par défaut, cette liste contient `GradientExtractor()`, `PhotometricColorCalibrator()`,
-`DeconvolutionProcessor()` puis `NoiseReductionProcessor()`. Le choix des moteurs
+`DeconvolutionProcessor()`, `NoiseReductionProcessor()` puis le rendu final
+`AutoGHSFinalRenderer()`. Le choix des moteurs
 appartient aux orchestrateurs des traitements. Par défaut,
-la séquence remplace les deux dernières étapes par
+la séquence remplace les deux étapes de restauration par
 `RestorationChainProcessor`, après le gradient et la photométrie.
 `--no-restoration-compare-chains` rétablit les comparaisons par étape.
+Le [rendu final AutoGHS](../../../postProcess/auto-ghs.md) reste après la
+restauration dans les deux modes et est activé par défaut ; `--disable-autoghs` conserve la sortie linéaire.
 Une liste de processeurs fournie explicitement au constructeur reste exécutée
 telle quelle ; la fusion automatique concerne la séquence standard.
 
@@ -25,7 +28,7 @@ Un processeur hérite de `processor` et expose :
 
 La séquence ajoute automatiquement `--enable-<prefixe>` et `--disable-<prefixe>`.
 L’attribut `enabled_by_default` du processeur détermine son activation par défaut
-(`True` pour les quatre traitements). Un appel Python sans `args` utilise
+(`True` pour les cinq traitements, y compris AutoGHS). Un appel Python sans `args` utilise
 la copie mémorisée par `set_from_args`, puis les paramètres partagés de `Config`
 si aucune copie locale n’a été fournie. Les défauts locaux du traitement
 s’appliquent aux paramètres absents.
@@ -114,7 +117,7 @@ d’activation sont également rémanents.
 En usage Python autonome, la séquence écrit les rapports individuels dans
 `<rapport>_steps/<index>_<prefixe>.json`, puis le rapport global
 `{ "prefixe": { ... }, ... }` au chemin demandé.
-Le CLI configure plutôt le dossier `<image>_postprocess_<backend>/`, avec rapport
+Le CLI configure plutôt le dossier `<image>_postprocess/`, avec rapport
 global et FITS final au même niveau ; voir [les sorties de postProcess](../../../postProcess/README.md#rapports-images-et-journaux).
 En comparaison des chaînes, la clé `restoration` et `03_restoration.json`
 remplacent les clés et rapports `deconvolution`/`denoise`.

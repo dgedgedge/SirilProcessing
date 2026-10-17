@@ -13,18 +13,32 @@ def treatment_file_prefix(report_path: Path | str) -> str:
     return f"{stem}_" if re.match(r"^\d{2,}_", stem) else ""
 
 
-def reset_ordered_work_dir(report_path: Path | str, order: int = 1) -> Path:
-    """Réinitialise le dossier de travail d'une étape et crée un sous-dossier ordonné.
+def reset_work_dir(report_path: Path | str) -> Path:
+    """Réinitialise et retourne le dossier visible `<rapport>_work/`.
 
-    Le parent `<étape>_work/` est supprimé puis recréé au démarrage de l'étape
-    afin de ne conserver que les artefacts de l'exécution courante.
+    Les anciens produits, y compris un éventuel sous-dossier historique 001,
+    sont supprimés avant de recréer le dossier. L'appelant doit vérifier que
+    son entrée n'est pas située dans ce dossier avant de demander sa remise à
+    zéro. Les erreurs du système de fichiers sont propagées.
     """
     report = Path(report_path).resolve()
+    work = report.parent / f"{report.stem}_work"
+    if work.exists():
+        shutil.rmtree(work)
+    work.mkdir(parents=True, exist_ok=False)
+    return work
+
+
+def reset_ordered_work_dir(report_path: Path | str, order: int = 1) -> Path:
+    """Réinitialise le dossier d'une étape puis crée un sous-dossier ordonné.
+
+    Réserve le niveau `<ordre>` aux traitements qui rangent leurs produits dans
+    une sous-étape explicite. L'ordre doit être positif ; une valeur invalide est
+    refusée avant toute suppression. L'appelant protège son entrée comme pour
+    `reset_work_dir`.
+    """
     if order < 1:
         raise ValueError("order doit être >= 1")
-    parent = report.parent / f"{report.stem}_work"
-    if parent.exists():
-        shutil.rmtree(parent)
-    work = parent / f"{order:03d}"
-    work.mkdir(parents=True, exist_ok=False)
+    work = reset_work_dir(report_path) / f"{order:03d}"
+    work.mkdir(exist_ok=False)
     return work
