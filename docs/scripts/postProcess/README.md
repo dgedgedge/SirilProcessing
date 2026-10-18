@@ -17,7 +17,9 @@ Les cinq traitements sont activés par défaut ; leur activation peut être
 modifiée par la ligne de commande ou par la configuration mémorisée.
 
 Cette commande s’utilise séparément sur un résultat de stacking ou une mosaïque,
-par exemple après [lightProcess](../lightProcess/README.md). Elle ne réalise ni
+ou s’enchaîne dans [lightProcess](../lightProcess/README.md) avec `--postprocess`.
+Les deux entrées utilisent le même
+[processeur complet et ses paramètres](pipeline.md). Elle ne réalise ni
 la calibration des poses brutes, ni leur empilement. Le
 [rendu final AutoGHS](auto-ghs.md) est exécuté après la restauration :
 il sépare les étoiles avec StarNet et produit deux images finales étoilées

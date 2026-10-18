@@ -18,6 +18,9 @@ un stack par session fournie, quel que soit son nombre de sous-sessions.
 
 # Reconstruction du stack à partir des calibrations disponibles
 ./bin/lightProcess.sh /chemin/M33 --force-stacking
+
+# Calibration, stacking et post-traitement complet
+./bin/lightProcess.sh /chemin/M33 --postprocess
 ```
 
 Chaque chemin fourni définit une session contenant une ou plusieurs sous-sessions
@@ -39,9 +42,17 @@ Voir [les structures d’entrée](SESSIONS.md).
 | Drizzle | `--drizzle`, `--drizzle-scale`, `--drizzle-pixfrac`, `--drizzle-kernel` |
 | Relance et conservation | `--force-stacking`, `--keep-intermediate`, `--purge-target` |
 | Mosaïque | `--mosaic`, `--mosaic-name` |
+| Post-traitement | `--postprocess`, `--no-postprocess`, mêmes options que `postProcess` |
 
 `--help` expose toutes les options. Les réglages peuvent provenir du fichier
 persistant de configuration ; `--save-config` enregistre les arguments.
+
+Le [post-traitement commun](../postProcess/pipeline.md) est activé par
+défaut dans lightProcess : les commandes habituelles l’enchaînent sans option.
+`--no-postprocess` le désactive. Il traite chaque stack final, ou uniquement
+la mosaïque si `--mosaic` est demandé. Ses paramètres suivent les mêmes défauts
+et la même configuration que le script autonome. `--dry-run` l’annonce sans
+l’exécuter ; une erreur de rendu entraîne un code de retour 1.
 
 ## Schéma du processus
 
@@ -56,3 +67,5 @@ la mosaïque optionnelle des résultats de stacking.
 - [Empilement final](treatments/STACKING.md) : scripts exécutés, alignements et comportement des modes.
 - [Sorties et reprise](treatments/OUTPUTS.md) : rapports, cache, nettoyage et limites de la simulation.
 - [Mosaïque](MOSAIC.md) : assemblage optionnel des champs.
+- [Pipeline de post-traitement](../postProcess/pipeline.md) : configuration,
+  enchaînement et exports FITS/JPEG communs.

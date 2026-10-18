@@ -1,10 +1,21 @@
 """Orchestration CLI : calibration par sous-session, stack par session, mosaïque."""
 import importlib.util
+import argparse
+from collections.abc import Callable
 import sys
 from pathlib import Path
+from types import ModuleType
 from unittest.mock import Mock
 
 import pytest
+
+from lib.postprocessing import PostProcessingProcessor
+from lib.type_defs import JSONReport
+
+PipelineFixture = tuple[
+    ModuleType, Callable[..., int], Mock, Mock, dict[Path, list[Path]],
+]
+PostprocessCalls = list[tuple[Path, Path, argparse.Namespace]]
 
 
 @pytest.fixture
@@ -70,8 +81,16 @@ def pipeline(tmp_path, monkeypatch):
 
     monkeypatch.setattr(mosaic, 'Mosaic', TestMosaic)
 
-    def run(roots, *options):
-        monkeypatch.setattr(sys, 'argv', ['lightProcess.py', *map(str, roots), '--no-dark', '--output', str(tmp_path / 'out'), '--work-dir', str(tmp_path / 'work'), *options])
+    def run(
+        roots: list[Path], *options: str, use_postprocess_default: bool = False,
+    ) -> int:
+        """Isole le stacking, sauf si le test demande le vrai défaut d’enchaînement.
+
+        Les options explicites restent prioritaires sur --no-postprocess utilisé
+        pour les tests de calibration et mosaïque avec fichiers factices.
+        """
+        isolation = [] if use_postprocess_default else ["--no-postprocess"]
+        monkeypatch.setattr(sys, 'argv', ['lightProcess.py', *map(str, roots), '--no-dark', '--output', str(tmp_path / 'out'), '--work-dir', str(tmp_path / 'work'), *isolation, *options])
         return cli.main()
 
     return cli, run, stack_mock, mosaic_mock, calibrated
@@ -213,3 +232,229 @@ def test_invalid_mosaic_name_fails_before_calibration(tmp_path, pipeline, name):
     assert run(roots, '--mosaic', '--mosaic-name', name) == 1
     assert not calibrated
     stack.assert_not_called()
+
+
+@pytest.fixture
+def postprocess_calls(monkeypatch: pytest.MonkeyPatch) -> PostprocessCalls:
+    """Trace le processeur complet sans exécuter de moteurs sur les faux stacks."""
+    from copy import deepcopy
+    import shutil
+
+    calls: PostprocessCalls = []
+
+    def postprocess(
+        self: PostProcessingProcessor, input_path: Path, output_path: Path,
+        args: argparse.Namespace | None = None,
+    ) -> JSONReport:
+        """Publie une copie et capture l’instantané résolu lors de l’instanciation."""
+        calls.append((input_path, output_path, deepcopy(self._get_args(args))))
+        destination = output_path.with_suffix(".fits")
+        shutil.copyfile(input_path, destination)
+        return {"status": "SUCCESS", "output_image": str(destination)}
+
+    monkeypatch.setattr(PostProcessingProcessor, "post_process", postprocess)
+    return calls
+
+
+def test_postprocess_each_final_stack_with_shared_parameters(
+    tmp_path: Path, pipeline: PipelineFixture, postprocess_calls: PostprocessCalls,
+) -> None:
+    """Les stacks finaux reçoivent les options communes, sans traiter les calibrations."""
+    _, run, stack, _, _ = pipeline
+    roots = [make_session(tmp_path, name, 1)[0] for name in ("north", "south")]
+    assert run(roots, "--postprocess", "--compute-backend", "cpu",
+               "--ghs-chroma", "enhanced", "--ghs-dynamic-target", "0.8",
+               "--photometry-object", "M33") == 0
+    assert stack.call_count == len(postprocess_calls) == 2
+    for root, (image, report, args) in zip(roots, postprocess_calls):
+        assert image == tmp_path / "out" / root.name / f"{root.name}_combined.fits"
+        assert report == image.with_name(f"{image.stem}_postprocess.json")
+        assert args.compute_backend == "cpu"
+        assert args.ghs_chroma == "enhanced" and args.ghs_dynamic_target == 0.8
+        assert args.photometry_object == "M33"
+        assert args.enable_autoghs is True
+        assert args.restoration_compare_chains is True
+        assert image.is_file() and report.with_suffix(".fits").is_file()
+
+
+def test_postprocess_only_final_mosaic(
+    tmp_path: Path, pipeline: PipelineFixture, postprocess_calls: PostprocessCalls,
+) -> None:
+    """La mosaïque reçoit les stacks linéaires et son résultat est traité une fois."""
+    _, run, stack, mosaic, _ = pipeline
+    roots = [make_session(tmp_path, name, 0)[0] for name in ("north", "south")]
+    assert run(roots, "--postprocess", "--mosaic", "--mosaic-name", "field") == 0
+    assert stack.call_count == 2 and len(postprocess_calls) == 1
+    image, report, _ = postprocess_calls[0]
+    assert image == tmp_path / "mosaic.fits"
+    assert report == tmp_path / "mosaic_postprocess.json"
+    call = mosaic.return_value.post_process.call_args.kwargs
+    assert call["input_path"].name == "north_combined.fits"
+
+
+@pytest.mark.parametrize("disabled", ["saved", "explicit", "dry-run"])
+def test_postprocess_not_executed_when_disabled_or_simulated(
+    tmp_path: Path, pipeline: PipelineFixture,
+    postprocess_calls: PostprocessCalls, disabled: str,
+) -> None:
+    """La configuration, le CLI ou la simulation peuvent empêcher le calcul final."""
+    import json
+
+    _, run, _, _, _ = pipeline
+    root, _ = make_session(tmp_path, "field", 0)
+    options = []
+    if disabled == "saved":
+        (tmp_path / "config.json").write_text(json.dumps({"enable_postprocess": False}))
+    elif disabled == "explicit":
+        (tmp_path / "config.json").write_text(json.dumps({"enable_postprocess": True}))
+        options = ["--no-postprocess"]
+    elif disabled == "dry-run":
+        options = ["--dry-run"]
+    assert run([root], *options, use_postprocess_default=True) == 0
+    assert not postprocess_calls
+
+
+def test_postprocess_reused_stack(
+    tmp_path: Path, pipeline: PipelineFixture,
+    postprocess_calls: PostprocessCalls, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """La reprise d’un stack à jour enchaîne quand même le post-traitement demandé."""
+    cli, run, stack, _, _ = pipeline
+    root, _ = make_session(tmp_path, "field", 0)
+    image = tmp_path / "out/field/field_combined.fits"
+    image.parent.mkdir(parents=True)
+    image.touch()
+    monkeypatch.setattr("lib.drizzle.cache_matches", lambda *args: True)
+    monkeypatch.setattr(cli, "should_rebuild_stack", lambda *args: False)
+    assert run([root], "--postprocess") == 0
+    stack.assert_not_called()
+    assert len(postprocess_calls) == 1 and postprocess_calls[0][0] == image
+
+
+def test_failed_mosaic_never_postprocesses_panels(
+    tmp_path: Path, pipeline: PipelineFixture, postprocess_calls: PostprocessCalls,
+) -> None:
+    """Un assemblage en erreur ne provoque aucun rendu des panneaux à sa place."""
+    _, run, _, mosaic, _ = pipeline
+    roots = [make_session(tmp_path, name, 0)[0] for name in ("north", "south")]
+    mosaic.return_value.post_process.side_effect = RuntimeError("mosaic failed")
+    assert run(roots, "--mosaic", "--mosaic-name", "field", "--postprocess") == 1
+    assert not postprocess_calls
+
+
+@pytest.mark.parametrize("failure", ["exception", "missing_output"])
+def test_postprocess_failure_fails_pipeline_without_removing_stack(
+    tmp_path: Path, pipeline: PipelineFixture,
+    monkeypatch: pytest.MonkeyPatch, failure: str,
+) -> None:
+    """Les erreurs de rendu affectent le code retour, sans perdre les stacks suivants."""
+    _, run, _, _, _ = pipeline
+    roots = [make_session(tmp_path, name, 0)[0] for name in ("north", "south")]
+    calls = []
+
+    def fail(
+        self: PostProcessingProcessor, input_path: Path, output_path: Path,
+        args: argparse.Namespace | None = None,
+    ) -> JSONReport:
+        """Simule soit une erreur du moteur, soit une sortie annoncée absente."""
+        calls.append(input_path)
+        if failure == "exception":
+            raise RuntimeError("render failed")
+        return {"output_image": str(output_path.with_suffix(".fits"))}
+
+    monkeypatch.setattr(PostProcessingProcessor, "post_process", fail)
+    assert run(roots, "--postprocess") == 1
+    assert len(calls) == 2
+    assert all(image.is_file() for image in calls)
+
+
+def test_lightprocess_saves_discovered_starnet_and_reuses_activation(
+    tmp_path: Path, pipeline: PipelineFixture, postprocess_calls: PostprocessCalls,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """-S mémorise le choix d’enchaînement, le chemin découvert et les réglages."""
+    import json
+
+    from lib.star_separation import StarNetSeparator
+
+    executable = str(tmp_path / "starnet++")
+    monkeypatch.setattr(StarNetSeparator, "resolve_executable", lambda args: executable)
+    _, run, _, _, _ = pipeline
+    root, _ = make_session(tmp_path, "field", 0)
+    assert run([root], "--postprocess", "--ghs-chroma", "enhanced", "-S") == 0
+    saved = json.loads((tmp_path / "config.json").read_text())
+    assert saved["enable_postprocess"] is True
+    assert saved["starnet_path"] == executable
+    assert saved["ghs_chroma"] == "enhanced"
+    assert postprocess_calls[0][2].starnet_path == executable
+    postprocess_calls.clear()
+    assert run([root], use_postprocess_default=True) == 0
+    assert len(postprocess_calls) == 1
+    assert postprocess_calls[0][2].ghs_chroma == "enhanced"
+
+
+@pytest.mark.parametrize("mosaic", [False, True])
+def test_postprocess_runs_by_default_without_activation_flag(
+    tmp_path: Path, pipeline: PipelineFixture, postprocess_calls: PostprocessCalls,
+    caplog: pytest.LogCaptureFixture, mosaic: bool,
+) -> None:
+    """Les commandes usuelles de stack et mosaïque enchaînent sans --postprocess."""
+    import logging
+
+    caplog.set_level(logging.INFO)
+    _, run, _, _, _ = pipeline
+    names = ("north", "south") if mosaic else ("M_33",)
+    roots = [make_session(tmp_path, name, 0)[0] for name in names]
+    options = (
+        ["--mosaic", "--force", "--keep-intermediate", "--mosaic-name", "M31"]
+        if mosaic else []
+    )
+    assert run(roots, *options, use_postprocess_default=True) == 0
+    assert len(postprocess_calls) == 1
+    image, _, args = postprocess_calls[0]
+    assert args.enable_postprocess is True
+    assert image == (
+        tmp_path / "mosaic.fits" if mosaic
+        else tmp_path / "out/M_33/M_33_combined.fits"
+    )
+    assert "Post-traitement final : activé" in caplog.text
+
+
+def test_lightprocess_executes_common_exports_after_stack(
+    tmp_path: Path, pipeline: PipelineFixture, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Un vrai FITS empilé rejoint la classe commune et ses exports/diagnostics."""
+    from contextlib import nullcontext
+    import json
+
+    import numpy as np
+    from astropy.io import fits
+    import lib.postprocessing as postprocessing
+
+    _, run, stack, _, _ = pipeline
+    root, _ = make_session(tmp_path, "field", 0)
+
+    def stack_rgb(*, output_dir: Path, **kwargs: object) -> Path:
+        """Simule seulement le stacking, en écrivant un FITS valide et non constant."""
+        destination = output_dir / "field_combined.fits"
+        pixels = np.linspace(0.01, 0.1, 3 * 64 * 64, dtype=np.float32)
+        fits.writeto(destination, pixels.reshape(3, 64, 64))
+        return destination
+
+    stack.side_effect = stack_rgb
+    monkeypatch.setattr(postprocessing, "PowerGuard", nullcontext)
+    assert run([root], "--postprocess", "--disable-photometry", "--disable-autoghs",
+               "--disable-denoise", "--disable-deconvolution",
+               "--gradient-method", "polynomial", "--gradient-min-order", "1",
+               "--gradient-max-order", "1", "--no-gradient-measurement-image") == 0
+    directory = tmp_path / "out/field"
+    source = directory / "field_combined.fits"
+    final = directory / "field_combined_postprocess.fits"
+    report = directory / "field_combined_postprocess.json"
+    result = json.loads(report.read_text())
+    assert set(result) == {"gradient"}
+    assert final.read_bytes() == Path(result["gradient"]["output_image"]).read_bytes()
+    assert source.is_file() and not final.with_suffix(".jpg").exists()
+    work = directory / "field_combined_postprocess"
+    assert (work / "quality_masks.png").is_file()
+    assert (work / "00_field_combined_postProcess.log").is_file()

@@ -8,6 +8,8 @@ Ce script :
 3. Trouve le master dark correspondant dans la librairie
 4. Effectue le prétraitement (soustraction du dark) et le stacking
 5. Optionnellement, assemble les sessions en mosaïque
+6. Avec --postprocess, traite les stacks finaux ou la mosaïque avec la même
+   classe, les mêmes paramètres et les mêmes exports que postProcess.py.
 
 Usage:
     python lightProcessor.py <répertoire_session> [options]
@@ -146,8 +148,13 @@ def should_rebuild_stack(combined_output: Path, calibrated_dirs: list[Path]) -> 
     return latest_input > combined_mtime
 
 
-def main() -> None:
-    """Résout les options, traite les sessions et produit les stacks et mosaïques demandés."""
+def main() -> int:
+    """Traite les sessions, les stacks et les étapes finales demandées.
+
+    Retourne 0 si les étapes requises réussissent, 1 sinon. --postprocess
+    exécute le processeur commun sur les produits finaux après l’assemblage
+    éventuel ; --dry-run annonce ces calculs sans les lancer.
+    """
     config = Config.from_command_line()
 
     siril_pipeline_epilog = """
@@ -160,6 +167,8 @@ Flux de traitement attendu:
     5) Une fois toutes les sous-sessions traitees, on reconstruit la sequence finale sur l'ensemble
        des FITS calibres et on effectue un stack par session fournie, meme avec une seule sous-session.
     6) Avec --mosaic, on assemble uniquement ces stacks de sessions.
+    7) Avec --postprocess, on traite chaque stack final, ou uniquement la mosaique
+       si elle est demandee, avec les memes options que postProcess.py.
 
 Exemple de pipeline Siril par sous-session:
     1) convert <sequence_name> -out=<work_dir>/process
@@ -189,7 +198,7 @@ Sorties:
     - Des FITS calibres par sous-session
     - Un FITS final empile par cible
     - Un JSON <target>_combined.drizzle.json contenant analyse, reglages et decision
-    - Un JPG de previsualisation genere automatiquement a partir du FITS final
+    - Avec --postprocess : rapports, FITS et JPEG finaux comme postProcess
 
 Traitement Siril de mosaique (si --mosaic):
     1) convert mosaic_ -out=<mosaic_output_dir>
@@ -205,10 +214,11 @@ Traitement Siril de mosaique (si --mosaic):
     )
 
     from lib.lightprocessor import LightProcessor
+    from lib.postprocessing import PostProcessingProcessor
     from lib.siril_utils import Siril
 
     config.register(LightProcessor, parser)
-    config.register(Siril, parser)
+    config.register(Siril, parser, photometry_aliases=True)
 
     # Arguments pour la mosaïque
     parser.add_argument(
@@ -222,6 +232,7 @@ Traitement Siril de mosaique (si --mosaic):
 
     # Panel inputs are produced by this pipeline, not supplied independently.
     config.register(Mosaic, parser, include_inputs=False)
+    config.register(PostProcessingProcessor, parser, include_activation=True)
 
     config.add_arguments(parser)
 
@@ -273,11 +284,23 @@ Traitement Siril de mosaique (si --mosaic):
     # Configuration du logging
     setup_logging(args.log_level)
     logging.info(f"Log level set to {args.log_level}")
+    logging.info(
+        "Post-traitement final : %s",
+        "activé" if args.enable_postprocess else "désactivé",
+    )
 
     # Sauvegarde de la configuration si demandé
     if args.save_config:
+        if args.enable_postprocess:
+            try:
+                PostProcessingProcessor.prepare_config_save(args)
+            except (OSError, ValueError, RuntimeError) as error:
+                logging.error("Préparation du post-traitement impossible: %s", error)
+                return 1
         if not config.save_requested(args):
             return 1
+        # La découverte de StarNet peut compléter les arguments sauvegardés.
+        config.bind_parameters(args)
 
     # Définition des répertoires par défaut
     if not args.output_dir:
@@ -777,6 +800,7 @@ Traitement Siril de mosaique (si --mosaic):
         len(input_roots),
     )
     mosaic_success = not args.create_mosaic
+    mosaic_result = None
     # La mosaïque reçoit exclusivement un résultat de stacking par session.
     if args.create_mosaic and args.dry_run and len(input_roots) >= 2:
         logging.info(
@@ -837,11 +861,50 @@ Traitement Siril de mosaique (si --mosaic):
             "Mosaïque demandée mais moins de 2 résultats de stacking disponibles"
         )
 
+    postprocess_success = True
+    if args.enable_postprocess:
+        if args.dry_run:
+            logging.info(
+                "[DRY-RUN] Post-traitement prévu sur %s",
+                "la mosaïque finale" if args.create_mosaic else "chaque stack final",
+            )
+        else:
+            # L’assemblage utilise les panneaux linéaires. Le rendu s’applique
+            # seulement au produit final, après la mosaïque si elle est demandée.
+            if args.create_mosaic:
+                final_images = (
+                    [Path(mosaic_result)] if mosaic_success and mosaic_result else []
+                )
+            else:
+                final_images = list(session_stack_outputs.values())
+            postprocess_success = bool(final_images)
+            for image in final_images:
+                try:
+                    treatment = PostProcessingProcessor()
+                    report_path = treatment.report_path_for(image)
+                    result = treatment.post_process(image, report_path)
+                    output_image = result.get("output_image")
+                    if (
+                        result.get("error") or not output_image
+                        or not Path(str(output_image)).is_file()
+                    ):
+                        raise RuntimeError(
+                            "Le post-traitement ne fournit pas de sortie valide"
+                        )
+                    logging.info("Post-traitement terminé: %s", output_image)
+                except Exception as error:
+                    postprocess_success = False
+                    logging.error(
+                        "Échec du post-traitement de %s: %s", image, error,
+                        exc_info=args.log_level == "DEBUG",
+                    )
+
     # Retour final
     if (
         successful_sessions == total_sessions
         and (args.dry_run or len(session_stack_outputs) == len(input_roots))
         and mosaic_success
+        and postprocess_success
     ):
         if args.dry_run:
             logging.info("Simulation terminée avec succès")

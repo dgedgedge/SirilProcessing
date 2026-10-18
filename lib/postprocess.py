@@ -124,7 +124,9 @@ class GradientExtractor(processor):
 
     @classmethod
     def add_arguments(cls, parser: argparse.ArgumentParser) -> None:
-        """Déclare les paramètres de cette étape dans le parseur partagé."""
+        """Déclare une fois les paramètres partagés avec la mosaïque et les étapes."""
+        if any(action.dest == "gradient_method" for action in parser._actions):
+            return
         prefix = "gradient"
         parser.add_argument(
             f"--{prefix}-method",

@@ -4,6 +4,8 @@
 
 Le parcours comporte une boucle de calibration sur les sous-sessions, une
 boucle de stacking sur les sessions d’entrée, puis une mosaïque optionnelle.
+`--postprocess` ajoute le [post-traitement commun](../../postProcess/pipeline.md)
+des stacks finaux ou de la mosaïque assemblée.
 Chaque calibration comporte elle-même une boucle sur les groupes de lights
 et un sous-traitement des flats. Les schémas ci-dessous détaillent ces niveaux.
 
@@ -58,7 +60,7 @@ flowchart TD
     end
 
     TARGETS -->|Non| MOSAIC_REQUEST{"--mosaic et au moins deux<br/>résultats de stacking disponibles ?"}
-    MOSAIC_REQUEST -->|Non| END["Bilan final"]
+    MOSAIC_REQUEST -->|Non| POST_REQUEST{"--postprocess activé ?"}
     subgraph MOSAIC["Sous-traitement final : mosaïque optionnelle"]
         MOSAIC_REQUEST -->|Oui| MOSAIC_INPUTS["Collecter un résultat de stacking par session"]
         MOSAIC_INPUTS --> MOSAIC_NAME["Choisir le nom et préparer les entrées"]
@@ -68,7 +70,10 @@ flowchart TD
         MOSAIC_REG --> MOSAIC_STACK["stack r_mosaic_<br/>Normalisation, recouvrement et raccords"]
         MOSAIC_STACK --> MOSAIC_RESULT["FITS mosaïque ou erreur journalisée<br/>Nettoyage du travail mosaïque"]
     end
-    MOSAIC_RESULT --> END
+    MOSAIC_RESULT --> POST_REQUEST
+    POST_REQUEST -->|Non| END["Bilan final"]
+    POST_REQUEST -->|Oui| POST["PostProcessingProcessor<br/>Chaque stack final ou la mosaïque réussie<br/>Rapports, diagnostics, FITS et JPEG"]
+    POST --> END
 ```
 
 La mosaïque nécessite au moins deux sessions fournies et deux résultats de

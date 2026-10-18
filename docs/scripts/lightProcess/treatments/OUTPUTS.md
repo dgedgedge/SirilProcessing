@@ -29,9 +29,16 @@ configurées. Pour toute session, avec une ou plusieurs sous-sessions :
 La séquence exportée permet de rouvrir les calibrations dans Siril. Les `.seq`
 contiennent les références, mesures et transformations, pas les pixels.
 Les scripts `.sps` et leurs journaux sont conservés avec les étapes de travail.
-Le parcours implémenté ne génère pas de prévisualisation JPG.
+Le stacking seul ne génère pas de prévisualisation JPG.
 Avec `--mosaic`, la base de sortie contient également `<nom>_mosaic.fits`
 et le rapport `<nom>_mosaic.json`, produit par `Mosaic.post_process()`.
+
+Avec `--postprocess`, le FITS final reste intact et reçoit à côté des produits
+`<image>_postprocess.fits`, `.json`, `.jpg` et un dossier `<image>_postprocess/`
+pour les étapes, journaux et diagnostics. Le JPEG dépend d’AutoGHS actif.
+Avec mosaïque, seul le résultat final assemblé est post-traité ; sans mosaïque,
+chaque stack final disponible l’est, même s’il provient du cache.
+Voir le [pipeline commun et ses erreurs](../../postProcess/pipeline.md).
 
 ## Réutilisation et relance
 
@@ -54,8 +61,8 @@ reconstruits automatiquement pour appliquer le cadrage commun natif de Siril
 La version 13 diffère les répétitions de pondération jusqu’au stack pour réduire
 le travail et les ressources du dématriçage et des rééchantillonnages.
 
-`--dry-run` simule la calibration et annonce les étapes de stacking et de
-mosaïque sans les exécuter.
+`--dry-run` simule la calibration et annonce les étapes de stacking, de
+mosaïque et de post-traitement sans les exécuter.
 L’option de purge est traitée avant ce parcours et n’est pas protégée par le
 mode simulation dans le code actuel.
 
