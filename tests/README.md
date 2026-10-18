@@ -52,6 +52,7 @@ Pour une exécution simple sans ce contrôle supplémentaire :
 | Drizzle et transformations | `test_drizzle.py`, `test_registration_geometry.py` |
 | Séquences Siril | `test_siril_sequence.py` |
 | Post-traitements Siril et backend Cosmic Clarity | `test_postprocessor.py`, `test_postprocess.py`, `test_deconvolution.py`, `test_denoising.py`, `test_deconvolution_quality.py`, `test_photometric_color.py`, `test_cosmic_clarity.py`, `test_cosmic_inference.py` |
+| Pipeline de post-traitement partagé | `test_postprocessing.py`, `test_session_pipeline.py` |
 | Qualité astrophotographique, chaînes et GraXpert | `test_restoration_quality.py`, `test_restoration_chains.py`, `test_restoration_summary.py`, `test_graxpert.py`, `test_restoration.py` |
 | Mosaïque : noms, entrées, préparation et script généré | `test_mosaic.py`, `test_mosaic_validation.py`, `test_integrated_script.py`, `test_simplified_mosaic.py` |
 | Configuration, lancement et journaux Siril | `test_siril_validation.py` |
@@ -59,6 +60,22 @@ Pour une exécution simple sans ce contrôle supplémentaire :
 | Synthèse de non-régression | `test_regression_summary.py` |
 
 ## Isolation et automatisation
+
+`test_postprocessing.py` compare les appels scientifiques, les paramètres et
+les exports FITS/JPEG entre l’appel du processeur complet et le CLI autonome.
+Il vérifie aussi les priorités de configuration, les instantanés indépendants,
+les déclarations uniques partagées avec la mosaïque, les chemins protégés et
+la libération du journal et de PowerGuard sur erreur ou interruption.
+`test_session_pipeline.py` couvre l’option `--postprocess`, les stacks repris,
+la mosaïque finale seule, la simulation et les échecs sans perte des stacks.
+Deux scénarios vérifient l’enchaînement activé par défaut, sans option, sur un
+stack et une mosaïque ; les tests limités aux étapes amont le désactivent
+explicitement. Les désactivations JSON/CLI restent testées séparément.
+Les moteurs simulés isolent l’enchaînement de la validation astrophotographique.
+
+```bash
+PIP_NO_INDEX=1 .venv/bin/python -m pytest -q tests/test_postprocessing.py tests/test_session_pipeline.py tests/test_render_exports.py
+```
 
 Les données de test sont créées dans des répertoires temporaires, notamment
 avec la fixture `tmp_path`. `conftest.py` fournit les fixtures partagées, les

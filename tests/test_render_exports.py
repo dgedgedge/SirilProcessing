@@ -124,6 +124,7 @@ def test_cli_copies_primary_jpeg_without_running_external_engines(
     import sys
 
     from lib.postprocess import _PostProcessorSequence
+    import lib.postprocessing as postprocessing
 
     source, rendered = tmp_path / "source.fits", tmp_path / "rendered.fits"
     data = np.full((3, 16, 20), 0.2, dtype=np.float32)
@@ -149,9 +150,9 @@ def test_cli_copies_primary_jpeg_without_running_external_engines(
         return result
 
     monkeypatch.setattr(_PostProcessorSequence, "post_process", render)
-    monkeypatch.setattr(module, "PowerGuard", nullcontext)
-    monkeypatch.setattr(module.QualityMaskPreview, "ensure_for_run", lambda *args: None)
-    monkeypatch.setattr(module.QualityMaskPreview, "write_gradient_points", lambda *args: None)
+    monkeypatch.setattr(postprocessing, "PowerGuard", nullcontext)
+    monkeypatch.setattr(postprocessing.QualityMaskPreview, "ensure_for_run", lambda *args: None)
+    monkeypatch.setattr(postprocessing.QualityMaskPreview, "write_gradient_points", lambda *args: None)
     monkeypatch.setattr(sys, "argv", [str(entry), str(source), str(tmp_path / "out"),
                                       "--config", str(tmp_path / "settings.json")])
     assert module.main() == 0

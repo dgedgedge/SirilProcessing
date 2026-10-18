@@ -6,6 +6,7 @@
 |---|---|
 | [parameterized_component.py](../../lib/parameterized_component.py) | Partager la déclaration et la capture des paramètres entre services et traitements |
 | [processor.py](../../lib/processor.py) | Ajouter le contrat de traitement d’image aux composants configurables |
+| [postprocessing.py](../../lib/postprocessing.py) | Exécuter le [pipeline complet de post-traitement](../scripts/postProcess/pipeline.md) commun à lightProcess et postProcess |
 | [final_render.py](../../lib/final_render.py) | Orchestrer et publier le [rendu final AutoGHS](../scripts/postProcess/auto-ghs.md) après les traitements linéaires |
 | [auto_ghs.py](../../lib/auto_ghs.py) | Calculer les étirements et rechercher leurs paramètres sur histogrammes |
 | [star_separation.py](../../lib/star_separation.py) | Adapter StarNet V2 via le service Siril existant |

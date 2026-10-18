@@ -25,6 +25,8 @@ ordre d’exécution :
 3. [Alignement et empilement final](treatments/STACKING.md).
 4. [Sorties, reprise et journaux](treatments/OUTPUTS.md).
 5. [Mosaïque optionnelle](MOSAIC.md).
+6. [Post-traitement optionnel](../postProcess/pipeline.md) : mêmes traitements
+   et exports que `postProcess`, avec `--postprocess`.
 
 ## Références
 
@@ -40,9 +42,13 @@ ordre d’exécution :
 fichier différent de `~/.siril_darklib_config.json` ; `-S/--save-config` mémorise les
 paramètres. Les options explicites priment sur le JSON, qui prime sur les défauts.
 Voir [la configuration partagée](../postProcess/README.md#configuration-et-mémorisation).
-Pour traiter ensuite le résultat empilé avec `bin/postProcess.sh`, consulter
-les [contrôles de qualité et la comparaison des chaînes](../postProcess/quality.md).
-Ces options appartiennent au script de post-traitement autonome.
+`--postprocess` enchaîne sur chaque stack final ou, avec `--mosaic`, sur la
+mosaïque finale. Il utilise les mêmes options de qualité, de restauration et
+de rendu que `bin/postProcess.sh`. L’enchaînement est activé par défaut, même
+sans option ; `--no-postprocess` le désactive. Une désactivation mémorisée dans
+le JSON reste prioritaire sur le défaut ; `--postprocess` permet de l’annuler.
+Voir le [pipeline commun](../postProcess/pipeline.md)
+et les [contrôles de qualité](../postProcess/quality.md).
 
 Le lanceur utilise Python et pip du système pour créer le venv sans pip et
 mettre à jour ses dépendances avant chaque exécution. Il lance ensuite le

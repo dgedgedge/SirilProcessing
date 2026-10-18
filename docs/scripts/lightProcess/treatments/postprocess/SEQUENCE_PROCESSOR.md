@@ -3,6 +3,9 @@
 [Guide utilisateur de postProcess](../../../postProcess/README.md)
 
 `_PostProcessorSequence` orchestre une liste ordonnée de `processor`.
+Le [processeur complet `PostProcessingProcessor`](../../../postProcess/pipeline.md)
+l’utilise dans `postProcess` et dans `lightProcess --postprocess`, puis ajoute
+les diagnostics et les exports finaux communs.
 Par défaut, cette liste contient `GradientExtractor()`, `PhotometricColorCalibrator()`,
 `DeconvolutionProcessor()`, `NoiseReductionProcessor()` puis le rendu final
 `AutoGHSFinalRenderer()`. Le choix des moteurs
