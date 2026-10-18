@@ -56,9 +56,9 @@ pas que StarNet a conservé toutes les structures astrophysiques compactes.
 
 ## Politique des résidus négatifs
 
-Un résidu négatif trop grand indique une extraction incompatible avec le
-rendu conservateur. Si son amplitude dépasse `ghs-negative-tolerance`, le
-traitement échoue. Pour les faibles résidus dans cette tolérance :
+Un résidu négatif indique que StarNet a produit localement un fond plus intense
+que l’image d’entrée. Ce dépassement peut rester corrigeable, même s’il est
+fort sur quelques pixels. Avant tout étirement, les branches sont compensées :
 
 ```text
 negative = min(stars_linear, 0)
@@ -68,9 +68,27 @@ stars_positive = stars_linear - negative
 
 Le flux est transféré dans le fond avant tout étirement, avec conservation de
 la somme linéaire. Les deux stratégies reçoivent ce **même fond corrigé**.
-La fraction de pixels concernés, le flux transféré et l'écart de conservation
-sont consignés. Le masque signé original reste dans les diagnostics : il
-n'est pas remplacé silencieusement par un masque écrêté.
+Dans les pixels concernés, le fond corrigé retrouve l’intensité originale et
+la couche d’étoiles devient nulle. Cela revient à borner le fond par l’original,
+en maintenant `fond_corrigé + étoiles_positives = image_originale`, à l’arrondi
+près. Les valeurs des deux branches doivent rester finies dans `[0,1]` ; une
+géométrie incompatible ou un domaine corrigé invalide reste une erreur.
+
+`--ghs-negative-tolerance=0.005` est un **seuil d’alerte**, dans `[0,0.05]`,
+et ne provoque plus l’abandon d’une décomposition corrigeable. Un avertissement
+indique le minimum, le nombre et la fraction de valeurs RGB qui dépassent ce
+seuil. Le rapport `residual_compensation` conserve ces mesures dans
+`minimum`, `above_tolerance_count`, `above_tolerance_fraction`,
+`tolerance_exceeded`, ainsi que le flux transféré et l’écart de conservation.
+Son statut est `CORRECTED` en cas de dépassement, `SUCCESS` sinon.
+Le masque signé original reste dans les diagnostics : il n’est pas remplacé
+par un masque écrêté sans correction simultanée du fond.
+
+Sur la mosaïque M31 de validation, 1 221 valeurs RGB sur 69 277 800 étaient
+inférieures à `-0.005` (environ 0,00176 %), avec un minimum de `-0.36232`.
+La compensation garde les branches dans `[0,1]` et reconstruit l’entrée avec
+un écart maximal de `2.98e-8`. Cette propriété algébrique ne certifie pas la
+fidélité des structures retirées par le réseau ; l’inspection reste nécessaire.
 
 ## Étirement propre aux étoiles
 

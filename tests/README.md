@@ -169,6 +169,12 @@ et génère le PDF avant de publier les téléchargements sur le site.
 
 ## AutoGHS, StarNet et rendu final
 
+Les tests de compensation vérifient les dépassements locaux StarNet de type
+M31, même supérieurs au seuil d’alerte : branches positives, somme linéaire
+conservée, données d’entrée inchangées et diagnostic explicite. Un scénario
+complet produit les deux rendus et leurs JPEG après compensation. Les seuils
+invalides et les branches corrigées hors domaine restent refusés.
+
 Les tests `test_star_separation.py`, `test_star_rendering.py`, `test_auto_ghs.py`
 et `test_final_render.py` couvrent respectivement l'adaptateur externe, le rendu
 stellaire/fusion, les mathématiques/recherches et le contrat du pipeline :

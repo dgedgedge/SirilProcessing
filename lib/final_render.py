@@ -249,7 +249,10 @@ class AutoGHSFinalRenderer(processor):
             "--ghs-negative-tolerance",
             type=float,
             default=0.005,
-            help="Amplitude négative maximale du résidu linéaire, en unités 0..1",
+            help=(
+                "Seuil d’alerte des résidus négatifs, en unités 0..1 ; "
+                "compensation conservant la somme linéaire"
+            ),
         )
         parser.add_argument(
             "--ghs-headroom",
@@ -262,30 +265,47 @@ class AutoGHSFinalRenderer(processor):
     def compensate_residual(
         starless: np.ndarray, stars: np.ndarray, tolerance: float
     ) -> tuple[np.ndarray, np.ndarray, JSONReport]:
-        """Transfère les résidus négatifs bornés dans le fond, sans perdre leur flux.
+        """Transfère les résidus négatifs dans le fond en conservant la somme.
 
         Fond corrigé = fond + min(étoiles,0), étoiles corrigées = max(étoiles,0).
-        La somme reste l'original ; une amplitude négative excessive est une
-        erreur d'extraction, pas une invitation à écrêter arbitrairement.
+        Lorsque StarNet a surestimé le fond, celui-ci revient ainsi à l’intensité
+        originale et la contribution stellaire devient nulle à cet endroit.
+        tolerance, finie dans [0,.05], est un seuil d’alerte diagnostique : un
+        dépassement est consigné sans invalider une décomposition corrigeable.
+        Les branches corrigées doivent être RGB, finies et bornées sur [0,1] ;
+        une incohérence de géométrie ou de domaine reste une erreur ValueError.
+        Voir docs/scripts/postProcess/star-rendering.md.
         """
         if not np.isfinite(tolerance) or not 0 <= tolerance <= 0.05:
             raise ValueError("ghs-negative-tolerance doit être dans [0,.05]")
         if starless.shape != stars.shape or not np.isfinite(stars).all():
             raise ValueError("Résidu StarNet incompatible")
+        validate_rgb(starless)
         negative = np.minimum(stars, 0)
-        if float(negative.min()) < -tolerance:
-            raise ValueError("Résidus négatifs StarNet supérieurs à la tolérance")
         background, positive = starless + negative, stars - negative
         validate_rgb(background)
         validate_rgb(positive)
+        minimum = float(stars.min())
+        exceeded_count = int(np.count_nonzero(stars < -tolerance))
+        if exceeded_count:
+            LOGGER.warning(
+                "StarNet : %d valeur(s) RGB (%.6f %%) sous -%g, minimum=%g ; "
+                "fond et étoiles compensés en conservant la somme linéaire",
+                exceeded_count, 100 * exceeded_count / stars.size,
+                tolerance, minimum,
+            )
         return (
             background,
             positive,
             {
-                "method": "transfer bounded negative residual into linear starless",
+                "method": "flux-conserving nonnegative residual compensation",
+                "status": "CORRECTED" if exceeded_count else "SUCCESS",
                 "tolerance": tolerance,
+                "tolerance_exceeded": bool(exceeded_count),
+                "above_tolerance_count": exceeded_count,
+                "above_tolerance_fraction": exceeded_count / stars.size,
                 "negative_fraction": float(np.mean(stars < 0)),
-                "minimum": float(stars.min()),
+                "minimum": minimum,
                 "transferred_absolute_flux": float(-negative.sum(dtype=np.float64)),
                 "sum_preserved_max_abs": float(
                     np.max(
