@@ -187,7 +187,7 @@ def test_failure_publishes_nothing(
 
 
 def test_residual_compensation_is_explicit_and_conservative() -> None:
-    """Les faibles résidus négatifs sont transférés sans perte ; les forts sont refusés."""
+    """Le transfert conserve la somme ; seuls les domaines invalides sont refusés."""
     background = np.full((3, 8, 8), 0.1, dtype=np.float32)
     residual = np.full_like(background, -0.0001)
     corrected, stars, report = AutoGHSFinalRenderer.compensate_residual(
@@ -196,8 +196,72 @@ def test_residual_compensation_is_explicit_and_conservative() -> None:
     np.testing.assert_allclose(corrected + stars, background + residual, atol=1e-8)
     assert report["negative_fraction"] == 1
     assert report["transferred_absolute_flux"] > 0
-    with pytest.raises(ValueError, match="tolérance"):
+    assert report["tolerance_exceeded"] is False
+    with pytest.raises(ValueError, match=r"\[0, 1\]"):
         AutoGHSFinalRenderer.compensate_residual(background, residual - 0.1, 0.005)
+
+
+def test_large_residual_is_compensated_and_reported(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Un dépassement local de type M31 n’interrompt pas une séparation corrigible."""
+    original = np.full((3, 8, 8), 0.01, dtype=np.float32)
+    background = original.copy()
+    original[0, 3, 4] = 0.604377627
+    background[0, 3, 4] = 0.966697633
+    background[1, 2, 3] = 0.005
+    residual = original - background
+    initial_background, initial_residual = background.copy(), residual.copy()
+    corrected, stars, report = AutoGHSFinalRenderer.compensate_residual(
+        background, residual, 0.005,
+    )
+    np.testing.assert_allclose(corrected + stars, original, atol=3e-8, rtol=0)
+    np.testing.assert_array_equal(background, initial_background)
+    np.testing.assert_array_equal(residual, initial_residual)
+    assert corrected[0, 3, 4] == pytest.approx(original[0, 3, 4])
+    assert stars[0, 3, 4] == 0 and stars[1, 2, 3] > 0
+    assert report["status"] == "CORRECTED" and report["tolerance_exceeded"]
+    assert report["above_tolerance_count"] == 1
+    assert report["above_tolerance_fraction"] == pytest.approx(1 / residual.size)
+    assert report["sum_preserved_max_abs"] < 3e-8
+    assert "somme linéaire" in caplog.text
+
+
+@pytest.mark.parametrize("tolerance", [-1, 0.1, float("nan")])
+def test_invalid_residual_tolerance_is_rejected(tolerance: float) -> None:
+    """Un seuil invalide reste une erreur de configuration explicite."""
+    data = np.full((3, 4, 4), 0.1, dtype=np.float32)
+    with pytest.raises(ValueError, match="ghs-negative-tolerance"):
+        AutoGHSFinalRenderer.compensate_residual(data, data * 0, tolerance)
+
+
+def test_both_renderings_survive_local_starnet_overshoot(
+    linear_rgb: Path, fake_separation, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """La correction rejoint les deux GHS, les exports et les diagnostics réels."""
+    separate = StarNetSeparator.post_process
+
+    def with_overshoot(
+        self: StarNetSeparator, source: Path, report: Path, args: argparse.Namespace,
+    ) -> dict[str, str]:
+        """Ajoute à la séparation synthétique un dépassement positif du fond."""
+        result = separate(self, source, report, args)
+        background = fits.getdata(result["starless_linear"])
+        background[0, 24, 24] = 0.9
+        residual = fits.getdata(source) - background
+        fits.writeto(result["starless_linear"], background, overwrite=True)
+        fits.writeto(result["stars_linear"], residual, overwrite=True)
+        return result
+
+    monkeypatch.setattr(StarNetSeparator, "post_process", with_overshoot)
+    result = AutoGHSFinalRenderer().post_process(
+        linear_rgb, tmp_path / "05_autoghs.json",
+        argparse.Namespace(compute_backend="cpu", ghs_bins=256, ghs_max_iterations=1),
+    )
+    assert result["status"] in ("SUCCESS", "NO_IMPROVEMENT")
+    assert result["residual_compensation"]["tolerance_exceeded"]
+    assert set(result["output_images"]) == {"range", "peak"}
+    assert all(Path(path).is_file() for path in result["output_jpegs"].values())
 
 
 def test_configuration_persistence_precedence_and_instance_snapshot(

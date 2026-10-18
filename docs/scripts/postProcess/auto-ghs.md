@@ -162,7 +162,7 @@ astronomique.
 | `--star-max-width-ratio` | `1.5` | Rapport FWHM médian maximal, si mesurable |
 | `--star-max-color-drift` | `0.08` | Dérive moyenne maximale de chromaticité RGB après fusion |
 | `--star-max-chroma-excess` | `0.10` | Hausse moyenne maximale de chroma RGB après fusion |
-| `--ghs-negative-tolerance` | `0.005` | Amplitude négative maximale du résidu linéaire |
+| `--ghs-negative-tolerance` | `0.005` | Seuil d’alerte des résidus négatifs, dans `[0,0.05]` ; compensation conservant la somme linéaire |
 | `--ghs-headroom` | `0.95` | Facteur commun du fond avant fusion screen |
 
 Les plages `[0,1]` s'expriment en unités Siril normalisées, les fractions ne
@@ -170,6 +170,11 @@ sont pas des pourcentages. Les mesures de couleur ne prétendent pas décrire
 une colorimétrie perceptuelle calibrée.
 
 ## Erreurs, résultats et limites de validation
+
+Les dépassements négatifs StarNet corrigeables sont compensés avant étirement,
+avec avertissement et mesures dans `residual_compensation`. Ils n’interrompent
+pas le rendu. Les couches corrigées doivent rester finies et bornées ; voir
+la [politique de compensation](star-rendering.md#politique-des-résidus-négatifs).
 
 Une panne StarNet, CUDA en cours de calcul, FITS, disque ou publication est
 **fatale**, sans reprise CPU ou substitution de rendu. La CLI retourne `1`.
