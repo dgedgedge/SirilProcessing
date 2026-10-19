@@ -2,6 +2,20 @@
 
 import logging
 from pathlib import Path
+from typing import Literal
+
+
+def log_section(title: str, *, separator: Literal["=", "-"] = "=") -> None:
+    """Journalise un titre INFO encadré par deux lignes de 60 signes.
+
+    Utilise les handlers existants pour conserver le même bandeau dans la
+    console et les fichiers de traitement, sans changer leur configuration.
+    Le séparateur = marque les étapes principales ; - marque les sous-étapes.
+    """
+    line = separator * 60
+    logging.info("%s", line)
+    logging.info("%s", title)
+    logging.info("%s", line)
 
 
 def setup_logging(log_level: str) -> None:

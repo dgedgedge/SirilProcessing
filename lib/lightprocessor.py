@@ -21,6 +21,7 @@ import numpy as np
 from astropy.io import fits
 
 from lib.fits_info import FitsInfo
+from lib.logging_utils import log_section
 from lib.siril_sequence import SirilSequence
 from lib.siril_utils import Siril
 from lib.type_defs import ConfigValue
@@ -38,7 +39,7 @@ def save_calibrated_sequence(
             if source.is_file():
                 destination = output_dir / name
                 SirilSequence.read(source).write(destination)
-                logging.info("Séquence calibrée conservée : %s", destination)
+                logging.debug("Séquence calibrée conservée : %s", destination)
                 return destination
     prefix = f"pp_{sequence_name}_"
     pattern = re.compile(re.escape(prefix) + r"(\d+)\.(?:fit|fits)$")
@@ -59,7 +60,7 @@ def save_calibrated_sequence(
     SirilSequence.from_files(
         destination, prefix, [frame[2] for frame in frames], layers=layers
     ).write()
-    logging.info("Séquence calibrée conservée : %s", destination)
+    logging.debug("Séquence calibrée conservée : %s", destination)
     return destination
 
 
@@ -720,7 +721,7 @@ class LightProcessor:
         light_files = [Path(f) for f in light_files]
         light_files.sort()
 
-        logging.info(f"Répertoire light trouvé: {light_dir}")
+        logging.debug(f"Répertoire light trouvé: {light_dir}")
         logging.debug(f"{len(light_files)} fichiers light détectés dans {light_dir}")
         return light_files
 
@@ -750,7 +751,7 @@ class LightProcessor:
         flat_files = [Path(f) for f in flat_files]
         flat_files.sort()
 
-        logging.info(f"Répertoire flat trouvé: {flat_dir}")
+        logging.debug(f"Répertoire flat trouvé: {flat_dir}")
         logging.debug(f"{len(flat_files)} fichiers flat détectés dans {flat_dir}")
         return flat_files
 
@@ -822,7 +823,7 @@ class LightProcessor:
                 f"(cam={light_info.camera()}, gain={round(light_info.gain())}, binning={light_info.binning()})"
             )
         else:
-            logging.info("Aucun flat compatible trouvé pour ce groupe de lights")
+            logging.debug("Aucun flat compatible trouvé pour ce groupe de lights")
 
         return selected
 
@@ -876,7 +877,7 @@ class LightProcessor:
 
         # Log des groupes trouvés
         for group_key, fits_list in groups.items():
-            logging.info(
+            logging.debug(
                 f"Groupe de calibration détecté: '{group_key}' ({len(fits_list)} images)"
             )
             if fits_list:
@@ -902,7 +903,7 @@ class LightProcessor:
             Chemin vers le master dark correspondant ou None si non trouvé
         """
         if not self.use_dark:
-            logging.info("Mode sans dark: recherche de master dark ignorée")
+            logging.debug("Mode sans dark: recherche de master dark ignorée")
             return None
 
         if not self.dark_library_path:
@@ -936,14 +937,14 @@ class LightProcessor:
 
                 # Vérifier la correspondance des caractéristiques
                 if light_info.is_equivalent(dark_info, self.temp_precision):
-                    logging.info(f"Master dark trouvé: {dark_file}")
-                    logging.info(
+                    logging.debug(f"Master dark trouvé: {dark_file}")
+                    logging.debug(
                         f"  Light: T={light_info.temperature()}°C, "
                         f"Exp={light_info.exptime()}s, "
                         f"Gain={light_info.gain()}, "
                         f"Caméra={light_info.camera()}"
                     )
-                    logging.info(
+                    logging.debug(
                         f"  Dark:  T={dark_info.temperature()}°C, "
                         f"Exp={dark_info.exptime()}s, "
                         f"Gain={dark_info.gain()}, "
@@ -1001,7 +1002,7 @@ class LightProcessor:
                 link_path.symlink_to(source_path)
                 logging.debug(f"Lien créé: {link_path} -> {source_path}")
 
-            logging.info(
+            logging.debug(
                 f"Séquence préparée: '{sequence_name}' ({len(light_files)} fichiers)"
             )
             return True
@@ -1172,24 +1173,36 @@ close"""
         return script_content
 
     def process_light_group(
-        self, group_key: str, light_infos: list[FitsInfo], stack_params: dict
+        self, group_key: str, light_infos: list[FitsInfo],
+        stack_params: dict[str, ConfigValue],
     ) -> bool:
-        """
-        Traite un groupe d'images light avec les mêmes caractéristiques.
+        """Calibre un groupe de lights ou reprend ses sorties existantes.
 
-        Args:
-            group_key: Clé identifiant le groupe
-            light_infos: Liste des FitsInfo du groupe
-            stack_params: Paramètres de stacking
+        Les étapes master flat et calibration sont annoncées en INFO avec
+        des titres ===. La reprise annonce les lights déjà calibrées ; elle
+        ne prétend pas réutiliser séparément un master flat. Les détails de
+        préparation et les caractéristiques sont en DEBUG.
 
-        Returns:
-            True si le traitement a réussi, False sinon
+        Parameters
+        ----------
+        group_key : str
+            Identifiant du groupe de calibration dans la sous-session.
+        light_infos : list[FitsInfo]
+            Métadonnées des lights compatibles, sans modification des sources.
+        stack_params : dict[str, ConfigValue]
+            Réglages du stacking ; Drizzle détermine ici la conservation du CFA.
+
+        Returns
+        -------
+        bool
+            Succès du calcul ou de la reprise, sans exécuter de stack de groupe.
+            En simulation, les opérations sont seulement annoncées.
         """
         if not light_infos:
             logging.warning(f"Groupe vide: {group_key}")
             return False
 
-        logging.info(f"Traitement du groupe '{group_key}' ({len(light_infos)} images)")
+        logging.debug(f"Traitement du groupe '{group_key}' ({len(light_infos)} images)")
 
         # Prendre le premier light comme référence pour les caractéristiques
         reference_light = light_infos[0]
@@ -1269,12 +1282,16 @@ close"""
             )
 
         if existing_output and not self.force_reprocess and not needs_native_cfa:
+            logging.info(
+                "%s=== Réutilisation des lights déjà calibrées : groupe %s ===",
+                "[DRY-RUN] " if self.dry_run else "", group_key,
+            )
             if not self.dry_run and not any(
                 (calibrated_output_dir / name).exists()
                 for name in (f"pp_{sequence_name}_.seq", f"pp_{sequence_name}.seq")
             ):
                 save_calibrated_sequence(sequence_name, calibrated_output_dir)
-            logging.info(f"Fichier de sortie existant, passage: {existing_output}")
+            logging.info("Résultats calibrés disponibles : %s", calibrated_output_dir)
             # Enregistrer le fichier existant dans la liste des sorties
             self.output_files.append(existing_output)
             self.session_stats["kept_for_stacking"] += len(light_infos)
@@ -1287,7 +1304,7 @@ close"""
         if self.force_reprocess and calibrated_output_dir.exists() and not self.dry_run:
             try:
                 shutil.rmtree(calibrated_output_dir)
-                logging.info(
+                logging.debug(
                     f"Répertoire calibré existant supprimé (mode --force): {calibrated_output_dir}"
                 )
             except Exception as exc:
@@ -1295,19 +1312,25 @@ close"""
                     f"Impossible de nettoyer le répertoire calibré {calibrated_output_dir}: {exc}"
                 )
 
-        if self.dry_run:
-            if self.use_dark:
-                logging.info(
-                    f"[DRY-RUN] Traiterait {len(light_files)} lights avec dark {master_dark_path}"
-                )
-            else:
-                logging.info(
-                    f"[DRY-RUN] Traiterait {len(light_files)} lights sans dark"
-                )
+        masters: list[str] = []
+        if master_dark_path:
+            masters.append("master dark")
+        if selected_flats:
+            masters.append("master flat")
+        calibration_description = (
+            "avec " + " + ".join(masters)
+            if masters else "sans master dark ni master flat"
+        )
+        calibration_stage = (
+            f"=== Calibration des lights {calibration_description} : "
+            f"{len(light_files)} images — groupe {group_key} ==="
+        )
 
+        if self.dry_run:
             if selected_flats:
                 logging.info(
-                    f"[DRY-RUN] Utiliserait {len(selected_flats)} flats pour créer un master flat"
+                    "[DRY-RUN] === Création du master flat : %d flats — groupe %s ===",
+                    len(selected_flats), group_key,
                 )
                 if self.use_dark:
                     flat_dark_path = self.find_matching_master_dark(selected_flats[0])
@@ -1320,6 +1343,9 @@ close"""
             else:
                 logging.info("[DRY-RUN] Aucun flat utilisé pour ce groupe")
 
+            logging.info("[DRY-RUN] %s", calibration_stage)
+            if master_dark_path:
+                logging.info("[DRY-RUN] Master dark des lights : %s", master_dark_path)
             logging.info(
                 f"[DRY-RUN] Dossier de sortie calibrée attendu: {calibrated_output_dir} "
                 "(contiendra des fichiers .fit/.fits)"
@@ -1337,10 +1363,10 @@ close"""
                     flat_path_for_script,
                     stack_params,
                 )
-                logging.info("[DRY-RUN] Script Siril qui serait généré:")
+                logging.debug("[DRY-RUN] Script Siril qui serait généré:")
                 for i, line in enumerate(script_content.split("\n"), 1):
                     if line.strip():
-                        logging.info(f"[DRY-RUN]   {i:2d}: {line}")
+                        logging.debug(f"[DRY-RUN]   {i:2d}: {line}")
             except Exception as e:
                 logging.warning(f"[DRY-RUN] Impossible de générer le script Siril: {e}")
 
@@ -1355,6 +1381,10 @@ close"""
             try:
                 # Génération du master flat si des flats sont disponibles pour ce groupe
                 if selected_flats:
+                    logging.info(
+                        "=== Création du master flat : %d flats — groupe %s ===",
+                        len(selected_flats), group_key,
+                    )
                     flat_dark_path = None
                     if self.use_dark:
                         # Les darkflats sont assimilés à des darks de la librairie.
@@ -1371,6 +1401,7 @@ close"""
                                 "aucun master dark adapté pour calibrer les flats"
                             )
                             return False
+                        logging.info("Master dark des flats : %s", flat_dark_path)
 
                     if not self._prepare_sequence(
                         flat_sequence_name,
@@ -1404,7 +1435,6 @@ close"""
                         flat_dark_path=str(flat_dark_path) if flat_dark_path else None,
                     )
 
-                    logging.info(f"Création du master flat pour le groupe {group_key}")
                     flat_success = self.siril.run_siril_script(
                         flat_script_content,
                         str(self.work_dir),
@@ -1431,6 +1461,9 @@ close"""
                             f"Master flat non trouvé: {fit_candidate} ou {fits_candidate}"
                         )
                         return False
+                    logging.info("Master flat créé : %s", master_flat_path)
+                else:
+                    logging.info("Master flat non utilisé : aucun flat compatible")
 
                 # Nettoyer le répertoire de traitement existant pour un démarrage propre
                 process_dir = self.work_dir / "process"
@@ -1458,17 +1491,11 @@ close"""
                     stack_params,
                 )
 
-                logging.info(
-                    f"Executing calibration workflow for sequence {sequence_name} (no per-group stack)"
-                )
-                if stack_params:
-                    method = stack_params.get("method", "average")
-                    rejection = stack_params.get("rejection", "sigma")
-                    rejection_low = stack_params.get("rejection_low", 3.0)
-                    rejection_high = stack_params.get("rejection_high", 3.0)
-                    logging.info(
-                        f"Calibration-only parameters: method={method}, rejection={rejection} {rejection_low} {rejection_high}"
-                    )
+                logging.info("%s", calibration_stage)
+                if master_dark_path:
+                    logging.info("Master dark des lights : %s", master_dark_path)
+                if master_flat_path:
+                    logging.info("Master flat des lights : %s", master_flat_path)
 
                 success = self.siril.run_siril_script(
                     script_content,
@@ -1487,8 +1514,8 @@ close"""
 
                     if exported_outputs:
                         logging.info(
-                            f"Calibrated subgroup exported successfully: {len(exported_outputs)} FITS calibrés (pp_*) in "
-                            f"{calibrated_output_dir}"
+                            "Calibration terminée : %d FITS calibrés dans %s",
+                            len(exported_outputs), calibrated_output_dir,
                         )
                         for exported_file in exported_outputs:
                             self.output_files.append(exported_file)
@@ -1514,7 +1541,7 @@ close"""
             finally:
                 # Nettoyer la séquence dans tous les cas, sauf si demandé explicitement.
                 if self.keep_intermediate:
-                    logging.info(
+                    logging.debug(
                         "Mode conservation activé: répertoires temporaires conservés pour inspection (%s, %s)",
                         self.work_dir / sequence_name,
                         self.work_dir / flat_sequence_name,
@@ -1537,7 +1564,7 @@ close"""
         Returns:
             True si tout s'est bien passé, False sinon
         """
-        logging.info(f"Début du traitement de la session: {self.session_dir}")
+        logging.debug(f"Début du traitement de la session: {self.session_dir}")
 
         # 1. Trouver tous les fichiers light
         self._init_session_stats()
@@ -1564,7 +1591,7 @@ close"""
                 if self.process_light_group(group_key, light_infos, stack_params):
                     success_count += 1
                     self.session_stats["groups_success"] += 1
-                    logging.info(f"Groupe '{group_key}' traité avec succès")
+                    logging.debug(f"Groupe '{group_key}' traité avec succès")
                 else:
                     logging.error(f"Échec du traitement du groupe '{group_key}'")
             except Exception as e:
@@ -1577,7 +1604,6 @@ close"""
         )
 
         if success_count == total_groups:
-            logging.info("Tous les groupes ont été traités avec succès")
             return True
         elif success_count > 0:
             logging.warning(
@@ -1679,7 +1705,7 @@ close"""
             copied_count += 1
 
         save_calibrated_sequence(sequence_name, calibrated_output_dir, process_dir)
-        logging.info(
+        logging.debug(
             "Sorties calibrées exportées depuis process/: %d fichier(s) vers %s",
             copied_count,
             calibrated_output_dir,
@@ -1704,6 +1730,8 @@ def stack_session_outputs(
     Le nom complet est transmis à Siril pour fixer l’extension sans changer
     celle des intermédiaires. Les anciennes sorties .fit restent reconnues,
     avec priorité à .fits. Une entrée unique est retournée sans nouvel empilement.
+    La préparation des entrées commence par un bandeau INFO, suivi des
+    bandeaux des étapes effectivement exécutées par le moteur de stacking.
     """
     valid_files = [
         Path(file).absolute() for file in output_files if Path(file).exists()
@@ -1713,6 +1741,7 @@ def stack_session_outputs(
     if len(valid_files) == 1:
         return valid_files[0]
 
+    log_section("Stacking — Préparation des images calibrées")
     resolved_targets = set()
     for file_path in valid_files:
         try:

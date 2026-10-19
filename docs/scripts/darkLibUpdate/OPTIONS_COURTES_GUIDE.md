@@ -2,11 +2,17 @@
 
 [Documentation](../../README.md) › [darkLibUpdate](README.md)
 
-## Vue d'ensemble
+<a id="vue-d-ensemble"></a>
+<a id="vue-densemble"></a>
+
+## 1. Vue d'ensemble
 
 Toutes les options du script ont maintenant des équivalents courts pour une utilisation plus rapide en ligne de commande.
 
-## Liste complète des options courtes
+<a id="liste-compl-te-des-options-courtes"></a>
+<a id="liste-complète-des-options-courtes"></a>
+
+## 2. Liste complète des options courtes
 
 | Option courte | Option longue | Description | Dest |
 |---------------|---------------|-------------|------|
@@ -29,7 +35,10 @@ Toutes les options du script ont maintenant des équivalents courts pour une uti
 | `-v` | `--validate-darks` | Active la validation | `validate_darks` |
 | `-R` | `--report` | Génère un rapport de traitement | `report` |
 
-## Options sans équivalent court
+<a id="options-sans-quivalent-court"></a>
+<a id="options-sans-équivalent-court"></a>
+
+## 3. Options sans équivalent court
 
 | Option longue | Description | Dest |
 |---------------|-------------|------|
@@ -40,9 +49,14 @@ Toutes les options du script ont maintenant des équivalents courts pour une uti
 | `--no-validate-darks` | Désactive la validation | `validate_darks` |
 | `--no-report` | Désactive le rapport | `report` |
 
-## Exemples d'utilisation avec options courtes
+<a id="exemples-d-utilisation-avec-options-courtes"></a>
+<a id="exemples-dutilisation-avec-options-courtes"></a>
 
-### Utilisation basique
+## 4. Exemples d'utilisation avec options courtes
+
+<a id="utilisation-basique"></a>
+
+### 4.1. Utilisation basique
 ```bash
 # Traitement simple avec validation
 python bin/darkLibUpdate.py -i /path/darks -v -R
@@ -54,7 +68,10 @@ python bin/darkLibUpdate.py -i /path/darks -v -D -S
 python bin/darkLibUpdate.py -L
 ```
 
-### Configuration avancée
+<a id="configuration-avanc-e"></a>
+<a id="configuration-avancée"></a>
+
+### 4.2. Configuration avancée
 ```bash
 # Configuration complète avec options courtes
 python bin/darkLibUpdate.py \
@@ -69,7 +86,10 @@ python bin/darkLibUpdate.py \
     -S
 ```
 
-### Workflow de débogage
+<a id="workflow-de-d-bogage"></a>
+<a id="workflow-de-débogage"></a>
+
+### 4.3. Workflow de débogage
 ```bash
 # Mode verbose avec test
 python bin/darkLibUpdate.py -i /path/darks -l DEBUG -D -v -R
@@ -78,9 +98,14 @@ python bin/darkLibUpdate.py -i /path/darks -l DEBUG -D -v -R
 python bin/darkLibUpdate.py -i /path/darks -f -v -l INFO
 ```
 
-## Combinaisons recommandées
+<a id="combinaisons-recommand-es"></a>
+<a id="combinaisons-recommandées"></a>
 
-### Session de validation
+## 5. Combinaisons recommandées
+
+<a id="session-de-validation"></a>
+
+### 5.1. Session de validation
 ```bash
 # Analyser et valider sans traiter
 python bin/darkLibUpdate.py -i /new/darks -v -R -D
@@ -89,13 +114,17 @@ python bin/darkLibUpdate.py -i /new/darks -v -R -D
 python bin/darkLibUpdate.py -i /new/darks -v
 ```
 
-### Configuration initiale
+<a id="configuration-initiale"></a>
+
+### 5.2. Configuration initiale
 ```bash
 # Setup complet en une commande
 python bin/darkLibUpdate.py -i /darks -d ~/darkLib -v -R -t 0.1 -S
 ```
 
-### Maintenance
+<a id="maintenance"></a>
+
+### 5.3. Maintenance
 ```bash
 # Recalcul forcé avec logs
 python bin/darkLibUpdate.py -f -l INFO
@@ -104,7 +133,9 @@ python bin/darkLibUpdate.py -f -l INFO
 python bin/darkLibUpdate.py -L
 ```
 
-## Variables dest explicites
+<a id="variables-dest-explicites"></a>
+
+## 6. Variables dest explicites
 
 Toutes les options ont maintenant des variables `dest` explicites qui correspondent au nom de l'attribut dans `args` :
 

@@ -61,17 +61,40 @@ Pour une exécution simple sans ce contrôle supplémentaire :
 
 ## Isolation et automatisation
 
+`test_calibration_logging.py` vérifie les titres INFO et leur ordre pour les
+quatre combinaisons dark/flat, la reprise sans nouvel appel Siril, la simulation
+et l’arrêt après échec du master flat. Les détails de préparation restent en
+DEBUG. Les scénarios utilisent de petits FITS et simulent les produits Siril.
+
+`test_drizzle.py` vérifie l’ordre des bandeaux INFO du stacking sur les branches
+CFA standard et Drizzle forcé, ainsi que l’absence de titres pour les étapes
+non exécutées après un échec. `test_session_pipeline.py` vérifie les bandeaux
+de réutilisation dans les journaux de stacking, sans annonces de recalcul.
+
 `test_postprocessing.py` compare les appels scientifiques, les paramètres et
 les exports FITS/JPEG entre l’appel du processeur complet et le CLI autonome.
 Il vérifie aussi les priorités de configuration, les instantanés indépendants,
 les déclarations uniques partagées avec la mosaïque, les chemins protégés et
-la libération du journal et de PowerGuard sur erreur ou interruption.
+la fermeture du journal sur erreur ou interruption sans activation énergétique
+dans la bibliothèque. Le CLI autonome détient et libère son propre PowerGuard.
+Les bandeaux INFO du début de post-traitement sont vérifiés dans la console
+capturée et les fichiers des deux modes d’appel. `test_postprocessor.py`
+vérifie les titres et numéros des étapes actives, avec restauration groupée,
+restauration par étape ou photométrie désactivée.
+`test_restoration_chains.py` vérifie les sous-titres en tirets pour les calculs
+et contrôles réellement exécutés, sans nouveau bandeau pour un calcul réutilisé.
+`test_restoration.py` vérifie aussi l’ordre des titres pour les moteurs évalués
+séparément et le classement final.
 `test_session_pipeline.py` couvre l’option `--postprocess`, les stacks repris,
 la mosaïque finale seule, la simulation et les échecs sans perte des stacks.
 Deux scénarios vérifient l’enchaînement activé par défaut, sans option, sur un
 stack et une mosaïque ; les tests limités aux étapes amont le désactivent
 explicitement. Les désactivations JSON/CLI restent testées séparément.
 Les moteurs simulés isolent l’enchaînement de la validation astrophotographique.
+Les scénarios PowerGuard vérifient un contexte unique dans lightProcess pour
+la calibration, les stacks, la mosaïque et les post-traitements, même lorsque
+ces derniers sont désactivés. La simulation ne demande pas de protection ;
+une erreur ou une interruption libère celle détenue par le script.
 
 ```bash
 PIP_NO_INDEX=1 .venv/bin/python -m pytest -q tests/test_postprocessing.py tests/test_session_pipeline.py tests/test_render_exports.py
@@ -166,6 +189,10 @@ hors dépôt restent exclus ; la génération n’exécute pas les sources copi�
 liens internes, les ressources embarquées du monofichier et la protection des
 dossiers. Une construction MkDocs complète rend les diagrammes dans Chromium
 et génère le PDF avant de publier les téléchargements sur le site.
+Les tests vérifient aussi l’ordre commun des rubriques, le sommaire imbriqué,
+les accès directs aux options sans duplication des chapitres, le regroupement
+des annexes et les ancres conservées après numérotation des manuels. Une cible
+absente ou hors des sources de navigation est refusée explicitement.
 
 ## AutoGHS, StarNet et rendu final
 
@@ -178,6 +205,14 @@ invalides et les branches corrigées hors domaine restent refusés.
 Les tests `test_star_separation.py`, `test_star_rendering.py`, `test_auto_ghs.py`
 et `test_final_render.py` couvrent respectivement l'adaptateur externe, le rendu
 stellaire/fusion, les mathématiques/recherches et le contrat du pipeline :
+
+Le rendu stellaire adaptatif est vérifié sur un champ synthétique de 36 pics
+colorés : davantage de pics franchissent le contraste indicatif 0,03, avec
+conservation des zéros, rapports RGB, plafond et garde de largeur. Les cas
+constants, plateaux et forces invalides sont couverts. Les exports étoiles
+FITS/JPEG et le diagnostic PNG sont vérifiés dans le pipeline. La cible de
+dynamique 1,0 est testée pour RANGE et PEAK ; la configuration préserve les
+surcharges et la nouvelle force stellaire sauvegardée.
 
 ```bash
 .venv/bin/python -m pytest -q tests/test_star_separation.py tests/test_star_rendering.py tests/test_auto_ghs.py tests/test_final_render.py tests/test_postprocessor.py

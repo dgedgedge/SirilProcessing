@@ -7,7 +7,10 @@ organisent une exécution et rendent ses résultats accessibles à l’utilisate
 Les bibliothèques de `lib/` portent les responsabilités communes et les
 traitements propres aux images astronomiques.
 
-## Organisation générale
+<a id="organisation-g-n-rale"></a>
+<a id="organisation-générale"></a>
+
+## 1. Organisation générale
 
 | Ensemble de bibliothèques | Responsabilité |
 |---|---|
@@ -21,7 +24,9 @@ Le [catalogue des bibliothèques](LIBRARIES.md) précise le rôle général de c
 module. Les pages d’architecture ne détaillent ni les algorithmes, ni les
 signatures de méthodes, ni les seuils de sélection.
 
-## Documentation des traitements
+<a id="documentation-des-traitements"></a>
+
+## 2. Documentation des traitements
 
 - [lightProcess : traitements détaillés](../scripts/lightProcess/treatments/README.md).
 - [postProcess : séquence de post-traitements FITS](../scripts/postProcess/README.md).

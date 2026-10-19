@@ -11,6 +11,7 @@ from shutil import copyfile
 import time
 from typing import ClassVar, Literal
 
+from lib.logging_utils import log_section
 from lib.processor import processor
 from lib.parameterized_component import ParameterizedComponent
 from lib.restoration_quality import QualityReference, RestorationQuality
@@ -147,7 +148,11 @@ class RestorationComparisonProcessor(processor):
         output_path: Path | str,
         args: argparse.Namespace | None = None,
     ) -> JSONReport:
-        """Évalue tous les enfants séquentiellement et publie le meilleur accepté."""
+        """Évalue tous les enfants séquentiellement et publie le meilleur accepté.
+
+        Des titres INFO entre lignes de tirets annoncent la préparation commune,
+        chaque moteur réellement évalué et le classement, y compris en legacy.
+        """
         args = copy(self._get_args(args))
         legacy = getattr(args, "quality_mode", "reliable") == "legacy"
         source, report = Path(input_path).resolve(), Path(output_path).resolve()
@@ -166,12 +171,15 @@ class RestorationComparisonProcessor(processor):
         if destination.suffix.lower() not in (".fit", ".fits", ".fts"):
             raise ValueError("Une sortie FITS est requise")
         engines = self.engines(args)
+        treatment = "Déconvolution" if self.operation == "sharpen" else "Débruitage"
         if (
             legacy
             and not getattr(args, "enable_clarity", True)
             and not any(name == "graxpert" for name, _ in engines)
         ):
+            log_section(f"{treatment} — Évaluation du moteur Siril", separator="-")
             result = self.siril_processor().post_process(source, report, args)
+            log_section(f"{treatment} — Publication du résultat", separator="-")
             RestorationSummary.write(
                 result,
                 report,
@@ -190,6 +198,9 @@ class RestorationComparisonProcessor(processor):
             evaluations={},
         )
         if not legacy:
+            log_section(
+                f"{treatment} — Préparation de la référence et des masques", separator="-",
+            )
             reference = getattr(args, "_quality_reference", None)
             if reference is None or reference.path != source:
                 reference = QualityReference(source, args)
@@ -200,13 +211,12 @@ class RestorationComparisonProcessor(processor):
             result["quality_reference"] = reference.audit()
         candidates = []
         for name, engine in engines:
-            treatment = "Déconvolution" if self.operation == "sharpen" else "Débruitage"
             label = {
                 "siril": "Siril",
                 "cosmic_clarity": "Cosmic Clarity",
                 "graxpert": "GraXpert",
             }[name]
-            logging.info("%s — début de l’évaluation %s", treatment, label)
+            log_section(f"{treatment} — Évaluation du moteur {label}", separator="-")
             child_path = report.with_name(report.stem + "_" + name + ".json")
             start = time.monotonic()
             try:
@@ -271,6 +281,9 @@ class RestorationComparisonProcessor(processor):
                         ),
                     )
             report.write_text(json.dumps(result, indent=2), encoding="utf-8")
+        log_section(
+            f"{treatment} — Classement et publication du résultat", separator="-",
+        )
         # Identité : score zéro ; un candidat sans bénéfice démontré ne la bat pas.
         candidates = [
             candidate for candidate in candidates if legacy or candidate[0] > 0

@@ -108,9 +108,7 @@ flowchart TD
         PREPARE_LIGHTS --> HAS_FLATS{"Flats compatibles disponibles ?"}
 
         subgraph FLAT_PROCESS["Sous-traitement : master flat du groupe"]
-            HAS_FLATS -->|Oui| FLAT_CACHE{"Master flat existant<br/>et calcul non forcé ?"}
-            FLAT_CACHE -->|Oui| USE_FLAT["Utiliser le master flat"]
-            FLAT_CACHE -->|Non| FLAT_DARK_MODE{"Darks activés ?"}
+            HAS_FLATS -->|Oui| FLAT_DARK_MODE{"Darks activés ?"}
             FLAT_DARK_MODE -->|Oui| FIND_FLAT_DARK["Chercher le master dark adapté aux flats"]
             FIND_FLAT_DARK --> FLAT_DARK_FOUND{"Dark des flats trouvé ?"}
             FLAT_DARK_FOUND -->|Non| FAILURE
@@ -120,7 +118,7 @@ flowchart TD
             CALIBRATE_FLATS --> STACK_FLATS["Empiler les flats en médiane<br/>avec normalisation multiplicative"]
             STACK_FLATS --> FLAT_OK{"Siril réussi et master flat présent ?"}
             FLAT_OK -->|Non| FAILURE
-            FLAT_OK -->|Oui| USE_FLAT
+            FLAT_OK -->|Oui| USE_FLAT["Utiliser le master flat créé"]
         end
 
         HAS_FLATS -->|Non| CONVERT_LIGHTS["Nettoyer process et convertir les lights"]

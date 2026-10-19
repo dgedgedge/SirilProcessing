@@ -72,6 +72,46 @@ SirilNoiseReductionProcessor.add_arguments(parser)
 result = SirilNoiseReductionProcessor().post_process(image, report, args)
 ```
 
+## Sous-étapes dans les journaux
+
+À l’intérieur de l’étape principale `03`, les sous-étapes de restauration sont
+annoncées en INFO par un titre entre deux lignes de `-`. Les lignes de `=`
+restent réservées aux grandes étapes du pipeline.
+
+```text
+------------------------------------------------------------
+Restauration — Préparation de la référence et des masques
+------------------------------------------------------------
+…
+------------------------------------------------------------
+Restauration — Calcul 01 : Débruitage avec Cosmic Clarity
+------------------------------------------------------------
+```
+
+Dans la comparaison des chaînes, les titres signalent :
+
+1. La préparation de la référence commune et des masques.
+2. Chaque calcul distinct de débruitage ou de netteté, avec son numéro et son
+   moteur : Siril, Cosmic Clarity ou GraXpert selon les moteurs actifs.
+3. Le contrôle final de chaque variante admissible, identifié par le numéro
+   de variante et sa chaîne. Le titre suivant, `Contrôle final : bruit, flux
+   et artefacts`, annonce ces mesures après validation de la comparaison stellaire.
+4. Le classement et la publication du résultat retenu, ou de l’image d’entrée
+   lorsqu’aucune amélioration sûre n’a été retenue.
+
+Une ligne INFO indique la variante courante et le nombre total de variantes.
+Une opération déjà en cache n’affiche pas de nouveau bandeau de calcul : sa
+réutilisation est en DEBUG. Un contrôle final déjà en cache n’est pas annoncé
+comme un nouveau contrôle. Les étapes non atteintes après rejet ne sont pas
+annoncées.
+
+Avec `--no-restoration-compare-chains`, chaque étape de déconvolution ou de
+débruitage utilise aussi des sous-titres en `-` pour la préparation de référence,
+les évaluations des moteurs et le classement. Le chemin historique Siril seul
+en mode `legacy` annonce son évaluation puis la publication de son résultat.
+Les mêmes messages apparaissent dans la console et le journal de post-traitement,
+depuis postProcess comme depuis lightProcess.
+
 ## Vérification
 
 ```bash

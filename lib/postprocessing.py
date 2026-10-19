@@ -14,9 +14,10 @@ import logging
 from pathlib import Path
 from shutil import copyfile
 
-from lib.logging_utils import add_session_file_logging, remove_session_file_logging
+from lib.logging_utils import (
+    add_session_file_logging, log_section, remove_session_file_logging,
+)
 from lib.postprocess import _PostProcessorSequence
-from lib.power_guard import PowerGuard
 from lib.processor import processor
 from lib.quality_preview import QualityMaskPreview
 from lib.star_separation import StarNetSeparator
@@ -203,6 +204,10 @@ class PostProcessingProcessor(processor):
         -----
         Ne parse pas sys.argv, ne sauvegarde pas Config et ne configure pas la
         console. Le journal propre à cette image est fermé même en cas d’échec.
+        La protection énergétique est gérée par le script appelant ; ce
+        processeur ne demande pas de profil système ni d’inhibition de veille.
+        Le début du post-traitement est annoncé par un bandeau INFO commun
+        à la console et au journal, avant les réglages et les étapes.
         """
         runtime = deepcopy(self._get_args(args))
         source, report = Path(input_path).resolve(), Path(output_path).resolve()
@@ -223,28 +228,28 @@ class PostProcessingProcessor(processor):
         try:
             if not source.is_file():
                 raise FileNotFoundError(f"Fichier introuvable: {source}")
+            log_section(f"Début du post-traitement : {source.name}")
             logging.info("Log de post-traitement: %s", log_file)
             self._log_settings(runtime)
             logging.info("Analyse de: %s", source)
             logging.info("Rapport global: %s", report)
             logging.info("Dossier des étapes: %s", steps_dir)
             logging.info("Résultat final: %s", final_path)
-            with PowerGuard():
-                sequence = _PostProcessorSequence()
-                results = sequence.post_process(source, report, args=runtime)
-                quality_preview = QualityMaskPreview.ensure_for_run(
-                    results, source, steps_dir, runtime,
-                )
-                gradient_preview = QualityMaskPreview.write_gradient_points(
-                    results, steps_dir,
-                )
-                report.write_text(
-                    json.dumps(results, indent=2, ensure_ascii=False),
-                    encoding="utf-8",
-                )
-                summary = self._export_results(
-                    results, source, report, quality_preview,
-                )
+            sequence = _PostProcessorSequence()
+            results = sequence.post_process(source, report, args=runtime)
+            quality_preview = QualityMaskPreview.ensure_for_run(
+                results, source, steps_dir, runtime,
+            )
+            gradient_preview = QualityMaskPreview.write_gradient_points(
+                results, steps_dir,
+            )
+            report.write_text(
+                json.dumps(results, indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            summary = self._export_results(
+                results, source, report, quality_preview,
+            )
             logging.info("Image des zones de qualité : %s", quality_preview)
             if gradient_preview:
                 logging.info("Points du gradient original : %s", gradient_preview)

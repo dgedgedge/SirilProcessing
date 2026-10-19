@@ -127,6 +127,10 @@ def test_both_contract_and_published_artifacts(
     assert all(Path(path).parent == work / "004_recomposition"
                for path in result["output_images"].values())
     stars_on_disk = fits.getdata(result["stars"]["output_image"])
+    assert Path(result["stars"]["diagnostic_path"]).parent == work / "002_stars"
+    assert Path(result["stars"]["diagnostic_path"]).is_file()
+    assert Path(result["stars"]["output_jpeg"]).is_file()
+    assert result["parameters"]["star_histogram_strength"] == 0.8
     for strategy, path in result["output_images"].items():
         final = fits.getdata(path)
         background = fits.getdata(result["strategies"][strategy]["starless_image"])
@@ -286,6 +290,8 @@ def test_configuration_persistence_precedence_and_instance_snapshot(
             "0.7",
             "--star-faint-boost",
             "4",
+            "--star-histogram-strength",
+            "0.6",
             "--enable-autoghs",
             "-S",
         ],
@@ -299,12 +305,14 @@ def test_configuration_persistence_precedence_and_instance_snapshot(
     assert saved["ghs_dynamic_target"] == 0.8
     assert saved["ghs_histogram_strength"] == 0.7
     assert saved["star_faint_boost"] == 4
+    assert saved["star_histogram_strength"] == 0.6
     parser = argparse.ArgumentParser()
     config.register(_PostProcessorSequence, parser)
     assert parser.parse_args([]).ghs_strategy == "peak"
     assert parser.parse_args([]).ghs_dynamic_target == 0.8
     assert parser.parse_args([]).ghs_histogram_strength == 0.7
     assert parser.parse_args([]).star_faint_boost == 4
+    assert parser.parse_args([]).star_histogram_strength == 0.6
     updated = config.parse_args(
         parser, ["--ghs-strategy", "range", "--starnet-path", "/other/starnet++",
                  "--ghs-dynamic-target", "0.9"]

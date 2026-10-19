@@ -115,7 +115,7 @@ def test_blackpoint_is_first_positive_rgb_value() -> None:
 
 
 @pytest.mark.parametrize("strategy", ["range", "peak"])
-@pytest.mark.parametrize("target", [0.8, 0.9])
+@pytest.mark.parametrize("target", [0.8, 0.9, 1.0])
 def test_optimizer_completes_dynamic_range(strategy: str, target: float) -> None:
     """Les deux stratégies atteignent la cible paramétrée sur un fond peu étendu."""
     base = np.linspace(0.02, 0.03, 32 * 32).reshape(32, 32)
@@ -161,6 +161,14 @@ def test_dynamic_target_validation(target: float) -> None:
     """Une cible invalide est refusée avant tout calcul."""
     with pytest.raises(ValueError, match="ghs-dynamic-target"):
         GHSOptimizer.options(argparse.Namespace(ghs_dynamic_target=target))
+
+
+def test_default_dynamic_target_is_full_starless_range() -> None:
+    """Les défauts visent [0,1] et une égalisation à 0,7, avec surcharge possible."""
+    assert GHSOptimizer.options(argparse.Namespace()).ghs_dynamic_target == 1.0
+    assert GHSOptimizer.options(argparse.Namespace()).ghs_histogram_strength == 0.7
+    overridden = GHSOptimizer.options(argparse.Namespace(ghs_dynamic_target=0.8))
+    assert overridden.ghs_dynamic_target == 0.8
 
 
 def test_backend_missing_cuda_and_no_midrun_fallback(monkeypatch) -> None:
@@ -308,7 +316,7 @@ def test_dynamic_iteration_limit_validation(limit: float) -> None:
         GHSOptimizer.options(argparse.Namespace(ghs_dynamic_max_iterations=limit))
 
 
-@pytest.mark.parametrize("strength", [0.5, 1.0])
+@pytest.mark.parametrize("strength", [0.5, 0.7, 1.0])
 def test_histogram_balancing_spreads_concentrated_intensities(strength: float) -> None:
     """L'égalisation étale un histogramme concentré et garde une courbe monotone."""
     level = np.linspace(0, 1, 128 * 128, dtype=np.float32).reshape(128, 128) ** 3

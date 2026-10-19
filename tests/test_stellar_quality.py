@@ -1,5 +1,7 @@
 from copy import deepcopy
+from collections.abc import Callable
 import json
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -148,7 +150,11 @@ def test_profile_read_errors_preserve_selection_and_are_reported(tmp_path, caplo
 
 
 @pytest.mark.parametrize('mode', ['off', 'auto', 'force'])
-def test_pixel_filter_excludes_defects_before_stacking(tmp_path, mode, caplog, simulated_registered_sequence):
+def test_pixel_filter_excludes_defects_before_stacking(
+    tmp_path: Path, mode: str, caplog: pytest.LogCaptureFixture,
+    simulated_registered_sequence: Callable[[Path, str, str], None],
+) -> None:
+    """Vérifie les exclusions avant stack et les niveaux des détails et bilans."""
     from lib.drizzle import run_stack
 
     files = []
@@ -173,7 +179,7 @@ def test_pixel_filter_excludes_defects_before_stacking(tmp_path, mode, caplog, s
                 (tmp_path/'final.fit').touch()
             return True
 
-    with caplog.at_level('INFO'):
+    with caplog.at_level('DEBUG'):
         assert run_stack(FakeSiril(), files, {'drizzle': mode, 'robust_realign': False},
                          tmp_path, tmp_path, 'light_', tmp_path/'final', 'requires 1.2',
                          'stack r_light_ rej 3 3 -out=final', 'min')
@@ -183,6 +189,13 @@ def test_pixel_filter_excludes_defects_before_stacking(tmp_path, mode, caplog, s
     assert report['frames'][1]['reasons'] == ['r80', 'elongation']
     assert 'étalement R80 : 2 image(s) retirée(s)' in caplog.text
     assert 'allongement cohérent : 0 image(s) retirée(s)' in caplog.text
+    rejections = [record for record in caplog.records
+                  if record.getMessage().startswith('Rejet profils stellaires')]
+    assert len(rejections) == 2
+    assert all(record.levelname == 'DEBUG' for record in rejections)
+    summaries = [record for record in caplog.records
+                 if record.getMessage().startswith('Sélection qualité —')]
+    assert summaries and all(record.levelname == 'INFO' for record in summaries)
     final = json.loads((tmp_path/'final.drizzle.json').read_text())
     assert final['stellar_profiles']['rejected'] == 2
     assert final['quality_selection']['independent_retained'] == 10

@@ -6,14 +6,26 @@
 `darkLibUpdate.py` et `darkLibUpdate.sh` regroupent les acquisitions de darks,
 contrôlent les groupes à traiter et produisent les masters de la bibliothèque.
 
-## Utilisation et configuration
+<a id="utilisation-et-configuration"></a>
+
+<a id="manuel-d-utilisation"></a>
+<a id="manuel-dutilisation"></a>
+
+## 1. Manuel d’utilisation
 
 - [Guide du script](GUIDE.md).
+
+<a id="options-et-configuration"></a>
+
+## 2. Options et configuration
+
 - [Options courtes](OPTIONS_COURTES_GUIDE.md).
 - [Configuration persistante](VALIDATION_CONFIG_GUIDE.md).
 - [Gestion des chemins](ABSOLUTE_PATHS_FEATURE.md).
 
-## Traitements
+<a id="traitements"></a>
+
+## 3. Traitements
 
 - [Critères de mise à jour](MIN_DARKS_THRESHOLD_FEATURE.md).
 - [Déclenchement de la validation](VALIDATION_OPTIMIZATION.md).

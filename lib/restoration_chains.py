@@ -14,6 +14,7 @@ from shutil import copyfile, which
 import sys
 import time
 
+from lib.logging_utils import log_section
 from lib.processor import processor
 from lib.restoration import RestorationComparisonProcessor
 from lib.restoration_quality import QualityReference
@@ -187,7 +188,11 @@ class RestorationChainProcessor(processor):
         args: argparse.Namespace,
         operations: tuple[str, ...],
     ) -> JSONReport:
-        """Contrôle final vs référence : étoiles, bruit, photométrie et structures."""
+        """Contrôle final vs référence : étoiles, bruit, photométrie et structures.
+
+        Le bandeau de contrôle final de l’appelant couvre les mesures stellaires.
+        Un sous-titre INFO annonce ensuite les mesures de bruit, flux et artefacts.
+        """
         from astropy.io import fits
         from lib.deconvolution import compare_star_catalogs, _quote
         from lib.deconvolution_quality import (
@@ -250,6 +255,10 @@ class RestorationChainProcessor(processor):
                     )
                 ),
             )
+        log_section(
+            "Restauration — Contrôle final : bruit, flux et artefacts",
+            separator="-",
+        )
         final_args = copy(args)
         final_args._quality_reference = reference
         artifacts = artifact_metrics(
@@ -330,6 +339,9 @@ class RestorationChainProcessor(processor):
         Les opérations et contrôles finaux y sont numérotés ; aucun niveau de
         répétition artificiel n'est créé. Le dossier est réinitialisé à chaque
         appel et une entrée qui s'y trouve est refusée avant suppression.
+        Les préparations, calculs distincts, contrôles finaux et classement sont
+        annoncés en INFO par des titres encadrés de tirets. Les réutilisations
+        de cache sont détaillées en DEBUG, sans annoncer de nouveau calcul.
         """
         args = copy(self._get_args(args))
         if getattr(args, "quality_mode", "reliable") == "legacy":
@@ -346,6 +358,9 @@ class RestorationChainProcessor(processor):
                 "L’entrée ne peut pas se trouver dans le dossier de travail réinitialisé"
             )
         work = reset_work_dir(report)
+        log_section(
+            "Restauration — Préparation de la référence et des masques", separator="-",
+        )
         reference = QualityReference(source, args)
         preview = reference.save_masks(work / "common_masks.fits")
         configurations = {
@@ -376,6 +391,10 @@ class RestorationChainProcessor(processor):
         )
         best = 0.0
         variants = self.variants(args)
+        operation_labels = {"denoise": "Débruitage", "sharpen": "Netteté"}
+        engine_labels = {
+            "siril": "Siril", "cosmic_clarity": "Cosmic Clarity", "graxpert": "GraXpert",
+        }
         logging.info(
             "Comparaison des chaînes complètes : %d variantes ; contrôles locaux puis finaux sur %s ; ordre inverse=%s",
             len(variants),
@@ -385,6 +404,13 @@ class RestorationChainProcessor(processor):
         for index, chain in enumerate(variants):
             current, steps, rejected = source, [], None
             names = [operation + ":" + name for operation, name, _ in chain]
+            description = " → ".join(
+                f"{operation_labels[operation]} avec {engine_labels.get(name, name)}"
+                for operation, name, _ in chain
+            ) or "Image d’entrée conservée (référence)"
+            logging.info(
+                "Restauration — variante %d/%d : %s", index + 1, len(variants), description,
+            )
             for operation, name, cls in chain:
                 if current not in fingerprints:
                     fingerprints[current] = self._fingerprint(current)
@@ -398,6 +424,11 @@ class RestorationChainProcessor(processor):
                 )
                 reused = key in cache
                 if not reused:
+                    log_section(
+                        f"Restauration — Calcul {len(cache) + 1:02d} : "
+                        f"{operation_labels[operation]} avec {engine_labels.get(name, name)}",
+                        separator="-",
+                    )
                     call_args = copy(args)
                     # Aucun décalage silencieux de la destination finale des variantes.
                     call_args.deconvolution_output = None
@@ -449,6 +480,11 @@ class RestorationChainProcessor(processor):
                     cache[key] = entry
                     result["operations"].append(entry)
                 entry = cache[key]
+                if reused:
+                    logging.debug(
+                        "Restauration — calcul #%d réutilisé pour la variante %d/%d",
+                        entry["operation_id"], index + 1, len(variants),
+                    )
                 steps.append(
                     dict(
                         operation=operation,
@@ -486,6 +522,11 @@ class RestorationChainProcessor(processor):
                     tuple(sorted({op for op, _, _ in chain})),
                 )
                 if final_key not in final_cache:
+                    log_section(
+                        f"Restauration — Contrôle final de la variante "
+                        f"{index + 1}/{len(variants)} : "
+                        f"{description}", separator="-",
+                    )
                     try:
                         final_cache[final_key] = self._final_evaluation(
                             source,
@@ -518,6 +559,9 @@ class RestorationChainProcessor(processor):
             report.write_text(
                 json.dumps(result, indent=2, allow_nan=False), encoding="utf-8"
             )
+        log_section(
+            "Restauration — Classement et publication du résultat", separator="-",
+        )
         result["operation_count"] = len(cache)
         if result["status"] == "accepted":
             destination = report.with_suffix(".fits")

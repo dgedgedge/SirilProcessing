@@ -2,7 +2,9 @@
 
 [Documentation](../../README.md) › [darkLibUpdate](README.md)
 
-## Sommaire rapide
+<a id="sommaire-rapide"></a>
+
+## 1. Sommaire rapide
 
 - [Vue d'ensemble](#vue-densemble)
 - [Options principales](#options-principales)
@@ -14,19 +16,28 @@
 
 <a id="vue-densemble"></a>
 
-## Vue d'ensemble
+<a id="vue-d-ensemble"></a>
+
+## 2. Vue d'ensemble
 
 `darkLibUpdate.py` est un outil complet pour créer et maintenir une bibliothèque de master darks pour Siril. Il automatise le regroupement, la validation, l'empilement et la gestion des fichiers dark frames avec des fonctionnalités avancées de validation et de rapport.
 
-## Utilisation de base
+<a id="utilisation-de-base"></a>
+
+## 3. Utilisation de base
 
 ```bash
 python bin/darkLibUpdate.py [OPTIONS]
 ```
 
-## Options principales
+<a id="options-principales"></a>
 
-### Répertoires et fichiers
+## 4. Options principales
+
+<a id="r-pertoires-et-fichiers"></a>
+<a id="répertoires-et-fichiers"></a>
+
+### 4.1. Répertoires et fichiers
 
 #### `-i, --input-dirs` (Répertoires d'entrée) ⭐⭐⭐
 ```bash
@@ -52,7 +63,9 @@ python bin/darkLibUpdate.py [OPTIONS]
 - **Défaut** : `/home/denis/tmp/sirilWorkDir`
 - **Usage** : Espace temporaire pour les opérations Siril
 
-### Configuration Siril
+<a id="configuration-siril"></a>
+
+### 4.2. Configuration Siril
 
 #### `-s, --siril-path` (Exécutable Siril)
 ```bash
@@ -72,7 +85,10 @@ python bin/darkLibUpdate.py [OPTIONS]
 - **Défaut** : `flatpak`
 - **Usage** : Adapte la commande selon l'installation
 
-### Validation et qualité ⭐⭐⭐
+<a id="validation-et-qualit"></a>
+<a id="validation-et-qualité"></a>
+
+### 4.3. Validation et qualité ⭐⭐⭐
 
 #### `-v, --validate-darks` (Validation intelligente)
 ```bash
@@ -100,7 +116,10 @@ python bin/darkLibUpdate.py [OPTIONS]
   - Statistiques globales
   - État de la bibliothèque complète
 
-### Paramètres d'empilement
+<a id="param-tres-d-empilement"></a>
+<a id="paramètres-dempilement"></a>
+
+### 4.4. Paramètres d'empilement
 
 #### `-r, --rejection-method` (Méthode de rejet)
 ```bash
@@ -142,7 +161,10 @@ python bin/darkLibUpdate.py [OPTIONS]
 - **Défaut** : `noscale`
 - **Usage** : Généralement `noscale` pour les darks
 
-### Paramètres de regroupement
+<a id="param-tres-de-regroupement"></a>
+<a id="paramètres-de-regroupement"></a>
+
+### 4.5. Paramètres de regroupement
 
 #### `-t, --temperature-precision` (Précision température) ⭐⭐
 ```bash
@@ -172,7 +194,10 @@ python bin/darkLibUpdate.py [OPTIONS]
 - **Défaut** : `False` (monochrome)
 - **Usage** : Nécessaire pour appareils couleur non défiltés
 
-### Modes d'opération
+<a id="modes-d-op-ration"></a>
+<a id="modes-dopération"></a>
+
+### 4.6. Modes d'opération
 
 #### `-L, --list-darks` (Lister la bibliothèque)
 ```bash
@@ -198,7 +223,9 @@ python bin/darkLibUpdate.py [OPTIONS]
 - **Usage** : Test de nouveaux paramètres, mise à jour forcée
 - **Attention** : Ignore les dates de modification
 
-### Configuration et logs
+<a id="configuration-et-logs"></a>
+
+### 4.7. Configuration et logs
 
 #### `-S, --save-config` (Sauvegarde configuration) ⭐⭐
 ```bash
@@ -230,9 +257,13 @@ python bin/darkLibUpdate.py [OPTIONS]
 
 <a id="exemples-dutilisation"></a>
 
-## Exemples d'utilisation
+<a id="exemples-d-utilisation"></a>
 
-### Configuration initiale
+## 5. Exemples d'utilisation
+
+<a id="configuration-initiale"></a>
+
+### 5.1. Configuration initiale
 ```bash
 # Setup complet avec validation et rapport
 python bin/darkLibUpdate.py \
@@ -243,7 +274,9 @@ python bin/darkLibUpdate.py \
     -S
 ```
 
-### Utilisation quotidienne
+<a id="utilisation-quotidienne"></a>
+
+### 5.2. Utilisation quotidienne
 ```bash
 # Avec configuration sauvegardée
 python bin/darkLibUpdate.py -i /new/session/darks
@@ -252,7 +285,9 @@ python bin/darkLibUpdate.py -i /new/session/darks
 python bin/darkLibUpdate.py
 ```
 
-### Mode diagnostic
+<a id="mode-diagnostic"></a>
+
+### 5.3. Mode diagnostic
 ```bash
 # Test avec logs détaillés
 python bin/darkLibUpdate.py \
@@ -262,7 +297,9 @@ python bin/darkLibUpdate.py \
     --log-skipped
 ```
 
-### Traitement en lot
+<a id="traitement-en-lot"></a>
+
+### 5.4. Traitement en lot
 ```bash
 # Plusieurs sessions
 python bin/darkLibUpdate.py \
@@ -270,7 +307,10 @@ python bin/darkLibUpdate.py \
     -v -R
 ```
 
-### Mise à jour forcée
+<a id="mise-jour-forc-e"></a>
+<a id="mise-à-jour-forcée"></a>
+
+### 5.5. Mise à jour forcée
 ```bash
 # Nouveaux paramètres d'empilement
 python bin/darkLibUpdate.py \
@@ -282,9 +322,14 @@ python bin/darkLibUpdate.py \
 
 <a id="workflow-recommande"></a>
 
-## Workflow recommandé
+<a id="workflow-recommand"></a>
+<a id="workflow-recommandé"></a>
 
-### 1. Configuration initiale (une fois)
+## 6. Workflow recommandé
+
+<a id="1-configuration-initiale-une-fois"></a>
+
+### 6.1. 1. Configuration initiale (une fois)
 ```bash
 python bin/darkLibUpdate.py \
     -d ~/MasterDarks \
@@ -293,7 +338,10 @@ python bin/darkLibUpdate.py \
     -S
 ```
 
-### 2. Usage régulier
+<a id="2-usage-r-gulier"></a>
+<a id="2-usage-régulier"></a>
+
+### 6.2. 2. Usage régulier
 ```bash
 # Traitement automatique
 python bin/darkLibUpdate.py -i /new/darks
@@ -302,7 +350,9 @@ python bin/darkLibUpdate.py -i /new/darks
 python bin/darkLibUpdate.py -i /new/darks -R
 ```
 
-### 3. Maintenance
+<a id="3-maintenance"></a>
+
+### 6.3. 3. Maintenance
 ```bash
 # Inspection bibliothèque
 python bin/darkLibUpdate.py -L
@@ -311,33 +361,48 @@ python bin/darkLibUpdate.py -L
 python bin/darkLibUpdate.py -f -R
 ```
 
-## Fonctionnalités avancées
+<a id="fonctionnalit-s-avanc-es"></a>
+<a id="fonctionnalités-avancées"></a>
 
-### Validation intelligente ⭐⭐⭐
+## 7. Fonctionnalités avancées
+
+<a id="validation-intelligente"></a>
+
+### 7.1. Validation intelligente ⭐⭐⭐
 - **Détection automatique** des darks pris capot ouvert
 - **Analyse statistique** : MAD, percentiles, pixels chauds
 - **Optimisation** : Validation seulement si nécessaire
 - **Traçabilité** : Raisons détaillées des rejets
 
-### Rapport consolidé ⭐⭐⭐
+<a id="rapport-consolid"></a>
+<a id="rapport-consolidé"></a>
+
+### 7.2. Rapport consolidé ⭐⭐⭐
 - **Masters mis à jour** avec statistiques
 - **Fichiers rejetés** avec détails techniques
 - **État bibliothèque** complète
 - **Statistiques globales** de réussite
 
-### Configuration persistante ⭐⭐
+<a id="configuration-persistante"></a>
+
+### 7.3. Configuration persistante ⭐⭐
 - **Sauvegarde automatique** des préférences
 - **Restauration** au démarrage
 - **Options courtes** pour usage fréquent
 - **Flexibilité** : Override ponctuel possible
 
-### Gestion d'interruption ⭐
+<a id="gestion-d-interruption"></a>
+<a id="gestion-dinterruption"></a>
+
+### 7.4. Gestion d'interruption ⭐
 - **Interruption propre** (Ctrl+C)
 - **Nettoyage automatique** des fichiers temporaires
 - **Message informatif** sans stack trace
 - **Reprise possible** après interruption
 
-## Options courtes (raccourcis)
+<a id="options-courtes-raccourcis"></a>
+
+## 8. Options courtes (raccourcis)
 
 | Courte | Longue | Description |
 |--------|--------|-------------|
@@ -361,7 +426,10 @@ python bin/darkLibUpdate.py -f -R
 
 <a id="configuration-par-defaut"></a>
 
-## Configuration par défaut
+<a id="configuration-par-d-faut"></a>
+<a id="configuration-par-défaut"></a>
+
+## 9. Configuration par défaut
 
 Le fichier `~/.siril_darklib_config.json` contient :
 ```json
@@ -377,7 +445,9 @@ Le fichier `~/.siril_darklib_config.json` contient :
 }
 ```
 
-## Codes de sortie
+<a id="codes-de-sortie"></a>
+
+## 10. Codes de sortie
 
 - **0** : Succès
 - **1** : Interruption utilisateur (Ctrl+C)

@@ -35,21 +35,28 @@ Exemples:
 from __future__ import annotations
 
 import argparse
+from contextlib import nullcontext
 import logging
 import os
 import shutil
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 # Add the parent directory to the path to import the lib module
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from lib.config import Config
+from lib.power_guard import PowerGuard
 from lib.logging_utils import (
     add_session_file_logging,
+    log_section,
     remove_session_file_logging,
     setup_logging,
 )
+
+if TYPE_CHECKING:
+    from lib.mosaic import Mosaic
 
 
 class HelpFormatter(
@@ -154,6 +161,8 @@ def main() -> int:
     Retourne 0 si les étapes requises réussissent, 1 sinon. --postprocess
     exécute le processeur commun sur les produits finaux après l’assemblage
     éventuel ; --dry-run annonce ces calculs sans les lancer.
+    Une protection énergétique unique couvre tous les calculs et exports,
+    sans activation en simulation, et est libérée même en cas d’exception.
     """
     config = Config.from_command_line()
 
@@ -228,7 +237,7 @@ Traitement Siril de mosaique (si --mosaic):
         help="Créer une mosaïque après traitement de toutes les sessions",
     )
 
-    from lib.mosaic import Mosaic, calculate_common_basename
+    from lib.mosaic import Mosaic
 
     # Panel inputs are produced by this pipeline, not supplied independently.
     config.register(Mosaic, parser, include_inputs=False)
@@ -255,7 +264,7 @@ Traitement Siril de mosaique (si --mosaic):
 
     args = config.parse_args(parser)
 
-    from lib.drizzle import cache_matches, validate_settings
+    from lib.drizzle import validate_settings
 
     try:
         validate_settings(
@@ -273,13 +282,6 @@ Traitement Siril de mosaique (si --mosaic):
     config.capture_args(args)
     config.bind_parameters(args)
     mosaic_processor = Mosaic()
-
-    from lib.lightprocessor import (
-        LightProcessor,
-        discover_session_roots,
-        stack_session_outputs,
-    )
-    from lib.siril_utils import Siril
 
     # Configuration du logging
     setup_logging(args.log_level)
@@ -301,6 +303,30 @@ Traitement Siril de mosaique (si --mosaic):
             return 1
         # La découverte de StarNet peut compléter les arguments sauvegardés.
         config.bind_parameters(args)
+
+    with (nullcontext() if args.dry_run else PowerGuard()):
+        return _process_sessions(args, config, mosaic_processor)
+
+
+def _process_sessions(
+    args: argparse.Namespace, config: Config, mosaic_processor: Mosaic,
+) -> int:
+    """Exécute le parcours CLI sous la protection détenue par main.
+
+    Reçoit les paramètres déjà résolus et liés. Couvre les sous-sessions,
+    stacks, mosaïque et post-traitements jusqu’aux exports et au bilan final.
+    Retourne 0 si toutes les opérations requises réussissent, 1 sinon.
+    Les exceptions non traitées remontent vers main et libèrent son contexte.
+    """
+    from lib.drizzle import cache_matches
+    from lib.lightprocessor import (
+        LightProcessor,
+        discover_session_roots,
+        stack_session_outputs,
+    )
+    from lib.mosaic import calculate_common_basename
+    from lib.postprocessing import PostProcessingProcessor
+    from lib.siril_utils import Siril
 
     # Définition des répertoires par défaut
     if not args.output_dir:
@@ -502,7 +528,7 @@ Traitement Siril de mosaique (si --mosaic):
                     light_dir = potential_light_dir
                     break
 
-            logging.info(f"Répertoire light: {light_dir}")
+            logging.debug(f"Répertoire light: {light_dir}")
 
             flat_dir = None
             for flat_name in ["flat", "Flat"]:
@@ -511,7 +537,7 @@ Traitement Siril de mosaique (si --mosaic):
                     flat_dir = potential_flat_dir
                     break
             if flat_dir is not None:
-                logging.info(
+                logging.debug(
                     f"Répertoire flat détecté: {flat_dir} (sera utilisé pour le prétraitement)"
                 )
 
@@ -583,11 +609,9 @@ Traitement Siril de mosaique (si --mosaic):
     # Un stack par session fournie, quel que soit son nombre de sous-sessions.
 
     for root_dir in input_roots:
-        logging.info(f"{'=' * 60}")
-        logging.info(f"Start Stacking process for session directory: {root_dir}")
-        logging.info(f"{'=' * 60}")
         discovered = discover_session_roots(root_dir)
         if args.dry_run:
+            log_section(f"[DRY-RUN] Stacking prévu : {root_dir.name}")
             logging.info(
                 "[DRY-RUN] Stacking de la session %s à partir de %d sous-session(s)",
                 root_dir,
@@ -672,6 +696,7 @@ Traitement Siril de mosaique (si --mosaic):
             ]
 
             try:
+                log_section(f"Début du stacking : {root_dir.name}")
                 logging.info(
                     "Logs de stack: %s",
                     ", ".join(
@@ -706,6 +731,7 @@ Traitement Siril de mosaique (si --mosaic):
                     and cache_matches(existing_combined, stack_params)
                     and not should_rebuild_stack(existing_combined, calibrated_dirs)
                 ):
+                    log_section(f"Réutilisation du stack existant : {root_dir.name}")
                     logging.info(
                         "Stack final déjà à jour pour %s (dates répertoires calibrés inchangées): %s",
                         root_dir.name,

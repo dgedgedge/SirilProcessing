@@ -38,6 +38,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from lib.config import Config
 from lib.logging_utils import setup_logging
 from lib.postprocessing import PostProcessingProcessor
+from lib.power_guard import PowerGuard
 from lib.siril_utils import Siril
 
 
@@ -45,7 +46,8 @@ def main() -> int:
     """Exécute les étapes, diagnostics et export sous protection énergétique facultative.
 
     Les services D-Bus indisponibles ne bloquent pas le calcul ; leurs demandes
-    sont libérées avant de fermer le journal, y compris après une interruption.
+    sont libérées après fermeture du journal, y compris après une interruption.
+    Le script détient la protection ; les processeurs ne l’activent pas.
     Retourne 0 en cas de succès, 1 pour une erreur ou 130 pour une interruption.
     """
     config = Config.from_command_line()
@@ -93,7 +95,8 @@ def main() -> int:
         config.bind_parameters(args)
         treatment = PostProcessingProcessor()
         report = treatment.report_path_for(input_file, args.output_file)
-        treatment.post_process(input_file, report)
+        with PowerGuard():
+            treatment.post_process(input_file, report)
         return 0
     except KeyboardInterrupt:
         logging.warning("Traitement interrompu par l'utilisateur")

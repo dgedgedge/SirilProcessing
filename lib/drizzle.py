@@ -14,6 +14,7 @@ from pathlib import Path
 import numpy as np
 from astropy.io import fits
 
+from lib.logging_utils import log_section
 from lib.quality_filter import (
     apply_quality_weights,
     filter_registration_geometry,
@@ -535,11 +536,15 @@ def run_stack(
 
     Output discovery prefers .fits while accepting legacy .fit files; output_path
     remains the extensionless base for the associated drizzle report.
+    Each executed stage starts with an INFO section banner, including optional
+    CFA reconstruction, robust realignment and Drizzle capability checks.
     """
+    log_section("Stacking — Alignement initial des images")
     if not siril.run_siril_script(
         prepare + "\nclose", str(input_dir), script_name="01_registration.sps"
     ):
         return False
+    log_section("Stacking — Contrôle de qualité, sélection et pondération")
     registration_dir = Path(input_dir)
     quality_dir = reset_stage(Path(work_dir) / "02_quality")
     stacking_dir = reset_stage(Path(work_dir) / "04_stacking")
@@ -658,6 +663,7 @@ def run_stack(
             rejected_registration_quality=metadata["unique_inputs"] - len(records),
             weighted_extra_entries=max(0, effective_entries - len(records)),
         )
+    log_section("Stacking — Analyse et choix du Drizzle")
     scale = cfg.get("drizzle_scale", "auto")
     scale = 2 if scale == "auto" else float(scale)
     frame_bytes = int(
@@ -696,6 +702,7 @@ def run_stack(
     decision = analyse(records, cfg, metadata, resources)
     supported, capability_dir = None, None
     if decision["enabled"]:
+        log_section("Stacking — Vérification de la compatibilité Drizzle")
         capability_dir = capability_path
         supported = siril.run_siril_script(
             f"requires 1.4\ncd {capability_dir}\nclose",
@@ -912,6 +919,7 @@ def run_stack(
     else:
         options = ""
         if native:
+            log_section("Stacking — Dématriçage et réalignement CFA")
             if not execute(
                 [
                     f"calibrate {sequence} -debayer -prefix=debayer_",
@@ -924,6 +932,7 @@ def run_stack(
             if not validate_new_registration(prefix):
                 return False
     if not decision["enabled"] and cfg.get("robust_realign", True):
+        log_section("Stacking — Réalignement robuste")
         if not execute(
             [
                 f"seqapplyreg {prefix} -filter-included -framing={framing}",
@@ -935,11 +944,16 @@ def run_stack(
         prefix = f"r_{prefix}"
         if not validate_new_registration(prefix):
             return False
+    log_section(
+        "Stacking — Application de l’alignement"
+        + (" avec Drizzle" if decision["enabled"] else "")
+    )
     if not execute(
         [f"seqapplyreg {prefix} -filter-included -framing={framing} {options}"],
         "04_applyreg.sps",
     ):
         return failed_stage()
+    log_section("Stacking — Préparation des pondérations finales")
     try:
         aligned = SirilSequence.read(stacking_dir / f"r_{prefix}.seq")
         final_sources, final_entries = materialize_quality_weights(
@@ -967,6 +981,7 @@ def run_stack(
     final_stack = (
         re.sub(r"^stack \S+", f"stack r_{prefix}", stack_line) + " -filter-included"
     )
+    log_section("Stacking — Empilement final")
     success = execute([final_stack], "04_stacking.sps")
     success = success and any(
         Path(str(output_path) + ext).exists() for ext in (".fits", ".fit")

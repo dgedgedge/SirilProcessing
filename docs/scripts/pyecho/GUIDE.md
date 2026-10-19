@@ -2,20 +2,30 @@
 
 [Documentation](../../README.md) › [pyecho](README.md)
 
-## Overview
+<a id="overview"></a>
+
+## 1. Overview
 
 This document describes the Python replacement scripts for common shell commands used in Siril scripts. These scripts provide cross-platform compatibility and can be easily extended with additional features if needed.
 
-## PyEcho Script
+<a id="pyecho-script"></a>
 
-### Overview
+## 2. PyEcho Script
+
+<a id="overview_1"></a>
+
+### 2.1. Overview
 The `pyecho.py` script is a Python replacement for the traditional `echo` command in Siril scripts.
 
-### Location
+<a id="location"></a>
+
+### 2.2. Location
 - **File**: `bin/pyecho.py`
 - **Purpose**: Echo arguments to stdout, replacing `echo` commands in generated Siril scripts
 
-### Usage
+<a id="usage"></a>
+
+### 2.3. Usage
 
 #### Basic usage (command line):
 ```bash
@@ -38,23 +48,33 @@ echo "Converting Light Frames to .fit files"
 pyscript /path/to/SirilProcessing/bin/pyecho.py "Converting Light Frames to .fit files"
 ```
 
-## PyDir Script
+<a id="pydir-script"></a>
 
-### Overview
+## 3. PyDir Script
+
+<a id="overview_2"></a>
+
+### 3.1. Overview
 The `pydir.py` script is a Python replacement for the `dir` command in Siril scripts, providing cross-platform directory listing functionality.
 
-### Location
+<a id="location_1"></a>
+
+### 3.2. Location
 - **File**: `bin/pydir.py`
 - **Purpose**: List directory contents, replacing `dir` commands in generated Siril scripts
 
-### Features
+<a id="features"></a>
+
+### 3.3. Features
 - Cross-platform directory listing
 - Formatted output with file sizes
 - Separates directories and files
 - Error handling for non-existent or inaccessible directories
 - Sorts items alphabetically (directories first, then files)
 
-### Usage
+<a id="usage_1"></a>
+
+### 3.4. Usage
 
 #### Basic usage (command line):
 ```bash
@@ -87,13 +107,17 @@ dir
 pyscript /path/to/SirilProcessing/bin/pydir.py
 ```
 
-### Error Handling
+<a id="error-handling"></a>
+
+### 3.5. Error Handling
 - Returns exit code 1 on errors
 - Prints error messages to stderr
 - Handles permission denied scenarios
 - Validates directory existence
 
-## Integration
+<a id="integration"></a>
+
+## 4. Integration
 
 Both scripts are automatically integrated into the light processing workflow through the `LightProcessor` class:
 
@@ -101,7 +125,9 @@ Both scripts are automatically integrated into the light processing workflow thr
 2. All `echo` and `dir` commands in generated Siril scripts are replaced with `pyscript` calls
 3. Arguments are properly quoted and passed to the Python scripts
 
-## Benefits
+<a id="benefits"></a>
+
+## 5. Benefits
 
 1. **Cross-platform compatibility**: Works the same on all platforms where Python is available
 2. **Consistency**: Uniform behavior across different operating systems
@@ -109,13 +135,17 @@ Both scripts are automatically integrated into the light processing workflow thr
 4. **Debugging**: Easier to debug and modify than shell commands
 5. **Enhanced output**: pydir provides formatted output with file sizes and better organization
 
-## Implementation Details
+<a id="implementation-details"></a>
+
+## 6. Implementation Details
 
 - Located in: `bin/pyecho.py` and `bin/pydir.py`
 - Used by: `lib/lightprocessor.py` in the `_generate_siril_script()` method
 - Path resolution: Dynamically calculated using `Path(__file__).parent.parent / "bin"`
 
-## Examples in Generated Scripts
+<a id="examples-in-generated-scripts"></a>
+
+## 7. Examples in Generated Scripts
 
 The script generates Siril commands like:
 

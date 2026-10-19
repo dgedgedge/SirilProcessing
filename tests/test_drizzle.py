@@ -1,4 +1,5 @@
 import json
+from collections.abc import Callable
 from pathlib import Path
 import numpy as np
 import pytest
@@ -64,7 +65,13 @@ def test_siril_registration_parser(tmp_path):
 
 @pytest.mark.parametrize('mode', ['force', 'auto', 'off'])
 @pytest.mark.parametrize('bad_alignment', [False, True])
-def test_pipeline_native_cfa_and_report(tmp_path, mode, bad_alignment, simulated_registered_sequence):
+def test_pipeline_native_cfa_and_report(
+    tmp_path: Path, mode: str, bad_alignment: bool,
+    simulated_registered_sequence: Callable[..., None],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Vérifie scripts, rapport et bandeaux des seules étapes exécutées."""
+    caplog.set_level("INFO")
     files=[]
     for i in range(4):
         f=tmp_path/f'input{i}.fits'
@@ -110,9 +117,36 @@ def test_pipeline_native_cfa_and_report(tmp_path, mode, bad_alignment, simulated
         assert report['final_selection']['independent_retained'] == (3 if bad_alignment else 4)
         assert any(check['rejected'] for check in report['geometry_checks']) == bad_alignment
         assert '-drizzle' not in script
+    expected = [
+        "Stacking — Alignement initial des images",
+        "Stacking — Contrôle de qualité, sélection et pondération",
+        "Stacking — Analyse et choix du Drizzle",
+    ]
+    if mode == 'force':
+        expected.append("Stacking — Vérification de la compatibilité Drizzle")
+    else:
+        expected.extend([
+            "Stacking — Dématriçage et réalignement CFA",
+            "Stacking — Réalignement robuste",
+        ])
+    expected.extend([
+        "Stacking — Application de l’alignement" + (" avec Drizzle" if mode == 'force' else ""),
+        "Stacking — Préparation des pondérations finales",
+        "Stacking — Empilement final",
+    ])
+    messages = [record.getMessage() for record in caplog.records]
+    assert [message for message in messages if message.startswith("Stacking —")] == expected
+    for title in expected:
+        position = messages.index(title)
+        assert messages[position - 1] == messages[position + 1] == "=" * 60
 
 
-def test_invalid_debayer_alignment_stops_before_any_resampling(tmp_path, simulated_registered_sequence):
+def test_invalid_debayer_alignment_stops_before_any_resampling(
+    tmp_path: Path, simulated_registered_sequence: Callable[..., None],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Un alignement invalide n’annonce pas les étapes suivantes non exécutées."""
+    caplog.set_level("INFO")
     from lib.siril_sequence import SirilSequence, RegistrationData
     files = [tmp_path/f'light_{i:03d}.fits' for i in range(1,4)]
     for path in files:
@@ -134,6 +168,9 @@ def test_invalid_debayer_alignment_stops_before_any_resampling(tmp_path, simulat
                          tmp_path/'final', 'requires 1.2', 'stack r_light_ rej 3 3 -out=final', 'min')
     assert not any('seqapplyreg' in script or '\nstack ' in script for script in scripts)
     assert json.loads((tmp_path/'final.drizzle.json').read_text())['status'] == 'failed'
+    assert "Stacking — Dématriçage et réalignement CFA" in caplog.text
+    assert "Stacking — Application de l’alignement" not in caplog.text
+    assert "Stacking — Empilement final" not in caplog.text
 
 
 def test_resources_and_cfa_have_separate_gates():

@@ -2,9 +2,18 @@
 
 [postProcess](README.md)
 
-`lib.power_guard.PowerGuard` est un gestionnaire de contexte réutilisable.
-`postProcess` l’active automatiquement pendant le traitement, les diagnostics
-et l’export du FITS. Il demande indépendamment :
+`lib.power_guard.PowerGuard` fournit le gestionnaire de contexte, dont
+l’activation appartient uniquement aux scripts de lancement :
+
+- `bin/postProcess.py` l’active pour son image, diagnostics et exports compris ;
+- `bin/lightProcess.py` l’active une seule fois pour toute la commande :
+  calibration, stacks, mosaïque éventuelle, post-traitements et exports.
+
+`--no-postprocess` ne désactive pas la protection des calculs de lightProcess.
+`--dry-run` n’active pas PowerGuard. Le processeur partagé et les moteurs ne
+l’activent pas, ce qui évite des acquisitions imbriquées ou répétées entre
+images. Les wrappers shell délèguent cette gestion à leur script Python.
+Le contexte demande indépendamment :
 
 - à `org.freedesktop.login1`, un inhibiteur `sleep:idle` en mode `block` ;
 - à `power-profiles-daemon`, un maintien temporaire du profil `performance`.
@@ -34,7 +43,14 @@ performance non disponible produit un avertissement et laisse le traitement
 continuer. L’inhibition et le maintien de profil sont indépendants. Les appels
 aux services ont un délai maximal de deux secondes chacun.
 
-## Réutilisation
+<a id="r-utilisation"></a>
+<a id="réutilisation"></a>
+
+## Utilisation dans un script de lancement
+
+Un appel direct à `PostProcessingProcessor.post_process()` laisse la gestion
+de l’énergie à son appelant. Le contexte se place autour du parcours complet
+dans le point d’entrée, sans l’introduire dans les processeurs de bibliothèque :
 
 ```python
 from lib.power_guard import PowerGuard
@@ -63,6 +79,7 @@ Références : [API PowerProfiles](https://upower.pages.freedesktop.org/power-pr
 
 ```bash
 PIP_NO_INDEX=1 .venv/bin/python -m pytest -q tests/test_power_guard.py
+PIP_NO_INDEX=1 .venv/bin/python -m pytest -q tests/test_postprocessing.py tests/test_session_pipeline.py
 ```
 
 Les services D-Bus sont simulés ; les tests vérifient des descripteurs Linux réels,
@@ -72,3 +89,6 @@ profil ou une mise en veille réelle sur la machine utilisateur.
 Lorsque `dbus-python` est installé, des tests supplémentaires vérifient la
 signature `u` réellement sérialisée, sans accès au bus système, y compris pour
 le cookie zéro et les valeurs dépassant la plage des entiers signés 32 bits.
+Les tests des points d’entrée vérifient la portée unique du contexte, son absence
+en simulation et sa libération après erreur ou interruption. Les appels directs
+au processeur sont vérifiés sans activation de PowerGuard.

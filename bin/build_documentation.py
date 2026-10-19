@@ -7,6 +7,7 @@ import argparse
 import base64
 import html
 import json
+from dataclasses import dataclass
 from html.parser import HTMLParser
 import mimetypes
 import os
@@ -26,6 +27,19 @@ MERMAID_VERSION = "10.9.5"
 MERMAID_URL = (
     f"https://cdn.jsdelivr.net/npm/mermaid@{MERMAID_VERSION}/dist/mermaid.min.js"
 )
+
+
+@dataclass(frozen=True)
+class DocumentationSection:
+    """Rubrique du sommaire commun au site, au PDF et au HTML autonome.
+
+    source est un Markdown relatif à la racine, ou None pour un groupe.
+    Une même source peut figurer dans plusieurs accès sans dupliquer le chapitre.
+    """
+
+    label: str
+    source: Path | None = None
+    children: tuple[DocumentationSection, ...] = ()
 
 
 class SingleFileLinks(HTMLParser):
@@ -150,10 +164,98 @@ class DocumentationBuilder:
             temporary.replace(path)
         return path
 
+    def _navigation(
+        self, sources: list[Path],
+    ) -> tuple[list[Path], tuple[DocumentationSection, ...]]:
+        """Ordonne les chapitres d’après nav de MkDocs, sans dupliquer les pages.
+
+        Les entrées de navigation doivent viser des pages Markdown locales.
+        Les accès répétés à une même page ne créent pas de second chapitre.
+        Les sources hors navigation sont regroupées en annexes ; sans nav,
+        l’ordre fourni reste utilisé. Un chemin absent ou hors sources lève
+        ValueError avant toute construction des exports.
+        """
+        configuration = self.root / "mkdocs.yml"
+        navigation: object = []
+        if configuration.is_file():
+            from mkdocs.config import load_config
+
+            navigation = load_config(config_file=str(configuration))["nav"] or []
+        available = set(sources)
+        ordered: list[Path] = []
+
+        def sections(entries: object) -> tuple[DocumentationSection, ...]:
+            """Valide et convertit une liste de rubriques MkDocs récursive."""
+            if not isinstance(entries, list):
+                raise ValueError("La navigation documentaire doit être une liste")
+            result: list[DocumentationSection] = []
+            for entry in entries:
+                if not isinstance(entry, dict) or len(entry) != 1:
+                    raise ValueError("Chaque rubrique doit avoir un titre et une cible")
+                label, value = next(iter(entry.items()))
+                if not isinstance(label, str):
+                    raise ValueError("Titre de rubrique documentaire invalide")
+                if isinstance(value, list):
+                    result.append(
+                        DocumentationSection(label, children=sections(value))
+                    )
+                elif isinstance(value, str):
+                    link = urlsplit(value)
+                    source = Path(unquote(link.path))
+                    if link.scheme or link.netloc or source not in available:
+                        raise ValueError(
+                            f"Page absente des sources documentaires : {value}"
+                        )
+                    if link.fragment:
+                        raise ValueError(
+                            f"La navigation doit viser une page sans ancre : {value}"
+                        )
+                    if source not in ordered:
+                        ordered.append(source)
+                    result.append(DocumentationSection(label, source))
+                else:
+                    raise ValueError(f"Cible de rubrique documentaire invalide : {label}")
+            return tuple(result)
+
+        tree = sections(navigation)
+        remaining = [source for source in sources if source not in ordered]
+        extra = tuple(
+            DocumentationSection(
+                renderer.title_from_markdown(
+                    (self.root / source).read_text(encoding="utf-8"), source,
+                ), source,
+            )
+            for source in remaining
+        )
+        if tree and extra:
+            tree += (DocumentationSection("Annexes", children=extra),)
+        elif not tree:
+            tree = extra
+        return ordered + remaining, tree
+
+    def _contents(
+        self, sections: tuple[DocumentationSection, ...], chapters: dict[Path, str],
+    ) -> str:
+        """Rend le sommaire imbriqué avec liens locaux et ancres de chapitres."""
+        items: list[str] = []
+        for section in sections:
+            label = html.escape(section.label)
+            if section.source is not None:
+                target = chapters[(self.root / section.source).resolve()]
+                label = f'<a href="#{html.escape(target, quote=True)}">{label}</a>'
+            else:
+                label = f"<strong>{label}</strong>"
+            children = (
+                self._contents(section.children, chapters) if section.children else ""
+            )
+            items.append(f"<li>{label}{children}</li>")
+        return "<ul>" + "".join(items) + "</ul>"
+
     def _exports(
-        self, sources: list[Path], staging: Path, work: Path, mermaid: Path
+        self, sources: list[Path], staging: Path, work: Path, mermaid: Path,
+        navigation: tuple[DocumentationSection, ...],
     ) -> None:
-        """Assemble les chapitres, rend Mermaid en SVG et imprime le même HTML en PDF."""
+        """Assemble les chapitres groupés, rend les SVG et imprime le même HTML en PDF."""
         from playwright.sync_api import sync_playwright
 
         chapters = {
@@ -164,23 +266,21 @@ class DocumentationBuilder:
         css = (work / "assets/style.css").read_text()
         css += "\n.pdf-section {break-before: page;} pre {white-space: pre-wrap;} svg {max-width:100%;height:auto;} @page {size:A4; margin:15mm;}"
         parts = [
-            f'<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>SirilProcessing</title><style>{css}</style></head><body><main class="page"><article><h1>SirilProcessing</h1><nav><ul>'
+            f'<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>SirilProcessing</title><style>{css}</style></head><body><main class="page"><article><h1>SirilProcessing</h1><nav aria-label="Sommaire">',
+            self._contents(navigation, chapters),
+            "</nav>",
         ]
         bodies = []
         for rel in sources:
             path = (self.root / rel).resolve()
             markdown = path.read_text(encoding="utf-8")
-            title = renderer.title_from_markdown(markdown, rel)
-            parts.append(
-                f'<li><a href="#{chapters[path]}">{html.escape(title)}</a></li>'
-            )
             body, _ = renderer.render_markdown_document(markdown, rel)
             links = SingleFileLinks(self.root, path, chapters)
             links.feed(body)
             bodies.append(
                 f'<section class="pdf-section" id="{chapters[path]}">{"".join(links.parts)}</section>'
             )
-        parts.extend(["</ul></nav>", *bodies, "</article></main></body></html>"])
+        parts.extend([*bodies, "</article></main></body></html>"])
         source = work / "combined.html"
         source.write_text("".join(parts), encoding="utf-8")
         downloads = staging / "downloads"
@@ -232,6 +332,7 @@ class DocumentationBuilder:
                 str(rel),
             )
         )
+        sources, navigation = self._navigation(sources)
         with TemporaryDirectory(prefix="build-", dir=self.cache) as directory:
             work = Path(directory)
             staging = work / "source"
@@ -245,7 +346,7 @@ class DocumentationBuilder:
                 renderer.copy_referenced_sources(self.root, staging, rel, body)
             self._stage_metadata(staging)
             mermaid = self._mermaid()
-            self._exports(sources, staging, work, mermaid)
+            self._exports(sources, staging, work, mermaid, navigation)
             home = staging / "README.md"
             links = "\n\n## Télécharger la documentation\n\n- [HTML autonome](downloads/documentation.html)\n"
             if self.pdf:

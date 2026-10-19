@@ -11,6 +11,7 @@ import logging
 from pathlib import Path
 import sys
 from typing import Iterator
+from unittest.mock import Mock
 
 import numpy as np
 import pytest
@@ -20,6 +21,7 @@ from lib.config import Config
 from lib.mosaic import Mosaic
 from lib.postprocess import GradientExtractor, _PostProcessorSequence
 from lib.postprocessing import PostProcessingProcessor
+from lib.power_guard import PowerGuard
 from lib.processor import processor
 from lib.render_exports import write_render_jpeg
 from lib.siril_utils import Siril
@@ -105,26 +107,14 @@ def test_starnet_prepared_only_for_requested_save(
 @pytest.mark.parametrize(
     "failure", [RuntimeError("engine failed"), KeyboardInterrupt()],
 )
-def test_failure_releases_guard_and_log(
+def test_failure_releases_log_without_activating_power_guard(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     failure: RuntimeError | KeyboardInterrupt,
 ) -> None:
-    """Une erreur ou interruption est propagée après libération des ressources."""
-    import lib.postprocessing as processing
-
+    """La bibliothèque ferme son journal sans demander de protection système."""
     source = tmp_path / "source.fits"
     fits.writeto(source, np.zeros((3, 16, 16), dtype=np.float32))
     report = tmp_path / "source_postprocess.json"
-    events = []
-
-    @contextmanager
-    def guard() -> Iterator[None]:
-        """Trace l’entrée et la sortie même si le moteur échoue."""
-        events.append("enter")
-        try:
-            yield
-        finally:
-            events.append("exit")
 
     def fail(
         self: _PostProcessorSequence, *args: object, **kwargs: object,
@@ -132,12 +122,13 @@ def test_failure_releases_guard_and_log(
         """Interrompt le calcul avant publication."""
         raise failure
 
-    monkeypatch.setattr(processing, "PowerGuard", guard)
+    guard = Mock(side_effect=AssertionError("Library must not activate PowerGuard"))
+    monkeypatch.setattr(PowerGuard, "__enter__", guard)
     monkeypatch.setattr(_PostProcessorSequence, "post_process", fail)
     handlers = list(logging.getLogger().handlers)
     with pytest.raises(type(failure)):
         PostProcessingProcessor().post_process(source, report, argparse.Namespace())
-    assert events == ["enter", "exit"]
+    guard.assert_not_called()
     assert logging.getLogger().handlers == handlers
     assert not report.exists() and not report.with_suffix(".fits").exists()
 
@@ -164,9 +155,9 @@ def test_input_and_output_validation(tmp_path: Path, invalid: str) -> None:
 
 
 def test_direct_and_cli_share_calculation_and_exports(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Même configuration : appels scientifiques, FITS et JPEG identiques."""
+    """Même configuration : calculs, exports et bandeau initial communs."""
     import lib.postprocessing as processing
 
     source = tmp_path / "source.fits"
@@ -189,7 +180,6 @@ def test_direct_and_cli_share_calculation_and_exports(
         return {"autoghs": {"output_image": str(rendered), "output_jpeg": str(jpeg)}}
 
     monkeypatch.setattr(_PostProcessorSequence, "post_process", render)
-    monkeypatch.setattr(processing, "PowerGuard", nullcontext)
     monkeypatch.setattr(
         processing.QualityMaskPreview, "ensure_for_run", lambda *args: None,
     )
@@ -206,11 +196,16 @@ def test_direct_and_cli_share_calculation_and_exports(
     config.bind_parameters(args)
     treatment = PostProcessingProcessor()
     direct_report = treatment.report_path_for(source, tmp_path / "direct")
+    guard = Mock(side_effect=AssertionError("Library must not activate PowerGuard"))
+    monkeypatch.setattr(PowerGuard, "__enter__", guard)
+    caplog.set_level(logging.INFO)
     direct = treatment.post_process(source, direct_report)
+    guard.assert_not_called()
     entry = Path(__file__).parents[1] / "bin/postProcess.py"
     spec = importlib.util.spec_from_file_location("common_postprocess_cli", entry)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    monkeypatch.setattr(module, "PowerGuard", nullcontext)
     monkeypatch.setattr(module, "setup_logging", lambda level: None)
     monkeypatch.setattr(sys, "argv", [str(entry), str(source), str(tmp_path / "cli"),
                                       "--config", str(config_path),
@@ -226,6 +221,14 @@ def test_direct_and_cli_share_calculation_and_exports(
         == cli_report.with_suffix(".jpg").read_bytes()
     )
     assert json.loads(cli_report.read_text()) == direct["treatments"]
+    title = f"Début du post-traitement : {source.name}"
+    assert [r.getMessage() for r in caplog.records].count(title) == 2
+    for report_path in (direct_report, cli_report):
+        log = report_path.parent / report_path.stem / "00_source_postProcess.log"
+        lines = log.read_text(encoding="utf-8").splitlines()
+        assert lines[0].endswith("=" * 60)
+        assert lines[1].endswith(title)
+        assert lines[2].endswith("=" * 60)
     for key in ("compute_backend", "ghs_chroma", "ghs_dynamic_target",
                 "star_faint_boost", "gradient_smoothing", "enable_autoghs"):
         assert snapshots[0][key] == snapshots[1][key]
@@ -235,3 +238,48 @@ def test_direct_and_cli_share_calculation_and_exports(
         == Path(snapshots[0]["postprocess_steps_dir"])
     )
     assert source.read_bytes() == original
+
+
+@pytest.mark.parametrize("failure,expected", [
+    (None, 0), (RuntimeError("engine failed"), 1), (KeyboardInterrupt(), 130),
+])
+def test_postprocess_cli_owns_and_releases_power_guard(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    failure: RuntimeError | KeyboardInterrupt | None, expected: int,
+) -> None:
+    """Le script détient un seul contexte et le libère sur tous les chemins."""
+    entry = Path(__file__).parents[1] / "bin/postProcess.py"
+    spec = importlib.util.spec_from_file_location("guard_postprocess_cli", entry)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    source = tmp_path / "source.fits"
+    source.write_bytes(b"source preserved")
+    events: list[str] = []
+
+    @contextmanager
+    def guard() -> Iterator[None]:
+        """Trace la portée du contexte autour du processeur complet."""
+        events.append("enter")
+        try:
+            yield
+        finally:
+            events.append("exit")
+
+    def process(
+        self: PostProcessingProcessor, input_path: Path, output_path: Path,
+    ) -> JSONReport:
+        """Vérifie la protection au moment de l’appel, puis simule son résultat."""
+        assert events == ["enter"]
+        assert input_path == source
+        events.append("process")
+        if failure is not None:
+            raise failure
+        return {"status": "SUCCESS"}
+
+    monkeypatch.setattr(module, "PowerGuard", guard)
+    monkeypatch.setattr(module, "setup_logging", lambda level: None)
+    monkeypatch.setattr(PostProcessingProcessor, "post_process", process)
+    monkeypatch.setattr(sys, "argv", [str(entry), str(source),
+                                      "--config", str(tmp_path / "settings.json")])
+    assert module.main() == expected
+    assert events == ["enter", "process", "exit"]

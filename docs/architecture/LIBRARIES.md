@@ -18,7 +18,7 @@
 | [restoration_chains.py](../../lib/restoration_chains.py) | Organiser la comparaison des chaînes complètes, active par défaut |
 | [restoration_summary.py](../../lib/restoration_summary.py) | Présenter les essais, contrôles et motifs de sélection dans les journaux et rapports |
 | [quality_preview.py](../../lib/quality_preview.py) | Illustrer les exclusions de qualité et les tuiles de ciel retenues |
-| [power_guard.py](../../lib/power_guard.py) | Détenir temporairement des demandes de performance et d’inhibition de veille via D-Bus |
+| [power_guard.py](../../lib/power_guard.py) | Fournir le contexte de performance et d’inhibition de veille D-Bus, activé uniquement par les scripts de lancement |
 | [graxpert_inference.py](../../lib/graxpert_inference.py) | Exécuter le modèle ONNX avec préservation des FITS |
 | [graxpert_models.py](../../lib/graxpert_models.py) | Acquérir et vérifier les poids à la demande |
 | [graxpert.py](../../lib/graxpert.py) | Encapsuler le débruitage ONNX natif GraXpert |

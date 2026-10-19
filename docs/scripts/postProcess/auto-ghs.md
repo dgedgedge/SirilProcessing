@@ -99,6 +99,8 @@ Les fichiers sont répartis dans ces sous-dossiers :
 | `<image>_starless_ghs_range.fits` | Fond étiré range pour comparaison |
 | `<image>_starless_ghs_peak.fits` | Fond étiré peak pour comparaison |
 | `<image>_stars_render.fits` | Couche d'étoiles étirée commune aux deux résultats |
+| `<image>_stars_render.jpg` | Couche d'étoiles entière en JPEG, dans `002_stars/` |
+| `<image>_stars_diagnostic.png` | Étoiles seules : extraits avant/après, histogrammes log et bilan d'adaptation dans `002_stars/` |
 | `<image>_ghs_report.json` | Rapport complet, paramètres, histogrammes et métriques |
 | `<image>_ghs_histograms.png` | Sans étoiles : entrée, étape intermédiaire et rendu final ; axes Y linéaire et logarithmique |
 | `<image>_ghs_histograms_with_stars.png` | Avec étoiles : rendu final recomposé seul ; axes Y linéaire et logarithmique |
@@ -143,9 +145,9 @@ astronomique.
 | `--ghs-strategy` | `both` | `both`, `range` ou `peak` |
 | `--compute-backend` | `auto` | Politique commune de postProcess ; NumPy/CuPy pour le GHS |
 | `--ghs-max-iterations` | `8` | Limite de 1 à 32 recherches GHS |
-| `--ghs-dynamic-target` | `0.9` | Étendue RGB minimale après GHS, dans `]0,1]` ; par exemple `0.8` |
+| `--ghs-dynamic-target` | `1.0` | Étendue RGB minimale du fond après GHS, dans `]0,1]` ; par exemple `0.8` |
 | `--ghs-dynamic-max-iterations` | `32` | Limite de 1 à 64 passages d’expansion linéaire |
-| `--ghs-histogram-strength` | `0.5` | Égalisation globale partielle, de 0 (désactivée) à 1 |
+| `--ghs-histogram-strength` | `0.7` | Égalisation globale partielle, de 0 (désactivée) à 1 |
 | `--ghs-histogram-clip` | `4.0` | Plafond d’effectifs relatif à la moyenne, de 1 à 16 |
 | `--ghs-bins` | `4096` | Histogramme, de 64 à 65536 classes |
 | `--ghs-q-low`, `--ghs-q-high` | `0.1`, `99.9` | Percentiles en pourcentage |
@@ -158,8 +160,9 @@ astronomique.
 | `--star-render` | `conservative` | Rendu asinh commun des étoiles |
 | `--star-strength` | `2.0` | Force asinh, dans `]0,20]` |
 | `--star-faint-boost` | `5.0` | Renforcement des étoiles faibles, de 1 (ancien rendu) à 10 |
+| `--star-histogram-strength` | `0.8` | Répartition des amplitudes des pics en logarithme, de 0 (gain fixe) à 1 ; réduite si la garde FWHM le demande |
 | `--star-ceiling` | `0.85` | Plafond du maximum RGB des étoiles seules |
-| `--star-max-width-ratio` | `1.5` | Rapport FWHM médian maximal, si mesurable |
+| `--star-max-width-ratio` | `2.0` | Rapport FWHM médian maximal, si mesurable |
 | `--star-max-color-drift` | `0.08` | Dérive moyenne maximale de chromaticité RGB après fusion |
 | `--star-max-chroma-excess` | `0.10` | Hausse moyenne maximale de chroma RGB après fusion |
 | `--ghs-negative-tolerance` | `0.005` | Seuil d’alerte des résidus négatifs, dans `[0,0.05]` ; compensation conservant la somme linéaire |
@@ -227,14 +230,19 @@ Pour viser une étendue de 0,8 et enregistrer ce choix dans la configuration :
 bin/postProcess.sh image_RGB.fit --ghs-dynamic-target 0.8 --save-config
 ```
 
-La valeur est résolue selon CLI > configuration > défaut (0,9).
+La valeur est résolue selon CLI > configuration > défaut (1,0). Une ancienne
+valeur sauvegardée reste prioritaire ; `--ghs-dynamic-target 1 --save-config`
+permet de la remplacer explicitement.
 
 Pour relever davantage les structures diffuses et les étoiles faibles, les réglages
-`--ghs-histogram-strength` (défaut 0,5) et `--star-faint-boost` (défaut 5)
+`--ghs-histogram-strength` (défaut 0,7) et `--star-faint-boost` (défaut 5)
 sont indépendants et persistants avec `--save-config`. Le premier égalise
 partiellement les intensités du fond, sous plafond de contraste ; le second
 renforce uniquement la couche stellaire extraite. Les valeurs 0 et 1,
-respectivement, désactivent ces deux ajouts. Voir les pages
+respectivement, désactivent ces deux ajouts. L'adaptation stellaire est pilotée
+séparément par `--star-histogram-strength` (défaut 0,8 ; 0 la désactive).
+Le diagnostic dédié et les exports des étoiles se trouvent dans `002_stars/`.
+Voir les pages
 [algorithme](auto-ghs-algorithm.md) et [étoiles](star-rendering.md).
 
 Les deux comparatifs PNG sont générés automatiquement dans `003_ghs/` et gardent

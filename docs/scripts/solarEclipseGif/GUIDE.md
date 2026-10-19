@@ -8,54 +8,21 @@ Ce document est maintenant la source de verite fonctionnelle du script. Les
 nouveaux elements de specification doivent etre ajoutes ici avant ou pendant les
 evolutions du code.
 
-## Specification Fonctionnelle
+<a id="specification-fonctionnelle"></a>
 
-### Parametres
+## 1. Specification Fonctionnelle
 
-Les parametres sont :
 
-- `--input-dir` : repertoire des images sources.
-- `--dark-calib-frames` : liste d'index d'images.
-- `--manual-seuil-fond-du-ciel` : nombre.
-- `--full-sun-frames` : liste d'index d'images.
-- `--first-nearly-full-sun-frames` : parametre par defaut `10`.
-- `--exclude-frames`.
-- `--debug-dir` : repertoire des images de debug. Par defaut, sous-repertoire
-  de `--input-dir` nomme `debug`.
-- `--debug-full-sun`.
-- `--debug-shifts` : cree et alimente le repertoire de debug du calcul des
-  decalages.
-- `--debug-gif-frames` : cree et alimente un repertoire contenant les images
-  effectivement incluses dans le GIF final.
-- `--debug-watershed` : calcule et affiche le watershed dans les images de
-  debug de `MasqueSolairePrincipal`. Par defaut, le watershed n'est pas calcule.
-- `--debug-luminosity` : cree et alimente le repertoire de debug de la
-  normalisation de luminosite avant/apres correction.
-- `--background-outside-mask-scale` : facteur applique au signal hors masque
-  solaire dilate avant la courbe en S. `1` conserve le fond pour laisser la
-  courbe en S travailler, `0` ramene d'abord le fond au niveau du ciel.
-- `--background-mask-dilate-fraction` : dilatation relative du masque solaire
-  courant avant attenuation du fond hors masque.
-- `--background-s-curve-sigma` : nombre d'ecarts-types du fond utilise pour
-  definir le seuil bas de la courbe en S du filtre de fond.
-- `--background-s-curve-target-fraction` : niveau relatif vise pour le fond
-  apres courbe en S, en fraction du contraste solaire courant.
-- `--enable-background-filter` : active explicitement le filtrage selectif du
-  fond hors masque solaire. Par defaut, ce filtrage est desactive.
-- `--disable-background-filter` : desactive completement le filtrage selectif du
-  fond hors masque solaire.
-- `--rotate-clockwise-deg`.
-- `--target-duration`.
-- `--output`.
-- `--log-level` : niveau de log technique.
+<a id="parametres"></a>
 
-Les selections d'images sont 1-based et acceptent les plages :
+### 1.1. Parametres
 
-```text
-1-10,15,20-25
-```
+Consulter la [référence des options de solarEclipseGif](OPTIONS.md). Les tableaux et réglages y sont regroupés.
 
-### Objectif
+
+<a id="objectif"></a>
+
+### 1.2. Objectif
 
 Faire un film qui dure `--target-duration` a partir des images transmises.
 
@@ -67,7 +34,9 @@ operations de correlation sont prioritaires pour cette acceleration. Si le GPU
 ou la pile CUDA n'est pas disponible, le traitement doit continuer en CPU sans
 changer les options utilisateur.
 
-### Processus Global
+<a id="processus-global"></a>
+
+### 1.3. Processus Global
 
 #### 0. Liste Des Frames
 
@@ -465,7 +434,9 @@ specifiee par l'utilisateur.
    l'index de l'image GIF, la duree du frame, les indices des images sources, et
    les valeurs moyennes connues d'exposition et de gain.
 
-## Workflow Global
+<a id="workflow-global"></a>
+
+## 2. Workflow Global
 
 ```mermaid
 flowchart TD
@@ -493,7 +464,9 @@ flowchart TD
     P --> S["Debug optionnel<br/>images incluses dans le GIF"]
 ```
 
-## Commandes
+<a id="commandes"></a>
+
+## 3. Commandes
 
 Traitement avec images plein Soleil explicites :
 
@@ -526,7 +499,9 @@ bin/solarEclipseGif.sh \
   --output ~/Images/AstroDirect/sun/eclipse.gif
 ```
 
-## Fichiers Generes
+<a id="fichiers-generes"></a>
+
+## 4. Fichiers Generes
 
 - `--output` : GIF final.
 - `<debug-dir>/full_sun_frames/*.png` : debug par image de calibration plein
@@ -540,7 +515,9 @@ bin/solarEclipseGif.sh \
 - `<debug-dir>/luminosity/*.png` : images avant/apres normalisation de
   luminosite, seulement avec `--debug-luminosity`.
 
-## Acceleration GPU
+<a id="acceleration-gpu"></a>
+
+## 5. Acceleration GPU
 
 Le script detecte automatiquement la disponibilite de CuPy et d'un GPU CUDA.
 
@@ -556,7 +533,9 @@ CuPy n'est pas force dans `requirements.txt`, car le paquet a installer depend
 de la version CUDA disponible localement, par exemple `cupy-cuda12x` ou
 `cupy-cuda11x`.
 
-## Notes De Maintenance
+<a id="notes-de-maintenance"></a>
+
+## 6. Notes De Maintenance
 
 Le script doit rester strictement aligne avec la section
 `Specification Fonctionnelle` de ce document.

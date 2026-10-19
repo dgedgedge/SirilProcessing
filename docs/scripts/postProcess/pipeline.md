@@ -6,9 +6,15 @@
 
 [`PostProcessingProcessor`](../../../lib/postprocessing.py) hérite de
 [`processor`](../../../lib/processor.py). Il porte l’exécution complète qui
-était dans `bin/postProcess.py` : séquence scientifique, protection énergétique,
-journal par image, diagnostics de qualité et du gradient, puis exports FITS et
+était dans `bin/postProcess.py` : séquence scientifique, journal par image,
+diagnostics de qualité et du gradient, puis exports FITS et
 JPEG. Les deux scripts appellent cette même classe en mémoire.
+
+La [protection énergétique](power-guard.md) appartient aux scripts de lancement.
+`postProcess.py` détient un contexte pour le traitement complet de son image ;
+`lightProcess.py` en détient un seul pour la calibration, le stacking, la
+mosaïque éventuelle et les post-traitements avec leurs exports. L’appel direct
+au processeur ne demande aucun profil système ni inhibition de veille.
 
 `_PostProcessorSequence` reste l’enfant qui orchestre les traitements et leurs
 moteurs. Les algorithmes ne sont pas copiés dans les points d’entrée.
@@ -36,6 +42,35 @@ reçoit le FITS exporté grâce à `output_image`.
 `<image>_postprocess.json` à côté de l’image, ou dans le répertoire demandé.
 Comme pour le CLI historique, un ancien chemin de rapport passé en second
 argument sélectionne uniquement son parent.
+
+## Bandeaux du journal
+
+Le début du post-traitement et chaque étape active sont annoncés en INFO avec
+un titre entre deux lignes de `=`. Le même format est écrit dans la console et
+dans le journal propre à l’image, depuis postProcess comme depuis lightProcess :
+
+```text
+============================================================
+Début du post-traitement : M31_mosaic.fits
+============================================================
+…
+============================================================
+Post-traitement — étape 01 : Correction du gradient
+============================================================
+```
+
+Les étapes standard suivantes sont `02 : Étalonnage photométrique des couleurs`,
+`03 : Comparaison des chaînes de restauration` et
+`05 : Rendu final AutoGHS et étoiles`. Les numéros correspondent aux rapports,
+même si une étape est désactivée. Sans comparaison des chaînes, la restauration
+se décline en `03 : Déconvolution` puis `04 : Débruitage`.
+Une étape désactivée n’affiche pas de bandeau. Les réglages, chemins d’entrée
+et diagnostics restent sous le titre de l’étape concernée.
+
+Les [sous-étapes de restauration](restoration.md#sous-étapes-dans-les-journaux)
+utilisent des lignes de `-` : préparation, calculs des moteurs, contrôles finaux,
+puis classement et publication. Cette présentation les distingue des grandes
+étapes encadrées par `=`.
 
 ## Paramètres et calcul identiques
 
@@ -124,14 +159,17 @@ L’activation du post-traitement ne change pas leurs critères de cache ; elle
 relance le post-traitement demandé avec ses réglages actuels. Les dossiers
 déterministes des étapes sont réinitialisés suivant leurs règles habituelles.
 
-Une erreur du processeur est journalisée puis propagée après libération de la
-protection énergétique et du journal. Le CLI autonome la traduit en code 1
+Une erreur du processeur est journalisée puis propagée après fermeture de son
+journal. Le script libère sa protection énergétique à la sortie de son contexte,
+y compris après une erreur ou une interruption. Le CLI autonome traduit l’erreur en code 1
 (130 pour une interruption clavier). Dans lightProcess, un échec ou une sortie
 finale absente entraîne le code 1 ; les autres stacks disponibles peuvent
 encore être traités. Les sources et produits partiels restent disponibles.
 
 Les tests `test_postprocessing.py` vérifient les paramètres, la conservation du
-contrat JSON, les exports communs et la libération des ressources. Les tests
+contrat JSON, les exports communs, la fermeture du journal et la protection
+détenue par le CLI autonome. Les tests
 `test_session_pipeline.py` vérifient la sélection des produits, le cache,
-la simulation et les échecs. Les tests avec moteurs simulés ne remplacent pas
+la simulation, les échecs et le contexte unique de protection du script complet.
+Les tests avec moteurs simulés ne remplacent pas
 une validation astrophotographique complète sur plusieurs acquisitions.

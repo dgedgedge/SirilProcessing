@@ -6,6 +6,11 @@
 de guidage `.txt` produits par le guideur interne de KStars au format PHD2.
 Il est indépendant de Siril et du visualiseur de fichiers `.analyze`.
 
+<a id="manuel-d-utilisation"></a>
+<a id="manuel-dutilisation"></a>
+
+## 1. Manuel d’utilisation
+
 ```bash
 bin/guideLogAnalyze.sh ~/Téléchargements/guidelogs/
 ```
@@ -38,7 +43,9 @@ Pour utiliser directement les dépendances déjà installées :
 .venv/bin/python bin/guideLogAnalyze.py ~/Téléchargements/guidelogs/
 ```
 
-## Explorer une nuit
+<a id="explorer-une-nuit"></a>
+
+## 2. Explorer une nuit
 
 Chaque début de guidage ou de calibration devient une entrée distincte.
 Les sections sans mesures restent visibles avec leur compteur à zéro.
@@ -60,7 +67,17 @@ enregistrée. Les sections ne sont jamais reliées par une courbe.
 
 La barre Matplotlib permet également d'enregistrer les graphiques en image.
 
-## Mesures et statistiques
+
+<a id="options-de-ligne-de-commande"></a>
+
+## 3. Options de ligne de commande
+
+Consulter la [référence des options de guideLogAnalyze](OPTIONS.md). Les tableaux et réglages y sont regroupés.
+
+
+<a id="mesures-et-statistiques"></a>
+
+## 4. Mesures et statistiques
 
 Les distances du format PHD2 sont en **pixels de la caméra de guidage**.
 L'affichage en secondes d'arc multiplie les erreurs `RARawDistance` et
@@ -96,7 +113,9 @@ Ces vues aident à examiner le suivi et les corrections. Elles ne fournissent
 pas un diagnostic mécanique automatique de la monture ou une mesure de son
 erreur périodique sans guidage.
 
-## Export HTML autonome
+<a id="export-html-autonome"></a>
+
+## 5. Export HTML autonome
 
 Le bouton « Exporter HTML » exporte les sections sélectionnées **complètes**,
 indépendamment du zoom. Le rapport contient Plotly et s'ouvre sans Internet.
@@ -119,7 +138,10 @@ uniquement et un export vers un fichier source est refusé.
 Référence du format : [PHD2 Guide Log Format](https://github.com/OpenPHDGuiding/phd2/wiki/PHD2GuideLog).
 Emplacement des journaux : [documentation du guideur Ekos](https://kstars-docs.kde.org/en/user_manual/ekos-guide.html#guiding-logs).
 
-## État du suivi et pertes de mesure
+<a id="tat-du-suivi-et-pertes-de-mesure"></a>
+<a id="état-du-suivi-et-pertes-de-mesure"></a>
+
+## 6. État du suivi et pertes de mesure
 
 Le panneau temporel « État du suivi », activé par défaut, partage le zoom des
 courbes. Chaque point correspond à une mesure enregistrée : vert pour une
@@ -134,7 +156,10 @@ permet de repérer les pertes de mesures et leur coïncidence avec les variation
 du SNR ou des erreurs AD/DEC ; un rejet ne prouve pas à lui seul une perte
 physique de suivi de la monture, ni une disparition de toutes les étoiles.
 
-## Calibration associée aux guidages
+<a id="calibration-associ-e-aux-guidages"></a>
+<a id="calibration-associée-aux-guidages"></a>
+
+## 7. Calibration associée aux guidages
 
 Sélectionner un guidage affiche aussi la dernière calibration qui le précède
 **dans le même fichier**, même si la calibration n'est pas sélectionnée.

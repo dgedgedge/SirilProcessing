@@ -41,6 +41,44 @@ L’astrométrie dépend du réglage `enable_stack_platesolve` et la transformat
 est `affine` par défaut. Les mesures et matrices du `.seq` sont lues par le
 modèle objet de séquence ; elles ne sont pas recalculées par Python.
 
+## Bandeaux de progression
+
+Le début du stacking d’une session et chacune de ses étapes sont annoncés en
+INFO par un titre entre deux lignes de `=`. Le format est commun au
+[post-traitement](../../postProcess/pipeline.md#bandeaux-du-journal). Les messages
+sont enregistrés dans la console et les journaux de stacking.
+
+```text
+============================================================
+Début du stacking : M33
+============================================================
+…
+============================================================
+Stacking — Alignement initial des images
+============================================================
+```
+
+Les titres suivent l’ordre du calcul :
+
+| Titre après `Stacking —` | Condition |
+|---|---|
+| Préparation des images calibrées | Préparation d’un nouvel empilement de plusieurs images |
+| Alignement initial des images | Appel du script initial de conversion et d’alignement |
+| Contrôle de qualité, sélection et pondération | Après réussite de l’alignement initial |
+| Analyse et choix du Drizzle | Après la sélection des poses |
+| Vérification de la compatibilité Drizzle | Si l’analyse sélectionne Drizzle |
+| Dématriçage et réalignement CFA | Branche standard avec sources CFA |
+| Réalignement robuste | Branche standard avec réalignement robuste actif |
+| Application de l’alignement, avec la mention `avec Drizzle` si actif | Avant le rééchantillonnage final |
+| Préparation des pondérations finales | Après réussite de l’application de l’alignement |
+| Empilement final | Après préparation réussie de la séquence finale |
+
+Les étapes optionnelles ou non atteintes après un échec n’affichent pas de
+bandeau. Si le résultat est déjà à jour, le script annonce
+`Réutilisation du stack existant : <session>`, sans annoncer les étapes de calcul.
+En simulation, le bandeau est `[DRY-RUN] Stacking prévu : <session>`.
+Une entrée unique retourne directement son image, sans bandeaux de sous-étapes.
+
 ## Sélection et pondération
 
 Dans `02_quality`, les contrôles géométriques, la validité des mesures, les
