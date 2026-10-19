@@ -9,6 +9,7 @@ import os
 import re
 import shutil
 import sys
+from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
@@ -636,12 +637,37 @@ def build_index(title: str, docs: list[tuple[Path, str]]) -> str:
     return html_page(title, body, [], "")
 
 
+class _DocumentTitleDetector(HTMLParser):
+    """Repère un vrai titre h1 dans le HTML rendu, en ignorant les commentaires."""
+
+    def __init__(self) -> None:
+        """Initialise le parseur et l'indicateur de présence du titre principal."""
+        super().__init__()
+        self.has_title = False
+
+    def handle_starttag(
+        self, tag: str, attrs: list[tuple[str, str | None]],
+    ) -> None:
+        """Enregistre les titres h1, indépendamment de leurs attributs et contenu."""
+        if tag == "h1":
+            self.has_title = True
+
+
 def build_single_page(title: str, docs: list[tuple[Path, str, str]]) -> str:
-    """Assemble les documents rendus dans une page unique destinée aussi au PDF."""
+    """Assemble les chapitres HTML/PDF sans doubler leurs titres principaux.
+
+    Conserve le h1 rendu, son contenu et ses ancres. Un titre de repli échappé
+    est ajouté seulement si le chapitre ne contient aucun h1. La provenance
+    reste affichée pour chaque document ; les corps rendus restent intacts.
+    """
     sections = [f"<h1>{html.escape(title)}</h1>"]
     for rel, doc_title, body in docs:
+        detector = _DocumentTitleDetector()
+        detector.feed(body)
+        detector.close()
+        heading = "" if detector.has_title else f"<h1>{html.escape(doc_title)}</h1>"
         sections.append(
-            f'<section class="pdf-section"><h1>{html.escape(doc_title)}</h1>'
+            f'<section class="pdf-section">{heading}'
             f"<p><small>Source: {html.escape(str(rel))}</small></p>{body}</section>"
         )
     return html_page(title, "\n".join(sections), [], "")

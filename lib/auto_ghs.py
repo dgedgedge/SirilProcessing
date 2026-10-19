@@ -399,7 +399,7 @@ class GHSOptimizer(processor):
         ComputeConfig.add_arguments(parser)
         parser.add_argument("--ghs-max-iterations", type=int, default=8)
         parser.add_argument(
-            "--ghs-dynamic-target", type=float, default=0.9,
+            "--ghs-dynamic-target", type=float, default=1.0,
             help="Étendue RGB minimale visée sur [0,1] après GHS (ex. 0.8)",
         )
         parser.add_argument(
@@ -407,7 +407,7 @@ class GHSOptimizer(processor):
             help="Nombre maximal de passages d’expansion de la dynamique",
         )
         parser.add_argument(
-            "--ghs-histogram-strength", type=float, default=0.5,
+            "--ghs-histogram-strength", type=float, default=0.7,
             help="Égalisation partielle de l’histogramme : 0 désactive, 1 maximale",
         )
         parser.add_argument(

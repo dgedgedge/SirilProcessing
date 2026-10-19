@@ -30,6 +30,7 @@ from lib.denoising import NoiseReductionProcessor
 from lib.deconvolution import DeconvolutionProcessor
 from lib.final_render import AutoGHSFinalRenderer
 from lib.compute_config import ComputeConfig
+from lib.logging_utils import log_section
 from lib.processor import processor
 from lib.siril_utils import Siril
 from lib.type_defs import ConfigValue, JSONReport
@@ -1467,6 +1468,8 @@ class _PostProcessorSequence(processor):
         <nom du rapport>_steps, et le même Namespace d'arguments parsés une fois.
         Les numéros standard restent fixes, notamment 05 pour AutoGHS lorsque
         la restauration regroupe les étapes 03/04.
+        Chaque étape active est annoncée en INFO par un titre lisible entre
+        deux lignes de signes = ; les étapes désactivées n’ont pas de bandeau.
         """
         if args is None:
             from lib.config import Config
@@ -1483,6 +1486,14 @@ class _PostProcessorSequence(processor):
             steps_dir = Path(configured_steps_dir)
         steps_dir.mkdir(parents=True, exist_ok=True)
         all_results = {}
+        stage_titles = {
+            "gradient": "Correction du gradient",
+            "photometry": "Étalonnage photométrique des couleurs",
+            "restoration": "Comparaison des chaînes de restauration",
+            "deconvolution": "Déconvolution",
+            "denoise": "Débruitage",
+            "autoghs": "Rendu final AutoGHS et étoiles",
+        }
         for index, processor in enumerate(self._selected_processors(args), start=1):
             prefix = processor.get_prefix()
             if not getattr(args, f"enable_{prefix}", processor.enabled_by_default):
@@ -1493,7 +1504,9 @@ class _PostProcessorSequence(processor):
                     for position, treatment in enumerate(self.processors, start=1)
                 }.get(prefix, index)
             report_path = steps_dir / f"{index:02d}_{prefix}.json"
-            logging.info("Exécution de %s sur %s", prefix, current_path)
+            title = stage_titles.get(prefix, prefix)
+            log_section(f"Post-traitement — étape {index:02d} : {title}")
+            logging.info("Image d’entrée : %s", current_path)
             try:
                 result = processor.post_process(current_path, report_path, args=args)
                 if result.get("error"):

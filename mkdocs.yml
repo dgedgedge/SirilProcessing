@@ -6,6 +6,91 @@ edit_uri: edit/main/
 docs_dir: docs
 site_dir: out
 use_directory_urls: false
+nav:
+  - Accueil: README.md
+  - 1. Installation et démarrage: docs/INSTALLATION.md
+  - 2. Manuels des scripts:
+      - Sommaire des scripts: docs/scripts/README.md
+      - 2.1. darkLibUpdate:
+          - Présentation: docs/scripts/darkLibUpdate/README.md
+          - Manuel d’utilisation: docs/scripts/darkLibUpdate/GUIDE.md
+          - Options courtes: docs/scripts/darkLibUpdate/OPTIONS_COURTES_GUIDE.md
+          - Configuration: docs/scripts/darkLibUpdate/VALIDATION_CONFIG_GUIDE.md
+          - Traitements détaillés:
+              - Choix des groupes: docs/scripts/darkLibUpdate/MIN_DARKS_THRESHOLD_FEATURE.md
+              - Validation: docs/scripts/darkLibUpdate/VALIDATION_OPTIMIZATION.md
+              - Statistiques: docs/scripts/darkLibUpdate/ROBUST_STATISTICS_UPDATE.md
+              - Préparation des liens: docs/scripts/darkLibUpdate/LINK_CREATION_OPTIMIZATION.md
+          - Sorties et maintenance:
+              - Rapports: docs/scripts/darkLibUpdate/RAPPORT_OPTIMISE.md
+              - Chemins: docs/scripts/darkLibUpdate/ABSOLUTE_PATHS_FEATURE.md
+              - Interruptions: docs/scripts/darkLibUpdate/INTERRUPTION_HANDLING.md
+      - 2.2. lightProcess:
+          - Présentation: docs/scripts/lightProcess/README.md
+          - Manuel d’utilisation: docs/scripts/lightProcess/GUIDE.md
+          - Options: docs/scripts/lightProcess/OPTIONS.md
+          - Sessions et entrées: docs/scripts/lightProcess/SESSIONS.md
+          - Traitements détaillés:
+              - Parcours complet: docs/scripts/lightProcess/treatments/README.md
+              - Calibration: docs/scripts/lightProcess/treatments/CALIBRATION.md
+              - Sélection des images: docs/scripts/lightProcess/filter/stacking/IMAGE_SELECTION.md
+              - Profils stellaires: docs/scripts/lightProcess/filter/stacking/STELLAR_PROFILE_FILTER.md
+              - Drizzle: docs/scripts/lightProcess/filter/stacking/DRIZZLE_SPECIFICATION.md
+              - Alignement et stacking: docs/scripts/lightProcess/treatments/STACKING.md
+              - Mosaïque: docs/scripts/lightProcess/MOSAIC.md
+          - Sorties et journaux: docs/scripts/lightProcess/treatments/OUTPUTS.md
+          - Références:
+              - Espace de travail: docs/scripts/lightProcess/WORKSPACE.md
+              - Filtres: docs/scripts/lightProcess/filter/README.md
+              - Filtrage du stacking: docs/scripts/lightProcess/filter/stacking/README.md
+              - Séquences Siril: docs/scripts/lightProcess/reference/SIRIL_SEQUENCE.md
+              - Sommaire des références: docs/scripts/lightProcess/reference/README.md
+              - Extraction du gradient: docs/scripts/lightProcess/treatments/GRADIENT_EXTRACTION.md
+              - Organisation des post-traitements: docs/scripts/lightProcess/treatments/postprocess/README.md
+              - Paramètres et séquence: docs/scripts/lightProcess/treatments/postprocess/SEQUENCE_PROCESSOR.md
+      - 2.3. postProcess:
+          - Manuel d’utilisation: docs/scripts/postProcess/README.md
+          - Options et configuration: docs/scripts/postProcess/OPTIONS.md
+          - Calcul CPU et GPU: docs/scripts/postProcess/compute-backend.md
+          - Traitements détaillés:
+              - Pipeline commun: docs/scripts/postProcess/pipeline.md
+              - Photométrie: docs/scripts/postProcess/photometry.md
+              - Restauration: docs/scripts/postProcess/restoration.md
+              - Contrôles de qualité: docs/scripts/postProcess/quality.md
+              - Mesures stellaires: docs/scripts/postProcess/reference-stars.md
+              - Cosmic Clarity: docs/scripts/postProcess/cosmic-clarity.md
+              - Couleurs Cosmic Clarity: docs/scripts/postProcess/cosmic-color.md
+              - GraXpert: docs/scripts/postProcess/graxpert.md
+              - AutoGHS: docs/scripts/postProcess/auto-ghs.md
+              - Algorithme AutoGHS: docs/scripts/postProcess/auto-ghs-algorithm.md
+              - Rendu des étoiles: docs/scripts/postProcess/star-rendering.md
+          - Exports et comparatifs: docs/scripts/postProcess/render-exports.md
+          - Gestion de l’énergie: docs/scripts/postProcess/power-guard.md
+      - 2.4. solarEclipseGif:
+          - Présentation: docs/scripts/solarEclipseGif/README.md
+          - Manuel d’utilisation: docs/scripts/solarEclipseGif/GUIDE.md
+          - Options: docs/scripts/solarEclipseGif/OPTIONS.md
+      - 2.5. kstarsAnalyze:
+          - Manuel d’utilisation: docs/scripts/kstarsAnalyze/README.md
+          - Options: docs/scripts/kstarsAnalyze/OPTIONS.md
+      - 2.6. guideLogAnalyze:
+          - Manuel d’utilisation: docs/scripts/guideLogAnalyze/README.md
+          - Options: docs/scripts/guideLogAnalyze/OPTIONS.md
+      - 2.7. Générer la documentation:
+          - Manuel d’utilisation: docs/scripts/generate_docs_html/README.md
+          - Options: docs/scripts/generate_docs_html/OPTIONS.md
+      - 2.8. Utilitaires:
+          - Messages pyecho: docs/scripts/pyecho/README.md
+          - Intégration dans Siril: docs/scripts/pyecho/GUIDE.md
+          - Répertoires pydir: docs/scripts/pydir/README.md
+          - Recherche de doublons: docs/scripts/trouve_doublons/README.md
+  - 3. Architecture:
+      - Organisation générale: docs/architecture/README.md
+      - Catalogue des bibliothèques: docs/architecture/LIBRARIES.md
+  - 4. Maintenance et vérification:
+      - Sommaire de la documentation: docs/README.md
+      - Contribuer à la documentation: docs/CONTRIBUTING.md
+      - Tests: tests/README.md
 theme:
   name: readthedocs
   locale: fr

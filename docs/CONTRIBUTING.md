@@ -25,9 +25,24 @@ L’accueil MkDocs est généré à partir du README du projet ; chaque autre Ma
 conserve son emplacement. MkDocs convertit `README.md` en `index.html` dans
 chaque dossier, et les autres pages en `.html`. Ajouter une page demande
 donc de la relier depuis le README de son ensemble, pour qu’elle soit accessible
-dans les deux formats. La navigation du site est déduite des sources et ne
-demande pas de liste de pages distincte à maintenir. Les mêmes Markdown
-alimentent le PDF et le HTML autonome téléchargeables.
+dans les deux formats. La rubrique `nav` de `mkdocs.yml` définit le plan commun :
+installation, manuels regroupés par script, architecture, puis maintenance et
+tests. Chaque script propose des accès au manuel, aux options et aux traitements
+détaillés. Les options sont regroupées dans une page de référence `OPTIONS.md`
+(ou le guide d’options existant). Les anciens emplacements du manuel gardent
+leurs ancres et renvoient à cette référence. Les entrées de `nav` visent les
+pages Markdown, sans fragment ; les accès à un paragraphe sont des liens dans
+le contenu du manuel, car MkDocs ne les traite pas comme des pages de navigation.
+Le constructeur reprend cet ordre et cette hiérarchie pour le PDF et le HTML
+autonome ; une page citée plusieurs fois n’est exportée qu’une fois. Les sources
+complémentaires hors navigation sont placées en annexes des exports.
+
+Les manuels et sommaires utilisent des paragraphes numérotés (`1.`, `1.1.`, etc.).
+Lorsqu’un titre est numéroté ou déplacé, conserver ses anciennes ancres avec un
+élément `<a id="ancienne-ancre"></a>` pour les liens existants. Vérifier les
+ancres utilisées aussi bien par MkDocs que par le moteur du monofichier,
+notamment pour les titres accentués. Les numéros d’étapes scientifiques peuvent
+être précisés dans le titre sans servir de numérotation de paragraphe.
 
 ## Mise à jour
 

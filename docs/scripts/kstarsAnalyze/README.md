@@ -7,6 +7,16 @@ pour consulter les fichiers `.analyze`, sans navigateur et sans Siril. Un export
 HTML interactif autonome reste disponible. Les fichiers
 sources sont seulement lus. Python 3.10 ou plus récent est nécessaire.
 
+<a id="manuel-d-utilisation"></a>
+<a id="manuel-dutilisation"></a>
+
+## 1. Manuel d’utilisation
+
+<a id="lancement-et-entr-es"></a>
+<a id="lancement-et-entrées"></a>
+
+### 1.1. Lancement et entrées
+
 Le lanceur shell crée le venv si nécessaire, puis met à jour
 les dépendances de `requirements-analyze.txt` à chaque lancement (accès Internet
 nécessaire pour rechercher les mises à jour). Il transmet tous les arguments au
@@ -15,6 +25,11 @@ script Python :
 ```bash
 bin/kstarsAnalyze.sh ~/Téléchargements/analyze
 ```
+
+<a id="explorer-la-fen-tre"></a>
+<a id="explorer-la-fenêtre"></a>
+
+### 1.2. Explorer la fenêtre
 
 La fenêtre propose une liste de sessions (Ctrl/clic pour en sélectionner plusieurs),
 un filtre « Avec acquisitions uniquement », des cases pour choisir les mesures,
@@ -48,6 +63,10 @@ Pour lancer directement la fenêtre sans mise à jour :
 ```bash
 .venv/bin/python bin/kstarsAnalyze.py --gui ~/Téléchargements/analyze --with-captures
 ```
+
+<a id="rapports-html"></a>
+
+### 1.3. Rapports HTML
 
 Pour générer le rapport HTML avec le lanceur, utiliser explicitement `--html` :
 
@@ -109,6 +128,11 @@ Cliquer sur une légende affiche ou masque une série. Les séries secondaires
 (impulsions, fond du ciel, étoiles, excentricité, etc.) sont masquées au départ.
 Le retour à une sélection de session rétablit cette sélection de mesures initiale.
 
+<a id="interpr-ter-les-mesures"></a>
+<a id="interpréter-les-mesures"></a>
+
+### 1.4. Interpréter les mesures
+
 Les états traduits (par exemple « Suivi » ou « Parquée ») sont conservés tels quels.
 Pour l’alignement, `AlignState` décrit les étapes actives (résolution,
 synchronisation, pointage, rotation). Succès, terminé, échec, interruption,
@@ -143,6 +167,10 @@ Références utilisées pour le format et l’affichage :
 
 - [Documentation officielle du module Analyze](https://kstars-docs.kde.org/en/user_manual/ekos-analyze.html)
 - [Lecteur et rédacteur officiel des journaux (analyze.cpp)](https://github.com/KDE/kstars/blob/master/kstars/ekos/analyze/analyze.cpp)
+
+<a id="chronologie-et-affichage-des-acquisitions"></a>
+
+### 1.5. Chronologie et affichage des acquisitions
 
 Le RMS du guidage possède son propre graphique, affiché par défaut en secondes
 d’arc (″). Le calcul reprend `RmsFilter` du code KStars consulté : racine de la
@@ -193,3 +221,10 @@ Le lanceur utilise Python et pip du système pour créer le venv sans pip et
 mettre à jour ses dépendances avant chaque exécution. Il lance ensuite le
 Python du venv. La sélection de l’environnement, les prérequis et l’exécution
 sans mise à jour sont décrits dans [Installation](../../INSTALLATION.md).
+
+
+<a id="options-de-ligne-de-commande"></a>
+
+## 2. Options de ligne de commande
+
+Consulter la [référence des options de kstarsAnalyze](OPTIONS.md). Les tableaux et réglages y sont regroupés.

@@ -340,8 +340,26 @@ def classify_stellar_profiles(
 
 def filter_stellar_profiles(
     images: Sequence[SequenceImage], mask: np.ndarray, cfg: ConfigMap
-) -> tuple[np.ndarray, JSONReport]:
-    """Inspect only independent survivors, without any star-count targeting."""
+) -> JSONReport:
+    """Inspect independent survivors without targeting a particular star count.
+
+    Log aggregate rejection counts at INFO and individual rejected files with
+    their measurements at DEBUG. Preserve all details in the returned report.
+
+    Parameters
+    ----------
+    images : Sequence[SequenceImage]
+        Independent input frames with their native pixel paths.
+    mask : np.ndarray
+        Boolean selection updated in place when a profile is rejected.
+    cfg : ConfigMap
+        Filter activation and robust threshold settings.
+
+    Returns
+    -------
+    JSONReport
+        Measurements, thresholds, decisions and aggregate rejection counts.
+    """
     from lib.stellar_quality import measure_stellar_profiles
 
     before = int(mask.sum())
@@ -390,7 +408,7 @@ def filter_stellar_profiles(
         for frame in report["frames"]:
             if reason in frame["reasons"] and mask[frame["sequence_index"]]:
                 mask[frame["sequence_index"]] = False
-                logging.info(
+                logging.debug(
                     "Rejet profils stellaires — %s : %s ; mesure=%.3f, seuil=%.3f, fraction=%.3f",
                     label,
                     frame["source"],

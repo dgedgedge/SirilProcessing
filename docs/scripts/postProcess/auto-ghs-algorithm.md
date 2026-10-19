@@ -129,7 +129,7 @@ Une exception de calcul ne devient jamais un arrêt de convergence.
 
 Après les recherches GHS et avant l’expansion finale de dynamique, une courbe
 CDF globale redistribue les intensités pour réduire leur concentration. L’option
-`--ghs-histogram-strength` vaut 0,5 par défaut : 0 désactive l’opération, 1 applique
+`--ghs-histogram-strength` vaut 0,7 par défaut : 0 désactive l’opération, 1 applique
 toute la courbe construite. Ce réglage est commun à RANGE et PEAK, qui gardent
 leurs recherches initiales indépendantes.
 
@@ -158,7 +158,7 @@ le rendu sans étoiles.
 
 Après la recherche RANGE ou PEAK, une seconde boucle vérifie l’étendue réelle
 `max(RGB)-min(RGB)` sur tous les pixels et canaux, en unités `[0,1]`. La cible
-`--ghs-dynamic-target` vaut `0.9` par défaut ; `0.8` est également possible.
+`--ghs-dynamic-target` vaut `1.0` par défaut ; `0.8` est également possible.
 Ce critère est distinct de la largeur robuste de RANGE et de celle du pic PEAK.
 Il mesure les bornes occupées, sans imposer une répartition uniforme ; un pixel
 extrême peut donc suffire à étendre cette mesure.

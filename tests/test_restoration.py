@@ -21,8 +21,10 @@ def isolate_graxpert_cache(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_noise_orchestrates_two_independent_processors(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Les enfants reçoivent la même image et seul le meilleur accepté est publié."""
+    """Même entrée, meilleur candidat publié et titres distincts pour les moteurs."""
+    caplog.set_level("INFO")
     source = tmp_path / 'source.fits'
     source.write_bytes(b'original')
     calls: list[tuple[str, Path]] = []
@@ -58,6 +60,16 @@ def test_noise_orchestrates_two_independent_processors(
     assert source.read_bytes() == b'original'
     assert all(issubclass(cls, ParameterizedComponent) for cls in NoiseReductionProcessor.parameter_children())
     assert NoiseReductionProcessor.__module__ == 'lib.denoising'
+    messages = [record.getMessage() for record in caplog.records]
+    titles = [
+        "Débruitage — Évaluation du moteur Cosmic Clarity",
+        "Débruitage — Évaluation du moteur Siril",
+        "Débruitage — Classement et publication du résultat",
+    ]
+    positions = [messages.index(title) for title in titles]
+    assert positions == sorted(positions)
+    for position in positions:
+        assert messages[position - 1] == messages[position + 1] == "-" * 60
 
 
 def test_noise_disabled_clarity_runs_only_siril(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -1,6 +1,6 @@
-"""Rendu stellaire conservateur et recomposition screen contrôlée.
+"""Rendu stellaire adaptatif et recomposition screen contrôlée.
 
-L'asinh puis une compression rationnelle renforcent les étoiles faibles.
+L'asinh puis les quantiles des pics renforcent les étoiles faibles.
 Le gain commun aux trois canaux préserve les rapports de couleur sans présumer les primaires du FITS.
 """
 
@@ -11,12 +11,57 @@ import json
 from pathlib import Path
 
 import numpy as np
-from scipy.ndimage import maximum_filter
+from scipy.ndimage import label, maximum_filter
 
 from lib.processor import processor
 from lib.restoration_quality import normalized_planes
 from lib.star_separation import validate_rgb, write_rgb
 from lib.type_defs import JSONReport
+
+VISIBILITY_LEVEL = 0.03  # Contribution normalisée, indicateur d'affichage seulement.
+PEAK_QUANTILE_COUNT = 17
+PEAK_QUANTILE_RANGE = (0.05, 0.95)  # Exclure les extrêmes du calage des pics.
+PEAK_OUTPUT_RANGE = (0.04, 0.65)  # Niveaux visés pour un plafond de référence 0,85.
+REFERENCE_STAR_CEILING = 0.85
+MAX_BALANCE_ATTEMPTS = 8  # Réductions par moitiés avant de conserver le gain fixe.
+
+
+def stellar_peak_positions(data: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Repère des candidats à 7 pixels, sans prétendre détecter de vraies étoiles.
+
+    Le seuil max(1e-5, médiane + 5 MAD normalisées) écarte les résidus proches
+    de zéro. Chaque plateau connexe ne fournit qu'un pic. Les mêmes positions
+    sont ensuite utilisées avant/après ; aucune nouvelle source n'est comptée.
+    """
+    light = data.max(axis=0)
+    if np.ptp(light) == 0:
+        return np.array([], dtype=int), np.array([], dtype=int)
+    floor = float(np.median(light))
+    noise = 1.4826 * float(np.median(abs(light - floor)))
+    maxima = (light == maximum_filter(light, size=7))
+    maxima &= light > max(1e-5, floor + 5 * noise)
+    groups, count = label(maxima)
+    yy, xx = np.nonzero(maxima)
+    if not count:
+        return yy, xx
+    _, indices = np.unique(groups[yy, xx], return_index=True)
+    return yy[indices], xx[indices]
+
+
+def peak_visibility(
+    data: np.ndarray, positions: tuple[np.ndarray, np.ndarray],
+) -> JSONReport:
+    """Compte les pics au-dessus de 0,03 en max RGB, sans modèle de perception.
+
+    Ce seuil d'affichage sur [0,1] ne mesure ni SNR ni détection astrophysique.
+    Appliqué à la contribution screen, il mesure le contraste ajouté au fond.
+    """
+    values = data[:, positions[0], positions[1]].max(axis=0)
+    return {
+        "candidate_count": int(values.size), "threshold": VISIBILITY_LEVEL,
+        "above_threshold": int(np.count_nonzero(values >= VISIBILITY_LEVEL)),
+        "median_peak": float(np.median(values)) if values.size else None,
+    }
 
 
 def clipping_metrics(data: np.ndarray) -> JSONReport:
@@ -110,9 +155,15 @@ def profile_widths(before: np.ndarray, after: np.ndarray) -> JSONReport:
 
 
 class ConservativeStarRenderer(processor):
-    """Étire les étoiles par asinh et renforcement doux, sans optimiser le fond."""
+    """Étire les étoiles avec répartition des pics et contrôle de largeur.
+
+    Voir docs/scripts/postProcess/star-rendering.md pour les quantiles et les
+    limites du critère de visibilité, distinct d'une détection astrophysique.
+    """
 
     default_faint_boost = 5.0
+    default_histogram_strength = 0.8
+    default_max_width_ratio = 2.0
 
     @classmethod
     def get_prefix(cls) -> str:
@@ -130,8 +181,14 @@ class ConservativeStarRenderer(processor):
             "--star-faint-boost", type=float, default=cls.default_faint_boost,
             help="Gain supplémentaire des étoiles faibles, avec compression douce des fortes",
         )
+        parser.add_argument(
+            "--star-histogram-strength", type=float, default=cls.default_histogram_strength,
+            help="Répartition logarithmique des pics stellaires, de 0 (gain fixe) à 1",
+        )
         parser.add_argument("--star-ceiling", type=float, default=0.85)
-        parser.add_argument("--star-max-width-ratio", type=float, default=1.5)
+        parser.add_argument(
+            "--star-max-width-ratio", type=float, default=cls.default_max_width_ratio,
+        )
         parser.add_argument(
             "--star-max-color-drift",
             type=float,
@@ -150,28 +207,93 @@ class ConservativeStarRenderer(processor):
         data: np.ndarray,
         strength: float = 2.0,
         ceiling: float = 0.85,
-        max_width_ratio: float = 1.5,
+        max_width_ratio: float = default_max_width_ratio,
         faint_boost: float = default_faint_boost,
+        histogram_strength: float = default_histogram_strength,
     ) -> tuple[np.ndarray, JSONReport]:
         """Retourne un rendu monotone borné et ses mesures sur les étoiles seules.
 
-        Une courbe rationnelle multiplie les faibles intensités par faint_boost
-        et conserve le plafond des fortes ; faint_boost=1 reproduit l'ancien rendu.
+        Une courbe rationnelle multiplie les faibles intensités par faint_boost.
+        Une table de quantiles des pics augmente ensuite les faibles sources ;
+        son mélange est réduit par moitiés si la FWHM médiane dépasse la garde.
+        histogram_strength=0 désactive cette adaptation ; avec faint_boost=1
+        cela reproduit l'ancien asinh. Les rapports RGB et zéros sont conservés.
         Les résidus négatifs doivent être compensés explicitement par l'appelant.
         Les paramètres non finis/hors limites et un gonflement excessif mesurable
         lèvent ValueError. Aucun traitement spatial n'est appliqué.
         """
         validate_rgb(data)
-        if not np.isfinite([strength, ceiling, max_width_ratio, faint_boost]).all():
+        if not np.isfinite([
+            strength, ceiling, max_width_ratio, faint_boost, histogram_strength
+        ]).all():
             raise ValueError("Paramètres stellaires non finis")
         if (
             not 0 < strength <= 20 or not 0 < ceiling < 1
             or max_width_ratio < 1 or not 1 <= faint_boost <= 10
+            or not 0 <= histogram_strength <= 1
         ):
             raise ValueError("Paramètres stellaires hors limites")
         light = data.max(axis=0)
         target = ceiling * np.arcsinh(strength * light) / np.arcsinh(strength)
         target = faint_boost * target / (1 + (faint_boost - 1) * target / ceiling)
+        positions = stellar_peak_positions(data)
+        peaks = light[positions]
+        fixed_origin_gain = float(ceiling * strength * faint_boost / np.arcsinh(strength))
+        origin_gain = fixed_origin_gain
+        balance: JSONReport = {
+            "requested_strength": histogram_strength, "accepted_strength": 0.0,
+            "iterations": [], "stop_reason": "disabled",
+            "before": peak_visibility(data, positions),
+        }
+        base_gain = np.divide(target, light, out=np.zeros_like(light), where=light > 0)
+        balance["fixed_gain"] = peak_visibility(data * base_gain[None], positions)
+        if histogram_strength > 0:
+            balance["stop_reason"] = "insufficient distinct peaks"
+            # Des quantiles de pics, pas les millions de pixels du fond nul.
+            quantiles = np.linspace(*PEAK_QUANTILE_RANGE, PEAK_QUANTILE_COUNT)
+            anchors = np.quantile(peaks, quantiles) if peaks.size >= 8 else np.array([])
+            if anchors.size and np.unique(anchors).size >= 4:
+                anchors, unique = np.unique(anchors, return_index=True)
+                levels = np.geomspace(*PEAK_OUTPUT_RANGE, PEAK_QUANTILE_COUNT)[unique]
+                levels *= ceiling / REFERENCE_STAR_CEILING
+                # Les bornes conservent 0 et le plafond ; interpolation log-log.
+                inside = anchors < 1
+                knots = np.r_[anchors[inside], 1.0]
+                levels = np.r_[levels[inside], ceiling]
+                balanced = np.exp(np.interp(
+                    np.log(np.maximum(light, np.finfo(np.float32).tiny)),
+                    np.log(knots), np.log(levels),
+                ))
+                below = light < knots[0]
+                balanced[below] = light[below] * levels[0] / knots[0]
+                balanced = np.maximum(target, balanced).astype(np.float32)
+                balance["input_knots"] = knots.tolist()
+                balance["target_knots"] = levels.tolist()
+                balance["stop_reason"] = "width limit"
+                for iteration in range(MAX_BALANCE_ATTEMPTS):
+                    fraction = histogram_strength / 2 ** iteration
+                    candidate = target + fraction * (balanced - target)
+                    gain = np.divide(
+                        candidate, light, out=np.zeros_like(light), where=light > 0
+                    )
+                    widths = profile_widths(data, data * gain[None])
+                    ratio = widths["median_ratio"]
+                    accepted = ratio is None or ratio <= max_width_ratio
+                    balance["iterations"].append({
+                        "strength": fraction, "median_width_ratio": ratio,
+                        "accepted": accepted,
+                    })
+                    if accepted:
+                        target = candidate
+                        balance["accepted_strength"] = fraction
+                        origin_gain += fraction * (
+                            max(fixed_origin_gain, float(levels[0] / knots[0]))
+                            - fixed_origin_gain
+                        )
+                        balance["stop_reason"] = (
+                            "requested strength" if iteration == 0 else "width limited"
+                        )
+                        break
         gain = np.divide(target, light, out=np.zeros_like(light), where=light > 0)
         rendered = data * gain[None]
         validate_rgb(rendered)
@@ -182,18 +304,19 @@ class ConservativeStarRenderer(processor):
         ):
             raise ValueError("Gonflement des profils stellaires supérieur à la limite")
         return rendered.astype(np.float32), {
-            "method": "asinh + soft faint boost of max RGB, shared RGB gain",
+            "method": "asinh + faint boost + log peak quantiles, shared RGB gain",
             "strength": strength,
             "faint_boost": faint_boost,
-            "faint_intensity_gain": float(
-                ceiling * strength * faint_boost / np.arcsinh(strength)
-            ),
+            "faint_intensity_gain": origin_gain,
+            "fixed_curve_faint_intensity_gain": fixed_origin_gain,
             "ceiling": ceiling,
             "max_width_ratio": max_width_ratio,
             "before": clipping_metrics(data),
             "after": clipping_metrics(rendered),
             "color": color_drift(data, rendered),
             "fwhm": widths,
+            "histogram_balance": balance,
+            "visibility": peak_visibility(rendered, positions),
         }
 
     def post_process(
@@ -202,22 +325,43 @@ class ConservativeStarRenderer(processor):
         output_path: Path,
         args: argparse.Namespace | None = None,
     ) -> JSONReport:
-        """Écrit la couche étirée et son rapport ; refuse de remplacer la source."""
+        """Écrit les étoiles FITS/JPEG, le diagnostic PNG et le rapport JSON.
+
+        La source est préservée. Les pixels de l'aperçu sont affichés directement,
+        en respectant ROWORDER ; aucune correction gamma n'est ajoutée.
+        """
+        from astropy.io import fits
+
+        from lib.render_exports import write_render_jpeg
+        from lib.star_diagnostics import write_star_diagnostic
+
         args = self._get_args(args)
         source, report = Path(input_path).resolve(), Path(output_path).resolve()
         destination = report.with_name(f"{report.stem}_stretched.fits")
         if source in (report, destination):
             raise ValueError("Le rendu stellaire ne peut pas remplacer la source")
+        before = normalized_planes(source)
         data, metrics = self.render(
-            normalized_planes(source),
+            before,
             getattr(args, "star_strength", 2.0),
             getattr(args, "star_ceiling", 0.85),
-            getattr(args, "star_max_width_ratio", 1.5),
+            getattr(args, "star_max_width_ratio", self.default_max_width_ratio),
             getattr(args, "star_faint_boost", self.default_faint_boost),
+            getattr(args, "star_histogram_strength", self.default_histogram_strength),
         )
         report.parent.mkdir(parents=True, exist_ok=True)
         write_rgb(source, destination, data, nonlinear=True, role="STARS")
-        result = {"output_image": str(destination), **metrics}
+        jpeg = destination.with_suffix(".jpg")
+        diagnostic = report.with_name(f"{report.stem}_stars_diagnostic.png")
+        write_render_jpeg(destination, jpeg)
+        write_star_diagnostic(
+            before, data, metrics, diagnostic,
+            row_order=fits.getheader(source).get("ROWORDER", "BOTTOM-UP"),
+        )
+        result = {
+            "output_image": str(destination), "output_jpeg": str(jpeg),
+            "diagnostic_path": str(diagnostic), **metrics,
+        }
         report.write_text(json.dumps(result, indent=2), encoding="utf-8")
         return result
 

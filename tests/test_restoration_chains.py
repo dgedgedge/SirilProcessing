@@ -20,8 +20,10 @@ from lib.type_defs import JSONReport
 def test_all_chains_are_evaluated_and_intermediates_cached(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reverse: bool,
     variants: int, operations: int,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Trois débruiteurs/deux moteurs de netteté, aucun top-N ni score local sommé."""
+    """Vérifie calculs mutualisés, scores finaux et bandeaux des opérations réelles."""
+    caplog.set_level("DEBUG")
     source = tmp_path / "source.fits"
     data = np.random.default_rng(1).normal(0.1, 0.001, (128, 128)).astype("float32")
     data[0, 0] = 0
@@ -103,6 +105,20 @@ def test_all_chains_are_evaluated_and_intermediates_cached(
     assert Path(result["quality_preview_path"]).parent == work
     assert not (work / "001").exists()
     assert any(work.glob("*_denoise_*.fits"))
+    messages = [record.getMessage() for record in caplog.records]
+    titles = [message for message in messages if message.startswith((
+        "Restauration — Préparation", "Restauration — Calcul ",
+        "Restauration — Contrôle final de la variante", "Restauration — Classement",
+    ))]
+    assert titles[0] == "Restauration — Préparation de la référence et des masques"
+    assert titles[-1] == "Restauration — Classement et publication du résultat"
+    assert sum(title.startswith("Restauration — Calcul ") for title in titles) == operations
+    assert sum("Contrôle final de la variante" in title for title in titles) == len(finals)
+    for title in titles:
+        position = messages.index(title)
+        assert messages[position - 1] == messages[position + 1] == "-" * 60
+    reused = [record for record in caplog.records if "réutilisé pour la variante" in record.getMessage()]
+    assert reused and all(record.levelname == "DEBUG" for record in reused)
 
 
 def test_sequence_uses_one_restoration_after_gradient_and_photometry() -> None:

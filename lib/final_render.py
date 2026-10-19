@@ -32,8 +32,11 @@ from lib.star_rendering import (
     ConservativeStarRenderer,
     clipping_metrics,
     color_drift,
+    peak_visibility,
     recompose,
+    stellar_peak_positions,
 )
+from lib.star_diagnostics import write_star_diagnostic
 from lib.star_separation import (
     StarNetSeparator,
     validate_linear_header,
@@ -411,13 +414,35 @@ class AutoGHSFinalRenderer(processor):
                 positive,
                 getattr(args, "star_strength", 2.0),
                 getattr(args, "star_ceiling", 0.85),
-                getattr(args, "star_max_width_ratio", 1.5),
+                getattr(
+                    args, "star_max_width_ratio",
+                    ConservativeStarRenderer.default_max_width_ratio,
+                ),
                 getattr(
                     args, "star_faint_boost", ConservativeStarRenderer.default_faint_boost
                 ),
+                getattr(
+                    args, "star_histogram_strength",
+                    ConservativeStarRenderer.default_histogram_strength,
+                ),
             )
             stars_path = stars_dir / f"{source.stem}_stars_render.fits"
+            LOGGER.info(
+                "Étoiles : %d pics candidats au-dessus du contraste 0,03 après rendu "
+                "(%d avec le gain fixe) ; adaptation %.3f",
+                star_report["visibility"]["above_threshold"],
+                star_report["histogram_balance"]["fixed_gain"]["above_threshold"],
+                star_report["histogram_balance"]["accepted_strength"],
+            )
             write_rgb(source, stars_path, stars, nonlinear=True, role="STARS")
+            stars_jpeg = stars_path.with_suffix(".jpg")
+            write_render_jpeg(stars_path, stars_jpeg)
+            stars_diagnostic = stars_dir / f"{source.stem}_stars_diagnostic.png"
+            write_star_diagnostic(
+                positive, stars, star_report, stars_diagnostic,
+                row_order=header.get("ROWORDER", "BOTTOM-UP"),
+            )
+            star_positions = stellar_peak_positions(positive)
             strategies = (
                 ("range", "peak")
                 if options.ghs_strategy == "both"
@@ -444,9 +469,13 @@ class AutoGHSFinalRenderer(processor):
                     source, starless_path, stretched, nonlinear=True, role="STARLESS"
                 )
                 final, fusion = recompose(stretched, stars, headroom)
+                fusion["peak_contrast"] = peak_visibility(
+                    final - headroom * stretched, star_positions,
+                )
                 profile_ratio = fusion["star_profiles_after_fusion"]["median_ratio"]
                 if profile_ratio is not None and profile_ratio > getattr(
-                    args, "star_max_width_ratio", 1.5
+                    args, "star_max_width_ratio",
+                    ConservativeStarRenderer.default_max_width_ratio,
                 ):
                     raise ValueError("Recomposition : gonflement stellaire excessif")
                 color = fusion["star_color_after_fusion"]
@@ -481,6 +510,14 @@ class AutoGHSFinalRenderer(processor):
                 )
                 rendered[strategy] = branch
                 outputs[strategy] = str(final_path)
+            star_report["recomposed_visibility"] = {
+                strategy: branch["recomposition"]["peak_contrast"]
+                for strategy, branch in rendered.items()
+            }
+            write_star_diagnostic(
+                positive, stars, star_report, stars_diagnostic,
+                row_order=header.get("ROWORDER", "BOTTOM-UP"),
+            )
             comparison_paths = write_render_comparisons(
                 rendered, ghs_dir, source.stem, previous_previews,
             )
@@ -529,7 +566,11 @@ class AutoGHSFinalRenderer(processor):
                 },
                 "separation": separation,
                 "residual_compensation": compensation,
-                "stars": {**star_report, "output_image": str(stars_path)},
+                "stars": {
+                    **star_report, "output_image": str(stars_path),
+                    "output_jpeg": str(stars_jpeg),
+                    "diagnostic_path": str(stars_diagnostic),
+                },
                 "strategies": rendered,
                 "output_images": outputs,
                 "output_jpegs": jpegs,
@@ -555,7 +596,14 @@ class AutoGHSFinalRenderer(processor):
                         ConservativeStarRenderer.default_faint_boost,
                     ),
                     "star_ceiling": getattr(args, "star_ceiling", 0.85),
-                    "star_max_width_ratio": getattr(args, "star_max_width_ratio", 1.5),
+                    "star_histogram_strength": getattr(
+                        args, "star_histogram_strength",
+                        ConservativeStarRenderer.default_histogram_strength,
+                    ),
+                    "star_max_width_ratio": getattr(
+                        args, "star_max_width_ratio",
+                        ConservativeStarRenderer.default_max_width_ratio,
+                    ),
                     "star_max_color_drift": max_color_drift,
                     "star_max_chroma_excess": max_chroma_excess,
                     "ghs_headroom": headroom,

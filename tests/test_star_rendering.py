@@ -5,7 +5,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from lib.star_rendering import ConservativeStarRenderer, recompose
+from lib.star_rendering import (
+    ConservativeStarRenderer, recompose, stellar_peak_positions,
+)
 
 
 def test_asinh_monotone_and_color_preserving() -> None:
@@ -72,6 +74,8 @@ def test_star_processor_fits_contract(tmp_path: Path) -> None:
     assert header["OBJECT"] == "Test" and header["SPNLIN"]
     assert header["SPROLE"] == "STARS"
     assert fits.getdata(result["output_image"]).mean() > data.mean()
+    assert Path(result["output_jpeg"]).is_file()
+    assert Path(result["diagnostic_path"]).is_file()
 
 
 def test_faint_boost_reveals_weak_stars_and_preserves_support() -> None:
@@ -105,6 +109,8 @@ def test_default_faint_boost_is_stronger_and_configurable() -> None:
     parser = argparse.ArgumentParser()
     ConservativeStarRenderer.add_arguments(parser)
     assert parser.parse_args([]).star_faint_boost == 5
+    assert parser.parse_args([]).star_max_width_ratio == 2
+    assert parser.parse_args(["--star-max-width-ratio", "1.5"]).star_max_width_ratio == 1.5
     assert parser.parse_args(["--star-faint-boost", "3"]).star_faint_boost == 3
     light = np.array([[0, 0.0001, 0.01, 0.4, 1]], dtype=np.float32)
     data = np.array([light, light * 0.6, light * 0.3])
@@ -115,4 +121,59 @@ def test_default_faint_boost_is_stronger_and_configurable() -> None:
     np.testing.assert_allclose(stronger[1], 0.6 * stronger[0], atol=1e-7)
     assert stronger.max() == pytest.approx(0.85)
     assert report["faint_boost"] == 5
+    assert report["max_width_ratio"] == 2
     assert report["faint_intensity_gain"] == pytest.approx(5.8879, rel=1e-4)
+
+
+def test_adaptive_histogram_reveals_faint_peaks_with_bounded_width() -> None:
+    """Un champ de pics faibles gagne en contraste sous les mêmes gardes RGB/FWHM."""
+    y, x = np.indices((144, 144))
+    light = np.zeros_like(x, dtype=np.float32)
+    for (cy, cx), amplitude in zip(
+        ((cy, cx) for cy in range(18, 130, 20) for cx in range(18, 130, 20)),
+        np.geomspace(1e-4, 0.7, 36),
+    ):
+        light += amplitude * np.exp(-((x - cx) ** 2 + (y - cy) ** 2) / 2)
+    data = np.array([light, 0.6 * light, 0.3 * light])
+    fixed, previous = ConservativeStarRenderer.render(data, histogram_strength=0)
+    adapted, report = ConservativeStarRenderer.render(data)
+    assert report["visibility"]["candidate_count"] == 36
+    assert report["visibility"]["above_threshold"] > previous["visibility"]["above_threshold"]
+    assert report["histogram_balance"]["accepted_strength"] > 0
+    assert report["histogram_balance"]["iterations"][-1]["accepted"]
+    assert report["fwhm"]["median_ratio"] <= 2
+    assert np.all(adapted >= fixed - 1e-7)
+    assert adapted.max() <= 0.85
+    order = np.argsort(light.ravel())
+    assert np.all(np.diff(adapted[0].ravel()[order]) >= -1e-7)
+    np.testing.assert_array_equal(adapted > 0, data > 0)
+    np.testing.assert_allclose(adapted[1], 0.6 * adapted[0], atol=1e-7)
+    assert report["faint_intensity_gain"] > report["fixed_curve_faint_intensity_gain"]
+
+
+@pytest.mark.parametrize("level", [0, 0.1, 1])
+def test_constant_stars_do_not_invent_peaks(level: float) -> None:
+    """Un champ constant n'est pas égalisé et ne devient pas une liste d'étoiles."""
+    data = np.full((3, 20, 20), level, dtype=np.float32)
+    result, report = ConservativeStarRenderer.render(data)
+    assert report["visibility"]["candidate_count"] == 0
+    assert report["histogram_balance"]["accepted_strength"] == 0
+    if level == 0:
+        np.testing.assert_array_equal(result, data)
+
+
+def test_flat_peak_is_counted_once() -> None:
+    """Un plateau connexe ne multiplie pas artificiellement les pics candidats."""
+    data = np.zeros((3, 24, 24), dtype=np.float32)
+    data[:, 10:13, 10:13] = 0.1
+    positions = stellar_peak_positions(data)
+    assert len(positions[0]) == 1
+
+
+@pytest.mark.parametrize("strength", [-0.1, 1.1, float("nan"), float("inf")])
+def test_invalid_histogram_strength(strength: float) -> None:
+    """L'égalisation stellaire refuse les forces non finies ou hors [0,1]."""
+    with pytest.raises(ValueError):
+        ConservativeStarRenderer.render(
+            np.full((3, 8, 8), 0.1), histogram_strength=strength,
+        )

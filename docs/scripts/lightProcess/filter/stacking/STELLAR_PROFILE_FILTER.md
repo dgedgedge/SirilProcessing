@@ -130,8 +130,10 @@ dans le rapport.
 références, les mesures par étoile, les seuils par pose, les fractions concordantes,
 les statuts et les motifs. Le champ `stellar_profiles` du rapport général
 `<sortie>.drizzle.json` pointe vers ce fichier et fournit les comptes.
-Les logs INFO indiquent l’avancement, les fichiers rejetés et les retraits
-additionnels de chaque critère.
+Les logs INFO indiquent les retraits additionnels de chaque critère et le
+bilan global. Les fichiers rejetés avec leur mesure, seuil et fraction
+concordante, ainsi que la progression par image, sont disponibles en DEBUG
+avec `--log-level DEBUG`. Le rapport JSON conserve tous ces détails.
 
 Les tests [test_stellar_quality.py](../../../../../tests/test_stellar_quality.py) couvrent
 des profils simples, flous, allongés, dédoublés et une binaire isolée, en

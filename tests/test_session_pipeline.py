@@ -1,16 +1,18 @@
 """Orchestration CLI : calibration par sous-session, stack par session, mosaïque."""
 import importlib.util
 import argparse
+from contextlib import contextmanager, nullcontext
 from collections.abc import Callable
 import sys
 from pathlib import Path
 from types import ModuleType
 from unittest.mock import Mock
+from typing import Iterator
 
 import pytest
 
 from lib.postprocessing import PostProcessingProcessor
-from lib.type_defs import JSONReport
+from lib.type_defs import ConfigValue, JSONReport
 
 PipelineFixture = tuple[
     ModuleType, Callable[..., int], Mock, Mock, dict[Path, list[Path]],
@@ -28,6 +30,7 @@ def pipeline(tmp_path, monkeypatch):
     spec = importlib.util.spec_from_file_location('light_process_cli', Path(__file__).parents[1] / 'bin/lightProcess.py')
     cli = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(cli)
+    monkeypatch.setattr(cli, 'PowerGuard', nullcontext)
     class TestConfig(Config):
         def __init__(self):
             super().__init__(str(tmp_path / 'config.json'))
@@ -172,8 +175,13 @@ def test_dry_run_never_executes_stack_or_mosaic(tmp_path, pipeline):
     mosaic.return_value.post_process.assert_not_called()
 
 
-def test_mosaic_accepts_cached_session_stacks(tmp_path, pipeline, monkeypatch):
+def test_mosaic_accepts_cached_session_stacks(
+    tmp_path: Path, pipeline: PipelineFixture, monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Les stacks repris annoncent la réutilisation sans annoncer les sous-étapes."""
     import lib.drizzle as drizzle
+    caplog.set_level("INFO")
     cli, run, stack, mosaic, _ = pipeline
     roots = [make_session(tmp_path, name, 1)[0] for name in ['north', 'south']]
     expected = []
@@ -190,6 +198,12 @@ def test_mosaic_accepts_cached_session_stacks(tmp_path, pipeline, monkeypatch):
     args = mosaic.return_value.set_from_args.call_args.args[0]
     assert 'args' not in call
     assert [call['input_path'], *args.mosaic_inputs] == expected
+    for root, result in zip(roots, expected):
+        log_path = result.parent / "stacking" / f"{root.name}_stacking.log"
+        log = log_path.read_text(encoding="utf-8")
+        assert f"Début du stacking : {root.name}" in log
+        assert f"Réutilisation du stack existant : {root.name}" in log
+        assert "Stacking — " not in log
 
 
 def test_mosaic_failure_is_reported_as_failure(tmp_path, pipeline):
@@ -422,14 +436,13 @@ def test_postprocess_runs_by_default_without_activation_flag(
 
 def test_lightprocess_executes_common_exports_after_stack(
     tmp_path: Path, pipeline: PipelineFixture, monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Un vrai FITS empilé rejoint la classe commune et ses exports/diagnostics."""
-    from contextlib import nullcontext
     import json
 
     import numpy as np
     from astropy.io import fits
-    import lib.postprocessing as postprocessing
 
     _, run, stack, _, _ = pipeline
     root, _ = make_session(tmp_path, "field", 0)
@@ -442,7 +455,7 @@ def test_lightprocess_executes_common_exports_after_stack(
         return destination
 
     stack.side_effect = stack_rgb
-    monkeypatch.setattr(postprocessing, "PowerGuard", nullcontext)
+    caplog.set_level("INFO")
     assert run([root], "--postprocess", "--disable-photometry", "--disable-autoghs",
                "--disable-denoise", "--disable-deconvolution",
                "--gradient-method", "polynomial", "--gradient-min-order", "1",
@@ -458,3 +471,117 @@ def test_lightprocess_executes_common_exports_after_stack(
     work = directory / "field_combined_postprocess"
     assert (work / "quality_masks.png").is_file()
     assert (work / "00_field_combined_postProcess.log").is_file()
+    log = (work / "00_field_combined_postProcess.log").read_text(encoding="utf-8")
+    assert "Début du post-traitement : field_combined.fits" in log
+    assert "Post-traitement — étape 01 : Correction du gradient" in log
+
+
+@pytest.mark.parametrize("mode", ["stack", "postprocess", "mosaic"])
+def test_lightprocess_owns_one_guard_for_all_processing(
+    tmp_path: Path, pipeline: PipelineFixture, monkeypatch: pytest.MonkeyPatch,
+    mode: str,
+) -> None:
+    """Un seul contexte couvre calibration, stacks et traitements finaux."""
+    import lib.lightprocessor as processing
+
+    cli, run, stack, mosaic, _ = pipeline
+    roots = [make_session(tmp_path, name, 1)[0] for name in ("north", "south")]
+    events: list[str] = []
+
+    @contextmanager
+    def guard() -> Iterator[None]:
+        """Trace l’acquisition et la libération autour de toute la commande."""
+        events.append("enter")
+        try:
+            yield
+        finally:
+            events.append("exit")
+
+    def record(stage: str) -> None:
+        """Refuse une opération exécutée hors de la protection du script."""
+        assert events[0] == "enter" and "exit" not in events
+        events.append(stage)
+
+    def calibrate(
+        self: processing.LightProcessor, params: dict[str, ConfigValue],
+    ) -> bool:
+        """Simule la calibration à l’intérieur du contexte."""
+        record("calibration")
+        return True
+
+    original_stack = stack.side_effect
+
+    def protected_stack(**kwargs: object) -> Path:
+        """Conserve le résultat du double de stacking en vérifiant sa protection."""
+        record("stack")
+        return original_stack(**kwargs)
+
+    def postprocess(
+        self: PostProcessingProcessor, input_path: Path, output_path: Path,
+    ) -> JSONReport:
+        """Fournit un résultat existant sans acquérir un second contexte."""
+        record("postprocess")
+        return {"output_image": str(input_path)}
+
+    def assemble(**kwargs: object) -> JSONReport:
+        """Vérifie la protection pendant l’assemblage final."""
+        record("mosaic")
+        return mosaic.return_value.post_process.return_value
+
+    monkeypatch.setattr(cli, "PowerGuard", guard)
+    monkeypatch.setattr(processing.LightProcessor, "process_session", calibrate)
+    monkeypatch.setattr(PostProcessingProcessor, "post_process", postprocess)
+    stack.side_effect = protected_stack
+    mosaic.return_value.post_process.side_effect = assemble
+    options = [] if mode == "stack" else ["--postprocess"]
+    if mode == "mosaic":
+        options.extend(["--mosaic", "--mosaic-name", "field"])
+    assert run(roots, *options) == 0
+    assert events[0] == "enter" and events[-1] == "exit"
+    assert events.count("enter") == events.count("exit") == 1
+    assert events.count("calibration") == events.count("stack") == 2
+    assert events.count("postprocess") == {"stack": 0, "postprocess": 2, "mosaic": 1}[mode]
+    assert events.count("mosaic") == int(mode == "mosaic")
+
+
+@pytest.mark.parametrize("failure", [RuntimeError("pipeline failed"), KeyboardInterrupt()])
+def test_lightprocess_releases_guard_when_pipeline_raises(
+    tmp_path: Path, pipeline: PipelineFixture, monkeypatch: pytest.MonkeyPatch,
+    failure: RuntimeError | KeyboardInterrupt,
+) -> None:
+    """Les exceptions et interruptions libèrent le contexte détenu par main."""
+    cli, run, _, _, _ = pipeline
+    root, _ = make_session(tmp_path, "field", 0)
+    events: list[str] = []
+
+    @contextmanager
+    def guard() -> Iterator[None]:
+        """Trace la libération même lorsque le parcours est interrompu."""
+        events.append("enter")
+        try:
+            yield
+        finally:
+            events.append("exit")
+
+    def fail(*args: object) -> int:
+        """Interrompt le parcours à l’intérieur de la portée protégée."""
+        assert events == ["enter"]
+        raise failure
+
+    monkeypatch.setattr(cli, "PowerGuard", guard)
+    monkeypatch.setattr(cli, "_process_sessions", fail)
+    with pytest.raises(type(failure)):
+        run([root])
+    assert events == ["enter", "exit"]
+
+
+def test_lightprocess_dry_run_does_not_activate_guard(
+    tmp_path: Path, pipeline: PipelineFixture, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """La simulation ne demande pas de ressources énergétiques au système."""
+    cli, run, _, _, _ = pipeline
+    root, _ = make_session(tmp_path, "field", 0)
+    guard = Mock(side_effect=AssertionError("Dry run must not activate PowerGuard"))
+    monkeypatch.setattr(cli, "PowerGuard", guard)
+    assert run([root], "--dry-run") == 0
+    guard.assert_not_called()

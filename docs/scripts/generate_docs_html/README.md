@@ -8,6 +8,12 @@ maîtresses des scripts et de l’architecture restent leurs points d’entrée.
 MkDocs fournit navigation et recherche, avec le thème Read the Docs en français.
 `mkdocs.yml` configure le thème, le rendu Markdown et l’adresse du site.
 
+La navigation suit un plan numéroté : installation, manuels des scripts,
+architecture, puis maintenance et tests. Chaque rubrique de script regroupe son
+manuel d’utilisation, ses options et ses traitements détaillés. La rubrique
+`nav` de `mkdocs.yml` est commune au menu du site et au sommaire des exports.
+Les paragraphes numérotés des manuels conservent leurs anciennes ancres.
+
 L’accueil propose deux téléchargements :
 
 - `downloads/documentation.html` : toute la documentation dans un seul HTML,
@@ -21,7 +27,16 @@ des sites externes restent externes. Les fichiers non liés, les poids `.onnx`/
 `.pth`, les FITS et les caches ne sont pas embarqués. Le site propose aussi les
 pages HTML individuelles et leurs sources liées.
 
-## Construire localement
+Le PDF et le HTML autonome suivent l’ordre des rubriques et proposent un
+sommaire imbriqué. Les références d’options sont regroupées avec le manuel de
+chaque script, sans répéter leurs tableaux dans plusieurs pages. Les sources
+complémentaires absentes du menu sont
+regroupées dans les annexes des exports. Une cible de navigation absente des
+sources arrête la construction au lieu de produire un lien incomplet.
+
+<a id="construire-localement"></a>
+
+## 1. Construire localement
 
 Depuis la racine du projet :
 
@@ -50,22 +65,17 @@ Sous Linux, des bibliothèques système peuvent être nécessaires ; la commande
 `python -m playwright install --with-deps chromium` les installe avec les droits
 administrateur. Le workflow l’utilise sur son runner GitHub.
 
-| Option du constructeur | Effet |
-|---|---|
-| `--source-root` | Racine du dépôt ; défaut : projet contenant le script |
-| `--output-dir` | Dossier généré ; défaut : `out/` dans ce projet |
-| `--no-pdf` | Construire le site et le HTML autonome sans PDF |
 
-Chromium reste nécessaire au HTML autonome pour rendre les diagrammes.
-Le premier lancement récupère Mermaid 10.9.5 via HTTPS dans
-`tmp/documentation/` ; les suivants réutilisent ce cache. Les caches et `out/`
-sont ignorés par Git. Le dossier de sortie est nettoyé par MkDocs et doit être
-réservé à la génération ; les dossiers des sources et du cache sont refusés.
-Une copie temporaire permet d’ajouter téléchargements et ressources sans modifier
-les guides. Un échec de téléchargement, de navigateur, de rendu ou de construction
-MkDocs bloque la CI ; elle ne publie pas un site privé des exports demandés.
+<a id="options-du-constructeur"></a>
 
-## Publication GitHub Pages
+## 2. Options du constructeur
+
+Consulter la [référence des options de generate_docs_html](OPTIONS.md). Les tableaux et réglages y sont regroupés.
+
+
+<a id="publication-github-pages"></a>
+
+## 3. Publication GitHub Pages
 
 Le workflow **Documentation MkDocs** (`.github/workflows/documentation.yml`)
 construit et teste les trois formats après une modification documentaire,
@@ -91,9 +101,14 @@ GitHub Pages reçoit uniquement `out/`, sans modèles, FITS d’exemple ni cache
 Chromium. Aucun HTML généré n’est commité dans `docs/`, qui conserve les sources
 Markdown. Une construction locale ne publie pas le site distant.
 
-## Classes et vérification
+<a id="classes-et-v-rification"></a>
+<a id="classes-et-vérification"></a>
 
-`DocumentationBuilder` prépare les sources, les exports et MkDocs.
+## 4. Classes et vérification
+
+`DocumentationBuilder` prépare les sources, lit la navigation MkDocs et produit
+les exports et le site. `DocumentationSection` représente les rubriques, pages
+et accès directs à leurs sections.
 `SingleFileLinks` convertit les liens et embarque les ressources autorisées.
 Playwright/Chromium rend Mermaid en SVG et imprime le même document en PDF.
 Le HTML autonome sauvegardé ne dépend d’aucun script ou fichier de style externe.
@@ -102,6 +117,9 @@ Le site utilise une copie locale du script Mermaid pour afficher ses diagrammes.
 `generate_docs_html.py` reste le moteur de rendu partagé des exports et conserve
 son ancien point d’entrée. Ses options `--pdf` et `--pdf-output` utilisent
 WeasyPrint ; elles ne sont pas celles du nouveau constructeur MkDocs.
+Le fichier `all_docs.html` conserve une seule fois le titre principal de chaque
+source, avec son ancre et la mention de provenance. Un titre est ajouté à partir
+du nom du document uniquement si le contenu ne possède pas de titre principal.
 
 ```bash
 .venv/bin/python -m unittest discover -s tests -p 'test_doc*.py'

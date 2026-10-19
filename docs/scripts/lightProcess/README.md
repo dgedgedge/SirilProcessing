@@ -7,35 +7,28 @@
 composée d’une ou plusieurs sous-sessions. Cet ensemble décrit leur utilisation
 et le détail des traitements effectués.
 
-## Utilisation
+<a id="utilisation"></a>
+
+<a id="manuel-d-utilisation"></a>
+<a id="manuel-dutilisation"></a>
+
+## 1. Manuel d’utilisation
 
 - [Guide d’utilisation](GUIDE.md) : commandes, options et vue d’ensemble du parcours.
 - [Sessions et sous-sessions](SESSIONS.md) : organisation des données d’entrée.
 
-## Traitements détaillés
+<a id="options-et-configuration"></a>
 
-Le [parcours de traitement](treatments/README.md) relie les étapes dans leur
-ordre d’exécution :
+## 2. Options et configuration
 
-1. [Découverte, regroupement et calibration](treatments/CALIBRATION.md).
-2. [Filtrage et stacking](filter/stacking/README.md), dont la
-   [sélection des images](filter/stacking/IMAGE_SELECTION.md), les
-   [profils stellaires](filter/stacking/STELLAR_PROFILE_FILTER.md) et le
-   [Drizzle](filter/stacking/DRIZZLE_SPECIFICATION.md).
-3. [Alignement et empilement final](treatments/STACKING.md).
-4. [Sorties, reprise et journaux](treatments/OUTPUTS.md).
-5. [Mosaïque optionnelle](MOSAIC.md).
-6. [Post-traitement optionnel](../postProcess/pipeline.md) : mêmes traitements
-   et exports que `postProcess`, avec `--postprocess`.
+- [Options par étape](OPTIONS.md).
+- [Paramètres Siril partagés](#paramètres-siril-partagés).
+- [Activation du post-traitement commun](../postProcess/pipeline.md#activation-dans-lightprocess).
 
-## Références
+<a id="param-tres-siril-partag-s"></a>
+<a id="paramètres-siril-partagés"></a>
 
-- [Séquences Siril et images associées](reference/SIRIL_SEQUENCE.md).
-- [Répertoires de travail et nettoyage](WORKSPACE.md).
-- [Rôle général des bibliothèques](../../architecture/LIBRARIES.md).
-
-
-### Paramètres Siril partagés
+### 2.1. Paramètres Siril partagés
 
 `lightProcess` et `postProcess` utilisent les mêmes options `-s/--siril-path`,
 `-m/--siril-mode` et le même fichier Config. `--config chemin.json` sélectionne un
@@ -62,3 +55,31 @@ compris les enfants. Voir la [liaison des paramètres](treatments/postprocess/SE
 Le résultat empilé est écrit sous `<cible>_combined.fits`. Les anciens résultats
 `.fit` restent utilisables en reprise ; `--force-stacking` demande de reconstruire
 le résultat avec la nouvelle extension. Voir [les sorties](treatments/OUTPUTS.md).
+
+<a id="traitements-d-taill-s"></a>
+<a id="traitements-détaillés"></a>
+
+## 3. Traitements détaillés
+
+Le [parcours de traitement](treatments/README.md) relie les étapes dans leur
+ordre d’exécution :
+
+1. [Découverte, regroupement et calibration](treatments/CALIBRATION.md).
+2. [Filtrage et stacking](filter/stacking/README.md), dont la
+   [sélection des images](filter/stacking/IMAGE_SELECTION.md), les
+   [profils stellaires](filter/stacking/STELLAR_PROFILE_FILTER.md) et le
+   [Drizzle](filter/stacking/DRIZZLE_SPECIFICATION.md).
+3. [Alignement et empilement final](treatments/STACKING.md).
+4. [Sorties, reprise et journaux](treatments/OUTPUTS.md).
+5. [Mosaïque optionnelle](MOSAIC.md).
+6. [Post-traitement optionnel](../postProcess/pipeline.md) : mêmes traitements
+   et exports que `postProcess`, avec `--postprocess`.
+
+<a id="r-f-rences"></a>
+<a id="références"></a>
+
+## 4. Références
+
+- [Séquences Siril et images associées](reference/SIRIL_SEQUENCE.md).
+- [Répertoires de travail et nettoyage](WORKSPACE.md).
+- [Rôle général des bibliothèques](../../architecture/LIBRARIES.md).

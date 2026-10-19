@@ -136,6 +136,7 @@ def test_cli_copies_primary_jpeg_without_running_external_engines(
     spec = importlib.util.spec_from_file_location("postprocess_export_cli", entry)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    monkeypatch.setattr(module, "PowerGuard", nullcontext)
 
     def render(
         self: _PostProcessorSequence, input_path: Path, output_path: Path,
@@ -150,7 +151,6 @@ def test_cli_copies_primary_jpeg_without_running_external_engines(
         return result
 
     monkeypatch.setattr(_PostProcessorSequence, "post_process", render)
-    monkeypatch.setattr(postprocessing, "PowerGuard", nullcontext)
     monkeypatch.setattr(postprocessing.QualityMaskPreview, "ensure_for_run", lambda *args: None)
     monkeypatch.setattr(postprocessing.QualityMaskPreview, "write_gradient_points", lambda *args: None)
     monkeypatch.setattr(sys, "argv", [str(entry), str(source), str(tmp_path / "out"),

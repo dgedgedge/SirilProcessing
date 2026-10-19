@@ -7,7 +7,10 @@ Le wrapper `bin/lightProcess.sh` active le venv puis appelle `bin/lightProcess.p
 Le script calibre les groupes de lights de chaque sous-session et construit
 un stack par session fournie, quel que soit son nombre de sous-sessions.
 
-## Commandes de démarrage
+<a id="commandes-de-d-marrage"></a>
+<a id="commandes-de-démarrage"></a>
+
+## 1. Commandes de démarrage
 
 ```bash
 # Calibration et stacking d’une session
@@ -27,40 +30,28 @@ Chaque chemin fourni définit une session contenant une ou plusieurs sous-sessio
 d’acquisition (`light/`, éventuellement `flat/`), ou directement ces dossiers.
 Voir [les structures d’entrée](SESSIONS.md).
 
-## Options par étape
 
-| Étape | Principales options |
-|---|---|
-| Chemins | `--dark-lib`, `--output`, `--work-dir` |
-| Calibration | `--no-dark`, `--temperature-precision`, `--force` |
-| Exécution | `--siril-path`, `--siril-mode`, `--dry-run`, `--log-level` |
-| Alignement | `--align-transform`, `--stack-platesolve` |
-| Sélection | `--fwhm-filter`, `--max-fwhm`, `--fwhm-reject-percent`, `--roundness-filter`, `--nbstars-filter` |
-| Profils stellaires | `--stellar-profile-filter`, `--no-stellar-profile-filter`, `--stellar-profile-sigma` |
-| Pondération | `--no-fwhm-weighted`, `--no-roundness-weighted` et maxima de répétitions associés |
-| Empilement | `--stack-method`, `--rejection-method`, `--rejection-param1`, `--rejection-param2` |
-| Drizzle | `--drizzle`, `--drizzle-scale`, `--drizzle-pixfrac`, `--drizzle-kernel` |
-| Relance et conservation | `--force-stacking`, `--keep-intermediate`, `--purge-target` |
-| Mosaïque | `--mosaic`, `--mosaic-name` |
-| Post-traitement | `--postprocess`, `--no-postprocess`, mêmes options que `postProcess` |
+<a id="options-par-tape"></a>
+<a id="options-par-étape"></a>
 
-`--help` expose toutes les options. Les réglages peuvent provenir du fichier
-persistant de configuration ; `--save-config` enregistre les arguments.
+## 2. Options par étape
 
-Le [post-traitement commun](../postProcess/pipeline.md) est activé par
-défaut dans lightProcess : les commandes habituelles l’enchaînent sans option.
-`--no-postprocess` le désactive. Il traite chaque stack final, ou uniquement
-la mosaïque si `--mosaic` est demandé. Ses paramètres suivent les mêmes défauts
-et la même configuration que le script autonome. `--dry-run` l’annonce sans
-l’exécuter ; une erreur de rendu entraîne un code de retour 1.
+Consulter la [référence des options de lightProcess](OPTIONS.md). Les tableaux et réglages y sont regroupés.
 
-## Schéma du processus
+
+<a id="sch-ma-du-processus"></a>
+<a id="schéma-du-processus"></a>
+
+## 3. Schéma du processus
 
 Le [parcours détaillé](treatments/README.md) décrit l’ordre des opérations et
 les références pour chaque traitement. Il détaille la calibration par sous-session, le stacking par session et
 la mosaïque optionnelle des résultats de stacking.
 
-## Références de traitement
+<a id="r-f-rences-de-traitement"></a>
+<a id="références-de-traitement"></a>
+
+## 4. Références de traitement
 
 - [Calibration](treatments/CALIBRATION.md) : correspondance des masters, sélection des flats et conservation du CFA.
 - [Filtrage et stacking](filter/stacking/README.md) : critères, profils stellaires et Drizzle.

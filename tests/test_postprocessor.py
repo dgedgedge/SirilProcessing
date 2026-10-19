@@ -136,11 +136,20 @@ def test_deconvolution_no_safe_improvement_continues_sequence(tmp_path: Path) ->
     assert "denoise" in results
 
 
+@pytest.mark.parametrize("options, expected", [
+    ((), [(1, "gradient"), (2, "photometry"), (3, "restoration"), (5, "autoghs")]),
+    (("--disable-photometry",), [(1, "gradient"), (3, "restoration"), (5, "autoghs")]),
+    (("--no-restoration-compare-chains",), [
+        (1, "gradient"), (2, "photometry"), (3, "deconvolution"),
+        (4, "denoise"), (5, "autoghs"),
+    ]),
+])
 def test_standard_step_numbers_survive_restoration_merge(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    options: tuple[str, ...], expected: list[tuple[int, str]],
 ) -> None:
-    """AutoGHS reste l'étape 05 après la restauration groupée 03/04."""
-    paths = []
+    """Les rapports et bandeaux suivent les étapes actives, dont AutoGHS en 05."""
+    paths: list[str] = []
 
     def record(
         self: processor, input_path: Path, output_path: Path,
@@ -151,10 +160,29 @@ def test_standard_step_numbers_survive_restoration_merge(
         return {"output_image": str(input_path)}
 
     for provider in (GradientExtractor, PhotometricColorCalibrator,
-                     RestorationChainProcessor, AutoGHSFinalRenderer):
+                     RestorationChainProcessor, DeconvolutionProcessor,
+                     NoiseReductionProcessor, AutoGHSFinalRenderer):
         monkeypatch.setattr(provider, "post_process", record)
     source = tmp_path / "source.fits"
     source.write_bytes(b"source")
-    _PostProcessorSequence().post_process(source, tmp_path / "report.json", _args())
-    assert paths == ["01_gradient.json", "02_photometry.json",
-                     "03_restoration.json", "05_autoghs.json"]
+    with caplog.at_level("INFO"):
+        _PostProcessorSequence().post_process(
+            source, tmp_path / "report.json", _args(*options),
+        )
+    assert paths == [f"{number:02d}_{prefix}.json" for number, prefix in expected]
+    messages = [record.getMessage() for record in caplog.records]
+    titles = [message for message in messages if message.startswith("Post-traitement — étape")]
+    labels = {
+        "gradient": "Correction du gradient",
+        "photometry": "Étalonnage photométrique des couleurs",
+        "restoration": "Comparaison des chaînes de restauration",
+        "deconvolution": "Déconvolution", "denoise": "Débruitage",
+        "autoghs": "Rendu final AutoGHS et étoiles",
+    }
+    assert titles == [
+        f"Post-traitement — étape {number:02d} : {labels[prefix]}"
+        for number, prefix in expected
+    ]
+    for title in titles:
+        position = messages.index(title)
+        assert messages[position - 1] == messages[position + 1] == "=" * 60

@@ -68,6 +68,11 @@ mode simulation dans le code actuel.
 
 ## Lecture des journaux et rapports
 
+La calibration utilise des titres INFO encadrés par `===` pour la création du
+master flat, la calibration des lights ou la reprise de lights déjà calibrées.
+Les [exemples de journal](CALIBRATION.md#étapes-dans-le-journal) précisent les
+masters utilisés. Les métadonnées et préparations techniques sont en DEBUG.
+
 Les statistiques de sous-session distinguent les métadonnées invalides, les types
 non light, l’absence de dark et les erreurs de traitement. Le stack compte
 ensuite les incompatibilités FITS et les rejets d’alignement ou de qualité.

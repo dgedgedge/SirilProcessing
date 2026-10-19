@@ -32,15 +32,14 @@ configuration sauvegardée). ONNX Runtime s’installe avec
 `bin/postProcess.sh --install-graxpert`. `--enable-graxpert` force l’activation et
 l’acquisition des poids manquants ; voir [GraXpert et ses modèles](graxpert.md).
 
-## Choix du calcul CPU/GPU
+<a id="manuel-d-utilisation"></a>
+<a id="manuel-dutilisation"></a>
 
-`--compute-backend auto|cpu|cuda` s'applique aux moteurs de postProcess et se
-sauvegarde avec `-S`. Le défaut `auto` choisit l'accélérateur disponible pour
-chaque moteur, CPU sinon, avant calcul. Les options propres aux moteurs restent
-des surcharges explicites, y compris dans les anciens JSON. Voir la
-[politique commune, ses priorités et ses limites](compute-backend.md).
+## 1. Manuel d’utilisation
 
-## Lancer un traitement
+<a id="lancer-un-traitement"></a>
+
+### 1.1. Lancer un traitement
 
 Le script demande automatiquement le profil performance et inhibe la veille
 pendant le calcul. Cette [protection énergétique](power-guard.md) est facultative :
@@ -85,7 +84,9 @@ identifiée par `BAYERPAT`. Pour une image monochrome, désactiver la photométr
 La recherche d’objet au CDS et les catalogues distants nécessitent un accès réseau.
 Voir [l’installation](../../INSTALLATION.md) pour l’environnement du projet.
 
-## Ordre et circulation des images
+<a id="ordre-et-circulation-des-images"></a>
+
+### 1.2. Ordre et circulation des images
 
 ```mermaid
 flowchart TD
@@ -135,7 +136,90 @@ leur ordre reste fixe. La comparaison des chaînes, active par défaut, remplace
 par `03_restoration`, en respectant leurs activations ; voir les
 [chaînes complètes](quality.md#chaînes-complètes).
 
-## Moteur Cosmic Clarity optionnel
+<a id="utiliser-seulement-certaines-tapes"></a>
+<a id="utiliser-seulement-certaines-étapes"></a>
+
+### 1.3. Utiliser seulement certaines étapes
+
+```bash
+# Image monochrome : pas d’étalonnage photométrique RGB.
+bin/postProcess.sh image_mono.fit rapports/mono.json --disable-photometry --disable-autoghs
+
+# Photométrie seule, avec une focale et une taille de pixel données en exemple.
+bin/postProcess.sh image_RGB.fit rapports/couleurs.json \
+  --disable-gradient --enable-photometry --disable-denoise --disable-deconvolution --disable-autoghs \
+  --photometry-object M20 --photometry-focal 750 --photometry-pixelsize 3.76
+
+# Débruitage seul, sans modifier les réglages mémorisés.
+bin/postProcess.sh image.fit rapports/bruit.json \
+  --disable-gradient --disable-photometry --enable-denoise --disable-deconvolution --disable-autoghs
+
+# Déconvolution seule avec PSF stellaire et repli adaptatif autorisé.
+bin/postProcess.sh image.fit rapports/details.json \
+  --disable-gradient --disable-photometry --disable-denoise --enable-deconvolution --disable-autoghs \
+  --deconvolution-psf-method stars --deconvolution-adaptive
+```
+
+Pour l’utilisation Python et l’ajout d’un traitement, consulter
+[le contrat de la séquence](../lightProcess/treatments/postprocess/SEQUENCE_PROCESSOR.md).
+
+Le lanceur utilise Python et pip du système pour créer le venv sans pip et
+mettre à jour ses dépendances avant chaque exécution. Il lance ensuite le
+Python du venv. La sélection de l’environnement, les prérequis et l’exécution
+sans mise à jour sont décrits dans [Installation](../../INSTALLATION.md).
+
+Les classes des traitements sont enregistrées avant le parsing. Les valeurs
+résolues sont ensuite liées aux classes avant la création des instances, y
+compris les enfants. Voir la [liaison des paramètres](../lightProcess/treatments/postprocess/SEQUENCE_PROCESSOR.md#résolution-et-liaison-hiérarchique-des-paramètres).
+
+Les poids Cosmic Clarity manquants ou corrompus sont téléchargés avant leur
+chargement dans `tmp/models/cosmicclarity/` par défaut, ou dans le dossier
+`--cosmic-model-dir` résolu. Voir [installation et téléchargement](cosmic-clarity.md#installation-et-lancement).
+
+En mode `--quality-mode legacy`, pour la netteté Cosmic Clarity, les grands catalogues sont contrôlés selon la
+[représentativité spatiale et en flux](cosmic-clarity.md#matching-representation),
+avec une alerte de fraction au lieu du rejet automatique à 70 %.
+
+Les journaux détaillent les mesures, seuils et verdicts de chaque contrôle ; voir
+[la lecture des motifs](cosmic-clarity.md#lecture-des-motifs-dans-le-journal).
+
+La [mesure aux positions initiales](reference-stars.md) est activée par défaut
+pour comparer les candidats Siril, Cosmic Clarity et GraXpert. Les moteurs Siril
+et Clarity acceptent `--no-deconvolution-reference-measurements` pour rétablir
+les catalogues indépendants ; GraXpert et les contrôles finaux des chaînes
+conservent les mesures aux positions initiales. Le diagnostic conserve le SNR
+et les motifs d’échec individuels.
+
+La [structure des traitements de restauration](restoration.md) distingue les
+orchestrateurs des moteurs Siril, Cosmic Clarity et GraXpert, tous de type `processor`.
+
+Les moteurs Siril organisent leur calcul en [phases d’exécution indépendantes](restoration.md#siril-execution-phases), avec un état propre à chaque appel. L’élargissement de la PSF ne modifie pas le seuil d’appariement configuré.
+
+Le [rendu final AutoGHS](auto-ghs.md) termine cette séquence par défaut.
+Voir aussi son [moteur et ses histogrammes](auto-ghs-algorithm.md) et le
+[traitement séparé des étoiles](star-rendering.md). Une panne de cette phase
+est fatale, sans reprise automatique ni substitution de rendu.
+
+<a id="options-et-configuration"></a>
+<a id="configuration-et-m-morisation"></a>
+<a id="configuration-et-mémorisation"></a>
+<a id="choix-du-calcul-cpu-gpu"></a>
+<a id="choix-du-calcul-cpugpu"></a>
+<a id="options-des-traitements"></a>
+
+## 2. Options et configuration
+
+Consulter la [référence des options de postProcess](OPTIONS.md). Les tableaux et réglages y sont regroupés.
+
+
+<a id="traitements-d-taill-s"></a>
+<a id="traitements-détaillés"></a>
+
+## 3. Traitements détaillés
+
+<a id="moteur-cosmic-clarity-optionnel"></a>
+
+### 3.1. Moteur Cosmic Clarity optionnel
 
 Cosmic Clarity et Siril sont activés par défaut. Chaque étape de restauration
 évalue séquentiellement ses moteurs actifs sur la même entrée : deux moteurs
@@ -175,7 +259,9 @@ poids sont présents ou que son activation est forcée.
 Voir [Cosmic Clarity](cosmic-clarity.md) pour les classes, modèles, paramètres,
 ressources, différences avec l'amont et limites de validation.
 
-## 01 — Correction du gradient
+<a id="01-correction-du-gradient"></a>
+
+### 3.2. Correction du gradient (étape 01)
 
 Le gradient est une variation lente du fond de ciel. Le traitement estime ce
 fond puis soustrait ses variations **en conservant son niveau au centre de
@@ -218,7 +304,10 @@ bin/postProcess.sh image.fit rapports/gradient.json \
 
 Ce traitement utilise Python et ne lance pas Siril.
 
-## 02 — Astrométrie et étalonnage spectrophotométrique
+<a id="02-astrom-trie-et-talonnage-spectrophotom-trique"></a>
+<a id="02-astrométrie-et-étalonnage-spectrophotométrique"></a>
+
+### 3.3. Astrométrie et étalonnage spectrophotométrique (étape 02)
 
 Sur une image RGB linéaire, le traitement appelle successivement `platesolve`
 puis `spcc` dans Siril, avec **Gaia par défaut pour les deux commandes**.
@@ -263,7 +352,10 @@ si un WCS existait, si une résolution était demandée et si un retournement é
 autorisé. `--photometry-noflip` empêche le retournement lors de la résolution ;
 il ne tourne pas l’image vers le nord. SPCC ne réoriente pas l’image.
 
-## 03 — Déconvolution contrôlée
+<a id="03-d-convolution-contr-l-e"></a>
+<a id="03-déconvolution-contrôlée"></a>
+
+### 3.4. Déconvolution contrôlée (étape 03 en mode séparé)
 
 La déconvolution cherche à réduire l’étalement des détails. Elle utilise
 Richardson–Lucy par descente de gradient avec régularisation TV, sur une copie
@@ -289,7 +381,7 @@ mais n’interdit pas à lui seul une amélioration stellaire en déconvolution.
 Des anneaux impossibles à mesurer rejettent le candidat. Les nouveaux contrôles
 de flux sont diagnostiques, sauf activation de `--quality-enforce-diffuse`.
 
-### Détail du candidat Cosmic Clarity (mode comparatif)
+#### Détail du candidat Cosmic Clarity (mode comparatif)
 
 Les modes suivent ceux de l’auteur : luminance par défaut pour la netteté et
 le débruitage, avec options R/V/B séparés et débruitage de chrominance.
@@ -372,7 +464,10 @@ appliquée. Les essais et diagnostics sont conservés ; les contrôles quantitat
 restent à compléter par l’inspection des images, notamment des étoiles brillantes
 et des nébulosités.
 
-## 04 — Réduction du bruit
+<a id="04-r-duction-du-bruit"></a>
+<a id="04-réduction-du-bruit"></a>
+
+### 3.5. Réduction du bruit (étape 04 en mode séparé)
 
 Le traitement utilise la commande Siril `denoise -vst`, avec transformation
 stabilisatrice de variance Anscombe, en flottant 32 bits. Il compare les
@@ -400,7 +495,7 @@ en plus le gain utile configuré, 5 % par défaut, avec sa significativité.
 Les contrôles de flux restent en observation sauf `--quality-enforce-diffuse`.
 Les anneaux non mesurables rejettent également le candidat.
 
-### Comparaison des candidats de débruitage
+#### Comparaison des candidats de débruitage
 
 En mode comparatif, l’étape calcule aussi un candidat neuronal de débruitage
 (`--cosmic-denoise-amount`, modèle AI3.6), puis applique les mêmes mesures
@@ -435,52 +530,25 @@ renvoie l’image précédente dans `output_image`. Les candidats et diagnostics
 restent disponibles dans les dossiers des moteurs. En mode fiable, un échec
 technique Siril est audité et écarte ce candidat ; les autres moteurs continuent.
 
-## Configuration et mémorisation
+<a id="restauration-et-autoghs"></a>
 
-Au démarrage, `Config` interroge les classes de traitement, charge leurs options
-et résout les valeurs selon la priorité **ligne de commande → fichier JSON →
-défauts locaux des classes**. Les défauts des tableaux ci-dessus peuvent donc
-être remplacés par une configuration sauvegardée.
+### 3.6. Restauration et AutoGHS
 
-| Option commune | Rôle |
-|---|---|
-| `--config FICHIER` | Fichier partagé ; défaut `~/.siril_darklib_config.json` |
-| `-S`, `--save-config` | Mémoriser les paramètres rémanents |
-| `-m`, `--siril-mode` | `flatpak` par défaut, ou `native`, `appimage` |
-| `-s`, `--siril-path` | `siril` par défaut ; chemin de l’exécutable en mode native/appimage |
-| `-l`, `--log-level` | `INFO` par défaut ; aussi `DEBUG`, `WARNING`, `ERROR`, `CRITICAL` |
+Le mode par défaut compare les [chaînes complètes de restauration](restoration.md) avant le [rendu final AutoGHS](auto-ghs.md). Les [contrôles de qualité](quality.md) et les [exports](render-exports.md) possèdent leurs pages de référence.
 
-`-S` mémorise les paramètres Siril, les activations/désactivations et les réglages
-rémanents des **cinq traitements**, y compris ceux désactivés. Les clés déjà
-présentes concernant d’autres traitements sont conservées. Sans `-S`, aucune
-écriture du fichier de configuration n’est effectuée.
+<a id="r-sultats-et-journaux"></a>
+<a id="résultats-et-journaux"></a>
 
-Restent propres à l’exécution : les chemins d’entrée et de rapport, le niveau
-de journalisation, `--gradient-output`, `--photometry-object`,
-`--photometry-coordinates`, `--photometry-force`, `--photometry-output` et
-`--deconvolution-output`. Ces paramètres ne sont pas mémorisés par `-S`.
-Les anciens noms `--photometry-siril-path` et `--photometry-siril-mode` sont des
-alias des réglages Siril communs.
+## 4. Résultats et journaux
 
-```bash
-# Mémoriser les réglages, puis traiter l’image.
-bin/postProcess.sh image_RGB.fit rapports/resultat.json \
-  --config config/postprocess.json -m native -s siril-cli \
-  --photometry-object M20 --denoise-modulation 0.4 -S
+<a id="rapports-images-et-journaux"></a>
 
-# Réutiliser ces réglages sur une autre image ; le nom d’objet est fourni à nouveau.
-bin/postProcess.sh autre_image_RGB.fit rapports/autre.json \
-  --config config/postprocess.json --photometry-object M31
-```
+### 4.1. Rapports, images et journaux
 
-La sauvegarde intervient avant les traitements, après vérification de la présence
-de l’image d’entrée. Les réglages peuvent donc être mémorisés même si une étape
-échoue ensuite. Un échec de sauvegarde arrête le programme.
-Les réglages de qualité et des chaînes sont également rémanents. Pour GraXpert,
-`enable_graxpert: null` conserve l’activation automatique ; `false` reste une
-désactivation explicite, même avec des poids présents.
-
-## Rapports, images et journaux
+En INFO, le début du post-traitement et chacune de ses étapes actives portent
+un titre entre deux lignes de `=`. Ces [bandeaux de progression](pipeline.md#bandeaux-du-journal)
+apparaissent aussi lors de l’enchaînement depuis lightProcess, dans la console
+et le journal par image.
 
 Pour `bin/postProcess.sh image_RGB.fit rapports/`, avec toutes les
 étapes actives et acceptées, en mode fiable et avec les poids GraXpert présents :
@@ -564,68 +632,9 @@ vérifier le code de sortie et les journaux. Le programme retourne `0` en cas de
 succès, `1` pour une erreur de traitement et `130` pour une interruption clavier ;
 argparse retourne `2` pour une ligne de commande invalide.
 
-## Utiliser seulement certaines étapes
+<a id="ordre-des-produits-autoghs"></a>
 
-```bash
-# Image monochrome : pas d’étalonnage photométrique RGB.
-bin/postProcess.sh image_mono.fit rapports/mono.json --disable-photometry --disable-autoghs
-
-# Photométrie seule, avec une focale et une taille de pixel données en exemple.
-bin/postProcess.sh image_RGB.fit rapports/couleurs.json \
-  --disable-gradient --enable-photometry --disable-denoise --disable-deconvolution --disable-autoghs \
-  --photometry-object M20 --photometry-focal 750 --photometry-pixelsize 3.76
-
-# Débruitage seul, sans modifier les réglages mémorisés.
-bin/postProcess.sh image.fit rapports/bruit.json \
-  --disable-gradient --disable-photometry --enable-denoise --disable-deconvolution --disable-autoghs
-
-# Déconvolution seule avec PSF stellaire et repli adaptatif autorisé.
-bin/postProcess.sh image.fit rapports/details.json \
-  --disable-gradient --disable-photometry --disable-denoise --enable-deconvolution --disable-autoghs \
-  --deconvolution-psf-method stars --deconvolution-adaptive
-```
-
-Pour l’utilisation Python et l’ajout d’un traitement, consulter
-[le contrat de la séquence](../lightProcess/treatments/postprocess/SEQUENCE_PROCESSOR.md).
-
-Le lanceur utilise Python et pip du système pour créer le venv sans pip et
-mettre à jour ses dépendances avant chaque exécution. Il lance ensuite le
-Python du venv. La sélection de l’environnement, les prérequis et l’exécution
-sans mise à jour sont décrits dans [Installation](../../INSTALLATION.md).
-
-Les classes des traitements sont enregistrées avant le parsing. Les valeurs
-résolues sont ensuite liées aux classes avant la création des instances, y
-compris les enfants. Voir la [liaison des paramètres](../lightProcess/treatments/postprocess/SEQUENCE_PROCESSOR.md#résolution-et-liaison-hiérarchique-des-paramètres).
-
-Les poids Cosmic Clarity manquants ou corrompus sont téléchargés avant leur
-chargement dans `tmp/models/cosmicclarity/` par défaut, ou dans le dossier
-`--cosmic-model-dir` résolu. Voir [installation et téléchargement](cosmic-clarity.md#installation-et-lancement).
-
-En mode `--quality-mode legacy`, pour la netteté Cosmic Clarity, les grands catalogues sont contrôlés selon la
-[représentativité spatiale et en flux](cosmic-clarity.md#matching-representation),
-avec une alerte de fraction au lieu du rejet automatique à 70 %.
-
-Les journaux détaillent les mesures, seuils et verdicts de chaque contrôle ; voir
-[la lecture des motifs](cosmic-clarity.md#lecture-des-motifs-dans-le-journal).
-
-La [mesure aux positions initiales](reference-stars.md) est activée par défaut
-pour comparer les candidats Siril, Cosmic Clarity et GraXpert. Les moteurs Siril
-et Clarity acceptent `--no-deconvolution-reference-measurements` pour rétablir
-les catalogues indépendants ; GraXpert et les contrôles finaux des chaînes
-conservent les mesures aux positions initiales. Le diagnostic conserve le SNR
-et les motifs d’échec individuels.
-
-La [structure des traitements de restauration](restoration.md) distingue les
-orchestrateurs des moteurs Siril, Cosmic Clarity et GraXpert, tous de type `processor`.
-
-Les moteurs Siril organisent leur calcul en [phases d’exécution indépendantes](restoration.md#siril-execution-phases), avec un état propre à chaque appel. L’élargissement de la PSF ne modifie pas le seuil d’appariement configuré.
-
-Le [rendu final AutoGHS](auto-ghs.md) termine cette séquence par défaut.
-Voir aussi son [moteur et ses histogrammes](auto-ghs-algorithm.md) et le
-[traitement séparé des étoiles](star-rendering.md). Une panne de cette phase
-est fatale, sans reprise automatique ni substitution de rendu.
-
-### Ordre des produits AutoGHS
+### 4.2. Ordre des produits AutoGHS
 
 AutoGHS conserve le numéro `05`, y compris lorsque `03_restoration` regroupe les
 étapes 03/04. Ses produits sont écrits dans `05_autoghs_work/`, avec des

@@ -60,8 +60,10 @@ stack pp_<flats> median -norm=mul -out=<master_flat>
 ```
 
 Avec `--no-dark`, la commande `calibrate` des flats est omise et `stack` utilise
-la séquence convertie directement. Un master flat existant peut être réutilisé
-si le retraitement n’est pas forcé.
+la séquence convertie directement. Si les lights calibrées du groupe sont
+réutilisables, cette étape n’est pas exécutée. Lorsqu’une nouvelle calibration
+est nécessaire, le master flat est recréé à partir des flats sélectionnés ; sa
+seule présence sur disque ne déclenche pas une réutilisation indépendante.
 
 ## Calibration des lights
 
@@ -91,3 +93,29 @@ restent utilisables après nettoyage des liens de travail.
 Le groupe produit des images calibrées, sans alignement ni empilement
 intermédiaire. Leur sélection pour le stack est décrite dans
 [la phase suivante](STACKING.md).
+
+## Étapes dans le journal
+
+Chaque groupe nécessitant un calcul annonce en INFO, dans cet ordre :
+
+```text
+=== Création du master flat : 100 flats — groupe <groupe> ===
+Master dark des flats : <chemin>
+Master flat créé : <chemin>
+=== Calibration des lights avec master dark + master flat : 61 images — groupe <groupe> ===
+Master dark des lights : <chemin>
+Master flat des lights : <chemin>
+Calibration terminée : 61 FITS calibrés dans <dossier>
+```
+
+Le titre de calibration nomme uniquement les masters effectivement utilisés.
+Sans flat compatible, le journal l’indique et n’annonce pas de création de
+master flat. Une reprise affiche `=== Réutilisation des lights déjà calibrées :
+groupe <groupe> ===`, sans annoncer de nouveau traitement des flats ou lights.
+En simulation, les titres sont précédés de `[DRY-RUN]`.
+
+Les caractéristiques caméra, température, exposition et gain, les répertoires
+d’entrée, la préparation des séquences et les détails de leur export sont
+disponibles avec `--log-level DEBUG`. Les paramètres d’empilement ne sont pas
+affichés comme paramètres de calibration : l’empilement intervient ensuite.
+Voir [les journaux et rapports](OUTPUTS.md#lecture-des-journaux-et-rapports).
