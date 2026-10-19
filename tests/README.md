@@ -56,7 +56,7 @@ Pour une exécution simple sans ce contrôle supplémentaire :
 | Qualité astrophotographique, chaînes et GraXpert | `test_restoration_quality.py`, `test_restoration_chains.py`, `test_restoration_summary.py`, `test_graxpert.py`, `test_restoration.py` |
 | Mosaïque : noms, entrées, préparation et script généré | `test_mosaic.py`, `test_mosaic_validation.py`, `test_integrated_script.py`, `test_simplified_mosaic.py` |
 | Configuration, lancement et journaux Siril | `test_siril_validation.py` |
-| Génération et navigation HTML | `test_docs_html.py` |
+| Génération et navigation HTML, titres uniques et ancres du monofichier | `test_docs_html.py` |
 | Synthèse de non-régression | `test_regression_summary.py` |
 
 ## Isolation et automatisation

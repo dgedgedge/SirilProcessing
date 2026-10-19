@@ -1,5 +1,6 @@
 """Vérifications HTML exécutables sans les dépendances astronomiques."""
 import importlib.util
+from html.parser import HTMLParser
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -13,7 +14,67 @@ generator = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(generator)
 
 
+class HeadingParser(HTMLParser):
+    """Collecte les titres h1 et leurs ancres pour vérifier les exports réels."""
+
+    def __init__(self) -> None:
+        """Initialise la liste des attributs des titres rencontrés."""
+        super().__init__()
+        self.headings: list[dict[str, str | None]] = []
+
+    def handle_starttag(
+        self, tag: str, attrs: list[tuple[str, str | None]],
+    ) -> None:
+        """Collecte uniquement les vraies balises de titre principal."""
+        if tag == 'h1':
+            self.headings.append(dict(attrs))
+
+
 class DocumentationHTMLTests(unittest.TestCase):
+    def test_single_page_keeps_original_titles_and_anchors_once(self) -> None:
+        """Le monofichier garde un seul h1 par document avec les deux moteurs."""
+        for markdown_module in (generator.markdown_lib, None):
+            with self.subTest(markdown=markdown_module), TemporaryDirectory() as directory:
+                with patch.object(generator, 'markdown_lib', markdown_module):
+                    output = self.build(Path(directory), {
+                        'README.md': '# Projet\n',
+                        '.github/copilot-instructions.md': (
+                            '# Instructions de travail — SirilProcessing\n\n'
+                            '## Consignes\n\nUn paragraphe.\n'
+                        ),
+                    })
+                single = (output / 'all_docs.html').read_text()
+                headings = HeadingParser()
+                headings.feed(single)
+                self.assertEqual(len(headings.headings), 3)  # titre global + deux sources
+                self.assertEqual(
+                    sum(item.get('id') == 'instructions-de-travail-sirilprocessing'
+                        for item in headings.headings), 1,
+                )
+                self.assertIn('Source: .github/copilot-instructions.md', single)
+                self.assertIn('Un paragraphe.', single)
+                individual = HeadingParser()
+                individual.feed((output / '.github/copilot-instructions.html').read_text())
+                self.assertEqual(len(individual.headings), 1)
+
+    def test_single_page_adds_fallback_only_without_real_h1(self) -> None:
+        """Les h2, commentaires et faux titres de code ne remplacent pas le h1."""
+        for body in (
+            '<p>Sans titre</p>',
+            '<h2 id="section">Section</h2>',
+            '<!-- <h1>Commentaire</h1> --><p>Texte</p>',
+            '<pre><code>&lt;h1&gt;Exemple&lt;/h1&gt;</code></pre>',
+        ):
+            with self.subTest(body=body):
+                page = generator.build_single_page(
+                    'Documentation', [(Path('guide.md'), 'Guide <test>', body)],
+                )
+                headings = HeadingParser()
+                headings.feed(page)
+                self.assertEqual(len(headings.headings), 2)
+                self.assertIn('<h1>Guide &lt;test&gt;</h1>', page)
+                self.assertIn(body, page)
+
     def build(self, root, pages):
         source = root / 'source'
         for relative, content in pages.items():

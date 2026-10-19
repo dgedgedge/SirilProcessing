@@ -117,6 +117,9 @@ Le site utilise une copie locale du script Mermaid pour afficher ses diagrammes.
 `generate_docs_html.py` reste le moteur de rendu partagé des exports et conserve
 son ancien point d’entrée. Ses options `--pdf` et `--pdf-output` utilisent
 WeasyPrint ; elles ne sont pas celles du nouveau constructeur MkDocs.
+Le fichier `all_docs.html` conserve une seule fois le titre principal de chaque
+source, avec son ancre et la mention de provenance. Un titre est ajouté à partir
+du nom du document uniquement si le contenu ne possède pas de titre principal.
 
 ```bash
 .venv/bin/python -m unittest discover -s tests -p 'test_doc*.py'
