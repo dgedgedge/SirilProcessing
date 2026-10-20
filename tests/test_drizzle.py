@@ -356,3 +356,18 @@ def test_memory_budget_fallback(tmp_path, monkeypatch):
     assert result['available_memory_bytes']==40960
     assert result['free_swap_bytes'] is None
     assert result['memory_available_source'].startswith('sysconf:')
+
+
+def test_memory_budget_macos_vm_stat(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from lib.drizzle import memory_resources
+    def no_sysconf(key):
+        raise ValueError('unrecognized configuration name')
+    vm_stat = ('Mach Virtual Memory Statistics: (page size of 16384 bytes)\n'
+               'Pages free: 10.\nPages inactive: 5.\nPages speculative: 1.\n')
+    monkeypatch.setattr('lib.drizzle.os.sysconf', no_sysconf)
+    monkeypatch.setattr('lib.drizzle.sys.platform', 'darwin')
+    monkeypatch.setattr('lib.drizzle.subprocess.run', lambda *a, **k: SimpleNamespace(stdout=vm_stat))
+    result = memory_resources(tmp_path / 'missing')
+    assert result['available_memory_bytes'] == 16 * 16384
+    assert result['memory_available_source'].startswith('vm_stat')
