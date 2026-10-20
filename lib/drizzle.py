@@ -7,6 +7,8 @@ import logging
 import os
 import re
 import shutil
+import subprocess
+import sys
 from collections.abc import Sequence
 from datetime import datetime, timezone
 from pathlib import Path
@@ -29,6 +31,48 @@ from lib.type_defs import ConfigMap, JSONReport
 QUALITY_PIPELINE_VERSION = 13
 
 
+def _fallback_available_memory() -> tuple[int, str]:
+    """Estimate available RAM where /proc/meminfo is absent (macOS, Windows)."""
+    try:
+        pages = os.sysconf("SC_AVPHYS_PAGES") * os.sysconf("SC_PAGE_SIZE")
+        return pages, "sysconf:SC_AVPHYS_PAGES (RAM libre, repli conservateur)"
+    except (AttributeError, ValueError, OSError):
+        pass
+    if sys.platform == "darwin":
+        try:
+            output = subprocess.run(
+                ["vm_stat"], capture_output=True, text=True, check=True
+            ).stdout
+            size = int(re.search(r"page size of (\d+) bytes", output).group(1))
+            pages = sum(
+                int(re.search(rf"Pages {name}:\s+(\d+)", output).group(1))
+                for name in ("free", "inactive", "speculative")
+            )
+            return pages * size, "vm_stat:free+inactive+speculative"
+        except (OSError, AttributeError, ValueError, subprocess.SubprocessError):
+            pass
+    if sys.platform == "win32":
+        import ctypes
+
+        class MemoryStatus(ctypes.Structure):
+            _fields_ = [
+                ("length", ctypes.c_ulong),
+                ("load", ctypes.c_ulong),
+                ("total_phys", ctypes.c_ulonglong),
+                ("avail_phys", ctypes.c_ulonglong),
+                ("total_page", ctypes.c_ulonglong),
+                ("avail_page", ctypes.c_ulonglong),
+                ("total_virtual", ctypes.c_ulonglong),
+                ("avail_virtual", ctypes.c_ulonglong),
+                ("avail_extended", ctypes.c_ulonglong),
+            ]
+
+        status = MemoryStatus(length=ctypes.sizeof(MemoryStatus))
+        if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+            return status.avail_phys, "GlobalMemoryStatusEx:ullAvailPhys"
+    return 0, "indisponible (budget RAM nul par prudence)"
+
+
 def memory_resources(meminfo_path: Path | str = Path("/proc/meminfo")) -> JSONReport:
     """Use Linux's reclaim-aware RAM estimate; report swap separately."""
     values = {}
@@ -46,8 +90,7 @@ def memory_resources(meminfo_path: Path | str = Path("/proc/meminfo")) -> JSONRe
     available = values.get("MemAvailable")
     source = "/proc/meminfo:MemAvailable"
     if available is None:
-        available = os.sysconf("SC_AVPHYS_PAGES") * os.sysconf("SC_PAGE_SIZE")
-        source = "sysconf:SC_AVPHYS_PAGES (RAM libre, repli conservateur)"
+        available, source = _fallback_available_memory()
     return dict(
         available_memory_bytes=available,
         memory_available_source=source,
