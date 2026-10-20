@@ -244,7 +244,9 @@ SIRIL_AUTOGHS_INTEGRATION=1 .venv/bin/python -m pytest -q tests/test_auto_ghs_in
 
 Le test CLI utilise un extrait RGB 512 × 512 de `imagesExample/M_33_combined.fits`.
 Le chemin StarNet vient des préférences Siril ; `STARNET_PATH` permet une
-surcharge pour cette validation. La CLI désactive les traitements amont pour
+surcharge pour cette validation. Siril est en Flatpak par défaut ; pour une
+installation native ou AppImage (macOS, Windows), définir `SIRIL_MODE=native` et
+`SIRIL_PATH=/chemin/siril-cli`, utilisés par les deux tests. La CLI désactive les traitements amont pour
 ne pas les réexécuter et conserve le chemin réellement résolu dans un JSON
 isolé avec `-S`. Elle vérifie les deux sorties **avec étoiles**, les deux fonds,
 le rendu stellaire, les histogrammes, la reconstruction linéaire, l'absence

@@ -15,8 +15,16 @@ from lib.star_rendering import recompose
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("SIRIL_AUTOGHS_INTEGRATION") != "1",
-    reason="Définir SIRIL_AUTOGHS_INTEGRATION=1 avec Siril/StarNet réels et un tmp accessible Flatpak",
+    reason="Définir SIRIL_AUTOGHS_INTEGRATION=1 avec Siril/StarNet réels ; "
+    "SIRIL_MODE (flatpak par défaut) et SIRIL_PATH pour un Siril natif ou AppImage",
 )
+
+
+def siril_cli_command() -> list[str]:
+    """Commande Siril du mode SIRIL_MODE (flatpak, native ou appimage)."""
+    if os.environ.get("SIRIL_MODE", "flatpak") == "flatpak":
+        return ["flatpak", "run", "--command=siril-cli", "org.siril.Siril"]
+    return [os.environ["SIRIL_PATH"]]
 
 
 def test_real_cli_both_and_saved_starnet_path(tmp_path: Path) -> None:
@@ -47,6 +55,10 @@ def test_real_cli_both_and_saved_starnet_path(tmp_path: Path) -> None:
         "cpu",
         "-S",
     ]
+    if os.environ.get("SIRIL_MODE"):
+        command += ["--siril-mode", os.environ["SIRIL_MODE"]]
+    if os.environ.get("SIRIL_PATH"):
+        command += ["--siril-path", os.environ["SIRIL_PATH"]]
     if os.environ.get("STARNET_PATH"):
         command += ["--starnet-path", os.environ["STARNET_PATH"]]
     process = subprocess.run(
@@ -125,10 +137,7 @@ def test_live_siril_math_oracle(tmp_path: Path) -> None:
     ]
     script.write_text("\n".join(lines) + "\n")
     command = [
-        "flatpak",
-        "run",
-        "--command=siril-cli",
-        "org.siril.Siril",
+        *siril_cli_command(),
         "-i",
         str(tmp_path / "siril.ini"),
         "-s",
