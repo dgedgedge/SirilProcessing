@@ -12,6 +12,7 @@ on:
       - 'lib/**/*.py'
       - 'requirements-docs.txt'
       - 'tests/test_doc*.py'
+      - 'tests/fixtures/documentation_crossings.js'
       - '.github/workflows/documentation.yml'
   pull_request:
     paths:
@@ -24,6 +25,7 @@ on:
       - 'lib/**/*.py'
       - 'requirements-docs.txt'
       - 'tests/test_doc*.py'
+      - 'tests/fixtures/documentation_crossings.js'
       - '.github/workflows/documentation.yml'
   workflow_dispatch:
 
@@ -53,10 +55,10 @@ jobs:
         run: python3 -m pip install -r requirements-docs.txt
       - name: Installer Chromium et ses bibliothèques système
         run: python3 -m playwright install --with-deps chromium
-      - name: Vérifier les générateurs
-        run: python3 -m unittest discover -s tests -p 'test_doc*.py'
       - name: Générer MkDocs, HTML autonome et PDF
         run: python3 bin/build_documentation.py
+      - name: Vérifier les générateurs et le placement automatique
+        run: python3 -m unittest discover -s tests -p 'test_doc*.py'
       - name: Conserver les trois formats téléchargeables
         uses: actions/upload-artifact@v4
         with:

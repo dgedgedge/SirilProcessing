@@ -21,6 +21,13 @@ L’accueil propose deux téléchargements :
 - `downloads/documentation.pdf` : la même documentation en PDF A4, avec diagrammes
   et signets.
 
+Les exports utilisent une présentation A4 portrait par défaut. À l’impression,
+les marges sont de 15 mm ; les diagrammes et images sont limités à la largeur
+disponible et à 247 mm de hauteur, en conservant leurs proportions. Un diagramme
+est déplacé sur la page suivante si nécessaire pour éviter de le couper.
+Les diagrammes très étendus sont réduits pour tenir sur une page ; le HTML
+autonome permet de les consulter avec le zoom du navigateur.
+
 Le monofichier conserve les liens internes entre chapitres et embarque les
 sources Python/shell/JSON et images locales explicitement liées. Les liens vers
 des sites externes restent externes. Les fichiers non liés, les poids `.onnx`/
@@ -101,6 +108,26 @@ GitHub Pages reçoit uniquement `out/`, sans modèles, FITS d’exemple ni cache
 Chromium. Aucun HTML généré n’est commité dans `docs/`, qui conserve les sources
 Markdown. Une construction locale ne publie pas le site distant.
 
+### 3.1. Téléchargements introuvables (erreur 404)
+
+Si l’accueil s’affiche mais que les téléchargements HTML et PDF renvoient une
+erreur 404, vérifier d’abord la source dans **Settings → Pages**. Elle doit être
+**GitHub Actions**, et non **Deploy from a branch**. La publication depuis une
+branche peut servir le README avec Jekyll à la place du site construit dans
+`out/` ; les exports, absents des sources Git, ne sont alors pas disponibles.
+
+Dans **Actions**, vérifier les jobs `build` et `deploy` de **Documentation
+MkDocs** sur la branche par défaut. Un déploiement documentaire réussi ne
+garantit pas qu’une publication concurrente ne l’a pas remplacé. La présence
+d’un workflow automatique **pages build and deployment** et de la mention
+`Jekyll` dans le code source de l’accueil permet de repérer cette situation.
+
+Après avoir sélectionné **GitHub Actions**, relancer **Documentation MkDocs**
+sur la branche par défaut. Vérifier ensuite l’accueil avec sa navigation
+MkDocs et ouvrir les deux liens `downloads/documentation.html` et
+`downloads/documentation.pdf`. Si un job échoue, consulter son journal avant
+de relancer la publication.
+
 <a id="classes-et-v-rification"></a>
 <a id="classes-et-vérification"></a>
 
@@ -126,10 +153,75 @@ du nom du document uniquement si le contenu ne possède pas de titre principal.
 ```
 
 Les tests utilisent des documents synthétiques et vérifient ancres, liens,
-ressources embarquées, exclusions, sommaires et protection des dossiers, sans
-installer de navigateur. Une construction complète vérifie en plus le rendu
+ressources embarquées, exclusions, sommaires et protection des dossiers.
+Un test supplémentaire vérifie le cadrage de figures larges et hautes en mode
+impression avec Chromium, ainsi que l’interligne des libellés SVG entre écran et
+impression ; il est ignoré si le navigateur ou Playwright manque.
+Une construction complète vérifie en plus le rendu
 Chromium et les vrais exports. Les scripts Mermaid des pages individuelles
 s’exécutent dans le navigateur du lecteur ; les exports contiennent leur SVG.
+
+### 4.1. Proportions des décisions dans les diagrammes
+
+Le constructeur adapte les losanges du moteur flowchart par défaut de Mermaid
+10.9.5 avant le calcul du placement. Leur largeur augmente de 20 % par rapport
+au carré initial ; leur hauteur est calculée à partir du libellé, sans changer
+la taille du texte. Cette géométrie sert aussi au raccordement des flèches.
+Le site, le HTML autonome et le PDF utilisent la même adaptation.
+
+Les schémas utilisent des retours à la ligne explicites `<br/>` dans les
+libellés longs, aux limites des groupes de mots. Le texte et la taille des
+caractères sont conservés ; un retour à la ligne peut augmenter la hauteur
+d’un bloc, ce qui demande de vérifier le diagramme complet après modification.
+
+Si `p` et `v` sont la largeur et la hauteur du libellé avec ses marges, la
+largeur du losange est `W = 1,2 × (p + v)` et sa hauteur
+`H = v / (1 − p / W)`. La relation `p/W + v/H = 1` place les coins de la boîte
+du texte sur les côtés du losange. Les libellés sur plusieurs lignes restent
+donc contenus dans la forme. Les dimensions sont exprimées dans les unités SVG.
+
+Cette adaptation est spécifique au code de la version épinglée et au moteur
+flowchart par défaut ; elle ne modifie pas les autres formes. Le cache original
+est conservé, et une copie `mermaid-10.9.5-wide.min.js` est préparée à chaque
+construction. Si la signature du moteur change, la construction échoue
+explicitement : une mise à jour de Mermaid nécessite de revoir l’adaptation et
+de vérifier les choix courts, longs et multilignes ainsi que les flèches.
+
+### 4.2. Placement automatique et espacement
+
+`DocumentationBuilder._diagram_renderer` fournit les mêmes réglages au site et
+aux exports : `nodeSpacing = 24` entre symboles d’un même niveau et
+`rankSpacing = 16` entre niveaux, en unités SVG. Ces valeurs sont des distances
+minimales pour Dagre ; le moteur peut les augmenter pour placer les branches,
+les libellés de flèches et les boucles sans superposer les symboles.
+Une marge de 6 unités au-dessus et de 12 unités sous les titres des groupes
+préserve leur lisibilité face au premier symbole.
+
+Mermaid 10.9.5 impose 50 unités dans certains sous-graphes. L’adaptation du
+constructeur remplace ces valeurs internes par les espacements du parent,
+y compris pour les groupes imbriqués. Cette adaptation est contrôlée par une
+signature de version, comme celle des losanges.
+
+Aucune coordonnée ni translation corrective n’est ajoutée aux symboles ou aux
+flèches. Le moteur recalcule tout le placement à chaque génération, selon les
+textes et les relations présents. Les nouveaux diagrammes bénéficient des
+réglages communs sans directive locale ; une directive Mermaid explicite peut
+les surcharger. Le rendu Markdown directement sur GitHub utilise son propre
+moteur et ne reçoit pas ces réglages du constructeur.
+
+L’ajout d’un texte ou d’une branche peut modifier la disposition : le calcul
+automatique ne garantit pas un dessin identique après évolution. Les tests
+vérifient la compacité et l’absence de superposition après ajout d’une branche,
+d’une boucle et d’un libellé multiligne dans des groupes imbriqués. Une mise à
+jour de Mermaid exige également de reconstruire et contrôler les exports.
+Le workflow lance les tests après la construction, pour que le cache Mermaid
+soit disponible et que ces vérifications de rendu s’exécutent avant publication.
+
+### 4.3. Conformité du séquencement
+
+La [référence de vérification des diagrammes](DIAGRAMS.md) associe chacun des six
+schémas à ses méthodes d’implémentation, ses tests et leurs limites. Les tests
+de mise en page ne remplacent pas cette comparaison des flèches au code réel.
 
 Références : [MkDocs](https://www.mkdocs.org/),
 [GitHub Pages](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages),

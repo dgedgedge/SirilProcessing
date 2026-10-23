@@ -53,6 +53,7 @@ Pour une exécution simple sans ce contrôle supplémentaire :
 | Séquences Siril | `test_siril_sequence.py` |
 | Post-traitements Siril et backend Cosmic Clarity | `test_postprocessor.py`, `test_postprocess.py`, `test_deconvolution.py`, `test_denoising.py`, `test_deconvolution_quality.py`, `test_photometric_color.py`, `test_cosmic_clarity.py`, `test_cosmic_inference.py` |
 | Pipeline de post-traitement partagé | `test_postprocessing.py`, `test_session_pipeline.py` |
+| Boucle solaire : centrage, corrections et sélection vide | `test_solar_eclipse_sequence.py` |
 | Qualité astrophotographique, chaînes et GraXpert | `test_restoration_quality.py`, `test_restoration_chains.py`, `test_restoration_summary.py`, `test_graxpert.py`, `test_restoration.py` |
 | Mosaïque : noms, entrées, préparation et script généré | `test_mosaic.py`, `test_mosaic_validation.py`, `test_integrated_script.py`, `test_simplified_mosaic.py` |
 | Configuration, lancement et journaux Siril | `test_siril_validation.py` |
@@ -60,6 +61,18 @@ Pour une exécution simple sans ce contrôle supplémentaire :
 | Synthèse de non-régression | `test_regression_summary.py` |
 
 ## Isolation et automatisation
+
+`test_solar_eclipse_sequence.py` vérifie l’ordre réel des corrections sur des
+images constantes synthétiques : recadrage et rotation de l’image et du masque,
+normalisation puis filtrage du fond. Il impose seulement les détections du
+disque et le déplacement de corrélation, pour tester les départs cohérents ou
+incohérents, la mémorisation du centre et l’absence d’images film. Les sorties
+doivent garder la taille prévue, une intensité de 100 et un facteur unité.
+Un essai complet sur cinq FITS synthétiques exécute aussi le modèle solaire,
+les corrections, les slots et les écritures : GIF de 64 × 64 pixels durant
+une seconde, avec trois PNG de debug. Les FITS de cet essai renseignent
+l’exposition et le gain. Voir la [correspondance des six diagrammes avec le
+code](../docs/scripts/generate_docs_html/DIAGRAMS.md).
 
 `test_calibration_logging.py` vérifie les titres INFO et leur ordre pour les
 quatre combinaisons dark/flat, la reprise sans nouvel appel Siril, la simulation
@@ -189,6 +202,33 @@ hors dépôt restent exclus ; la génération n’exécute pas les sources copi�
 liens internes, les ressources embarquées du monofichier et la protection des
 dossiers. Une construction MkDocs complète rend les diagrammes dans Chromium
 et génère le PDF avant de publier les téléchargements sur le site.
+Le test de cadrage utilise Chromium en mode impression sur des figures larges
+et hautes : elles doivent tenir dans la largeur disponible et sous 247 mm de
+hauteur, avec évitement des coupures. Ce test est ignoré si Playwright ou son
+navigateur ne sont pas installés ; les autres erreurs du navigateur sont bloquantes.
+Il compare aussi la hauteur et l’espacement des libellés HTML intégrés aux SVG
+entre écran et impression pour détecter les textes superposés dans le PDF.
+Avec le cache Mermaid disponible, un test vérifie aussi les losanges élargis
+sur des choix courts, longs et multilignes, en disposition verticale et
+horizontale : largeur augmentée, hauteur diminuée, libellés inchangés et
+contenus dans la forme. Ce test est ignoré si le cache manque ; construire la
+documentation avant de le lancer. Une version Mermaid incompatible est refusée.
+Le même scénario vérifie le placement automatique de groupes imbriqués avant
+et après ajout d’une branche, d’une boucle et d’un libellé multiligne : hauteur
+réduite avec les réglages communs, textes conservés et aucun symbole superposé.
+Le diagramme réel de calibration est aussi rendu : la sortie « Oui » du choix
+de reprise doit partir à droite du losange et la sortie « Non » à gauche,
+sans coordonnées fixes pour les symboles.
+Tous les diagrammes réels sous `docs/` sont également rendus et contrôlés avec
+`fixtures/documentation_crossings.js` : les intersections transverses des
+flèches sont recherchées dans un repère SVG commun. Des cas synthétiques
+vérifient le détecteur, les jonctions et les transformations des groupes.
+L’échantillonnage des courbes exclut les extrémités proches et les segments
+quasi colinéaires ; une inspection visuelle reste nécessaire pour les contacts,
+recouvrements et libellés. Le [relevé des croisements et convergences](../docs/scripts/generate_docs_html/DIAGRAMS.md#croisements-et-convergences)
+explique les convergences conservées et les croisements supprimés.
+Le workflow documentaire construit les exports avant les tests pour préparer
+le cache Mermaid nécessaire à ces vérifications avant publication.
 Les tests vérifient aussi l’ordre commun des rubriques, le sommaire imbriqué,
 les accès directs aux options sans duplication des chapitres, le regroupement
 des annexes et les ancres conservées après numérotation des manuels. Une cible
