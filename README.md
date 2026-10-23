@@ -58,3 +58,17 @@ du PC d’exécution moins un (minimum : un). La classe commune
 du processus : `CpuConfig.configure(limit=8)`. Utiliser
 `CpuConfig.configure()` pour rétablir le calcul automatique. Une limite explicite
 est plafonnée au nombre de processeurs du PC.
+
+<a id="licence"></a>
+
+## 3. Licence
+
+SirilProcessing est un logiciel libre distribué sous la **licence GNU General
+Public License, version 3 (GPLv3)**. Le texte intégral figure dans le fichier
+[`LICENSE`](https://github.com/dgedgedge/SirilProcessing/blob/main/LICENSE)
+à la racine du dépôt.
+
+Les composants tiers et les poids des modèles conservent leurs licences
+respectives, précisées notamment dans les guides
+[Cosmic Clarity](docs/scripts/postProcess/cosmic-clarity.md) et
+[GraXpert](docs/scripts/postProcess/graxpert.md).
