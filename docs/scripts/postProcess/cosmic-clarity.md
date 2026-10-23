@@ -148,15 +148,20 @@ leurs erreurs ; si Siril n’a aucun essai accepté, son statut est
 ```mermaid
 flowchart TD
     A["Entrée commune et masques fixes"] --> B["Évaluer Cosmic Clarity si actif"]
-    B --> C["Évaluer Siril si actif, sur l’entrée commune"]
-    C --> D["Évaluer GraXpert si débruitage actif, sur l’entrée commune"]
-    D --> E["Écarter erreurs et rejets ; scorer les candidats accepted"]
+    B --> C["Évaluer Siril si actif,<br/>sur l’entrée commune"]
+    C --> D["Évaluer GraXpert si débruitage<br/>actif, sur l’entrée commune"]
+    D --> E["Écarter erreurs et rejets ;<br/>scorer les candidats accepted"]
     E --> F{"Un score strictement positif ?"}
-    F -->|Oui| G["Publier le meilleur candidat vers 03/04_*.fits"]
+    F -->|Oui| G["Publier le meilleur<br/>candidat vers 03/04_*.fits"]
     F -->|Non| H["Conserver l’entrée"]
 ```
 
-Ce schéma décrit le mode fiable. Les erreurs isolées sont auditées et ne
+Ce schéma décrit le mode fiable de comparaison des moteurs d’une opération
+isolée (`--no-restoration-compare-chains`). Chaque moteur actif reçoit la même
+entrée ; les flèches entre évaluations décrivent leur ordre d’exécution,
+pas une transmission de l’image produite au moteur suivant.
+Siril est essayé seulement si `--restoration-siril` reste actif.
+Les erreurs isolées sont auditées et ne
 suppriment pas les autres candidats. Les [chaînes complètes](quality.md#chaînes-complètes)
 ajoutent un contrôle final commun après les contrôles de chaque opération.
 

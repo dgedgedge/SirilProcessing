@@ -13,6 +13,8 @@
 | `--no-pdf` | Construire le site et le HTML autonome sans PDF |
 
 Chromium reste nécessaire au HTML autonome pour rendre les diagrammes.
+Le format des exports est A4 portrait par défaut, avec des marges d’impression
+de 15 mm. Les figures sont ajustées à la zone imprimable sans découpage interne.
 Le premier lancement récupère Mermaid 10.9.5 via HTTPS dans
 `tmp/documentation/` ; les suivants réutilisent ce cache. Les caches et `out/`
 sont ignorés par Git. Le dossier de sortie est nettoyé par MkDocs et doit être

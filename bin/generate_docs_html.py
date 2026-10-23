@@ -544,6 +544,7 @@ small {{ color: var(--muted); }}
   border-radius: 8px;
   overflow-x: auto;
 }}
+img, svg {{ max-width: 100%; }}
 {pygments_css}
 @media (max-width: 760px) {{
   .site-header {{ align-items: flex-start; flex-direction: column; gap: 4px; }}
@@ -551,13 +552,33 @@ small {{ color: var(--muted); }}
   article {{ padding: 22px; }}
   .toc ul {{ columns: 1; }}
 }}
+@page {{ size: A4 portrait; margin: 15mm; }}
 @media print {{
   body {{ background: white; }}
   .site-header {{ position: static; box-shadow: none; }}
   .page {{ max-width: none; padding: 0; }}
-  article {{ border: 0; box-shadow: none; }}
+  article {{ border: 0; padding: 0; box-shadow: none; }}
   a {{ color: #102a43; }}
   pre, blockquote {{ break-inside: avoid; }}
+  h1, h2, h3, h4 {{ break-after: avoid; }}
+  pre.mermaid {{
+    padding: 0;
+    border: 0;
+    overflow: visible;
+    white-space: normal;
+    line-height: normal;
+    break-inside: avoid;
+  }}
+  pre.mermaid svg, img {{
+    display: block;
+    width: auto;
+    height: auto;
+    max-width: 100% !important;
+    max-height: 247mm;
+    object-fit: contain;
+    margin: 0 auto;
+    break-inside: avoid;
+  }}
 }}
 """,
         encoding="utf-8",

@@ -445,7 +445,10 @@ flowchart TD
     C --> D["Calcul Seuil_fond_du_ciel"]
     D --> E["Construction modele Soleil session"]
     E --> F["Selection images film<br/>hors dark, exclude, full-sun"]
-    F --> G["MasqueSolairePrincipal<br/>sur chaque image film"]
+    F --> AVAILABLE{"Images film disponibles ?"}
+    AVAILABLE -->|Non| FAILURE["Erreur : aucune image à traiter"]
+    AVAILABLE -->|Oui| NEXT{"Image film suivante ?"}
+    NEXT -->|Oui| G["MasqueSolairePrincipal<br/>sur cette image film"]
     G --> H{"Rayon coherent<br/>avec rayon_solaire ?"}
     H -->|Oui| I["Centre = centre du cercle detecte"]
     H -->|Non| J{"Centre precedent<br/>disponible ?"}
@@ -456,13 +459,24 @@ flowchart TD
     R --> L
     L --> M["Rotation optionnelle"]
     M --> T["Normalisation luminosite<br/>sur masque courant"]
-    T --> U["Filtrage fond<br/>hors masque dilate"]
-    U --> N["Slots temporels max 10 fps"]
+    T --> U["Filtrage fond si activé<br/>hors masque dilate"]
+    U --> PREVIOUS["Mémoriser masque et centre<br/>pour l’image suivante"]
+    PREVIOUS --> NEXT
+    NEXT -->|Non| N["Slots temporels max 10 fps"]
     N --> O["Stacking par slot"]
     O --> P["Normalisation globale"]
-    P --> Q["Ecriture GIF"]
-    P --> S["Debug optionnel<br/>images incluses dans le GIF"]
+    P --> DEBUG{"Exporter les images GIF de debug ?"}
+    DEBUG -->|Oui| S["Sauvegarder les images<br/>incluses dans le GIF"]
+    S --> Q["Ecriture GIF"]
+    DEBUG -->|Non| Q
 ```
+
+Le centrage, le recadrage, la rotation et les corrections sont exécutés dans
+la boucle des images film. Le masque est recadré et tourné avec l’image avant
+la normalisation de luminosité. Le filtrage du fond est facultatif ; lorsqu’il
+est désactivé, l’image corrigée en luminosité est conservée. Le centre et le
+masque précédents sont mémorisés après chaque image, y compris après le repli
+sur la corrélation. Les slots sont construits seulement après cette boucle.
 
 <a id="commandes"></a>
 
@@ -514,6 +528,11 @@ bin/solarEclipseGif.sh \
   seulement avec `--debug-gif-frames`.
 - `<debug-dir>/luminosity/*.png` : images avant/apres normalisation de
   luminosite, seulement avec `--debug-luminosity`.
+
+Limite de `--debug-gif-frames` : si le gain est absent des FITS, le nom du PNG
+contient actuellement `n/a`, dont la barre oblique est interprétée comme un
+séparateur de chemin. L’export échoue alors avant l’écriture du GIF. Désactiver
+cet export de debug pour ce cas ; la correction du nom de fichier reste à faire.
 
 <a id="acceleration-gpu"></a>
 

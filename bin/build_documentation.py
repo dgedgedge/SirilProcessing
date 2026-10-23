@@ -24,6 +24,12 @@ import generate_docs_html as renderer
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 MERMAID_VERSION = "10.9.5"
+# Distances minimales en unités SVG ; Dagre peut les augmenter pour les liens.
+MERMAID_NODE_SPACING = 24
+MERMAID_RANK_SPACING = 16
+# Réserve pour les titres des groupes afin de ne pas toucher le premier symbole.
+MERMAID_GROUP_TITLE_TOP_MARGIN = 6
+MERMAID_GROUP_TITLE_BOTTOM_MARGIN = 12
 MERMAID_URL = (
     f"https://cdn.jsdelivr.net/npm/mermaid@{MERMAID_VERSION}/dist/mermaid.min.js"
 )
@@ -154,7 +160,12 @@ class DocumentationBuilder:
         )
 
     def _mermaid(self) -> Path:
-        """Met en cache la version JS épinglée ; un téléchargement échoué est bloquant."""
+        """Prépare Mermaid avec décisions larges et espacement hérité des sous-graphes.
+
+        Le cache original reste intact. L’adaptation du moteur flowchart par défaut
+        est liée à la version 10.9.5 : un changement de son code est bloquant.
+        Voir le guide documentaire pour la géométrie et ses limites.
+        """
         path = self.cache / f"mermaid-{MERMAID_VERSION}.min.js"
         if not path.is_file():
             with urlopen(MERMAID_URL, timeout=60) as response:
@@ -162,7 +173,76 @@ class DocumentationBuilder:
             temporary = path.with_suffix(".part")
             temporary.write_bytes(data)
             temporary.replace(path)
-        return path
+        adapted = self.cache / f"mermaid-{MERMAID_VERSION}-wide.min.js"
+        adapted.write_text(
+            self._adapt_mermaid(path.read_text(encoding="utf-8")),
+            encoding="utf-8",
+        )
+        return adapted
+
+    @staticmethod
+    def _adapt_mermaid(source: str) -> str:
+        """Adapte les losanges et les sous-graphes de Mermaid 10.9.5.
+
+        La largeur W vaut 1,2 fois le côté initial du losange carré.
+        Pour une boîte de libellé de largeur p et hauteur v (marges comprises),
+        H = v / (1 - p/W) inscrit ses quatre coins dans le losange.
+        Le moteur utilise ensuite ces sommets pour le placement et les
+        intersections des flèches. Les autres formes restent inchangées.
+        Les sous-graphes héritent des espacements du graphe parent au lieu
+        des 50 unités codées en dur par cette version du moteur.
+        Une signature absente ou ambiguë lève ValueError plutôt que de publier
+        une adaptation partielle après une évolution de la dépendance.
+        """
+        replacements = (
+            (
+                "p=d.width+s.padding,v=d.height+s.padding,b=p+v,"
+                "y=[{x:b/2,y:0},{x:b,y:-b/2},{x:b/2,y:-b},{x:0,y:-b/2}];"
+                'Xe.info("Question main (Circle)");const T=n5(u,b,b,y);',
+                "p=d.width+s.padding,v=d.height+s.padding,b=1.2*(p+v),"
+                "height=v/(1-p/b),y=[{x:b/2,y:0},{x:b,y:-height/2},"
+                "{x:b/2,y:-height},{x:0,y:-height/2}];"
+                'Xe.info("Question main (Circle)");const T=n5(u,b,height,y);',
+            ),
+            (
+                ".setGraph({rankdir:b,nodesep:50,ranksep:50,marginx:8,marginy:8})",
+                ".setGraph({rankdir:b,nodesep:i.graph().nodesep,"
+                "ranksep:i.graph().ranksep,marginx:8,marginy:8})",
+            ),
+        )
+        for original, replacement in replacements:
+            if source.count(original) != 1:
+                raise ValueError(
+                    "Mermaid incompatible avec l’adaptation des diagrammes "
+                    f"prévue pour la version {MERMAID_VERSION}"
+                )
+            source = source.replace(original, replacement)
+        return source
+
+    @staticmethod
+    def _diagram_renderer() -> str:
+        """Retourne le même rendu automatique pour le site et les exports.
+
+        Les espacements sont des minima Dagre, jamais des coordonnées imposées.
+        Chaque rendu recalcule les positions selon les textes et les liens.
+        Les directives Mermaid locales peuvent surcharger ces défauts.
+        """
+        configuration = {
+            "startOnLoad": False,
+            "flowchart": {
+                "nodeSpacing": MERMAID_NODE_SPACING,
+                "rankSpacing": MERMAID_RANK_SPACING,
+                "subGraphTitleMargin": {
+                    "top": MERMAID_GROUP_TITLE_TOP_MARGIN,
+                    "bottom": MERMAID_GROUP_TITLE_BOTTOM_MARGIN,
+                },
+            },
+        }
+        return (
+            "async () => {mermaid.initialize("
+            + json.dumps(configuration)
+            + "); await mermaid.run({querySelector:'.mermaid'});}"
+        )
 
     def _navigation(
         self, sources: list[Path],
@@ -255,7 +335,12 @@ class DocumentationBuilder:
         self, sources: list[Path], staging: Path, work: Path, mermaid: Path,
         navigation: tuple[DocumentationSection, ...],
     ) -> None:
-        """Assemble les chapitres groupés, rend les SVG et imprime le même HTML en PDF."""
+        """Rend les SVG et exporte en A4 avec des figures tenant dans la zone imprimable.
+
+        Les styles partagés limitent les figures à la largeur imprimable et
+        à 247 mm de hauteur, sous les 267 mm utiles avec les marges de 15 mm.
+        Le navigateur conserve les proportions et évite les coupures internes.
+        """
         from playwright.sync_api import sync_playwright
 
         chapters = {
@@ -264,7 +349,12 @@ class DocumentationBuilder:
         }
         renderer.write_assets(work)
         css = (work / "assets/style.css").read_text()
-        css += "\n.pdf-section {break-before: page;} pre {white-space: pre-wrap;} svg {max-width:100%;height:auto;} @page {size:A4; margin:15mm;}"
+        css += (
+            "\n.page {max-width:210mm;}"
+            " .pdf-section {break-before:page;}"
+            " pre {white-space:pre-wrap;}"
+            " svg {max-width:100%;height:auto;}"
+        )
         parts = [
             f'<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>SirilProcessing</title><style>{css}</style></head><body><main class="page"><article><h1>SirilProcessing</h1><nav aria-label="Sommaire">',
             self._contents(navigation, chapters),
@@ -294,9 +384,7 @@ class DocumentationBuilder:
                 page = browser.new_page()
                 page.goto(source.as_uri())
                 page.add_script_tag(path=str(mermaid))
-                page.evaluate(
-                    "async () => {mermaid.initialize({startOnLoad:false}); await mermaid.run({querySelector:'.mermaid'});}"
-                )
+                page.evaluate(self._diagram_renderer())
                 page.evaluate(
                     "() => document.querySelectorAll('script').forEach(node => node.remove())"
                 )
@@ -307,6 +395,7 @@ class DocumentationBuilder:
                     page.pdf(
                         path=str(downloads / "documentation.pdf"),
                         format="A4",
+                        prefer_css_page_size=True,
                         print_background=True,
                         tagged=True,
                         outline=True,
@@ -356,7 +445,8 @@ class DocumentationBuilder:
             assets.mkdir(exist_ok=True)
             shutil.copyfile(mermaid, assets / "mermaid.min.js")
             (assets / "documentation.js").write_text(
-                "document.addEventListener('DOMContentLoaded', () => {mermaid.initialize({startOnLoad:true});});\n"
+                "document.addEventListener('DOMContentLoaded', "
+                + self._diagram_renderer() + ");\n"
             )
             config = work / "mkdocs.yml"
             config.write_text(

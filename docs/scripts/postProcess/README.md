@@ -93,29 +93,37 @@ flowchart TD
     A["FITS source"] --> G["01 · Correction du gradient"]
     G --> P["02 · Astrométrie Gaia et couleurs SPCC"]
     P --> C{"Comparer les chaînes ?"}
-    C -->|Non| D["03 · Évaluation séquentielle des moteurs de netteté actifs"]
-    D --> V{"Candidat accepté avec score positif ?"}
+    C -->|Non| D["03 · Évaluation séquentielle<br/>des moteurs de netteté actifs"]
+    D --> V{"Candidat accepté<br/>avec score positif ?"}
     V -->|Oui| S["Retenir le meilleur candidat"]
     V -->|Non| E["Conserver l’entrée de la déconvolution"]
-    S --> N["04 · Évaluation séquentielle des débruiteurs actifs"]
+    S --> N["04 · Évaluation séquentielle<br/>des débruiteurs actifs"]
     E --> N
-    N --> Q{"Candidat accepté avec score positif ?"}
+    N --> Q{"Candidat accepté<br/>avec score positif ?"}
     Q -->|Oui| B["Retenir le meilleur candidat"]
     Q -->|Non| O["Conserver l’entrée du débruitage"]
-    C -->|Oui, par défaut| H["03 · Chaînes : identité, moteurs seuls et associations"]
-    H --> I["Contrôles locaux, puis comparaison finale à la référence commune"]
-    I --> T["Retenir la meilleure chaîne sûre de score positif, sinon l’identité"]
-    B --> R["FITS final et rapport global"]
-    O --> R
-    T --> R
+    C -->|Oui, par défaut| H["03 · Chaînes : identité,<br/>moteurs seuls et associations"]
+    H --> I["Contrôles locaux, puis comparaison<br/>finale à la référence commune"]
+    I --> T["Retenir la meilleure chaîne sûre<br/>de score positif, sinon l’identité"]
+    B --> U{"AutoGHS activé ?"}
+    O --> U
+    T --> U
+    U -->|Oui, par défaut| F["05 · Rendu AutoGHS et étoiles"]
+    U -->|Non| R["Exports FITS, JPEG si produit<br/>Diagnostics et rapport global"]
+    F --> R
 ```
 
-Le schéma décrit le mode `reliable`, avec les quatre traitements actifs.
+Le schéma décrit le mode `reliable`, avec les traitements linéaires actifs
+et le rendu AutoGHS facultatif, activé par défaut.
 Siril et Cosmic Clarity produisent les candidats de netteté ; GraXpert peut
 s’ajouter au débruitage. Les activations des moteurs sont respectées.
 Une étape désactivée transmet l’image courante à la suivante. En mode fiable,
 une erreur technique d’un moteur est auditée, puis les autres sont essayés.
 Les erreurs de gradient, photométrie ou de publication restent bloquantes.
+Un échec du rendu AutoGHS est également bloquant. En comparaison de chaînes,
+les associations suivent par défaut l’ordre débruitage puis netteté ; l’ordre
+inverse s’ajoute avec `--restoration-reverse-order`. Dans la branche par étapes
+isolées, la netteté précède toujours le débruitage.
 Un refus de qualité conserve l’entrée et permet de poursuivre. Le mode
 `legacy` conserve les exceptions bloquantes historiques des moteurs et peut
 retenir un candidat accepté même si son score n’est pas positif.
