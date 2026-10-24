@@ -1317,7 +1317,13 @@ class _PostProcessorSequence(processor):
             raise ValueError("Chaque processeur doit avoir un préfixe unique")
 
     def _selected_processors(self, args: argparse.Namespace) -> list[processor]:
-        """Fusionne la restauration standard ; respecte les séquences personnalisées."""
+        """Sélectionne AutoGHS seul, ou fusionne la restauration de la séquence standard.
+
+        autoghs_only ne modifie pas les séquences personnalisées de l'API.
+        """
+        if not self._custom_processors and getattr(args, "autoghs_only", False):
+            return [treatment for treatment in self.processors
+                    if isinstance(treatment, AutoGHSFinalRenderer)]
         if self._custom_processors or not getattr(
             args, "restoration_compare_chains", True
         ):

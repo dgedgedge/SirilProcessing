@@ -293,7 +293,7 @@ Traitement Siril de mosaique (si --mosaic):
 
     # Sauvegarde de la configuration si demandé
     if args.save_config:
-        if args.enable_postprocess:
+        if args.enable_postprocess or args.autoghs_only:
             try:
                 PostProcessingProcessor.prepare_config_save(args)
             except (OSError, ValueError, RuntimeError) as error:
@@ -354,8 +354,8 @@ def _process_sessions(
             logging.error(f"Le chemin spécifié n'est pas un répertoire: {session_dir}")
             return 1
 
-        discovered = discover_session_roots(session_dir)
-        if not discovered:
+        discovered = [] if args.autoghs_only else discover_session_roots(session_dir)
+        if not discovered and not args.autoghs_only:
             logging.error(
                 f"Aucun répertoire 'light' ou 'Light' trouvé dans: {session_dir}"
             )
@@ -381,6 +381,27 @@ def _process_sessions(
         args.work_dir = work_base_dir
         args.output_dir = output_base_dir
         logging.info("Répertoire commun de la mosaïque : %s", work_base_dir)
+
+    if args.autoghs_only:
+        from lib.postprocess_resume import PostProcessResume
+
+        try:
+            images = PostProcessResume.final_images(
+                output_base_dir, work_base_dir, input_roots,
+                args.mosaic_name if args.create_mosaic else None,
+            )
+            # Vérifier toutes les reprises avant de modifier un seul résultat.
+            for image in images:
+                PostProcessResume.load(image, PostProcessingProcessor.report_path_for(image))
+            for image in images:
+                logging.info("Reprise du rendu final uniquement : %s", image)
+                if not args.dry_run:
+                    treatment = PostProcessingProcessor()
+                    treatment.post_process(image, treatment.report_path_for(image))
+            return 0
+        except (OSError, ValueError, KeyError, RuntimeError) as error:
+            logging.error("Reprise AutoGHS impossible : %s", error)
+            return 1
 
     session_dirs, session_to_target = build_session_target_map(input_roots)
     if not session_dirs:
@@ -924,6 +945,15 @@ def _process_sessions(
                         "Échec du post-traitement de %s: %s", image, error,
                         exc_info=args.log_level == "DEBUG",
                     )
+
+    if (args.enable_postprocess and not args.dry_run and postprocess_success
+            and successful_sessions == total_sessions and mosaic_success
+            and len(session_stack_outputs) == len(input_roots)):
+        from lib.postprocess_resume import PostProcessResume
+
+        PostProcessResume.save_final_images(
+            output_base_dir, input_roots, args.create_mosaic, final_images,
+        )
 
     # Retour final
     if (

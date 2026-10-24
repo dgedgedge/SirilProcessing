@@ -236,10 +236,18 @@ absente ou hors des sources de navigation est refusée explicitement.
 
 ## AutoGHS, StarNet et rendu final
 
+Le GHS final sans étoiles est vérifié à D=1,25, avec désactivation à 0,
+distribution constante, forces invalides et entrées non finies. RANGE,
+avec et sans chroma, doit reproduire exactement l’application
+de la courbe validée au fond déjà rendu, sans modifier les recherches amont.
+Le contrat de publication vérifie son application avant la fusion stellaire
+et sa présence dans les rapports ; la configuration vérifie CLI > JSON >
+défaut, la sauvegarde explicite et les instantanés indépendants par instance.
+
 Les tests de compensation vérifient les dépassements locaux StarNet de type
 M31, même supérieurs au seuil d’alerte : branches positives, somme linéaire
 conservée, données d’entrée inchangées et diagnostic explicite. Un scénario
-complet produit les deux rendus et leurs JPEG après compensation. Les seuils
+complet produit le rendu RANGE et son JPEG après compensation. Les seuils
 invalides et les branches corrigées hors domaine restent refusés.
 
 Les tests `test_star_separation.py`, `test_star_rendering.py`, `test_auto_ghs.py`
@@ -251,16 +259,16 @@ colorés : davantage de pics franchissent le contraste indicatif 0,03, avec
 conservation des zéros, rapports RGB, plafond et garde de largeur. Les cas
 constants, plateaux et forces invalides sont couverts. Les exports étoiles
 FITS/JPEG et le diagnostic PNG sont vérifiés dans le pipeline. La cible de
-dynamique 1,0 est testée pour RANGE et PEAK ; la configuration préserve les
+dynamique 1,0 est testée pour RANGE ; la configuration préserve les
 surcharges et la nouvelle force stellaire sauvegardée.
 
 ```bash
 .venv/bin/python -m pytest -q tests/test_star_separation.py tests/test_star_rendering.py tests/test_auto_ghs.py tests/test_final_render.py tests/test_postprocessor.py
 ```
 
-Le contrat `both` exige une séparation, un rendu stellaire, deux traitements du
-même fond initial et deux fusions avec la même couche d'étoiles ; les valeurs des
-FITS finaux sont vérifiées, ainsi que les métadonnées, extensions et la source
+Le contrat exige une séparation, un rendu stellaire, un seul traitement RANGE
+et une fusion avec la couche d'étoiles ; les valeurs du FITS final sont vérifiées,
+ainsi que les métadonnées, extensions et la source
 inchangée. Les pannes d'extraction, calcul, fusion et publication sont injectées
 sans autoriser de reprise. La configuration vérifie priorité, sauvegarde
 explicite et instantanés d'instance. Les histogrammes constants, gaussiens,
@@ -328,7 +336,7 @@ périmés lors d’une relance. Une source dans le dossier réinitialisé est pr
 Le test CLI du nom de sortie vérifie le dossier, le rapport et le FITS
 `<image>_postprocess`, avec Clarity activé puis désactivé.
 
-La boucle d’expansion AutoGHS est vérifiée pour RANGE et PEAK avec les cibles
+La boucle d’expansion AutoGHS est vérifiée pour RANGE avec les cibles
 0,8/0,9, le gain borné, les images déjà étendues ou constantes, la limite de
 passages et les paramètres invalides. Les tests vérifient BP sur le premier RGB
 strictement positif, la conservation des valeurs supérieures et la sérialisation
@@ -352,7 +360,51 @@ plafond conservés. Les profils gaussiens sont contrôlés aux deux réglages.
 
 `test_render_exports.py` vérifie les exports JPEG RGB pleine résolution, les
 intensités directes, l’orientation ROWORDER, l’intégrité du FITS, les entrées
-invalides et la copie du JPEG principal par le CLI. Les comparatifs vérifient
-que les pixels précédents sont capturés avant nettoyage et que les catégories
-sans/avec étoiles restent séparées. Le contrat AutoGHS vérifie les nouveaux
-chemins et le premier lancement, puis une relance avec historique disponible.
+invalides et la copie du JPEG principal par le CLI. Le contrat AutoGHS vérifie
+un seul appel RANGE, une seule fusion, l’absence des produits PEAK et des
+comparatifs, puis leur nettoyage lors d’une relance sur un ancien dossier. Les
+anciens choix de stratégie CLI/JSON sont normalisés vers RANGE ; le moteur
+PEAK n’est plus exécutable. Les histogrammes du fond et de l’image étoilée
+restent distincts.
+
+`test_final_annotation.py` contrôle l’encart final de prise de vue : provenance
+des cartes FITS, placement automatique, conservation des pixels hors panneau,
+absence de totalisation supposée des mosaïques et options de configuration.
+
+`test_annotation_catalog.py` vérifie OpenNGC, la projection WCS avec rotation
+et passage RA=0, les orientations et les exclusions automatiques d’étiquettes.
+
+`test_ghs_final_stretch.py` vérifie la recherche automatique D/B/SP/HP sur trois
+distributions spatiales, la conservation du contraste brillant et du petit cœur,
+les fusions à étoiles fixes et le retour à l'identité. `test_postprocessing.py`
+vérifie que `--autoghs-only` saute tous les traitements linéaires et leurs aperçus,
+garde les exports et ne persiste pas le mode de relance.
+
+`test_ghs_log_histogram.py` confronte la régression semi-log à une pente
+exponentielle connue, vérifie sa résistance à une bosse secondaire, les
+classes vides, les bordures, la borne haute conditionnelle 0,75/0,875 et le
+classement renforcé du RMS relatif face à la pente. Les tests du moteur final
+contrôlent aussi SP variable, la visibilité des tons moyens, la distinction
+entre P98 sombre et hautes lumières, et la parité CPU/CUDA lorsqu'elle est disponible.
+Ils vérifient aussi les bornes hautes figées, le meilleur score sur tout le champ
+parmi trois finalistes, et la conservation d'un champ déjà rectiligne. Les tests
+de configuration couvrent le poids RMS, ses limites et sa priorité CLI/JSON.
+
+`test_postprocess_resume.py` vérifie la reprise avec la même entrée initiale,
+la conservation des réglages et rapports amont, les reprises répétées, les
+intermédiaires périmés/manquants/non linéaires et les anciens rapports.
+Les tests de sessions vérifient que la reprise lightProcess saute calibration,
+stacking et mosaïque et garde les mêmes réglages.
+
+`test_cuda_environment.py` contrôle l’installation CUDA dans le seul venv cible,
+la résolution avant retrait des conflits, les échecs et la validité du graphe
+ONNX. Les contrôles matériels sont lancés séparément avec `install_cuda.sh`.
+
+Les contours d'annotation sont contrôlés par leurs dimensions angulaires et
+leur angle de position, après projection WCS avec rotation et inversion des
+lignes. Les tailles distinctes de M31/M32 et le repli vers un marqueur de centre
+lorsque les dimensions sont absentes sont également vérifiés.
+
+Les noms usuels d'annotation sont vérifiés pour M31/M33/M42, avec priorité au
+français disponible, conservation des identifiants et repli vers le nom original
+ou les seuls identifiants lorsque le catalogue ne fournit pas de nom usuel.

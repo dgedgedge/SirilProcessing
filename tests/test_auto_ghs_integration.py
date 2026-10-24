@@ -27,8 +27,8 @@ def siril_cli_command() -> list[str]:
     return [os.environ["SIRIL_PATH"]]
 
 
-def test_real_cli_both_and_saved_starnet_path(tmp_path: Path) -> None:
-    """La CLI réelle publie les deux variantes, et -S conserve le chemin effectif."""
+def test_real_cli_range_and_saved_starnet_path(tmp_path: Path) -> None:
+    """La CLI réelle publie RANGE seul, et -S conserve le chemin effectif."""
     root = Path(__file__).resolve().parents[1]
     data = fits.getdata(root / "imagesExample/M_33_combined.fits")[
         :, 1000:1512, 1000:1512
@@ -90,8 +90,10 @@ def test_real_cli_both_and_saved_starnet_path(tmp_path: Path) -> None:
         assert np.isfinite(final).all() and final.min() >= 0 and final.max() <= 1
     assert source.read_bytes() == original
     assert Path(report["histogram_path"]).stat().st_size > 0
-    assert set(report["output_jpegs"]) == {"range", "peak"}
-    assert all(Path(path).is_file() for path in report["comparison_paths"].values())
+    assert set(report["output_images"]) == set(report["output_jpegs"]) == {"range"}
+    assert "comparison_paths" not in report and "comparison_previous" not in report
+    assert not list((tmp_path / "output").rglob("*peak*"))
+    assert not list((tmp_path / "output").rglob("*comparison*"))
     assert (tmp_path / "output/m33_postprocess.jpg").is_file()
 
 

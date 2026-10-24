@@ -21,14 +21,14 @@ traitements peuvent donc être remplacés par une configuration sauvegardée.
 | `-l`, `--log-level` | `INFO` par défaut ; aussi `DEBUG`, `WARNING`, `ERROR`, `CRITICAL` |
 
 `-S` mémorise les paramètres Siril, les activations/désactivations et les réglages
-rémanents des **cinq traitements**, y compris ceux désactivés. Les clés déjà
+rémanents des traitements, y compris ceux désactivés. Les clés déjà
 présentes concernant d’autres traitements sont conservées. Sans `-S`, aucune
 écriture du fichier de configuration n’est effectuée.
 
 Restent propres à l’exécution : les chemins d’entrée et de rapport, le niveau
 de journalisation, `--gradient-output`, `--photometry-object`,
 `--photometry-coordinates`, `--photometry-force`, `--photometry-output` et
-`--deconvolution-output`. Ces paramètres ne sont pas mémorisés par `-S`.
+`--deconvolution-output` et `--autoghs-only`. Ces paramètres ne sont pas mémorisés par `-S`.
 Les anciens noms `--photometry-siril-path` et `--photometry-siril-mode` sont des
 alias des réglages Siril communs.
 
@@ -66,3 +66,31 @@ des surcharges explicites, y compris dans les anciens JSON. Voir la
 ## 3. Options des traitements
 
 Les tableaux des sections suivantes décrivent les options de chaque étape. Les références spécialisées complètent celles de [GraXpert](graxpert.md#paramètres), [AutoGHS](auto-ghs.md#paramètres) et de la [politique CPU/GPU](compute-backend.md).
+
+AutoGHS recherche par défaut un renforcement final protégé
+(`--ghs-final-mode auto`), avec D borné par `--ghs-final-strength 1.25`,
+avant recomposition. `--ghs-final-strength 0` le désactive.
+Cette option est rémanente avec `-S` et commune à postProcess et à lightProcess.
+
+## Annotation finale
+
+| Option | Défaut | Rôle |
+|---|---|---|
+| `--final-annotation` / `--no-final-annotation` | activé | [Copie PNG avec encart de prise de vue](annotations.md), après le rendu final |
+
+Les options `--annotation-objects` / `--no-annotation-objects` (actif),
+`--annotation-magnitude` (14, entre 0 et 25) et `--annotation-max-objects`
+(40, entre 0 et 200) règlent les noms astronomiques. Elles sont mémorisables
+avec `-S` ; les détails figurent dans [Annotation finale](annotations.md).
+
+## Relance AutoGHS et protection des hautes lumières
+
+| Option | Défaut | Rôle |
+|---|---|---|
+| `--autoghs-only` | désactivé | Reprendre la même commande à partir du résultat linéaire précédent ; StarNet, AutoGHS et exports seulement ; non mémorisable |
+| `--ghs-final-mode` | `auto` | Recherche D/B/SP/HP protégée ; `fixed` pour comparer l'ancienne courbe |
+| `--ghs-highlight-retention` | `0.9` | Conservation minimale des indicateurs de contraste brillant, dans `]0,1]` |
+| `--ghs-log-rms-weight` | `2.0` | Poids du gain relatif de régularité de la queue log ; `[0,10]`, zéro désactive ce terme ; mémorisable avec `-S` |
+
+Voir [le mode de relance](README.md#relance-autoghs-seul) et
+[la méthode de protection](ghs-highlight-protection.md).

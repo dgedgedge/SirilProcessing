@@ -48,3 +48,12 @@ défaut dans lightProcess : les commandes habituelles l’enchaînent sans optio
 la mosaïque si `--mosaic` est demandé. Ses paramètres suivent les mêmes défauts
 et la même configuration que le script autonome. `--dry-run` l’annonce sans
 l’exécuter ; une erreur de rendu entraîne un code de retour 1.
+
+## Reprendre seulement le rendu final
+
+Ajouter `--autoghs-only` à la même commande, avec les mêmes sessions, chemins,
+mode mosaïque et réglages. Le programme réutilise les produits finaux et le FITS
+préparé du traitement précédent, sans calibration, stacking ni mosaïque.
+Les rapports et les intermédiaires nécessaires doivent exister ; une reprise
+impossible est signalée sans recalcul automatique. Les exports et annotations
+sont remis à jour. Voir [la référence commune](../postProcess/README.md#relance-autoghs-seul).

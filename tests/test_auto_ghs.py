@@ -77,21 +77,20 @@ def test_histogram_peak_and_quantiles() -> None:
     assert len(state.rgb_counts) == 3
 
 
-@pytest.mark.parametrize("strategy", ["range", "peak"])
-def test_constant_stops_and_optimizer_is_deterministic(strategy: str) -> None:
+def test_constant_stops_and_optimizer_is_deterministic() -> None:
     """Le plateau constant n'est pas une erreur ; l'optimisation est reproductible."""
     backend = ComputeBackend("cpu")
     data = np.full((3, 32, 32), 0.02, dtype=np.float32)
     optimizer = GHSOptimizer()
-    result, report = optimizer.optimize(data, strategy, argparse.Namespace(), backend)
+    result, report = optimizer.optimize(data, "range", argparse.Namespace(), backend)
     np.testing.assert_array_equal(result, data)
     assert report["status"] == "NO_IMPROVEMENT"
     rng = np.random.default_rng(41)
     base = rng.normal(0.02, 0.002, (32, 32))
     data = np.array([base, base * 1.1, base * 0.9], dtype=np.float32)
     args = argparse.Namespace(ghs_max_iterations=2, ghs_bins=512)
-    first, report = optimizer.optimize(data, strategy, args, backend)
-    second, again = optimizer.optimize(data, strategy, args, backend)
+    first, report = optimizer.optimize(data, "range", args, backend)
+    second, again = optimizer.optimize(data, "range", args, backend)
     np.testing.assert_array_equal(first, second)
     assert report == again
     assert len(report["iterations"]) <= 2
@@ -114,14 +113,13 @@ def test_blackpoint_is_first_positive_rgb_value() -> None:
         assert bp == 0
 
 
-@pytest.mark.parametrize("strategy", ["range", "peak"])
 @pytest.mark.parametrize("target", [0.8, 0.9, 1.0])
-def test_optimizer_completes_dynamic_range(strategy: str, target: float) -> None:
-    """Les deux stratégies atteignent la cible paramétrée sur un fond peu étendu."""
+def test_optimizer_completes_dynamic_range(target: float) -> None:
+    """RANGE atteint la cible paramétrée sur un fond peu étendu."""
     base = np.linspace(0.02, 0.03, 32 * 32).reshape(32, 32)
     data = np.array([base, base * 0.9, base * 0.8], dtype=np.float32)
     output, report = GHSOptimizer().optimize(
-        data, strategy, argparse.Namespace(
+        data, "range", argparse.Namespace(
             ghs_max_iterations=1, ghs_bins=512, ghs_dynamic_target=target,
         ), ComputeBackend("cpu"),
     )
@@ -288,25 +286,50 @@ def test_auto_cuda_selection_vram_guard_and_fatal_runtime(monkeypatch) -> None:
 
 
 def test_single_strategy_processor_contract(tmp_path: Path) -> None:
-    """Le moteur GHS seul exige une stratégie et conserve le contrat FITS/rapport."""
+    """Le moteur GHS seul utilise RANGE par défaut et conserve le contrat FITS/rapport."""
     from astropy.io import fits
 
     source = tmp_path / "background.fits"
     data = np.random.default_rng(39).uniform(0.01, 0.03, (3, 16, 16)).astype(np.float32)
     fits.writeto(source, data)
     optimizer = GHSOptimizer()
-    with pytest.raises(ValueError, match="both"):
-        optimizer.post_process(source, tmp_path / "both.json", argparse.Namespace())
     result = optimizer.post_process(
         source,
         tmp_path / "range.json",
         argparse.Namespace(
-            ghs_strategy="range", compute_backend="cpu", ghs_max_iterations=1
+            compute_backend="cpu", ghs_max_iterations=1
         ),
     )
     assert Path(result["output_image"]).is_file()
     assert fits.getheader(result["output_image"])["SPNLIN"]
     assert fits.getheader(result["output_image"])["SPROLE"] == "STARLESS"
+
+
+@pytest.mark.parametrize('legacy', ['both', 'peak', 'range'])
+def test_obsolete_strategy_is_normalized_from_config_cli_and_api(
+    tmp_path: Path, legacy: str,
+) -> None:
+    """Normalise les anciens choix vers RANGE sans réécrire la configuration."""
+    from lib.config import Config
+
+    path = tmp_path / 'settings.json'
+    path.write_text(json.dumps({'ghs_strategy': legacy}))
+    before = path.read_bytes()
+    config = Config(path)
+    parser = argparse.ArgumentParser()
+    config.register(GHSOptimizer, parser)
+    assert config.parse_args(parser, []).ghs_strategy == 'range'
+    assert config.parse_args(parser, ['--ghs-strategy', legacy]).ghs_strategy == 'range'
+    assert GHSOptimizer.options(argparse.Namespace(ghs_strategy=legacy)).ghs_strategy == 'range'
+    assert '--ghs-strategy' not in parser.format_help()
+    assert path.read_bytes() == before
+
+
+def test_removed_peak_engine_is_not_executable() -> None:
+    """Un appel direct ne peut plus déclencher une optimisation PEAK."""
+    data = np.full((3, 8, 8), .1, dtype='f4')
+    with pytest.raises(ValueError, match='Seule la stratégie range'):
+        GHSOptimizer().optimize(data, 'peak', argparse.Namespace(), ComputeBackend('cpu'))
 
 
 @pytest.mark.parametrize("limit", [0, 65, 1.5])
@@ -357,3 +380,72 @@ def test_histogram_parameters_are_validated(option: str, value: float) -> None:
     """Les paramètres d'égalisation sont validés avant l'optimisation."""
     with pytest.raises(ValueError, match="égalisation"):
         GHSOptimizer.options(argparse.Namespace(**{option: value}))
+
+
+@pytest.mark.parametrize("strength", [-0.01, 10.01, float("nan"), float("inf")])
+def test_final_strength_validation(strength: float) -> None:
+    """La configuration et l’appel direct rejettent les forces hors domaine."""
+    with pytest.raises(ValueError, match="ghs-final-strength"):
+        GHSOptimizer.options(argparse.Namespace(ghs_final_strength=strength))
+    with pytest.raises(ValueError, match="ghs-final-strength"):
+        GHSOptimizer().final_stretch(
+            np.full((3, 8, 8), .04, dtype=np.float32), HistogramAnalyzer(256),
+            ComputeBackend("cpu"), strength,
+        )
+
+
+def test_fixed_final_stretch_keeps_reference_curve_and_endpoints() -> None:
+    """Le mode fixe reste disponible pour comparer la courbe historique."""
+    gray = np.linspace(0, 1, 1024, dtype=np.float32).reshape(32, 32)
+    data = np.stack([gray, gray, gray])
+    output, report = GHSOptimizer().final_stretch(
+        data, HistogramAnalyzer(512), ComputeBackend("cpu"), 1.25, mode="fixed",
+    )
+    np.testing.assert_allclose(output, ghs_rgb(data, 1.25, B=0, SP=0, LP=0, HP=1))
+    assert output[0, 1, 1] > data[0, 1, 1]
+    assert output[0, 0, 0] == 0 and output[0, -1, -1] == 1
+    assert np.all(np.diff(output[0].ravel()) >= 0)
+    assert report["status"] == "applied"
+    assert report["parameters"] == {"D": 1.25, "B": 0, "SP": 0, "LP": 0, "HP": 1}
+    assert report["after"]["nonfinite_count"] == 0
+
+
+def test_final_stretch_disable_constant_and_invalid_input() -> None:
+    """Zéro et les constantes sont préservés ; une entrée NaN reste une erreur."""
+    optimizer, analyzer, backend = GHSOptimizer(), HistogramAnalyzer(256), ComputeBackend("cpu")
+    data = np.random.default_rng(96).uniform(0, .2, (3, 16, 16)).astype(np.float32)
+    disabled, report = optimizer.final_stretch(data, analyzer, backend, 0)
+    np.testing.assert_array_equal(disabled, data)
+    assert report["status"] == "disabled"
+    constant = np.full_like(data, .04)
+    output, report = optimizer.final_stretch(constant, analyzer, backend, 1.25)
+    np.testing.assert_array_equal(output, constant)
+    assert report["status"] == "constant distribution"
+    data[0, 0, 0] = np.nan
+    with pytest.raises(ValueError, match="NaN/Inf"):
+        optimizer.final_stretch(data, analyzer, backend, 1.25)
+
+
+@pytest.mark.parametrize("chroma", ["off", "enhanced"])
+def test_final_stretch_is_after_chroma_and_before_publication(
+    chroma: str,
+) -> None:
+    """L’option ne change pas la recherche et reproduit l’étirement du fond déjà rendu."""
+    base = np.random.default_rng(141).normal(.02, .003, (24, 24))
+    data = np.array([base * 1.1, base, base * .9], dtype=np.float32)
+    args = argparse.Namespace(
+        ghs_max_iterations=1, ghs_bins=256, ghs_chroma=chroma, ghs_final_strength=0,
+        ghs_final_mode="fixed",
+    )
+    optimizer, backend = GHSOptimizer(), ComputeBackend("cpu")
+    baseline, old = optimizer.optimize(data, "range", args, backend)
+    args.ghs_final_strength = 1.25
+    output, new = optimizer.optimize(data, "range", args, backend)
+    np.testing.assert_allclose(
+        output, ghs_rgb(baseline, 1.25, B=0, SP=0, LP=0, HP=1), atol=1e-7,
+    )
+    assert old["iterations"] == new["iterations"]
+    assert old["chroma_diagnostics"] == new["chroma_diagnostics"]
+    assert old["presentation_stretch"]["status"] == "disabled"
+    assert new["presentation_stretch"]["status"] == "applied"
+    assert GHSOptimizer.options(argparse.Namespace()).ghs_final_strength == 1.25

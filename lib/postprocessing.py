@@ -14,10 +14,12 @@ import logging
 from pathlib import Path
 from shutil import copyfile
 
+from lib.final_annotation import FinalImageAnnotator
 from lib.logging_utils import (
     add_session_file_logging, log_section, remove_session_file_logging,
 )
 from lib.postprocess import _PostProcessorSequence
+from lib.postprocess_resume import PostProcessResume
 from lib.processor import processor
 from lib.quality_preview import QualityMaskPreview
 from lib.star_separation import StarNetSeparator
@@ -31,12 +33,15 @@ class PostProcessingProcessor(processor):
     sur disque (une clé par étape) et retourne une enveloppe ``processor`` avec
     ``output_image``, ``report_path`` et ``treatments``. Les chemins des produits
     dérivent du rapport, jamais du répertoire de travail de la calibration.
+    L’annotation finale ajoute un PNG distinct et un audit par étape.
     Voir docs/scripts/postProcess/pipeline.md.
     """
 
     enabled_by_default = True
     parameter_dependencies = {"config", "log_level"}
-    parameter_persistence = _PostProcessorSequence.parameter_persistence
+    parameter_persistence = {
+        **_PostProcessorSequence.parameter_persistence, "autoghs_only": False,
+    }
     config_path_parameters = _PostProcessorSequence.config_path_parameters
 
     @classmethod
@@ -46,14 +51,14 @@ class PostProcessingProcessor(processor):
 
     @classmethod
     def parameter_children(cls) -> tuple[type[processor], ...]:
-        """Déclare la séquence et ses moteurs pour la liaison hiérarchique."""
-        return (_PostProcessorSequence,)
+        """Déclare la séquence et l’annotation pour la liaison hiérarchique."""
+        return (_PostProcessorSequence, FinalImageAnnotator)
 
     @classmethod
     def add_arguments(
         cls, parser: argparse.ArgumentParser, include_activation: bool = False,
     ) -> None:
-        """Déclare les mêmes paramètres scientifiques dans les deux scripts.
+        """Déclare les paramètres scientifiques et de présentation des deux scripts.
 
         include_activation ajoute uniquement dans lightProcess le choix
         persistant --postprocess/--no-postprocess, activé par défaut.
@@ -68,19 +73,27 @@ class PostProcessingProcessor(processor):
                     "finale (activé par défaut)"
                 ),
             )
+        parser.add_argument(
+            "--autoghs-only", action="store_true", default=False,
+            help="Reprendre le traitement précédent : relancer seulement StarNet et AutoGHS",
+        )
         _PostProcessorSequence.add_arguments(parser)
+        FinalImageAnnotator.add_arguments(parser)
 
     @staticmethod
     def prepare_config_save(args: argparse.Namespace) -> None:
         """Résout StarNet avant une sauvegarde demandée avec AutoGHS actif.
 
-        Modifie uniquement args.starnet_path ; le script appelle ensuite
+        Le mode autoghs-only active également cette découverte, même si AutoGHS
+        est désactivé dans la configuration. Modifie uniquement args.starnet_path ;
+        le script appelle ensuite
         Config.save_requested une seule fois, avant ses calculs. Les erreurs de
         découverte restent explicites. Sans -S ou sans AutoGHS, ne fait rien.
         """
         if (
             getattr(args, "save_config", False)
-            and getattr(args, "enable_autoghs", True)
+            and (getattr(args, "enable_autoghs", True)
+                 or getattr(args, "autoghs_only", False))
         ):
             args.starnet_path = StarNetSeparator.resolve_executable(args)
 
@@ -183,7 +196,7 @@ class PostProcessingProcessor(processor):
             FITS linéaire issu du stack, de la mosaïque ou fourni directement.
         output_path : Path
             Rapport JSON global ; son stem nomme le dossier d’étapes et les
-            exports FITS/JPEG. Utiliser report_path_for pour les noms standards.
+            exports FITS/JPEG/PNG. Utiliser report_path_for pour les noms standards.
         args : argparse.Namespace, optional
             Surcharge ponctuelle, copiée sans modifier les paramètres mémorisés.
 
@@ -202,6 +215,10 @@ class PostProcessingProcessor(processor):
 
         Notes
         -----
+        autoghs_only retrouve le FITS linéaire du traitement précédent avec la
+        même entrée/sortie, saute les traitements amont et leurs aperçus, force
+        AutoGHS pour cet appel et conserve les exports, l'annotation et les audits
+        amont. Un historique absent ou périmé empêche la reprise.
         Ne parse pas sys.argv, ne sauvegarde pas Config et ne configure pas la
         console. Le journal propre à cette image est fermé même en cas d’échec.
         La protection énergétique est gérée par le script appelant ; ce
@@ -222,7 +239,12 @@ class PostProcessingProcessor(processor):
             raise ValueError(
                 "Les produits du post-traitement ne peuvent pas remplacer la source"
             )
+        prepared, previous = source, {}
+        if getattr(runtime, "autoghs_only", False):
+            prepared, previous = PostProcessResume.load(source, report)
         runtime.postprocess_steps_dir = steps_dir
+        if getattr(runtime, "autoghs_only", False):
+            runtime.enable_autoghs = True
         level = getattr(runtime, "log_level", "INFO")
         handler = add_session_file_logging(log_file, level)
         try:
@@ -236,19 +258,38 @@ class PostProcessingProcessor(processor):
             logging.info("Dossier des étapes: %s", steps_dir)
             logging.info("Résultat final: %s", final_path)
             sequence = _PostProcessorSequence()
-            results = sequence.post_process(source, report, args=runtime)
-            quality_preview = QualityMaskPreview.ensure_for_run(
-                results, source, steps_dir, runtime,
-            )
-            gradient_preview = QualityMaskPreview.write_gradient_points(
-                results, steps_dir,
-            )
-            report.write_text(
-                json.dumps(results, indent=2, ensure_ascii=False),
-                encoding="utf-8",
-            )
+            logging.info("Entrée linéaire du rendu : %s", prepared)
+            results = sequence.post_process(prepared, report, args=runtime)
+            if previous:
+                results = {**{key: value for key, value in previous.items()
+                              if key not in ("autoghs", "annotation")}, **results}
+            quality_preview, gradient_preview = None, None
+            if not getattr(runtime, "autoghs_only", False):
+                quality_preview = QualityMaskPreview.ensure_for_run(
+                    results, source, steps_dir, runtime,
+                )
+                gradient_preview = QualityMaskPreview.write_gradient_points(
+                    results, steps_dir,
+                )
             summary = self._export_results(
                 results, source, report, quality_preview,
+            )
+            log_section("Annotation finale : informations de prise de vue")
+            annotation = FinalImageAnnotator().post_process(
+                Path(summary["output_image"]),
+                report.with_name(report.stem + "_annotation.json"), args=runtime,
+            )
+            results["annotation"] = annotation
+            if annotation.get("output_annotated_image"):
+                summary["output_annotated_image"] = annotation["output_annotated_image"]
+            logging.debug("Rapport détaillé d’annotation finale : %s", annotation)
+            if annotation.get("output_annotated_image"):
+                logging.info("Image annotée exportée : %s",
+                             annotation["output_annotated_image"])
+            else:
+                logging.info("Annotation finale : %s", annotation.get("status"))
+            report.write_text(
+                json.dumps(results, indent=2, ensure_ascii=False), encoding="utf-8",
             )
             logging.info("Image des zones de qualité : %s", quality_preview)
             if gradient_preview:
@@ -260,6 +301,7 @@ class PostProcessingProcessor(processor):
                         "Synthèse des essais %s : %s", name, branch["summary_path"],
                     )
             logging.info("Rapport sauvegardé: %s", report)
+            PostProcessResume.save(source, report, results)
             logging.info("Post-traitements terminés")
             return summary
         except KeyboardInterrupt:

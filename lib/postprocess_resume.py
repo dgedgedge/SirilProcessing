@@ -1,0 +1,154 @@
+"""Provenance et reprise du rendu final sans réexécuter les traitements amont.
+
+Les chemins viennent des rapports, jamais d'une recherche du dernier FITS par
+nom ou date. Les nouvelles exécutions contrôlent aussi taille et date de fichier.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from astropy.io import fits
+
+from lib.star_separation import validate_linear_header
+from lib.type_defs import JSONReport
+
+
+class PostProcessResume:
+    """Mémorise l'entrée initiale et le FITS réellement reçu par AutoGHS."""
+
+    @staticmethod
+    def read_object(path: Path) -> JSONReport:
+        """Lit un rapport JSON objet ; refuse les racines scalaires ou tableaux."""
+        payload = json.loads(path.read_text(encoding='utf-8'))
+        if not isinstance(payload, dict):
+            raise ValueError(f'Rapport de reprise invalide : {path}')
+        return payload
+
+    @staticmethod
+    def snapshot(path: Path) -> JSONReport:
+        """Identifie un fichier par chemin absolu, taille et mtime en nanosecondes."""
+        path = path.resolve()
+        stat = path.stat()
+        return {'path': str(path), 'size': stat.st_size, 'mtime_ns': stat.st_mtime_ns}
+
+    @staticmethod
+    def manifest_path(report: Path) -> Path:
+        """Place la provenance de reprise à côté du rapport de post-traitement."""
+        return report.with_name(report.stem + '_resume.json')
+
+    @classmethod
+    def save(cls, source: Path, report: Path, results: JSONReport) -> None:
+        """Conserve les références après une exécution réussie, sans changer les options."""
+        prepared = source
+        for name, branch in results.items():
+            if not isinstance(branch, dict) or name == 'annotation':
+                continue
+            if name == 'autoghs':
+                if branch.get('image_path'):
+                    prepared = Path(branch['image_path'])
+                break
+            if branch.get('output_image'):
+                prepared = Path(branch['output_image'])
+        if not prepared.is_absolute():
+            prepared = report.parent / prepared
+        payload = {'version': 1, 'source': cls.snapshot(source),
+                   'prepared': cls.snapshot(prepared)}
+        cls.manifest_path(report).write_text(
+            json.dumps(payload, indent=2, ensure_ascii=False), encoding='utf-8',
+        )
+
+    @classmethod
+    def load(cls, source: Path, report: Path) -> tuple[Path, JSONReport]:
+        """Retrouve l'entrée linéaire du précédent traitement de la même commande.
+
+        Un rapport absent, invalide ou un intermédiaire disparu/modifié est fatal,
+        avant toute remise à zéro d'AutoGHS. Les anciens rapports sont compatibles
+        lorsqu'ils enregistrent explicitement autoghs.image_path.
+        """
+        if not report.is_file():
+            raise FileNotFoundError(
+                'Aucun traitement précédent à reprendre ; lancer le traitement complet '
+                f'avec les mêmes entrée et sortie : {report}'
+            )
+        previous = cls.read_object(report)
+        manifest = cls.manifest_path(report)
+        if manifest.is_file():
+            payload = cls.read_object(manifest)
+            if payload.get('version') != 1:
+                raise ValueError('Version de provenance de reprise inconnue')
+            if payload.get('source') != cls.snapshot(source):
+                raise ValueError('L’entrée initiale a changé depuis le traitement précédent')
+            stored = payload.get('prepared')
+            if not isinstance(stored, dict) or not isinstance(stored.get('path'), str):
+                raise ValueError('Référence linéaire de reprise invalide')
+            prepared = Path(stored['path'])
+            if stored != cls.snapshot(prepared):
+                raise ValueError(
+                    'Le FITS linéaire préparé a changé ; refaire le traitement complet'
+                )
+        else:
+            autoghs = previous.get('autoghs')
+            if not isinstance(autoghs, dict) or not autoghs.get('image_path'):
+                raise ValueError('Le rapport ne contient pas l’entrée linéaire AutoGHS ; '
+                                 'refaire le traitement complet')
+            prepared = Path(autoghs['image_path'])
+            if not prepared.is_absolute():
+                prepared = report.parent / prepared
+        prepared = prepared.resolve()
+        validate_linear_header(fits.getheader(prepared))
+        return prepared, previous
+
+    @staticmethod
+    def save_final_images(
+        directory: Path, roots: list[Path], mosaic: bool, images: list[Path],
+    ) -> None:
+        """Enregistre les produits finaux lightProcess, y compris les stacks à une pose."""
+        directory.mkdir(parents=True, exist_ok=True)
+        payload = {'roots': [str(root.resolve()) for root in roots], 'mosaic': mosaic,
+                   'images': [str(image.resolve()) for image in images]}
+        (directory / 'lightprocess_final_images.json').write_text(
+            json.dumps(payload, indent=2), encoding='utf-8',
+        )
+
+    @staticmethod
+    def final_images(
+        directory: Path, work: Path, roots: list[Path], mosaic_name: str | None,
+    ) -> list[Path]:
+        """Retrouve les mêmes produits lightProcess sans calibration, stacking ni mosaïque.
+
+        Pour les anciens traitements, le rapport de mosaïque ou le nom standard
+        d'un stack est accepté. Une ambiguïté ou un produit absent reste une erreur.
+        """
+        manifest = directory / 'lightprocess_final_images.json'
+        if manifest.is_file():
+            payload = PostProcessResume.read_object(manifest)
+            if (payload.get('roots') != [str(root.resolve()) for root in roots]
+                    or payload.get('mosaic') != bool(mosaic_name)):
+                raise ValueError(
+                    'Les sessions ou le mode mosaïque diffèrent du traitement précédent'
+                )
+            paths = payload.get('images')
+            if (not isinstance(paths, list) or len(paths) != (1 if mosaic_name else len(roots))
+                    or not all(isinstance(path, str) for path in paths)):
+                raise ValueError('Liste de produits finaux de reprise invalide')
+            images = [Path(path) for path in paths]
+        elif mosaic_name:
+            report = work / f'{mosaic_name}_mosaic.json'
+            payload = PostProcessResume.read_object(report)
+            if not isinstance(payload.get('output_image'), str):
+                raise ValueError('Le rapport de mosaïque ne référence pas son image finale')
+            image = Path(payload['output_image'])
+            images = [image if image.is_absolute() else report.parent / image]
+        else:
+            images = []
+            for root in roots:
+                candidates = [directory / root.name / f'{root.name}_combined{suffix}'
+                              for suffix in ('.fits', '.fit')]
+                images.append(next(
+                    (path for path in candidates if path.is_file()), candidates[0],
+                ))
+        if not images or any(not image.is_file() for image in images):
+            raise FileNotFoundError('Résultat final précédent absent ; refaire le traitement complet')
+        return images

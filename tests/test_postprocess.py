@@ -595,4 +595,6 @@ def test_default_output_uses_general_name_and_indexed_files(
     assert (work / 'quality_masks.json').exists()
     assert (work / 'quality_gradient_points.png').exists()
     assert not (tmp_path / 'target_gradient_steps').exists()
-    assert not list(tmp_path.glob('target_postprocess_*'))
+    assert {path.name for path in tmp_path.glob('target_postprocess_*')} == {
+        'target_postprocess_resume.json', 'target_postprocess_annotation.json',
+    }

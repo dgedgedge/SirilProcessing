@@ -8,7 +8,7 @@
 [`processor`](../../../lib/processor.py). Il porte l’exécution complète qui
 était dans `bin/postProcess.py` : séquence scientifique, journal par image,
 diagnostics de qualité et du gradient, puis exports FITS et
-JPEG. Les deux scripts appellent cette même classe en mémoire.
+JPEG, puis annotation finale PNG. Les deux scripts appellent cette même classe en mémoire.
 
 La [protection énergétique](power-guard.md) appartient aux scripts de lancement.
 `postProcess.py` détient un contexte pour le traitement complet de son image ;
@@ -34,7 +34,7 @@ Le contrat est `post_process(input_path, output_path, args=None)` :
   `output_jpeg` est ajouté si AutoGHS a fourni un JPEG.
 
 Le JSON sur disque conserve son schéma historique : une clé par traitement,
-comme `gradient`, `photometry`, `restoration` et `autoghs`. Il correspond au
+comme `gradient`, `photometry`, `restoration`, `autoghs` et `annotation`. Il correspond au
 contenu de `treatments` dans l’enveloppe retournée. Le consommateur suivant
 reçoit le FITS exporté grâce à `output_image`.
 
@@ -173,3 +173,30 @@ détenue par le CLI autonome. Les tests
 la simulation, les échecs et le contexte unique de protection du script complet.
 Les tests avec moteurs simulés ne remplacent pas
 une validation astrophotographique complète sur plusieurs acquisitions.
+
+## Annotation après publication
+
+La dernière étape appelle `FinalImageAnnotator` sur le FITS final exporté.
+Elle produit par défaut le [PNG avec encart de prise de vue](annotations.md),
+son audit et la clé `annotation` du rapport global. L’enveloppe retournée
+contient `output_annotated_image` en cas de réussite. La séquence enregistre d'abord les traitements scientifiques ; l'orchestrateur
+complète ensuite le rapport global avec l'annotation. Une erreur d'annotation
+peut donc laisser le rapport scientifique sans cette dernière clé, ainsi que les
+exports déjà produits. Vérifier le code de sortie et le journal pour confirmer
+la réussite de l'ensemble.
+
+## Relance du rendu seul
+
+`--autoghs-only` sélectionne seulement `AutoGHSFinalRenderer` dans la séquence
+standard et l'active pour cet appel. Les aperçus de qualité linéaire sont sautés ;
+les exports et l'annotation restent actifs. Le paramètre n'est pas sauvegardé.
+Voir [l'exemple et les contraintes d'entrée](README.md#relance-autoghs-seul).
+
+La reprise conserve l'entrée et la sortie de la commande complète.
+`lib.postprocess_resume.PostProcessResume` retrouve et vérifie le FITS préparé
+avant la remise à zéro du travail AutoGHS. L'orchestrateur conserve les clés des
+étapes amont du rapport et remplace seulement `autoghs` et `annotation`.
+La provenance est enregistrée séparément après réussite ; elle comprend les
+chemins absolus, tailles et dates des fichiers source et préparé. Depuis
+lightProcess, `lightprocess_final_images.json` retrouve les mêmes produits finaux
+avant tout travail de calibration/stacking/mosaïque, même pour un stack à une pose.

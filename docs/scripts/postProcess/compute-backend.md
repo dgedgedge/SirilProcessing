@@ -73,3 +73,9 @@ explicitement autorisée.
 
 Voir les détails de [Cosmic Clarity](cosmic-clarity.md),
 [GraXpert](graxpert.md), et du [backend AutoGHS](auto-ghs-algorithm.md#cpu-cuda-et-ressources).
+
+## Installation commune
+
+`bin/install_cuda.sh` prépare et vérifie les trois dépendances CUDA dans le
+même venv. Voir [Installation CUDA](../install_cuda/README.md). L’option
+`--compute-backend` choisit le moteur et ne réalise pas cette installation.

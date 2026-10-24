@@ -1,0 +1,6 @@
+# Ensemble cohérent CUDA 12.8, Python 3.11–3.14 ; ne pas installer onnxruntime CPU en parallèle.
+-r requirements-cosmic-clarity.txt
+onnxruntime-gpu==1.26.0
+cupy-cuda12x[ctk]==14.2.0
+# Évite la sélection d'un toolkit CUDA 12.9 incompatible avec les pins PyTorch.
+cuda-toolkit==12.8.1

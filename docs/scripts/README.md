@@ -89,7 +89,7 @@ et [organisation des sessions](lightProcess/SESSIONS.md).
 ### 2.3.3. Traitements et sorties
 
 [Manuel complet](postProcess/README.md), [restauration](postProcess/restoration.md),
-[AutoGHS](postProcess/auto-ghs.md) et [FITS, JPEG et comparatifs](postProcess/render-exports.md).
+[AutoGHS](postProcess/auto-ghs.md) et [exports FITS et JPEG](postProcess/render-exports.md).
 
 <a id="solareclipsegif-animation-solaire"></a>
 
@@ -180,3 +180,8 @@ l’ancien point d’entrée `generate_docs_html.py`.
 
 Pour comprendre les responsabilités des modules communs, consulter
 l’[architecture](../architecture/README.md).
+
+## Installation du venv CUDA
+
+[Installer et vérifier les trois moteurs GPU](install_cuda/README.md) avec
+`bin/install_cuda.sh` pour lightProcess et postProcess.

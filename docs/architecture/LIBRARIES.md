@@ -7,6 +7,12 @@
 | [parameterized_component.py](../../lib/parameterized_component.py) | Partager la déclaration et la capture des paramètres entre services et traitements |
 | [processor.py](../../lib/processor.py) | Ajouter le contrat de traitement d’image aux composants configurables |
 | [postprocessing.py](../../lib/postprocessing.py) | Exécuter le [pipeline complet de post-traitement](../scripts/postProcess/pipeline.md) commun à lightProcess et postProcess |
+| [annotation_catalog.py](../../lib/annotation_catalog.py) | Charger OpenNGC hors ligne et projeter les positions sur le WCS final pour les [annotations](../scripts/postProcess/annotations.md) |
+| [final_annotation.py](../../lib/final_annotation.py) | Produire la [copie annotée finale](../scripts/postProcess/annotations.md) et son encart de prise de vue |
+| [postprocess_resume.py](../../lib/postprocess_resume.py) | Conserver la provenance et retrouver l’entrée linéaire pour la [reprise du rendu final](../scripts/postProcess/README.md#relance-autoghs-seul) |
+| [cuda_environment.py](../../lib/cuda_environment.py) | Installer les dépendances du venv commun et vérifier les trois moteurs [CUDA](../scripts/install_cuda/README.md) |
+| [ghs_final_stretch.py](../../lib/ghs_final_stretch.py) | Rechercher le renforcement final D/B/SP/HP sous [contraintes de hautes lumières](../scripts/postProcess/ghs-highlight-protection.md) |
+| [ghs_log_histogram.py](../../lib/ghs_log_histogram.py) | Mesurer la décroissance semi-log robuste pour le [classement des essais GHS](../scripts/postProcess/ghs-highlight-protection.md#31-régression-de-la-décroissance-logarithmique) |
 | [final_render.py](../../lib/final_render.py) | Orchestrer et publier le [rendu final AutoGHS](../scripts/postProcess/auto-ghs.md) après les traitements linéaires |
 | [auto_ghs.py](../../lib/auto_ghs.py) | Calculer les étirements et rechercher leurs paramètres sur histogrammes |
 | [star_separation.py](../../lib/star_separation.py) | Adapter StarNet V2 via le service Siril existant |

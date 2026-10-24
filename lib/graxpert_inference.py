@@ -98,10 +98,18 @@ class GraXpertEngine(ParameterizedComponent):
         return ComputeConfig.requested(args)
 
     def _create_session(self, model: Path, gpu: bool) -> ort.InferenceSession:
-        """Crée une session sans repli CPU implicite lorsque le GPU est exigé."""
+        """Précharge CUDA depuis les paquets NVIDIA du venv puis crée la session.
+
+        Le GPU exigé ne permet pas de repli CPU implicite. Les versions ONNX
+        antérieures sans API preload_dlls conservent leur chargement habituel.
+        """
         import onnxruntime as ort
 
         ort.disable_telemetry_events()
+        if gpu and hasattr(ort, 'preload_dlls'):
+            # Les installations CUDA du venv fournissent les DLL/.so NVIDIA ;
+            # les charger avant la création de session, sans modifier le système.
+            ort.preload_dlls(directory='')
         options = ort.SessionOptions()
         options.intra_op_num_threads = CpuConfig.get_limit()
         options.inter_op_num_threads = 1

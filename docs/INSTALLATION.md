@@ -197,6 +197,18 @@ permet de l’écarter. Siril reste requis pour les contrôles.
 Voir [Cosmic Clarity](scripts/postProcess/cosmic-clarity.md) pour les versions
 épinglées, les prérequis GPU, les erreurs et les volumes de téléchargement.
 
+Pour installer ensemble **PyTorch CUDA, ONNX Runtime GPU et CuPy** dans le
+même venv utilisé par lightProcess et postProcess :
+
+```bash
+./bin/install_cuda.sh
+```
+
+Le [guide de l'installateur CUDA](scripts/install_cuda/README.md) décrit les
+prérequis NVIDIA, les versions cohérentes CUDA 12.8, `--check-only`,
+`--install-only` et la sélection du venv. Les poids ne sont pas téléchargés
+par ce script.
+
 `--compute-backend auto`, réglage général par défaut, choisit le GPU disponible
 pour chaque moteur ou le CPU avant calcul. **Ce choix n’installe aucune
 dépendance GPU.** PyTorch CUDA, `onnxruntime-gpu` pour GraXpert et CuPy pour

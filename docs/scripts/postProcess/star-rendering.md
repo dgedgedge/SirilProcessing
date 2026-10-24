@@ -14,10 +14,9 @@ histogrammes de la couche d'étoiles, sans intervenir dans le calcul.
 [`AutoGHSFinalRenderer`](../../../lib/final_render.py) orchestre les enfants,
 contrôle et publie leurs sorties ; il ne contient pas le moteur GHS.
 
-L'ordre est strict : **une séparation → une couche d'étoiles étirée → deux
-fonds GHS indépendants → deux fusions**, en mode both. Les deux recompositions
-reçoivent le même tableau d'étoiles rendu. Les tests contractuels enregistrent
-ces appels et vérifient sur disque leur contribution non nulle.
+L'ordre est strict : **une séparation → une couche d'étoiles étirée → un fond
+GHS RANGE → une fusion**. Les tests contractuels enregistrent ces appels et
+vérifient sur disque la contribution non nulle des étoiles au rendu final.
 
 ## Adaptateur StarNet V2 / Siril 1.4
 
@@ -69,7 +68,7 @@ stars_positive = stars_linear - negative
 ```
 
 Le flux est transféré dans le fond avant tout étirement, avec conservation de
-la somme linéaire. Les deux stratégies reçoivent ce **même fond corrigé**.
+la somme linéaire. RANGE reçoit ce **fond corrigé**.
 Dans les pixels concernés, le fond corrigé retrouve l’intensité originale et
 la couche d’étoiles devient nulle. Cela revient à borner le fond par l’original,
 en maintenant `fond_corrigé + étoiles_positives = image_originale`, à l’arrondi
@@ -185,7 +184,7 @@ Dans `05_autoghs_work/002_stars/`, `<image>_stars_diagnostic.png` présente :
 - un encart : objectif, effectif candidat, dépassements du seuil 0,03 pour le
   linéaire/le gain fixe/le rendu adapté, essais, force retenue et FWHM.
   Après recomposition, l'encart ajoute les effectifs dont le contraste réinséré
-  dépasse ce même seuil pour chaque stratégie.
+  dépasse ce même seuil après fusion RANGE.
 
 Les zéros sont exclus des axes logarithmiques et leur fraction est affichée.
 `<image>_stars_render.jpg` fournit aussi la couche entière en pleine résolution,
@@ -206,8 +205,8 @@ final = B_safe + S*(1-B_safe)
 Cette loi screen correspond à une expression PixelMath, et non à une simple
 addition de branches non linéaires. Elle est bornée pour des entrées bornées,
 conserve une contribution stellaire positive et ne recadre aucune branche.
-`headroom=0.95` réserve une marge commune aux canaux du fond. Les deux variantes
-produisent leurs propres FITS étoilés et sont vérifiées après fusion.
+`headroom=0.95` réserve une marge commune aux canaux du fond. Le rendu
+RANGE est écrit en FITS puis vérifié après fusion.
 
 Les diagnostics comparent l'addition hypothétique `B_safe+S` (potentiellement
 écrêtée) au résultat screen réellement retenu. Ils mesurent la contribution
