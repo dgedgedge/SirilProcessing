@@ -100,8 +100,11 @@ class GraXpertEngine(ParameterizedComponent):
     def _create_session(self, model: Path, gpu: bool) -> ort.InferenceSession:
         """Précharge CUDA depuis les paquets NVIDIA du venv puis crée la session.
 
-        Le GPU exigé ne permet pas de repli CPU implicite. Les versions ONNX
-        antérieures sans API preload_dlls conservent leur chargement habituel.
+        Les opérations auxiliaires peuvent rester sur CPU ; une demande GPU
+        exige toujours un fournisseur GPU enregistré dans la session. Ce
+        contrôle ne mesure pas la répartition des opérations. Le redémarrage
+        automatique de la session après un échec reste désactivé. Les versions
+        ONNX sans preload_dlls conservent leur chargement habituel.
         """
         import onnxruntime as ort
 
@@ -121,7 +124,8 @@ class GraXpertEngine(ParameterizedComponent):
             ]
             if not providers:
                 raise RuntimeError("Aucun fournisseur ONNX GPU disponible")
-            options.add_session_config_entry("session.disable_cpu_ep_fallback", "1")
+            # Autoriser les opérations auxiliaires affectées au CPU par ONNX.
+            providers.append("CPUExecutionProvider")
         else:
             providers = ["CPUExecutionProvider"]
         session = ort.InferenceSession(

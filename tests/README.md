@@ -408,3 +408,8 @@ lorsque les dimensions sont absentes sont également vérifiés.
 Les noms usuels d'annotation sont vérifiés pour M31/M33/M42, avec priorité au
 français disponible, conservation des identifiants et repli vers le nom original
 ou les seuls identifiants lorsque le catalogue ne fournit pas de nom usuel.
+
+Les tests GraXpert vérifient aussi la configuration des sessions mixtes GPU/CPU,
+le refus d’une session sans fournisseur GPU lorsque celui-ci est demandé, et
+la désactivation du redémarrage implicite ONNX. Ces tests simulent les
+fournisseurs ; ils ne valident pas la répartition réelle des opérations sur GPU.

@@ -447,3 +447,41 @@ def test_auto_gpu_inference_failure_does_not_restart_cpu(
     with pytest.raises(RuntimeError, match='inference GPU failure'):
         GraXpertEngine(native_engine).process(source, tmp_path/'candidate.fits')
     assert calls == [True]
+
+
+@pytest.mark.parametrize('gpu, registered', [
+    (True, ['CUDAExecutionProvider', 'CPUExecutionProvider']),
+    (True, ['CPUExecutionProvider']),
+    (False, ['CPUExecutionProvider']),
+])
+def test_session_allows_mixed_execution_but_requires_gpu(
+    monkeypatch: pytest.MonkeyPatch, gpu: bool, registered: list[str],
+) -> None:
+    """Autorise CPU auxiliaire, refuse la disparition du fournisseur GPU demandé."""
+    from unittest.mock import Mock
+    import onnxruntime as ort
+
+    options = Mock()
+    session = Mock()
+    session.get_providers.return_value = registered
+    session.get_inputs.return_value = [SimpleNamespace(
+        name='gen_input_image', type='tensor(float)', shape=[None, 256, 256, 3],
+    )]
+    factory = Mock(return_value=session)
+    monkeypatch.setattr(ort, 'SessionOptions', lambda: options)
+    monkeypatch.setattr(ort, 'InferenceSession', factory)
+    monkeypatch.setattr(ort, 'preload_dlls', Mock())
+    monkeypatch.setattr(ort, 'get_available_providers', lambda: [
+        'CUDAExecutionProvider', 'CPUExecutionProvider',
+    ])
+    engine = GraXpertEngine(argparse.Namespace(compute_backend='cuda'))
+    if gpu and 'CUDAExecutionProvider' not in registered:
+        with pytest.raises(RuntimeError, match='CPU malgré'):
+            engine._create_session(Path('model.onnx'), gpu)
+    else:
+        assert engine._create_session(Path('model.onnx'), gpu) is session
+    expected = (['CUDAExecutionProvider', 'CPUExecutionProvider'] if gpu
+                else ['CPUExecutionProvider'])
+    assert factory.call_args.kwargs['providers'] == expected
+    options.add_session_config_entry.assert_not_called()
+    session.disable_fallback.assert_called_once_with()

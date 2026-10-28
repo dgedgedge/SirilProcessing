@@ -121,8 +121,12 @@ fourniture de tuiles contient les éléments réels, sans compléter artificiell
 le lot. Le résultat est mélangé avec l’original selon l’intensité ; le uint16 est
 remis dans son échelle avant mélange, comme Siril.
 
-Les fournisseurs effectifs sont auditables. Si le GPU est demandé, le repli ONNX
-implicite vers CPU est désactivé. En cas de défaillance GPU, une nouvelle inférence
+Les fournisseurs enregistrés dans la session sont consignés dans le rapport.
+Une session GPU autorise les opérations auxiliaires sur CPU et exige qu’un
+fournisseur GPU reste enregistré. Cette vérification ne mesure pas la répartition
+des opérations ; seule une mesure sur GPU permet de confirmer son utilisation
+pour le modèle concerné. Le redémarrage automatique interne à ONNX est désactivé.
+En cas de défaillance GPU pendant le calcul, une nouvelle inférence
 sur toute l’image n’est autorisée que par `--graxpert-cpu-fallback`, et journalisée.
 Un contrat de modèle incorrect n’est pas traité comme une simple erreur GPU.
 Les appels restent séquentiels. La RAM contient l’image, ses marges et le modèle ;
