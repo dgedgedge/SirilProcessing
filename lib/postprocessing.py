@@ -15,6 +15,7 @@ from pathlib import Path
 from shutil import copyfile
 
 from lib.final_annotation import FinalImageAnnotator
+from lib.final_color import FinalColorProcessor
 from lib.logging_utils import (
     add_session_file_logging, log_section, remove_session_file_logging,
 )
@@ -38,9 +39,10 @@ class PostProcessingProcessor(processor):
     """
 
     enabled_by_default = True
-    parameter_dependencies = {"config", "log_level"}
+    parameter_dependencies = {"config", "log_level", "final_color_explicit"}
     parameter_persistence = {
-        **_PostProcessorSequence.parameter_persistence, "autoghs_only": False,
+        **_PostProcessorSequence.parameter_persistence,
+        "autoghs_only": False, "color_only": False,
     }
     config_path_parameters = _PostProcessorSequence.config_path_parameters
 
@@ -51,8 +53,8 @@ class PostProcessingProcessor(processor):
 
     @classmethod
     def parameter_children(cls) -> tuple[type[processor], ...]:
-        """Déclare la séquence et l’annotation pour la liaison hiérarchique."""
-        return (_PostProcessorSequence, FinalImageAnnotator)
+        """Déclare la séquence, la couleur et l’annotation finales."""
+        return (_PostProcessorSequence, FinalColorProcessor, FinalImageAnnotator)
 
     @classmethod
     def add_arguments(
@@ -73,11 +75,17 @@ class PostProcessingProcessor(processor):
                     "finale (activé par défaut)"
                 ),
             )
-        parser.add_argument(
+        resume = parser.add_mutually_exclusive_group()
+        resume.add_argument(
             "--autoghs-only", action="store_true", default=False,
-            help="Reprendre le traitement précédent : relancer seulement StarNet et AutoGHS",
+            help='Reprendre à StarNet/AutoGHS, puis saturation, exports et annotation',
+        )
+        resume.add_argument(
+            '--color-only', action='store_true', default=False,
+            help='Relancer couleur, fusion et exports sur les couches GHS précédentes',
         )
         _PostProcessorSequence.add_arguments(parser)
+        FinalColorProcessor.add_arguments(parser)
         FinalImageAnnotator.add_arguments(parser)
 
     @staticmethod
@@ -89,7 +97,11 @@ class PostProcessingProcessor(processor):
         le script appelle ensuite
         Config.save_requested une seule fois, avant ses calculs. Les erreurs de
         découverte restent explicites. Sans -S ou sans AutoGHS, ne fait rien.
+        color-only valide ses options sans découvrir StarNet ni lancer de séparation.
         """
+        FinalColorProcessor.options(args)
+        if getattr(args, 'color_only', False):
+            return
         if (
             getattr(args, "save_config", False)
             and (getattr(args, "enable_autoghs", True)
@@ -156,11 +168,15 @@ class PostProcessingProcessor(processor):
     ) -> JSONReport:
         """Copie les exports finaux et retourne leurs chemins avec les rapports.
 
-        La dernière image des étapes est exportée en FITS. Le JPEG n’est copié
-        que si AutoGHS l’a fourni. Toute erreur est propagée ; la source n’est
+        Si la passe couleur a été exécutée, son export porte le suffixe
+        ``_saturated`` et le rendu AutoGHS est conservé sous ``_ghs`` (FITS et
+        JPEG disponible). Sans couleur, le nom historique est conservé.
+        Toute erreur est propagée ; la source n’est
         jamais modifiée et le rapport historique garde ses clés par étape.
         """
-        final_path = report.with_suffix(".fits")
+        has_color = isinstance(results.get("final_color"), dict)
+        final_path = (report.with_name(report.stem + "_saturated.fits")
+                      if has_color else report.with_suffix(".fits"))
         final_image = self._final_image(results, source)
         if not final_image.is_file():
             raise FileNotFoundError(f"Image finale introuvable: {final_image}")
@@ -173,7 +189,21 @@ class PostProcessingProcessor(processor):
             "steps_dir": str(report.parent / report.stem), "treatments": results,
             "quality_preview_path": str(quality_preview) if quality_preview else None,
         }
-        autoghs = results.get("autoghs")
+        if has_color:
+            ghs = results.get("autoghs", {})
+            if isinstance(ghs, dict):
+                for key, suffix, summary_key in (
+                    ("output_image", ".fits", "output_ghs_image"),
+                    ("output_jpeg", ".jpg", "output_ghs_jpeg"),
+                ):
+                    if ghs.get(key):
+                        original = Path(str(ghs[key])).resolve()
+                        preserved = report.with_name(report.stem + "_ghs" + suffix)
+                        if original != preserved:
+                            copyfile(original, preserved)
+                        summary[summary_key] = str(preserved)
+                        logging.info("Rendu GHS conservé : %s", preserved)
+        autoghs = results.get("final_color", results.get("autoghs"))
         jpeg = autoghs.get("output_jpeg") if isinstance(autoghs, dict) else None
         if jpeg:
             jpeg_path = Path(str(jpeg)).resolve()
@@ -217,8 +247,12 @@ class PostProcessingProcessor(processor):
         -----
         autoghs_only retrouve le FITS linéaire du traitement précédent avec la
         même entrée/sortie, saute les traitements amont et leurs aperçus, force
-        AutoGHS pour cet appel et conserve les exports, l'annotation et les audits
+        AutoGHS et la saturation pour cet appel (sauf refus CLI explicite de la
+        couleur) et conserve les exports, l'annotation et les audits
         amont. Un historique absent ou périmé empêche la reprise.
+        color_only saute aussi StarNet/GHS, réutilise leurs couches immuables et
+        relance la couleur, la fusion et les exports. Elle ne réécrit pas la
+        provenance linéaire et n’exige pas les intermédiaires linéaires préparés.
         Ne parse pas sys.argv, ne sauvegarde pas Config et ne configure pas la
         console. Le journal propre à cette image est fermé même en cas d’échec.
         La protection énergétique est gérée par le script appelant ; ce
@@ -227,20 +261,38 @@ class PostProcessingProcessor(processor):
         à la console et au journal, avant les réglages et les étapes.
         """
         runtime = deepcopy(self._get_args(args))
+        color_only = getattr(runtime, 'color_only', False)
+        if color_only and getattr(runtime, 'autoghs_only', False):
+            raise ValueError('--color-only et --autoghs-only sont incompatibles')
+        if color_only:
+            runtime.enable_final_color = True
+        elif (getattr(runtime, 'autoghs_only', False)
+              and not getattr(runtime, 'final_color_explicit', False)):
+            runtime.enable_final_color = True
+        color_options = FinalColorProcessor.options(runtime)
+        if (color_options.enable_final_color and not color_only
+                and not getattr(runtime, 'autoghs_only', False)
+                and not getattr(runtime, 'enable_autoghs', True)):
+            raise ValueError('La couleur finale exige AutoGHS ou une reprise --color-only')
         source, report = Path(input_path).resolve(), Path(output_path).resolve()
         if report.suffix.lower() != ".json":
             raise ValueError(
                 "Le chemin de sortie du post-traitement doit être un rapport JSON"
             )
         steps_dir = report.parent / report.stem
-        final_path = report.with_suffix(".fits")
+        saturated_path = report.with_name(report.stem + "_saturated.fits")
+        ghs_path = report.with_name(report.stem + "_ghs.fits")
+        final_path = (saturated_path if color_options.enable_final_color
+                      else report.with_suffix(".fits"))
         log_file = steps_dir / f"00_{source.stem}_postProcess.log"
-        if source in (report, final_path, log_file):
+        if source in (report, report.with_suffix(".fits"), saturated_path, ghs_path, log_file):
             raise ValueError(
                 "Les produits du post-traitement ne peuvent pas remplacer la source"
             )
         prepared, previous = source, {}
-        if getattr(runtime, "autoghs_only", False):
+        if color_only:
+            previous = PostProcessResume.load_color(source, report)
+        elif getattr(runtime, "autoghs_only", False):
             prepared, previous = PostProcessResume.load(source, report)
         runtime.postprocess_steps_dir = steps_dir
         if getattr(runtime, "autoghs_only", False):
@@ -257,14 +309,41 @@ class PostProcessingProcessor(processor):
             logging.info("Rapport global: %s", report)
             logging.info("Dossier des étapes: %s", steps_dir)
             logging.info("Résultat final: %s", final_path)
-            sequence = _PostProcessorSequence()
-            logging.info("Entrée linéaire du rendu : %s", prepared)
-            results = sequence.post_process(prepared, report, args=runtime)
-            if previous:
+            if color_only:
+                results = {key: value for key, value in previous.items()
+                           if key not in ('final_color', 'annotation')}
+            else:
+                if color_options.enable_final_color:
+                    runtime.ghs_chroma = 'off'
+                    logging.info('La couleur finale remplace le renforcement chroma avant GHS')
+                sequence = _PostProcessorSequence()
+                logging.info("Entrée linéaire du rendu : %s", prepared)
+                results = sequence.post_process(prepared, report, args=runtime)
+            if previous and not color_only:
                 results = {**{key: value for key, value in previous.items()
-                              if key not in ("autoghs", "annotation")}, **results}
+                              if key not in ("autoghs", "final_color", "annotation")}, **results}
+            if color_options.enable_final_color:
+                autoghs = results.get('autoghs', {})
+                branch = autoghs.get('strategies', {}).get('range', {})
+                stars = autoghs.get('stars', {})
+                if not branch.get('starless_image') or not stars.get('output_image'):
+                    raise ValueError('La couleur finale exige les couches sans étoiles '
+                                     'et étoiles AutoGHS')
+                log_section('Post-traitement — étape 06 : Couleur finale adaptative')
+                if color_only:
+                    logging.info('Réutilisation du fond GHS existant ; chroma antérieure : %s',
+                                 autoghs.get('parameters', {}).get('ghs_chroma', 'non renseignée'))
+                results['final_color'] = FinalColorProcessor().post_process(
+                    Path(branch['starless_image']), steps_dir / '06_final_color.json', runtime,
+                    stars_path=Path(stars['output_image']),
+                    headroom=autoghs.get('parameters', {}).get('ghs_headroom', .95),
+                    color_mode=autoghs.get('parameters', {}).get('ghs_color_mode', 'human'),
+                )
+                results['final_color']['upstream_chroma'] = autoghs.get(
+                    'parameters', {},
+                ).get('ghs_chroma')
             quality_preview, gradient_preview = None, None
-            if not getattr(runtime, "autoghs_only", False):
+            if not (getattr(runtime, "autoghs_only", False) or color_only):
                 quality_preview = QualityMaskPreview.ensure_for_run(
                     results, source, steps_dir, runtime,
                 )
@@ -301,7 +380,8 @@ class PostProcessingProcessor(processor):
                         "Synthèse des essais %s : %s", name, branch["summary_path"],
                     )
             logging.info("Rapport sauvegardé: %s", report)
-            PostProcessResume.save(source, report, results)
+            if not color_only:
+                PostProcessResume.save(source, report, results)
             logging.info("Post-traitements terminés")
             return summary
         except KeyboardInterrupt:

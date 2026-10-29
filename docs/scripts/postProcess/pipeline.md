@@ -10,6 +10,15 @@
 diagnostics de qualité et du gradient, puis exports FITS et
 JPEG, puis annotation finale PNG. Les deux scripts appellent cette même classe en mémoire.
 
+La [couleur finale adaptative](final-color.md) est une étape facultative entre
+AutoGHS et les exports. Son rapport porte le numéro `06_final_color` ; elle
+réutilise le fond GHS et les étoiles rendues, puis recompose la sortie colorée.
+Les exports `_ghs.fits/.jpg` conservent le rendu avant saturation ; les sorties
+finales portent `_saturated.fits/.jpg` et `_saturated_annotated.png`.
+`--color-only` saute aussi StarNet et GHS, conserve leurs couches et les audits
+amont, puis réexporte les FITS/JPEG et l'annotation. Il ne réinitialise que le
+travail de la passe couleur et ne crée pas de nouvel instantané linéaire.
+
 La [protection énergétique](power-guard.md) appartient aux scripts de lancement.
 `postProcess.py` détient un contexte pour le traitement complet de son image ;
 `lightProcess.py` en détient un seul pour la calibration, le stacking, la
@@ -31,10 +40,10 @@ Le contrat est `post_process(input_path, output_path, args=None)` :
   les valeurs liées ou mémorisées par `set_from_args` sont utilisées.
 - Le résultat retourné contient `status: SUCCESS`, `output_image`,
   `report_path`, `steps_dir`, `quality_preview_path` et `treatments` ;
-  `output_jpeg` est ajouté si AutoGHS a fourni un JPEG.
+  `output_jpeg` est ajouté si AutoGHS ou la passe couleur a fourni un JPEG.
 
 Le JSON sur disque conserve son schéma historique : une clé par traitement,
-comme `gradient`, `photometry`, `restoration`, `autoghs` et `annotation`. Il correspond au
+comme `gradient`, `photometry`, `restoration`, `autoghs`, `final_color` et `annotation`. Il correspond au
 contenu de `treatments` dans l’enveloppe retournée. Le consommateur suivant
 reçoit le FITS exporté grâce à `output_image`.
 
@@ -133,7 +142,7 @@ reste possible en simulation.
 
 ## Produits, erreurs et limites
 
-Pour `<sortie>/M33/M33_combined.fits`, l’enchaînement crée à côté :
+Pour `<sortie>/M33/M33_combined.fits`, sans passe couleur finale, l’enchaînement crée à côté :
 
 ```text
 M33_combined_postprocess.fits
@@ -149,7 +158,7 @@ M33_combined_postprocess/
 ```
 
 Cet extrait suppose les traitements actifs et réussis. Le JPEG est publié
-seulement si AutoGHS l’a produit. Les détails des diagnostics, étapes
+si AutoGHS ou la passe couleur l’a produit. Les détails des diagnostics, étapes
 intermédiaires et noms des variantes sont dans [les sorties](README.md#rapports-images-et-journaux)
 et [les exports de rendu](render-exports.md). La mosaïque suit la même convention,
 en ajoutant `_postprocess` au nom de son FITS final réel.
@@ -189,13 +198,17 @@ la réussite de l'ensemble.
 
 `--autoghs-only` sélectionne seulement `AutoGHSFinalRenderer` dans la séquence
 standard et l'active pour cet appel. Les aperçus de qualité linéaire sont sautés ;
-les exports et l'annotation restent actifs. Le paramètre n'est pas sauvegardé.
+la saturation, les exports et l'annotation suivent. La saturation est activée
+pour cet appel même si le JSON la désactive ; `--disable-final-color` l'écarte
+explicitement. Les options `only` définissent le point de reprise et exécutent
+la suite du processus. Le paramètre n'est pas sauvegardé.
 Voir [l'exemple et les contraintes d'entrée](README.md#relance-autoghs-seul).
 
 La reprise conserve l'entrée et la sortie de la commande complète.
 `lib.postprocess_resume.PostProcessResume` retrouve et vérifie le FITS préparé
 avant la remise à zéro du travail AutoGHS. L'orchestrateur conserve les clés des
-étapes amont du rapport et remplace seulement `autoghs` et `annotation`.
+étapes amont du rapport et remplace `autoghs`, `annotation` et la passe couleur
+(sauf désactivation explicite). Un ancien résultat couleur n'est pas conservé implicitement.
 La provenance est enregistrée séparément après réussite ; elle comprend les
 chemins absolus, tailles et dates des fichiers source et préparé. Depuis
 lightProcess, `lightprocess_final_images.json` retrouve les mêmes produits finaux

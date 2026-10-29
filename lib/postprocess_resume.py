@@ -100,6 +100,54 @@ class PostProcessResume:
         validate_linear_header(fits.getheader(prepared))
         return prepared, previous
 
+    @classmethod
+    def load_color(cls, source: Path, report: Path) -> JSONReport:
+        """Valide une reprise après GHS sans exiger les intermédiaires linéaires.
+
+        Les anciens rapports avec couches explicites restent compatibles. Après
+        une passe couleur, leurs snapshots empêchent de réutiliser des couches
+        modifiées à l'extérieur du traitement. Aucun dossier n'est réinitialisé.
+        """
+        previous = cls.read_object(report)
+        manifest = cls.manifest_path(report)
+        if manifest.is_file():
+            provenance = cls.read_object(manifest)
+            if provenance.get('version') != 1:
+                raise ValueError('Version de provenance de reprise inconnue')
+            if provenance.get('source') != cls.snapshot(source):
+                raise ValueError('L’entrée initiale a changé depuis le traitement précédent')
+        autoghs = previous.get('autoghs')
+        if not isinstance(autoghs, dict) or autoghs.get('status') not in (
+            'SUCCESS', 'NO_IMPROVEMENT',
+        ):
+            raise ValueError('Reprise couleur : aucun rendu AutoGHS réussi disponible')
+        strategies, stars = autoghs.get('strategies'), autoghs.get('stars')
+        if not isinstance(strategies, dict) or not isinstance(stars, dict):
+            raise ValueError('Reprise couleur : rapport des couches AutoGHS invalide')
+        branch = strategies.get('range')
+        if not isinstance(branch, dict):
+            raise ValueError('Reprise couleur : aucun fond RANGE disponible')
+        for value, role in ((branch.get('starless_image'), 'STARLESS'),
+                            (stars.get('output_image'), 'STARS')):
+            if not isinstance(value, str):
+                raise ValueError('Reprise couleur : couches GHS et étoiles non référencées')
+            path = Path(value)
+            if not path.is_absolute():
+                raise ValueError('Reprise couleur : les chemins des couches doivent être absolus')
+            header = fits.getheader(path)
+            if not header.get('SPNLIN') or header.get('SPROLE') != role:
+                raise ValueError(f'Couche de reprise couleur incompatible : {path}')
+        color = previous.get('final_color', {})
+        snapshots = color.get('inputs', []) if isinstance(color, dict) else []
+        if not isinstance(snapshots, list):
+            raise ValueError('Provenance des couches couleur invalide')
+        for snapshot in snapshots:
+            if not isinstance(snapshot, dict) or not isinstance(snapshot.get('path'), str):
+                raise ValueError('Provenance des couches couleur invalide')
+            if snapshot != cls.snapshot(Path(snapshot['path'])):
+                raise ValueError('Une couche GHS a changé ; relancer AutoGHS avant la couleur')
+        return previous
+
     @staticmethod
     def save_final_images(
         directory: Path, roots: list[Path], mosaic: bool, images: list[Path],

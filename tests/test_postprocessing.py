@@ -290,7 +290,7 @@ def test_postprocess_cli_owns_and_releases_power_guard(
 def test_autoghs_only_skips_linear_steps_and_quality(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Le mode ciblé active seulement AutoGHS, puis garde exports et annotation."""
+    """Une reprise avec couleur explicitement désactivée garde exports et annotation."""
     from lib.final_render import AutoGHSFinalRenderer
     from lib.quality_preview import QualityMaskPreview
 
@@ -324,7 +324,8 @@ def test_autoghs_only_skips_linear_steps_and_quality(
     monkeypatch.setattr(QualityMaskPreview, 'write_gradient_points', forbidden)
     (tmp_path / 'run.json').write_text(json.dumps(
         {'autoghs': {'image_path': str(source)}}))
-    args = argparse.Namespace(autoghs_only=True, enable_autoghs=False)
+    args = argparse.Namespace(autoghs_only=True, enable_autoghs=False,
+                              enable_final_color=False, final_color_explicit=True)
     result = PostProcessingProcessor().post_process(source, tmp_path / 'run.json', args)
     assert calls == ['05_autoghs.json']
     assert set(result['treatments']) == {'autoghs', 'annotation'}

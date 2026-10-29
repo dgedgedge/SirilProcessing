@@ -26,6 +26,10 @@ il sépare les étoiles avec StarNet et produit une image finale étoilée RANGE
 en FITS et [JPEG](render-exports.md), avec ses histogrammes de diagnostic.
 Il est activé par défaut ; `--disable-autoghs` conserve la sortie linéaire.
 
+Une [passe couleur finale facultative](final-color.md) peut suivre GHS avant
+la fusion et l'annotation : `--enable-final-color` l'active et `--color-only`
+permet de la relancer seule sur les couches GHS existantes.
+
 GraXpert est ajouté automatiquement à la comparaison lorsque des poids locaux
 valides sont présents, sauf désactivation explicite (`--no-enable-graxpert` ou
 configuration sauvegardée). ONNX Runtime s’installe avec
@@ -67,6 +71,11 @@ Chaque exécution crée un nom de base `<image>_postprocess` :
 
 Le rapport global et le FITS final sont donc au même niveau que le dossier
 d’étapes et partagent son nom de base.
+
+Avec la [couleur finale](final-color.md) activée, le rendu GHS est conservé
+dans `<image>_postprocess_ghs.fits/.jpg` et le résultat saturé porte le nom
+`<image>_postprocess_saturated.fits/.jpg`. Son annotation est
+`<image>_postprocess_saturated_annotated.png`.
 
 Le wrapper conserve le dossier de lancement pour résoudre les chemins relatifs.
 L’appel Python équivalent, avec le venv déjà activé, est :
@@ -570,7 +579,10 @@ ne provoquent aucun recalcul amont dans ce mode.
 
 Cette option saute le gradient, la photométrie, la déconvolution, le débruitage,
 les comparaisons de restauration et leurs aperçus de qualité. Elle active AutoGHS
-pour cet appel. StarNet est relancé, puis les rendus et annotations sont remplacés
+et la saturation pour cet appel, même si la couleur est désactivée dans le JSON.
+Ajouter `--disable-final-color` pour l'écarter explicitement. Les options `only`
+indiquent le point de reprise : toutes les étapes suivantes sont ensuite exécutées.
+StarNet est relancé, puis les rendus et annotations sont remplacés
 aux emplacements habituels. Les étapes amont et leurs rapports sont conservés.
 Les prérequis Siril/StarNet et les contrôles de linéarité restent identiques.
 Le paramètre de reprise n'est jamais mémorisé avec `-S`.
@@ -673,7 +685,8 @@ exécutées : `gradient`, `photometry`, `deconvolution`, `denoise`, ou
 `restoration` à la place des deux dernières en comparaison des chaînes. Chaque résultat
 indique son `output_image` lorsqu’une image doit être transmise. Le FITS final est
 celui référencé par la dernière étape active, recopié au niveau du rapport global
-sous le nom `<image>_postprocess.fits`.
+sous le nom `<image>_postprocess.fits`, ou avec le suffixe `_saturated` lorsque
+la passe couleur est exécutée (le rendu GHS est alors exporté séparément).
 
 Le log principal est recréé à chaque lancement. Avec `--log-level DEBUG`, les
 exceptions levées y incluent leur traceback. Une erreur non prise en charge au

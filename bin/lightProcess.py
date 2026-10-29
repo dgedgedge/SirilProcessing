@@ -293,7 +293,7 @@ Traitement Siril de mosaique (si --mosaic):
 
     # Sauvegarde de la configuration si demandé
     if args.save_config:
-        if args.enable_postprocess or args.autoghs_only:
+        if args.enable_postprocess or args.autoghs_only or getattr(args, "color_only", False):
             try:
                 PostProcessingProcessor.prepare_config_save(args)
             except (OSError, ValueError, RuntimeError) as error:
@@ -354,8 +354,8 @@ def _process_sessions(
             logging.error(f"Le chemin spécifié n'est pas un répertoire: {session_dir}")
             return 1
 
-        discovered = [] if args.autoghs_only else discover_session_roots(session_dir)
-        if not discovered and not args.autoghs_only:
+        discovered = [] if (args.autoghs_only or getattr(args, "color_only", False)) else discover_session_roots(session_dir)
+        if not discovered and not (args.autoghs_only or getattr(args, "color_only", False)):
             logging.error(
                 f"Aucun répertoire 'light' ou 'Light' trouvé dans: {session_dir}"
             )
@@ -382,7 +382,7 @@ def _process_sessions(
         args.output_dir = output_base_dir
         logging.info("Répertoire commun de la mosaïque : %s", work_base_dir)
 
-    if args.autoghs_only:
+    if args.autoghs_only or getattr(args, "color_only", False):
         from lib.postprocess_resume import PostProcessResume
 
         try:
@@ -392,7 +392,10 @@ def _process_sessions(
             )
             # Vérifier toutes les reprises avant de modifier un seul résultat.
             for image in images:
-                PostProcessResume.load(image, PostProcessingProcessor.report_path_for(image))
+                if getattr(args, "color_only", False):
+                    PostProcessResume.load_color(image, PostProcessingProcessor.report_path_for(image))
+                else:
+                    PostProcessResume.load(image, PostProcessingProcessor.report_path_for(image))
             for image in images:
                 logging.info("Reprise du rendu final uniquement : %s", image)
                 if not args.dry_run:
@@ -400,7 +403,7 @@ def _process_sessions(
                     treatment.post_process(image, treatment.report_path_for(image))
             return 0
         except (OSError, ValueError, KeyError, RuntimeError) as error:
-            logging.error("Reprise AutoGHS impossible : %s", error)
+            logging.error("Reprise du rendu impossible : %s", error)
             return 1
 
     session_dirs, session_to_target = build_session_target_map(input_roots)

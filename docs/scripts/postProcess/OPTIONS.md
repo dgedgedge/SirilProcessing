@@ -28,7 +28,7 @@ présentes concernant d’autres traitements sont conservées. Sans `-S`, aucune
 Restent propres à l’exécution : les chemins d’entrée et de rapport, le niveau
 de journalisation, `--gradient-output`, `--photometry-object`,
 `--photometry-coordinates`, `--photometry-force`, `--photometry-output` et
-`--deconvolution-output` et `--autoghs-only`. Ces paramètres ne sont pas mémorisés par `-S`.
+`--deconvolution-output`, `--autoghs-only` et `--color-only`. Ces paramètres ne sont pas mémorisés par `-S`.
 Les anciens noms `--photometry-siril-path` et `--photometry-siril-mode` sont des
 alias des réglages Siril communs.
 
@@ -87,7 +87,10 @@ avec `-S` ; les détails figurent dans [Annotation finale](annotations.md).
 
 | Option | Défaut | Rôle |
 |---|---|---|
-| `--autoghs-only` | désactivé | Reprendre la même commande à partir du résultat linéaire précédent ; StarNet, AutoGHS et exports seulement ; non mémorisable |
+| `--autoghs-only` | désactivé | Reprendre à StarNet/AutoGHS, puis saturation, exports et annotation ; saturation activée pour cet appel sauf `--disable-final-color` explicite ; non mémorisable |
+| `--color-only` | désactivé | Reprendre seulement la couleur, la fusion et les exports sur les couches GHS existantes ; non mémorisable |
+| `--enable-final-color` / `--disable-final-color` | désactivé | Activer/désactiver la [couleur finale adaptative](final-color.md) après GHS ; mémorisable avec `-S` |
+| `--final-color-strength` | `3.0` | Excès de gain chromatique maximal, dans `[0,3]` ; 0 redonne le rendu GHS sans renforcement ; mémorisable |
 | `--ghs-final-mode` | `auto` | Recherche D/B/SP/HP protégée ; `fixed` pour comparer l'ancienne courbe |
 | `--ghs-highlight-retention` | `0.9` | Conservation minimale des indicateurs de contraste brillant, dans `]0,1]` |
 | `--ghs-log-rms-weight` | `2.0` | Poids du gain relatif de régularité de la queue log ; `[0,10]`, zéro désactive ce terme ; mémorisable avec `-S` |

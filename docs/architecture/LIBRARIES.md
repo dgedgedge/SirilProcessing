@@ -14,6 +14,7 @@
 | [ghs_final_stretch.py](../../lib/ghs_final_stretch.py) | Rechercher le renforcement final D/B/SP/HP sous [contraintes de hautes lumières](../scripts/postProcess/ghs-highlight-protection.md) |
 | [ghs_log_histogram.py](../../lib/ghs_log_histogram.py) | Mesurer la décroissance semi-log robuste pour le [classement des essais GHS](../scripts/postProcess/ghs-highlight-protection.md#31-régression-de-la-décroissance-logarithmique) |
 | [final_render.py](../../lib/final_render.py) | Orchestrer et publier le [rendu final AutoGHS](../scripts/postProcess/auto-ghs.md) après les traitements linéaires |
+| [final_color.py](../../lib/final_color.py) | Renforcer la [couleur après GHS](../scripts/postProcess/final-color.md) et recomposer les étoiles, avec reprise indépendante |
 | [auto_ghs.py](../../lib/auto_ghs.py) | Calculer les étirements et rechercher leurs paramètres sur histogrammes |
 | [star_separation.py](../../lib/star_separation.py) | Adapter StarNet V2 via le service Siril existant |
 | [star_rendering.py](../../lib/star_rendering.py) | Étendre modérément les étoiles et recomposer les branches |

@@ -56,4 +56,14 @@ mode mosaïque et réglages. Le programme réutilise les produits finaux et le F
 préparé du traitement précédent, sans calibration, stacking ni mosaïque.
 Les rapports et les intermédiaires nécessaires doivent exister ; une reprise
 impossible est signalée sans recalcul automatique. Les exports et annotations
-sont remis à jour. Voir [la référence commune](../postProcess/README.md#relance-autoghs-seul).
+sont remis à jour. La saturation suit GHS par défaut dans cette reprise, même
+si le JSON la désactive ; `--disable-final-color` permet de l'écarter explicitement.
+Les options `only` indiquent le point de reprise du processus.
+Voir [la référence commune](../postProcess/README.md#relance-autoghs-seul).
+
+`--color-only` reprend encore plus tard, sur les couches GHS/étoiles rendues,
+sans StarNet ni AutoGHS. `--enable-final-color` ajoute cette passe facultative
+au traitement complet ; `--disable-final-color` la désactive, et
+`--final-color-strength` règle sa force (3 par défaut, dans `[0,3]`). Ces réglages
+sont communs avec postProcess et mémorisables avec `-S`, sauf le mode de reprise.
+Voir [couleur finale et provenance](../postProcess/final-color.md).

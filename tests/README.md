@@ -413,3 +413,15 @@ Les tests GraXpert vérifient aussi la configuration des sessions mixtes GPU/CPU
 le refus d’une session sans fournisseur GPU lorsque celui-ci est demandé, et
 la désactivation du redémarrage implicite ONNX. Ces tests simulent les
 fournisseurs ; ils ne valident pas la répartition réelle des opérations sur GPU.
+
+`test_final_color.py` vérifie aussi que `--autoghs-only` reprend à GHS puis
+exécute la saturation malgré un JSON désactivé, sauf `--disable-final-color`
+explicite, sans modifier les paramètres mémorisés.
+Il vérifie la passe couleur après GHS : conservation de Y et
+la direction des écarts RGB, ciel et cœur inchangés, couleurs fortes moins
+renforcées, gamut, force nulle et entrées invalides. Les tests de reprise
+interdisent les appels amont, exécutent deux reprises identiques, réexportent la
+référence avec la force zéro et rejettent les couches modifiées. La configuration
+contrôle CLI > JSON, l'activation facultative et le mode de reprise non rémanent.
+La parité CPU/CUDA est vérifiée quand CUDA est disponible. Les tests de sessions
+couvrent `--color-only` avec et sans mosaïque, sans calibration ni stacking.

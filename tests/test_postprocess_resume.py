@@ -46,7 +46,8 @@ def test_resume_same_input_and_arguments(tmp_path: Path, monkeypatch: pytest.Mon
         return {'image_path': str(input_path), 'output_image': str(rendered)}
 
     monkeypatch.setattr(AutoGHSFinalRenderer, 'post_process', render)
-    settings = argparse.Namespace(autoghs_only=True, ghs_final_strength=.8, gradient_smoothing=.75)
+    settings = argparse.Namespace(autoghs_only=True, ghs_final_strength=.8, gradient_smoothing=.75,
+                                  enable_final_color=False, final_color_explicit=True)
     for _ in range(2):
         result = PostProcessingProcessor().post_process(source, report, settings)
         assert result['image_path'] == str(source)

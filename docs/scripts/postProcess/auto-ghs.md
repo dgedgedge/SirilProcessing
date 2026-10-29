@@ -8,6 +8,11 @@ séparation StarNet, un étirement dédié aux étoiles, puis une optimisation R
 fond sans étoiles et une recomposition. Les étapes amont gardent leur ordre.
 Chaque fond passe aussi par une recherche finale D/B/SP/HP avec protection des
 hautes lumières, après l’optimisation et la chroma éventuelle, avant la fusion.
+
+La [couleur finale adaptative](final-color.md), désactivée par défaut, peut ensuite
+renforcer le fond sans étoiles. Avec `--enable-final-color`, elle remplace la
+chroma préalable et publie un rendu recomposé distinct. `--color-only` reprend
+directement les couches rendues sans recalculer StarNet ou GHS.
 La phase est activée par défaut ; `--disable-autoghs` la désactive même si
 elle a été mémorisée dans la configuration.
 

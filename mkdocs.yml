@@ -67,6 +67,7 @@ nav:
               - Algorithme AutoGHS: docs/scripts/postProcess/auto-ghs-algorithm.md
               - Rendu des étoiles: docs/scripts/postProcess/star-rendering.md
           - Annotation finale: docs/scripts/postProcess/annotations.md
+          - Couleur finale après GHS: docs/scripts/postProcess/final-color.md
           - Exports FITS et JPEG: docs/scripts/postProcess/render-exports.md
           - Gestion de l’énergie: docs/scripts/postProcess/power-guard.md
       - 2.4. solarEclipseGif:

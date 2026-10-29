@@ -590,9 +590,10 @@ def test_lightprocess_dry_run_does_not_activate_guard(
 
 
 @pytest.mark.parametrize('mosaic_mode', [False, True])
+@pytest.mark.parametrize('resume_mode', ['--autoghs-only', '--color-only'])
 def test_autoghs_only_reuses_final_images_without_upstream(
     tmp_path: Path, pipeline: PipelineFixture, monkeypatch: pytest.MonkeyPatch,
-    mosaic_mode: bool,
+    mosaic_mode: bool, resume_mode: str,
 ) -> None:
     """La même commande avec le drapeau reprend les produits, sans travail amont."""
     from lib.postprocess_resume import PostProcessResume
@@ -608,6 +609,7 @@ def test_autoghs_only_reuses_final_images_without_upstream(
     PostProcessResume.save_final_images(directory, roots, mosaic_mode, images)
     calls = []
     monkeypatch.setattr(PostProcessResume, 'load', classmethod(lambda cls, *args: (images[0], {})))
+    monkeypatch.setattr(PostProcessResume, 'load_color', classmethod(lambda cls, *args: {}))
 
     def process(
         self: PostProcessingProcessor, image: Path, report: Path,
@@ -620,7 +622,7 @@ def test_autoghs_only_reuses_final_images_without_upstream(
 
     monkeypatch.setattr(PostProcessingProcessor, 'post_process', process)
     options = ['--mosaic', '--mosaic-name', 'field'] if mosaic_mode else []
-    assert run(roots, *options, '--autoghs-only', '--ghs-final-strength', '.8') == 0
+    assert run(roots, *options, resume_mode, '--ghs-final-strength', '.8') == 0
     assert calls == images
     assert calibrated == {}
     stack.assert_not_called()
