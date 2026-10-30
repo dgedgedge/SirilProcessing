@@ -8,6 +8,7 @@ et différences avec l'application amont figurent dans cosmic-clarity.md.
 from __future__ import annotations
 
 import logging
+import platform
 from pathlib import Path
 from typing import Literal
 
@@ -16,6 +17,8 @@ from astropy.io import fits
 from numpy.typing import NDArray
 import torch
 from torch import nn
+
+from lib.compute_config import ComputeConfig
 
 from lib.cosmic_clarity.models import (
     DENOISE_MODEL, NONSTELLAR_MODELS, STELLAR_MODEL, manifest, ensure_model,
@@ -35,20 +38,28 @@ DENOISE_STRETCH_THRESHOLD = 0.05
 
 
 def select_device(name: str) -> torch.device:
-    """Choisit CUDA disponible en auto, CPU sinon, avant tout calcul.
+    """Choisit CUDA, puis MPS Apple disponible en auto, CPU sinon.
 
-    CUDA forcé indisponible reste une erreur ; aucune panne d'inférence ne
+    CUDA/MPS forcé indisponible reste une erreur ; aucune panne d'inférence ne
     déclenche une reprise CPU. Aucun modèle n'est chargé pour cette détection.
     """
-    if name not in ('auto', 'cpu', 'cuda'):
-        raise ValueError('cosmic-device doit être auto, cpu ou cuda')
+    if name not in ('auto', 'cpu', 'cuda', 'mps'):
+        raise ValueError('cosmic-device doit être auto, cpu, cuda ou mps')
     if name == 'auto':
-        name = 'cuda' if torch.cuda.is_available() else 'cpu'
+        name = ('cuda' if torch.cuda.is_available() else
+                'mps' if torch.backends.mps.is_available() else 'cpu')
+        if name == 'cpu':
+            accelerator = 'MPS/Metal' if platform.system() == 'Darwin' else 'CUDA'
+            ComputeConfig.warn_cpu_fallback('Cosmic Clarity',
+                                           f'{accelerator} non disponible dans PyTorch')
     if name == 'cuda' and not torch.cuda.is_available():
         raise RuntimeError(
             'CUDA indisponible. Vérifier le pilote NVIDIA et installer avec '
-            '--install-cosmic-clarity, ou choisir --cosmic-device cpu.'
+            'bin/install_dependances.sh, ou choisir --cosmic-device cpu.'
         )
+    if name == 'mps' and not torch.backends.mps.is_available():
+        raise RuntimeError('MPS indisponible : utiliser un Python arm64, un PyTorch '
+                           'compatible et macOS récent sur Apple Silicon, ou choisir cpu.')
     return torch.device(name)
 
 
@@ -110,6 +121,7 @@ class CosmicClarityEngine:
         """
         self.directory = directory
         self.device = select_device(device)
+        logging.info('Cosmic Clarity : périphérique sélectionné avant calcul : %s', self.device)
         self.used_models: dict[str, str] = {}
 
     def _load(self, name: str) -> nn.Module:

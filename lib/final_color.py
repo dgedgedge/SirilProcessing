@@ -17,6 +17,7 @@ from astropy.io import fits
 from astropy.wcs import WCS
 
 from lib.auto_ghs import ComputeBackend, luminance
+from lib.compute_config import ComputeConfig
 from lib.postprocess_paths import reset_ordered_work_dir
 from lib.processor import processor
 from lib.render_exports import write_render_jpeg
@@ -32,7 +33,7 @@ LOGGER = logging.getLogger(__name__)
 
 
 class _ColorActivation(argparse.Action):
-    """Mémorise le choix CLI pour distinguer un refus du défaut désactivé."""
+    """Mémorise le choix CLI pour distinguer la demande explicite du défaut."""
 
     def __call__(
         self, parser: argparse.ArgumentParser, namespace: argparse.Namespace,
@@ -46,7 +47,7 @@ class _ColorActivation(argparse.Action):
 class FinalColorProcessor(processor):
     """Renforce la chroma cohérente sous protections du ciel, du cœur et du gamut."""
 
-    enabled_by_default = False
+    enabled_by_default = True
     parameter_dependencies = {
         'star_max_color_drift', 'star_max_chroma_excess', 'star_max_width_ratio',
     }
@@ -58,7 +59,7 @@ class FinalColorProcessor(processor):
 
     @classmethod
     def add_arguments(cls, parser: argparse.ArgumentParser) -> None:
-        """Déclare l'activation facultative et le plafond de gain rémanent."""
+        """Déclare la couleur active par défaut et le plafond de gain rémanent."""
         group = parser.add_mutually_exclusive_group()
         group.add_argument('--enable-final-color', dest='enable_final_color',
                            action=_ColorActivation, nargs=0, const=True,
@@ -251,7 +252,8 @@ class FinalColorProcessor(processor):
             second_wcs = WCS(star_header, naxis=2).celestial.to_header(relax=True)
             if data.shape != stars.shape or first_wcs != second_wcs:
                 raise ValueError('Géométrie ou WCS des couches couleur incompatibles')
-        backend = ComputeBackend(getattr(runtime, 'compute_backend', 'auto'), data.nbytes * 12)
+        backend = ComputeBackend(ComputeConfig.requested(runtime), data.nbytes * 12,
+                                 engine='Couleur finale')
         reference_y = (luminance(headroom * data + stars * (1 - headroom * data), color_mode)
                        if stars is not None else None)
         attempts = []

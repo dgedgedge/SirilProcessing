@@ -28,16 +28,20 @@ Les noms moderne `org.freedesktop.UPower.PowerProfiles` et historique
 pendant le contexte et se ferme à sa sortie. Les enfants Siril n’héritent pas du
 descripteur ; leur exécution est couverte par la demande du processus parent.
 
-## Dépendance facultative
+## Installation et disponibilité
 
-Sous Linux, si les services existent et que leurs politiques autorisent l’appel :
+Sous Linux, `bin/install_dependances.sh` installe automatiquement
+`requirements-power.txt` dans le venv sélectionné. macOS n'installe pas cette
+dépendance. Pour ajouter uniquement ce module à un venv existant :
 
 ```bash
-.venv/bin/python -m pip install -r requirements-power.txt
+python3 -m pip --python .venv/bin/python install -r requirements-power.txt
 ```
 
 `dbus-python` peut nécessiter les bibliothèques et en-têtes système D-Bus/GLib
-pour sa compilation. Son installation n’est pas automatique ni obligatoire.
+pour sa compilation. L'installeur ne fournit pas ces paquets système ; si la
+compilation échoue, il s'arrête avec une erreur. La présence du module Python
+ne garantit pas l'accès aux services D-Bus ni l'autorisation de les appeler.
 Une dépendance absente, un bus inaccessible, un refus de droits ou un profil
 performance non disponible produit un avertissement et laisse le traitement
 continuer. L’inhibition et le maintien de profil sont indépendants. Les appels

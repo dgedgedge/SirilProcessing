@@ -273,7 +273,12 @@ class PostProcessingProcessor(processor):
         if (color_options.enable_final_color and not color_only
                 and not getattr(runtime, 'autoghs_only', False)
                 and not getattr(runtime, 'enable_autoghs', True)):
-            raise ValueError('La couleur finale exige AutoGHS ou une reprise --color-only')
+            if getattr(runtime, 'final_color_explicit', False):
+                raise ValueError('La couleur finale exige AutoGHS ou une reprise --color-only')
+            # Sans rendu GHS, le défaut couleur ne doit pas bloquer un parcours linéaire.
+            runtime.enable_final_color = False
+            color_options.enable_final_color = False
+            logging.info('Couleur finale non exécutée : AutoGHS désactivé')
         source, report = Path(input_path).resolve(), Path(output_path).resolve()
         if report.suffix.lower() != ".json":
             raise ValueError(

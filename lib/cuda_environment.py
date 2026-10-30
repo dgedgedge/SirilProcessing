@@ -8,33 +8,16 @@ Voir docs/scripts/install_cuda/README.md pour le périmètre et les limites.
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 import platform
 import subprocess
 import sys
 
+from lib.gpu_environment import GpuEnvironmentInstaller
 
-class CudaEnvironmentInstaller:
+
+class CudaEnvironmentInstaller(GpuEnvironmentInstaller):
     """Installe les dépendances CUDA dans un venv sans modifier Python système."""
-
-    def __init__(self, root: Path, venv: Path | None = None) -> None:
-        """Résout le même venv que les lanceurs : explicite, VENV_DIR, .venv, venv."""
-        self.root = root.resolve()
-        selected = venv or os.environ.get('VENV_DIR')
-        if selected is None:
-            selected = self.root / ('venv' if not (self.root / '.venv').is_dir()
-                                    and (self.root / 'venv').is_dir() else '.venv')
-        self.venv = Path(selected).expanduser().resolve()
-        self.python = self.venv / 'bin/python'
-        self.system_python = sys._base_executable
-        if self.venv in (self.root, Path('/'), Path(sys.base_prefix).resolve()):
-            raise ValueError('La cible doit être un venv distinct du projet et du Python système')
-        if self.venv.exists():
-            if not self.venv.is_dir():
-                raise ValueError('La cible du venv doit être un répertoire')
-            if any(self.venv.iterdir()) and not (self.venv / 'pyvenv.cfg').is_file():
-                raise ValueError('Le répertoire cible non vide ne contient pas de venv')
 
     @staticmethod
     def check_platform() -> None:
@@ -56,13 +39,6 @@ class CudaEnvironmentInstaller:
                 '--install-only installe les paquets sans certifier le GPU.'
             ) from error
 
-    def pip(self, *arguments: str, capture: bool = False) -> subprocess.CompletedProcess:
-        """Exécute le pip système avec --python visant exclusivement le venv sélectionné."""
-        return subprocess.run(
-            [self.system_python, '-m', 'pip', '--python', str(self.python), *arguments],
-            check=True, capture_output=capture, text=True,
-        )
-
     def install(self, install_only: bool = False) -> None:
         """Crée le venv, résout les paquets, retire les conflits et installe CUDA.
 
@@ -74,9 +50,15 @@ class CudaEnvironmentInstaller:
 
         Notes
         -----
-        La résolution pip précède le retrait des paquets CPU/variantes CuPy.
+        PyTorch est résolu et installé depuis son index CUDA exclusif. Les
+        autres dépendances sont ensuite résolues depuis PyPI en conservant son
+        pin CUDA. Cette seconde résolution précède le retrait CPU/variantes
+        CuPy ; son échec peut laisser PyTorch mis à jour, mais ne les retire pas.
         Une panne réseau pendant l'installation peut laisser un venv incomplet ;
         relancer le script. Aucun pilote, paquet système ni poids n'est installé.
+        PowerGuard est installé sous Linux via requirements-power.txt dans une
+        phase PyPI séparée autorisant les sources de dbus-python. Sa compilation
+        peut nécessiter des en-têtes D-Bus/GLib et les outils de développement.
         Les échecs de pip sont propagés avec un code de sortie non nul.
         """
         if not install_only:
@@ -85,6 +67,10 @@ class CudaEnvironmentInstaller:
             self.check_platform()
         subprocess.run([self.system_python, '-m', 'venv', '--without-pip', str(self.venv)],
                        check=True)
+        torch_options = ['--upgrade', '--only-binary=:all:',
+                         '-r', str(self.root / 'requirements-cosmic-clarity.txt')]
+        self.pip('install', '--dry-run', *torch_options)
+        self.pip('install', *torch_options)
         options = ['--upgrade', '--only-binary=:all:',
                    '-r', str(self.root / 'requirements.txt'),
                    '-r', str(self.root / 'requirements-cuda.txt')]
@@ -109,7 +95,11 @@ class CudaEnvironmentInstaller:
             # Les distributions CPU/GPU partagent des fichiers Python : restaurer
             # les versions retenues, même si leurs métadonnées existaient déjà.
             self.pip('install', '--force-reinstall', '--no-deps',
+                     '--index-url', 'https://pypi.org/simple',
                      'onnxruntime-gpu==1.26.0', 'cupy-cuda12x==14.2.0')
+        # dbus-python peut nécessiter une compilation : ne pas imposer only-binary.
+        self.pip('install', '--upgrade', '--index-url', 'https://pypi.org/simple',
+                 '-r', str(self.root / 'requirements-power.txt'))
         self.pip('check')
 
     def verify(self) -> None:
@@ -117,29 +107,8 @@ class CudaEnvironmentInstaller:
         self.preflight()
         if not (self.venv / 'pyvenv.cfg').is_file():
             raise ValueError(f'Venv absent : {self.venv}')
-        subprocess.run([str(self.python), str(self.root / 'bin/install_cuda.py'),
-                        '--verify-worker'], check=True)
-
-    @staticmethod
-    def onnx_probe() -> bytes:
-        """Retourne un graphe ONNX MatMul X×X, float32 [2,2], IR8/opset13.
-
-        Protobuf minimal sans dépendance au paquet onnx : un seul nœud MatMul,
-        une entrée X et une sortie Y. Sa validité est vérifiée avec ONNX Runtime.
-        """
-        def field(number: int, payload: bytes) -> bytes:
-            """Encode un champ protobuf length-delimited de moins de 128 octets."""
-            return bytes([number * 8 + 2, len(payload)]) + payload
-
-        tensor_type = b'\x08\x01' + field(2, field(1, b'\x08\x02') * 2)
-        def value(name: bytes) -> bytes:
-            """Décrit un tenseur float32 carré 2×2 avec le nom donné."""
-            return field(1, name) + field(2, field(1, tensor_type))
-
-        node = field(1, b'X') * 2 + field(2, b'Y') + field(4, b'MatMul')
-        graph = field(1, node) + field(2, b'CUDA probe')
-        graph += field(11, value(b'X')) + field(12, value(b'Y'))
-        return b'\x08\x08' + field(7, graph) + field(8, b'\x10\x0d')
+        subprocess.run([str(self.python), str(self.root / 'bin/install_dependances.py'),
+                        '--venv', str(self.venv), '--verify-worker'], check=True)
 
     @staticmethod
     def verify_worker() -> None:

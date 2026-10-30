@@ -279,7 +279,7 @@ class LightProcessor:
         "drizzle_min_coverage": 0.75,
         "drizzle_fwhm_limit": 2.5,
         "drizzle_max_drift": 10.0,
-        "temperature_precision": 0.2,
+        "temperature_precision": 0.5,
         "keep_intermediate": False,
     }
 
@@ -383,7 +383,7 @@ class LightProcessor:
             "-r",
             "--rejection-method",
             dest="rejection_method",
-            choices=["none", "sigma", "linear", "winsor", "percentile"],
+            choices=["none", "sigma", "linear", "winsor", "winsorizedsigma", "percentile"],
             default=config.get("rejection_method"),
             help=f"Méthode de rejet pour Siril. (Défaut: '{config.get('rejection_method')}')",
         )
@@ -544,7 +544,7 @@ class LightProcessor:
         dark_library_path: str,
         output_dir: Path,
         work_dir: Path,
-        temp_precision: float = 0.2,
+        temp_precision: float = 0.5,
         force_reprocess: bool = False,
         dry_run: bool = False,
         use_dark: bool = True,
@@ -558,7 +558,7 @@ class LightProcessor:
             dark_library_path: Chemin vers la librairie de master darks
             output_dir: Répertoire de sortie pour les résultats
             work_dir: Répertoire de travail temporaire
-            temp_precision: Précision de correspondance des températures
+            temp_precision: Pas d'arrondi des températures en °C (défaut : 0.5)
             force_reprocess: Force le retraitement même si les fichiers existent
             dry_run: Simule le traitement sans l'exécuter
             use_dark: Utilise les master darks pour la calibration si True

@@ -55,11 +55,16 @@ désactivation explicite, même avec des poids présents.
 
 ## 2. Choix du calcul CPU/GPU
 
-`--compute-backend auto|cpu|cuda` s'applique aux moteurs de postProcess et se
+`--compute-backend auto|cpu` s'applique aux moteurs de postProcess et se
 sauvegarde avec `-S`. Le défaut `auto` choisit l'accélérateur disponible pour
-chaque moteur, CPU sinon, avant calcul. Les options propres aux moteurs restent
+chaque moteur, CPU sinon avec un WARNING indiquant la cause, avant calcul.
+L'ancien choix global `cuda` est converti en `auto` avec avertissement.
+Les options propres aux moteurs restent
 des surcharges explicites, y compris dans les anciens JSON. Voir la
 [politique commune, ses priorités et ses limites](compute-backend.md).
+Sur Apple Silicon, `auto` sélectionne MPS pour Cosmic Clarity et CoreML pour
+GraXpert lorsqu'ils sont utilisables. `--cosmic-device mps` force ce seul moteur ;
+AutoGHS et la saturation restent sur CPU. Voir [le guide Mac](../install_macos/README.md).
 
 <a id="options-des-traitements"></a>
 
@@ -89,7 +94,7 @@ avec `-S` ; les détails figurent dans [Annotation finale](annotations.md).
 |---|---|---|
 | `--autoghs-only` | désactivé | Reprendre à StarNet/AutoGHS, puis saturation, exports et annotation ; saturation activée pour cet appel sauf `--disable-final-color` explicite ; non mémorisable |
 | `--color-only` | désactivé | Reprendre seulement la couleur, la fusion et les exports sur les couches GHS existantes ; non mémorisable |
-| `--enable-final-color` / `--disable-final-color` | désactivé | Activer/désactiver la [couleur finale adaptative](final-color.md) après GHS ; mémorisable avec `-S` |
+| `--enable-final-color` / `--disable-final-color` | activé | Activer/désactiver la [couleur finale adaptative](final-color.md) après GHS ; mémorisable avec `-S` |
 | `--final-color-strength` | `3.0` | Excès de gain chromatique maximal, dans `[0,3]` ; 0 redonne le rendu GHS sans renforcement ; mémorisable |
 | `--ghs-final-mode` | `auto` | Recherche D/B/SP/HP protégée ; `fixed` pour comparer l'ancienne courbe |
 | `--ghs-highlight-retention` | `0.9` | Conservation minimale des indicateurs de contraste brillant, dans `]0,1]` |

@@ -9,8 +9,8 @@ fond sans étoiles et une recomposition. Les étapes amont gardent leur ordre.
 Chaque fond passe aussi par une recherche finale D/B/SP/HP avec protection des
 hautes lumières, après l’optimisation et la chroma éventuelle, avant la fusion.
 
-La [couleur finale adaptative](final-color.md), désactivée par défaut, peut ensuite
-renforcer le fond sans étoiles. Avec `--enable-final-color`, elle remplace la
+La [couleur finale adaptative](final-color.md), activée par défaut, renforce ensuite
+le fond sans étoiles. Sauf `--disable-final-color`, elle remplace la
 chroma préalable et publie un rendu recomposé distinct. `--color-only` reprend
 directement les couches rendues sans recalculer StarNet ou GHS.
 La phase est activée par défaut ; `--disable-autoghs` la désactive même si
@@ -47,7 +47,7 @@ Avec le venv existant, pour ajouter le rendu à toute la chaîne :
   --starnet-path /chemin/StarNetv2CLI_linux/starnet++ --save-config
 ```
 
-Le lanceur `bin/postProcess.sh` accepte les mêmes arguments et prépare le venv
+Le lanceur `bin/postProcess.sh` accepte les mêmes arguments et utilise le venv installé
 comme décrit dans [Installation](../../INSTALLATION.md). Il ne possède pas de
 mécanisme AutoGHS distinct. Aucun nouveau lanceur n'est nécessaire.
 
@@ -170,7 +170,7 @@ astronomique.
 | `--ghs-chroma` | `off` | `off`, `balanced`, `enhanced` ; RGB expérimental |
 | `--star-render` | `conservative` | Rendu asinh commun des étoiles |
 | `--star-strength` | `2.0` | Force asinh, dans `]0,20]` |
-| `--star-faint-boost` | `5.0` | Renforcement des étoiles faibles, de 1 (ancien rendu) à 10 |
+| `--star-faint-boost` | `5.0` | Renforcement demandé des étoiles faibles, de 1 à 10 ; réduit par pas de 1 jusqu'au premier rendu respectant la garde de largeur |
 | `--star-histogram-strength` | `0.8` | Répartition des amplitudes des pics en logarithme, de 0 (gain fixe) à 1 ; réduite si la garde FWHM le demande |
 | `--star-ceiling` | `0.85` | Plafond du maximum RGB des étoiles seules |
 | `--star-max-width-ratio` | `2.0` | Rapport FWHM médian maximal, si mesurable |

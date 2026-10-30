@@ -10,7 +10,7 @@ exports et l'annotation. Il renforce la couleur du **fond sans étoiles déjà
 étiré**, puis le recompose avec la même couche stellaire rendue. Les étoiles
 ne reçoivent pas de nouvelle passe de saturation.
 
-L'étape est **désactivée par défaut**. Aucun réglage ne dépend du nom de la
+L'étape est **activée par défaut après AutoGHS**. Aucun réglage ne dépend du nom de la
 cible. La force est modulée par le signal, la cohérence chromatique, la couleur
 déjà présente, les hautes lumières et la marge disponible dans le gamut RGB.
 
@@ -18,13 +18,22 @@ La reprise seule utilise les dépendances Python communes (NumPy, SciPy,
 Astropy, Pillow et Matplotlib pour l'annotation), sans lancer Siril ni StarNet.
 CuPy est facultatif pour CUDA. Voir l'[installation commune](../../INSTALLATION.md)
 et l'[installation du venv CUDA](../install_cuda/README.md).
+Sur Apple Silicon, cette passe reste sur CPU NumPy/SciPy ; voir
+[l'installation Mac](../install_macos/README.md) pour MPS/CoreML des autres moteurs.
+En mode auto, son WARNING précise l'absence de moteur Metal ; un CPU demandé
+explicitement ne déclenche pas ce message. Sous NVIDIA, un précontrôle CUDA
+échoué ou une mémoire insuffisante est également signalé avant le choix CPU.
 
 | Option | Défaut | Rôle |
 |---|---|---|
-| `--enable-final-color` | désactivé | Activer la passe dans le traitement complet ou la reprise AutoGHS |
+| `--enable-final-color` | activé | Activer la passe dans le traitement complet ou la reprise AutoGHS |
 | `--disable-final-color` | — | Désactiver explicitement la passe |
 | `--final-color-strength` | `3.0` | Excès de gain maximal dans `[0,3]` ; 1 autorise au plus ×2, 3 au plus ×4 ; zéro donne l'identité |
 | `--color-only` | désactivé | Activer la couleur pour cet appel et reprendre directement les couches GHS existantes |
+
+Avec `--disable-autoghs`, la passe couleur implicite est également omise.
+Une demande CLI explicite `--enable-final-color` sans AutoGHS reste une erreur ;
+`--color-only` permet de travailler sur les couches GHS déjà disponibles.
 
 Les choix d'activation et la force suivent CLI > JSON > défaut et sont
 mémorisables avec `-S`. Les options `only` indiquent le **point de reprise** :

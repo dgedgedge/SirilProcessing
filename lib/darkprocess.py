@@ -34,9 +34,9 @@ class DarkLib:
         "rejection_param2": 3.0,
         "max_age_days": 182,
         "stack_method": "average",
-        "temperature_precision": 0.2,
+        "temperature_precision": 0.5,
         "min_darks_threshold": 0,
-        "validate_darks": False,
+        "validate_darks": True,
         "report": False,
         "max_hot_pixels_percent": 1.0,
         "input_dirs": None,
@@ -182,8 +182,8 @@ class DarkLib:
             "--validate-darks",
             dest="validate_darks",
             action="store_true",
-            default=config.get("validate_darks", False),
-            help="Valide les fichiers darks en analysant leurs statistiques pour détecter ceux pris avec le capot ouvert (présence de lumière parasite).",
+            default=config["validate_darks"],
+            help="Valide les fichiers darks par analyse statistique avant empilement (activé par défaut).",
         )
         parser.add_argument(
             "--no-validate-darks",
@@ -389,11 +389,24 @@ class DarkLib:
         fitsinfo_list: list[FitsInfo],
         process_dir: str,
         link_dir: str,
-        validate_darks: bool = False,
+        validate_darks: bool = True,
     ) -> None:
-        """
-        Empile les darks d'un groupe en utilisant Siril et enregistre le master dark
-        dans la bibliothèque, en gérant les remplacements selon la date.
+        """Empile un groupe avec Siril après contrôle du besoin de mise à jour.
+
+        Parameters
+        ----------
+        group_key : str
+            Identifiant du groupe et nom du master à produire.
+        fitsinfo_list : list[FitsInfo]
+            Darks sources partageant les mêmes caractéristiques de capture.
+        process_dir : str
+            Répertoire des scripts et résultats temporaires.
+        link_dir : str
+            Répertoire des liens vers les darks retenus.
+        validate_darks : bool, optional
+            Contrôler les statistiques des sources avant un empilement nécessaire,
+            par défaut True. Les fichiers rejetés restent sur disque. Si moins
+            de deux sources sont valides, aucun master n'est produit.
         """
         # Récupérer l'objet FitsInfo avec la date la plus récente
         latest_infoFile: FitsInfo | None = None
@@ -810,10 +823,17 @@ cd {process_dir}
         print()  # Ligne vide à la fin pour améliorer la lisibilité
 
     def process_all_groups(
-        self, dark_groups: dict[str, list[FitsInfo]], validate_darks: bool = False
+        self, dark_groups: dict[str, list[FitsInfo]], validate_darks: bool = True
     ) -> None:
-        """
-        Traite tous les groupes de darks pour créer des master darks.
+        """Traite les groupes pour créer ou actualiser les masters nécessaires.
+
+        Parameters
+        ----------
+        dark_groups : dict[str, list[FitsInfo]]
+            Darks sources regroupés par caractéristiques de capture.
+        validate_darks : bool, optional
+            Transmettre le contrôle statistique à chaque empilement, par défaut
+            True. Les groupes déjà à jour ne sont pas analysés à nouveau.
         """
         total_groups = len(dark_groups)
         processed_groups = 0

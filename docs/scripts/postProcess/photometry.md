@@ -12,8 +12,13 @@ pas automatiquement que l’image est linéaire : fournir une image non étirée
 Le traitement charge l’image, exécute `platesolve -force -catalog=gaia`, puis
 `spcc -catalog=gaia`, et sauvegarde dans un dossier de travail neuf. Gaia est
 explicitement demandé, indépendamment du catalogue choisi dans l’interface.
-Siril peut exploiter sa base astrométrique Gaia locale lorsqu’elle est disponible,
-même avec `-catalog=gaia`. L’astrométrie et l’étalonnage des couleurs sont
+Si un extrait Gaia conforme est présent dans le cache commun, le programme
+remplace la commande astrométrique par `platesolve -force -catalog=localgaia`
+et fournit le chemin dans des préférences Siril isolées. Le SHA-256 du catalogue
+est vérifié ; un cache absent ou invalide laisse le catalogue distant. Les
+autres catalogues demandés explicitement ne sont pas remplacés. Le rapport
+contient `local_gaia_catalogue` et les commandes réellement exécutées.
+L’astrométrie et l’étalonnage des couleurs sont
 systématiquement refaits lorsque l’étape est active, même avec un WCS ou une
 calibration antérieure. `--photometry-force` reste accepté pour compatibilité ;
 une ancienne valeur de configuration `photometry_force=false` ne change pas
@@ -29,6 +34,11 @@ paramètre du calcul. Le module délègue ce calcul à Siril ; il ne fait aucun
 `--photometry-catalog localgaia` choisit le catalogue spectral Gaia local de
 Siril ; un catalogue astrométrique local seul ne suffit pas pour SPCC. Le
 catalogue distant et l’installation des données SPCC nécessitent le réseau.
+L'[installateur commun](../install_dependances/README.md) propose
+`--assets-only --no-models --with-gaia` pour acquérir l'extrait **astrométrique**
+seul (plate solving), avec réutilisation d'un catalogue Siril déjà conforme.
+Il est automatiquement utilisé par les scripts sans modification des
+préférences utilisateur ; cela ne remplace pas le catalogue spectral SPCC.
 `--photometry-method pcc --photometry-catalog nomad` choisit explicitement PCC
 sur NOMAD ; les paramètres spectraux SPCC sont alors refusés.
 

@@ -94,3 +94,77 @@ def test_single_exposure_final_image_provenance(tmp_path: Path) -> None:
     assert PostProcessResume.final_images(tmp_path, tmp_path, roots, None) == [source]
     with pytest.raises(ValueError):
         PostProcessResume.final_images(tmp_path, tmp_path, [tmp_path / 'other'], None)
+
+
+def interrupted_history(tmp_path: Path) -> tuple[Path, Path, Path]:
+    """Simule un ancien échec AutoGHS avec étapes écrites mais sans rapport global."""
+    source, prepared, report, _ = history(tmp_path)
+    report.unlink()
+    PostProcessResume.manifest_path(report).unlink()
+    steps = report.parent / report.stem
+    steps.mkdir()
+    (steps / '03_restoration.json').write_text(json.dumps({
+        'status': 'accepted', 'image_path': str(source), 'output_image': str(prepared),
+    }))
+    (steps / '05_autoghs.json').write_text(json.dumps({
+        'status': 'ERROR', 'image_path': str(prepared), 'error': 'width limit',
+    }))
+    return source, prepared, report
+
+
+def test_interrupted_history_without_global_report_is_resumable(tmp_path: Path) -> None:
+    """Retrouver le linéaire par chaîne explicite sans exiger de rendu final."""
+    source, prepared, report = interrupted_history(tmp_path)
+    actual, previous = PostProcessResume.load(source, report)
+    assert actual == prepared
+    assert previous['restoration']['output_image'] == str(prepared)
+    assert previous['autoghs']['status'] == 'ERROR'
+    assert not report.exists()
+    assert not PostProcessResume.manifest_path(report).exists()
+
+
+@pytest.mark.parametrize('changed', ['source', 'prepared', 'chain', 'missing', 'nonlinear'])
+def test_interrupted_history_rejects_inconsistent_inputs(tmp_path: Path, changed: str) -> None:
+    """Ne pas reprendre des données modifiées ou une chaîne étrangère/incomplète."""
+    source, prepared, report = interrupted_history(tmp_path)
+    if changed in ('source', 'prepared'):
+        (source if changed == 'source' else prepared).touch()
+    elif changed == 'missing':
+        prepared.unlink()
+    elif changed == 'nonlinear':
+        with fits.open(prepared, mode='update') as hdus:
+            hdus[0].header['SPNLIN'] = True
+    else:
+        stage = report.parent / report.stem / '03_restoration.json'
+        contents = json.loads(stage.read_text())
+        contents['image_path'] = str(tmp_path / 'other.fits')
+        stage.write_text(json.dumps(contents))
+    with pytest.raises((ValueError, FileNotFoundError)):
+        PostProcessResume.load(source, report)
+    assert not report.exists()
+
+
+def test_autoghs_failure_keeps_pre_render_checkpoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Une erreur de rendu conserve source et linéaire pour une reprise vérifiée."""
+    from lib.postprocess import _PostProcessorSequence
+
+    source = tmp_path / 'source.fits'
+    fits.writeto(source, np.full((3, 24, 24), .01, dtype='f4'))
+    report = tmp_path / 'source_postprocess.json'
+
+    def fail(*args: object, **kwargs: object) -> dict:
+        """Provoque l'échec après l'écriture du point de reprise."""
+        assert report.exists()
+        assert PostProcessResume.manifest_path(report).exists()
+        raise ValueError('width limit')
+
+    monkeypatch.setattr(AutoGHSFinalRenderer, 'post_process', fail)
+    with pytest.raises(RuntimeError, match='width limit'):
+        _PostProcessorSequence([AutoGHSFinalRenderer()]).post_process(
+            source, report, argparse.Namespace(),
+        )
+    prepared, previous = PostProcessResume.load(source, report)
+    assert prepared == source
+    assert previous['autoghs']['status'] == 'PENDING'

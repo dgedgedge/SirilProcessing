@@ -9,7 +9,12 @@ export LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libstdc++.so.6
 
 # shellcheck source=bin/venv_helpers.sh
 source "${SCRIPT_DIR}/venv_helpers.sh"
-prepare_project_venv "${PROJECT_ROOT}/requirements-docs.txt"
+# La construction documentaire prépare ses dépendances indépendamment des traitements.
+locate_project_venv
+DOCS_SYSTEM_PYTHON="$(python3 -c 'import sys; print(sys._base_executable)')"
+"${DOCS_SYSTEM_PYTHON}" -m venv --without-pip "${SELECTED_VENV}"
+"${DOCS_SYSTEM_PYTHON}" -m pip --python "${SELECTED_VENV}/bin/python" \
+  install --upgrade --quiet --disable-pip-version-check -r "${PROJECT_ROOT}/requirements-docs.txt"
 # Chromium est réservé au rendu documentaire, dans un cache exclu de Git.
 export PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-${PROJECT_ROOT}/tmp/docs-browsers}"
 "${SELECTED_VENV}/bin/python" -m playwright install chromium

@@ -26,14 +26,14 @@ il sépare les étoiles avec StarNet et produit une image finale étoilée RANGE
 en FITS et [JPEG](render-exports.md), avec ses histogrammes de diagnostic.
 Il est activé par défaut ; `--disable-autoghs` conserve la sortie linéaire.
 
-Une [passe couleur finale facultative](final-color.md) peut suivre GHS avant
-la fusion et l'annotation : `--enable-final-color` l'active et `--color-only`
+La [passe couleur finale adaptative](final-color.md) suit GHS par défaut avant
+la fusion et l'annotation : `--disable-final-color` la désactive et `--color-only`
 permet de la relancer seule sur les couches GHS existantes.
 
 GraXpert est ajouté automatiquement à la comparaison lorsque des poids locaux
 valides sont présents, sauf désactivation explicite (`--no-enable-graxpert` ou
 configuration sauvegardée). ONNX Runtime s’installe avec
-`bin/postProcess.sh --install-graxpert`. `--enable-graxpert` force l’activation et
+`bin/install_dependances.sh`. `--enable-graxpert` force l’activation et
 l’acquisition des poids manquants ; voir [GraXpert et ses modèles](graxpert.md).
 
 <a id="manuel-d-utilisation"></a>
@@ -180,17 +180,17 @@ bin/postProcess.sh image.fit rapports/details.json \
 Pour l’utilisation Python et l’ajout d’un traitement, consulter
 [le contrat de la séquence](../lightProcess/treatments/postprocess/SEQUENCE_PROCESSOR.md).
 
-Le lanceur utilise Python et pip du système pour créer le venv sans pip et
-mettre à jour ses dépendances avant chaque exécution. Il lance ensuite le
-Python du venv. La sélection de l’environnement, les prérequis et l’exécution
-sans mise à jour sont décrits dans [Installation](../../INSTALLATION.md).
+Le lanceur utilise le Python du venv existant sans installer ni mettre à jour
+les dépendances, y compris avec `--help`. La sélection suit `VENV_DIR`, `.venv`,
+puis `venv`. Si l’environnement manque, il indique la commande d’installation.
+Voir [Installation](../../INSTALLATION.md) pour préparer les prérequis.
 
 Les classes des traitements sont enregistrées avant le parsing. Les valeurs
 résolues sont ensuite liées aux classes avant la création des instances, y
 compris les enfants. Voir la [liaison des paramètres](../lightProcess/treatments/postprocess/SEQUENCE_PROCESSOR.md#résolution-et-liaison-hiérarchique-des-paramètres).
 
 Les poids Cosmic Clarity manquants ou corrompus sont téléchargés avant leur
-chargement dans `tmp/models/cosmicclarity/` par défaut, ou dans le dossier
+chargement dans `tmp/cache/models/cosmicclarity/` par défaut, ou dans le dossier
 `--cosmic-model-dir` résolu. Voir [installation et téléchargement](cosmic-clarity.md#installation-et-lancement).
 
 En mode `--quality-mode legacy`, pour la netteté Cosmic Clarity, les grands catalogues sont contrôlés selon la
@@ -259,13 +259,13 @@ Algorithme appliqué en mode comparatif :
    conservation de l’image d’entrée.
 
 ```bash
-bin/postProcess.sh --install-cosmic-clarity
+bin/install_dependances.sh
 bin/postProcess.sh image_RGB.fit --enable-clarity
 bin/postProcess.sh image_RGB.fit --disable-clarity --no-enable-graxpert
 ```
 
-L'option d'installation est capturée par le `.sh` ; elle utilise pip système
-pour installer les dépendances dans le venv et récupérer les poids vérifiés.
+L'installeur prépare séparément le venv et les poids vérifiés. Le lanceur
+`postProcess.sh` utilise ensuite ce venv sans installation ni mise à jour.
 `--enable-clarity` et `--disable-clarity` appartiennent au programme Python et
 peuvent être mémorisées avec `-S`.
 Les noms des rapports, l'ordre et les contrôles d'acceptation restent les mêmes.
@@ -328,6 +328,10 @@ Ce traitement utilise Python et ne lance pas Siril.
 
 Sur une image RGB linéaire, le traitement appelle successivement `platesolve`
 puis `spcc` dans Siril, avec **Gaia par défaut pour les deux commandes**.
+Pour le plate solving, le catalogue Gaia vérifié dans `tmp/cache/catalogues/gaia/`
+est utilisé automatiquement via `localgaia` et des préférences Siril temporaires.
+Sans cache conforme, le catalogue distant est utilisé. Le catalogue spectral
+SPCC reste distinct. Voir [le cache commun](../install_dependances/resources.md).
 L’astrométrie associe les pixels à des coordonnées célestes ; SPCC utilise les
 spectres stellaires Gaia DR3 et les réponses spectrales du capteur et des filtres
 pour étalonner les couleurs. `--photometry-method pcc` permet de choisir PCC.
@@ -576,6 +580,12 @@ l'entrée brute ni du rendu déjà étiré. Les paramètres sont résolus comme 
 un traitement complet : CLI > JSON > défauts ; les options non mémorisées doivent
 donc être répétées dans la commande. Les options amont restent acceptées mais
 ne provoquent aucun recalcul amont dans ce mode.
+
+La reprise reste possible après un échec du rendu final : le point de reprise
+est écrit avant AutoGHS. Les anciens traitements sans rapport global peuvent
+être repris si leurs rapports d'étapes établissent un enchaînement cohérent
+jusqu'au FITS linéaire existant ; voir les
+[contrôles de provenance](pipeline.md). Les exports finaux ne sont pas requis.
 
 Cette option saute le gradient, la photométrie, la déconvolution, le débruitage,
 les comparaisons de restauration et leurs aperçus de qualité. Elle active AutoGHS

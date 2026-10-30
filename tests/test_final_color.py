@@ -147,9 +147,9 @@ def test_color_only_skips_all_upstream_and_does_not_accumulate(
         PostProcessResume.load_color(source, report)
 
 
-@pytest.mark.parametrize('enabled', [True, False])
+@pytest.mark.parametrize('enabled', [True, False, None])
 def test_full_run_places_optional_color_after_ghs(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, enabled: bool,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, enabled: bool | None,
 ) -> None:
     """L'activation remplace l'ancienne chroma avant GHS ; désactivée, aucun appel couleur."""
     from lib.quality_preview import QualityMaskPreview
@@ -157,11 +157,12 @@ def test_full_run_places_optional_color_after_ghs(
     source, _, _, report = prepared_layers(tmp_path)
     previous = json.loads(report.read_text())
     calls = []
+    effective = enabled is not False
 
     def sequence(self: _PostProcessorSequence, input_path: Path, output_path: Path,
                  args: argparse.Namespace | None = None) -> JSONReport:
         """Simule les moteurs amont et contrôle le réglage transmis au GHS."""
-        assert args.ghs_chroma == ('off' if enabled else 'enhanced')
+        assert args.ghs_chroma == ('off' if effective else 'enhanced')
         calls.append('ghs')
         return previous
 
@@ -178,11 +179,13 @@ def test_full_run_places_optional_color_after_ghs(
     monkeypatch.setattr(QualityMaskPreview, 'write_gradient_points', lambda *args: None)
     args = argparse.Namespace(enable_final_color=enabled, compute_backend='cpu',
                               final_annotation=False, ghs_chroma='enhanced')
+    if enabled is None:
+        del args.enable_final_color
     result = PostProcessingProcessor().post_process(source, report, args)
-    assert calls == (['ghs', 'color'] if enabled else ['ghs'])
-    assert ('final_color' in result['treatments']) == enabled
-    assert Path(result['output_image']).name == ('run_saturated.fits' if enabled else 'run.fits')
-    assert ('output_ghs_image' in result) == enabled
+    assert calls == (['ghs', 'color'] if effective else ['ghs'])
+    assert ('final_color' in result['treatments']) == effective
+    assert Path(result['output_image']).name == ('run_saturated.fits' if effective else 'run.fits')
+    assert ('output_ghs_image' in result) == effective
     assert args.ghs_chroma == 'enhanced'
 
 
@@ -336,3 +339,45 @@ def test_cuda_matches_cpu_when_available() -> None:
     cpu, _ = FinalColorProcessor.render(data, 1)
     gpu, _ = FinalColorProcessor.render(data, 1, backend=backend)
     np.testing.assert_allclose(gpu, cpu, atol=3e-6)
+
+
+@pytest.mark.parametrize('saved,flags,expected', [
+    ({}, [], True),
+    ({}, ['--disable-final-color'], False),
+    ({'enable_final_color': False}, [], False),
+    ({'enable_final_color': False}, ['--enable-final-color'], True),
+])
+def test_final_color_default_and_precedence(
+    tmp_path: Path, saved: dict[str, bool], flags: list[str], expected: bool,
+) -> None:
+    """La saturation est active sans surcharge et respecte JSON puis CLI."""
+    settings = tmp_path / 'config.json'
+    settings.write_text(json.dumps(saved))
+    config = Config(settings)
+    parser = argparse.ArgumentParser()
+    config.register(PostProcessingProcessor, parser)
+    assert config.parse_args(parser, flags).enable_final_color is expected
+    assert json.loads(settings.read_text()) == saved
+
+
+@pytest.mark.parametrize('explicit', [False, True])
+def test_no_ghs_omits_default_color_but_rejects_explicit_request(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, explicit: bool,
+) -> None:
+    """Garder un parcours linéaire utilisable lorsque GHS est désactivé."""
+    from lib.quality_preview import QualityMaskPreview
+
+    source, _, _, report = prepared_layers(tmp_path)
+    monkeypatch.setattr(_PostProcessorSequence, 'post_process', lambda *a, **k: {})
+    monkeypatch.setattr(QualityMaskPreview, 'ensure_for_run', lambda *a: None)
+    monkeypatch.setattr(QualityMaskPreview, 'write_gradient_points', lambda *a: None)
+    args = argparse.Namespace(enable_autoghs=False, final_annotation=False,
+                              final_color_explicit=explicit)
+    if explicit:
+        args.enable_final_color = True
+        with pytest.raises(ValueError, match='exige AutoGHS'):
+            PostProcessingProcessor().post_process(source, report, args)
+    else:
+        result = PostProcessingProcessor().post_process(source, report, args)
+        assert 'final_color' not in result['treatments']
+        assert result['output_image'].endswith('run.fits')

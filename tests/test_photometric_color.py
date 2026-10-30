@@ -22,9 +22,10 @@ def rgb(tmp_path):
 
 @pytest.fixture
 def fake_siril(monkeypatch, rgb):
+    monkeypatch.setattr('lib.resource_cache.ResourceCache.find_gaia', lambda self: None)
     runner = Mock()
 
-    def run(script, working_dir, script_name):
+    def run(script, working_dir, script_name, **kwargs):
         wcs = WCS(naxis=2)
         wcs.wcs.crpix = [10, 10]
         wcs.wcs.crval = [270.6, -23.0]
@@ -45,6 +46,34 @@ def arguments(*options):
     Siril.add_arguments(parser, photometry_aliases=True)
     _PostProcessorSequence().add_arguments(parser)
     return parser.parse_args(['--disable-denoise', '--disable-autoghs', '--disable-deconvolution', *options])
+
+
+def test_cached_gaia_is_automatically_used_without_changing_preferences(
+    rgb: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_siril,
+) -> None:
+    """Le cache local remplace Gaia distant pour l'astrométrie, sans changer SPCC."""
+    import configparser
+    from lib.resource_cache import ResourceCache
+    from lib.star_separation import StarNetSeparator
+
+    cached = tmp_path / 'gaia.dat'
+    cached.write_bytes(b'catalogue already verified by cache discovery')
+    monkeypatch.setattr(ResourceCache, 'find_gaia', lambda self: cached)
+    preferences = configparser.ConfigParser()
+    preferences['core'] = {'catalogue_gaia_astro': 'previous', 'other_setting': 'kept'}
+    original = tmp_path / 'user-preferences.ini'
+    original.write_text('untouched')
+    monkeypatch.setattr(StarNetSeparator, 'preferences', lambda args: (preferences, original))
+    result = PhotometricColorCalibrator().post_process(rgb, tmp_path / 'report.json', arguments())
+    assert result['platesolve_command'] == 'platesolve -force -catalog=localgaia'
+    assert result['spcc_command'].startswith('spcc -catalog=gaia')
+    assert result['local_gaia_catalogue'] == str(cached)
+    isolated = fake_siril[1].run_siril_script.call_args.kwargs['initfile']
+    saved = configparser.ConfigParser()
+    saved.read(isolated)
+    assert saved['core']['catalogue_gaia_astro'] == str(cached)
+    assert saved['core']['other_setting'] == 'kept'
+    assert original.read_text() == 'untouched'
 
 
 def test_object_resolution_and_all_options(rgb, tmp_path, monkeypatch, fake_siril):

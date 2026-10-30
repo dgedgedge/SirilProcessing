@@ -1057,6 +1057,9 @@ class PhotometricColorCalibrator(processor):
         Pour un capteur couleur, le filtre provient des options, puis du champ
         FITS FILTER, sinon de « No filter ». Le mode PCC reste disponible.
         L’astrométrie est toujours recalculée, même si un WCS existe.
+        Gaia local vérifié du cache commun est préféré pour l'astrométrie ;
+        ses préférences temporaires ne modifient pas celles de l'utilisateur.
+        Le catalogue SPCC reste indépendant.
         Le retournement est autorisé sauf noflip. Le rapport et le journal
         décrivent les commandes exécutées.
 
@@ -1173,6 +1176,11 @@ class PhotometricColorCalibrator(processor):
 
         # Une calibration antérieure ou un WCS présent ne dispensent pas
         # de refaire la résolution avant l’étalonnage des couleurs.
+        from lib.resource_cache import ResourceCache
+        gaia_path = ResourceCache().find_gaia() if solve_catalog in ('gaia', 'localgaia') else None
+        if gaia_path is not None:
+            solve_catalog = 'localgaia'
+            logging.info('Astrométrie : catalogue Gaia local vérifié : %s', gaia_path)
         solve = ["platesolve", "-force"]
         if coordinates is not None:
             solve.append(f"{coordinates[0]:.10f},{coordinates[1]:.10f}")
@@ -1235,10 +1243,22 @@ class PhotometricColorCalibrator(processor):
             ]
         )
         log_path = work_dir / f"{tag[:-1] if tag else 'photometry'}.log"
+        init_options = {}
+        if gaia_path is not None:
+            from lib.star_separation import StarNetSeparator
+            preferences, _ = StarNetSeparator.preferences(args)
+            if not preferences.has_section('core'):
+                preferences.add_section('core')
+            preferences.set('core', 'catalogue_gaia_astro', str(gaia_path))
+            isolated = work_dir / 'siril-local-gaia.ini'
+            with isolated.open('w', encoding='utf-8') as stream:
+                preferences.write(stream, space_around_delimiters=False)
+            init_options['initfile'] = isolated
         if not siril.run_siril_script(
             script,
             str(work_dir),
             script_name=f"{tag[:-1] if tag else 'photometry'}.sps",
+            **init_options,
         ):
             raise RuntimeError(
                 f"Résolution astrométrique / {method.upper()} échouée ; consulter {log_path}"
@@ -1261,6 +1281,7 @@ class PhotometricColorCalibrator(processor):
 
         copyfile(staged_image, output_image)
         results = {
+            "local_gaia_catalogue": str(gaia_path) if gaia_path is not None else None,
             "image_path": str(input_path),
             "output_image": str(output_image),
             "object": object_name,
@@ -1476,6 +1497,9 @@ class _PostProcessorSequence(processor):
         la restauration regroupe les étapes 03/04.
         Chaque étape active est annoncée en INFO par un titre lisible entre
         deux lignes de signes = ; les étapes désactivées n’ont pas de bandeau.
+        Avant AutoGHS dans un traitement complet, un rapport partiel et les
+        snapshots source/linéaire sont persistés pour permettre une reprise
+        même si le rendu final échoue ou est interrompu.
         """
         if args is None:
             from lib.config import Config
@@ -1513,6 +1537,16 @@ class _PostProcessorSequence(processor):
             title = stage_titles.get(prefix, prefix)
             log_section(f"Post-traitement — étape {index:02d} : {title}")
             logging.info("Image d’entrée : %s", current_path)
+            if prefix == "autoghs" and not getattr(args, "autoghs_only", False):
+                # Le rendu peut échouer : conserver sa provenance avant de le lancer.
+                from lib.postprocess_resume import PostProcessResume
+
+                checkpoint = {
+                    **all_results,
+                    "autoghs": {"status": "PENDING", "image_path": str(current_path)},
+                }
+                _write_report(output_path, checkpoint)
+                PostProcessResume.save(Path(input_path), output_path, checkpoint)
             try:
                 result = processor.post_process(current_path, report_path, args=args)
                 if result.get("error"):

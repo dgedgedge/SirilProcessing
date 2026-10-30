@@ -49,6 +49,9 @@ nav:
               - Organisation des post-traitements: docs/scripts/lightProcess/treatments/postprocess/README.md
               - Paramètres et séquence: docs/scripts/lightProcess/treatments/postprocess/SEQUENCE_PROCESSOR.md
       - Installation du venv CUDA: docs/scripts/install_cuda/README.md
+      - Installation des dépendances: docs/scripts/install_dependances/README.md
+      - Modèles et catalogue Gaia: docs/scripts/install_dependances/resources.md
+      - Installation Apple Silicon: docs/scripts/install_macos/README.md
       - 2.3. postProcess:
           - Manuel d’utilisation: docs/scripts/postProcess/README.md
           - Options et configuration: docs/scripts/postProcess/OPTIONS.md

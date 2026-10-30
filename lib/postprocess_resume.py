@@ -40,7 +40,7 @@ class PostProcessResume:
 
     @classmethod
     def save(cls, source: Path, report: Path, results: JSONReport) -> None:
-        """Conserve les références après une exécution réussie, sans changer les options."""
+        """Conserve les références avant le rendu ou après succès, sans changer les options."""
         prepared = source
         for name, branch in results.items():
             if not isinstance(branch, dict) or name == 'annotation':
@@ -60,14 +60,69 @@ class PostProcessResume:
         )
 
     @classmethod
+    def _incomplete_history(cls, source: Path, report: Path) -> JSONReport:
+        """Valide les rapports d'un ancien traitement interrompu avant publication.
+
+        Les chemins explicites doivent former une chaîne depuis ``source``
+        jusqu'à l'entrée du rapport AutoGHS. Chaque fichier doit exister et
+        précéder son rapport en date de modification. Cette compatibilité sans
+        snapshots ne constitue pas une preuve d'intégrité cryptographique.
+        Aucun fichier n'est créé ou réinitialisé pendant cette lecture.
+        """
+        directory = report.parent / report.stem
+        autoghs_path = directory / '05_autoghs.json'
+        if not autoghs_path.is_file():
+            raise FileNotFoundError(
+                f'Aucun rapport AutoGHS permettant de reprendre le traitement : {report}'
+            )
+        previous: JSONReport = {}
+        current = source.resolve()
+
+        def referenced(value: object) -> Path:
+            """Résout uniquement un chemin explicitement enregistré dans l'étape."""
+            if not isinstance(value, str) or not value:
+                raise ValueError('Rapport incomplet : chemin de reprise absent')
+            path = Path(value)
+            return (path if path.is_absolute() else directory / path).resolve()
+
+        for name in ('01_gradient', '02_photometry', '03_restoration',
+                     '03_deconvolution', '04_denoise', '05_autoghs'):
+            stage_path = directory / f'{name}.json'
+            if not stage_path.is_file():
+                continue
+            stage = cls.read_object(stage_path)
+            if referenced(stage.get('image_path')) != current:
+                raise ValueError(f'Chaîne de reprise incohérente : {stage_path}')
+            if current.stat().st_mtime_ns > stage_path.stat().st_mtime_ns:
+                raise ValueError(f'Entrée modifiée après son traitement : {current}')
+            prefix = name[3:]
+            if prefix != 'autoghs':
+                if stage.get('error') or stage.get('status') == 'ERROR':
+                    raise ValueError(f'Étape amont en échec : {stage_path}')
+                current = referenced(stage.get('output_image'))
+                if current.stat().st_mtime_ns > stage_path.stat().st_mtime_ns:
+                    raise ValueError(f'Sortie modifiée après son traitement : {current}')
+            previous[prefix] = stage
+        validate_linear_header(fits.getheader(current))
+        return previous
+
+    @classmethod
     def load(cls, source: Path, report: Path) -> tuple[Path, JSONReport]:
         """Retrouve l'entrée linéaire du précédent traitement de la même commande.
 
-        Un rapport absent, invalide ou un intermédiaire disparu/modifié est fatal,
+        Un historique invalide ou un intermédiaire disparu/modifié est fatal,
         avant toute remise à zéro d'AutoGHS. Les anciens rapports sont compatibles
-        lorsqu'ils enregistrent explicitement autoghs.image_path.
+        lorsqu'ils enregistrent explicitement autoghs.image_path. Sans rapport
+        global ni manifeste, les rapports d'étapes peuvent prouver l'enchaînement
+        d'un ancien traitement interrompu avant le rendu final.
         """
         if not report.is_file():
+            if not cls.manifest_path(report).exists():
+                previous = cls._incomplete_history(source, report)
+                prepared = Path(previous['autoghs']['image_path'])
+                if not prepared.is_absolute():
+                    prepared = report.parent / report.stem / prepared
+                return prepared.resolve(), previous
             raise FileNotFoundError(
                 'Aucun traitement précédent à reprendre ; lancer le traitement complet '
                 f'avec les mêmes entrée et sortie : {report}'

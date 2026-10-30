@@ -485,3 +485,49 @@ def test_session_allows_mixed_execution_but_requires_gpu(
     assert factory.call_args.kwargs['providers'] == expected
     options.add_session_config_entry.assert_not_called()
     session.disable_fallback.assert_called_once_with()
+
+
+@pytest.mark.parametrize('policy', ['auto', 'cpu'])
+def test_graxpert_no_accelerator_warns_only_in_auto(
+    tmp_path: Path, native_engine: argparse.Namespace, monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture, policy: str,
+) -> None:
+    """Un fournisseur CPU seul avertit en auto, sans warning pour un CPU demandé."""
+    import onnxruntime as ort
+
+    native_engine.compute_backend = policy
+    native_engine.graxpert_gpu = None
+    monkeypatch.setattr(ort, 'get_available_providers', lambda: ['CPUExecutionProvider'])
+    source = tmp_path / 'source.fits'
+    fits.writeto(source, np.random.default_rng(71).uniform(.1, .2, (32, 32)).astype('f4'))
+    GraXpertEngine(native_engine).process(source, tmp_path / 'output.fits')
+    warnings = [r for r in caplog.records if r.levelname == 'WARNING' and 'GraXpert' in r.message]
+    assert bool(warnings) is (policy == 'auto')
+    if warnings:
+        assert 'CPU choisi' in warnings[0].message
+
+
+def test_coreml_session_without_cuda_preload(monkeypatch: pytest.MonkeyPatch) -> None:
+    """CoreML MLProgram autorise Apple GPU/ANE sans charger les bibliothèques NVIDIA."""
+    from unittest.mock import Mock
+    import onnxruntime as ort
+
+    session = Mock()
+    session.get_providers.return_value = ['CoreMLExecutionProvider', 'CPUExecutionProvider']
+    session.get_inputs.return_value = [SimpleNamespace(
+        name='gen_input_image', type='tensor(float)', shape=[None, 256, 256, 3],
+    )]
+    factory, preload = Mock(return_value=session), Mock()
+    monkeypatch.setattr(ort, 'get_available_providers', lambda: session.get_providers())
+    monkeypatch.setattr(ort, 'InferenceSession', factory)
+    monkeypatch.setattr(ort, 'preload_dlls', preload)
+    engine = GraXpertEngine(argparse.Namespace(compute_backend='auto'))
+    assert engine._create_session(Path('model.onnx'), True) is session
+    assert factory.call_args.kwargs['providers'] == [
+        ('CoreMLExecutionProvider', {'ModelFormat': 'MLProgram', 'MLComputeUnits': 'ALL'}),
+        'CPUExecutionProvider',
+    ]
+    preload.assert_not_called()
+    engine.backend = 'cuda'
+    with pytest.raises(RuntimeError, match='Aucun fournisseur ONNX GPU'):
+        engine._create_session(Path('model.onnx'), True)

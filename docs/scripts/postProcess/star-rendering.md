@@ -110,7 +110,8 @@ La seconde courbe augmente surtout les faibles intensités et comprime doucement
 les fortes vers le même plafond. Le gain à l'origine vaut
 `ceiling*strength*faint_boost/asinh(strength)`, soit environ 5,89 par défaut,
 contre 1,18 avec `--star-faint-boost=1`. Le facteur est paramétrable
-de 1 à 10 et est sauvegardé par Config avec les autres options. Les étoiles
+de 1 à 10 : c'est le renforcement **demandé**, que la garde de largeur peut
+réduire automatiquement. Il est sauvegardé par Config avec les autres options. Les étoiles
 fortes ne sont pas toutes ramenées à une intensité commune.
 
 ### Adaptation à la répartition des pics
@@ -131,8 +132,19 @@ très faibles. Par défaut, `--star-histogram-strength=0.8` ajoute une adaptatio
 3. Mélanger cette proposition au rendu fixe avec la force demandée. Mesurer la
    largeur des profils ; si elle dépasse la garde, diviser la force par deux et
    réessayer, au plus huit fois. Retenir le premier essai admissible, ou conserver
-   le gain fixe si aucun ne passe. Un gain fixe lui-même hors limite reste une erreur.
+   le gain fixe si aucun ne passe.
 4. Appliquer `gain = target(L)/L` aux trois canaux, avec un gain nul si `L=0`.
+
+Si le rendu obtenu dépasse encore la limite de largeur, réduire `faint_boost`
+d'une unité et recommencer ces étapes sur les mêmes étoiles linéaires.
+La recherche commence à la valeur demandée et s'arrête au **premier rendu
+admissible**, sans essayer les renforcements plus faibles. La valeur 1 est
+toujours essayée en dernier : par exemple `5 → 4 → 3 → 2 → 1` ou
+`2,4 → 1,4 → 1`. La force asinh, le plafond et la limite de largeur restent
+inchangés. Les valeurs demandées en CLI/JSON ne sont pas réécrites.
+Avec un facteur limité à 10, la boucle comporte au plus dix essais de base.
+Si même le dernier essai dépasse la limite, l'erreur indique le seuil et
+les renforcements/rapports essayés. Les autres erreurs restent bloquantes.
 
 L'objectif est de répartir davantage les amplitudes des pics en logarithme.
 Il ne s'agit pas de forcer l'histogramme de **tous les pixels** à être plat :
@@ -149,7 +161,12 @@ saturé ne peut pas être rétablie.
 
 Aucun pixel stellaire nul n'est rendu positif par ce renforcement : il révèle
 les contributions déjà extraites et ne recrée pas une étoile absente du masque.
-Les rapports donnent `faint_boost`, le gain à l'origine de la courbe fixe
+Les rapports donnent `requested_faint_boost` (demande), `faint_boost` (retenu),
+et `width_adaptation` (pas, essais de base, rapports de largeur, acceptation,
+historique de l'adaptation des pics pour chaque essai et motif d'arrêt).
+Une largeur non mesurable reste signalée comme telle, sans certifier la garde.
+Le journal indique chaque renforcement refusé avec sa mesure et la réduction
+finalement retenue. Les rapports donnent aussi le gain à l'origine de la courbe fixe
 `fixed_curve_faint_intensity_gain`, et celui de la courbe retenue
 `faint_intensity_gain`. `histogram_balance` contient la force demandée/retenue,
 les points de la table, chaque essai et son rapport de largeur, ainsi que le
@@ -168,10 +185,13 @@ sont corrigés du niveau médian des extrémités ; les traversées de demi-haut
 sont interpolées. Les profils tronqués ou sans traversée exploitable sont
 exclus. Le rapport fournit le nombre de profils et les largeurs médianes ;
 `null` exprime une mesure impossible. Le seuil de rapport médian, 2 par défaut,
-provoque une erreur s'il est dépassé. Il s'agit d'un contrôle de profils locaux,
+déclenche la réduction du renforcement et ne provoque une erreur qu'après
+épuisement des essais de base. Il s'agit d'un contrôle de profils locaux,
 **pas d'un ajustement PSF**, ni d'une garantie d'absence de halos faibles.
 Ce seuil autorise un doublement de la largeur apparente médiane ; il constitue
 une garde heuristique de présentation, sans calibration physique.
+Le contrôle distinct après fusion reste bloquant si cette recomposition
+introduit un dépassement : il ne relance pas les traitements amont.
 
 ### Diagnostic spécifique des étoiles
 

@@ -51,9 +51,12 @@ Depuis la racine du projet :
 bin/build_docs.sh
 ```
 
-Le lanceur prépare le venv avec `requirements-docs.txt`, installe Chromium dans
-`tmp/docs-browsers/`, puis construit les trois formats dans `out/`. Il ne nécessite
-ni Siril ni les bibliothèques astronomiques. Avec les prérequis déjà installés :
+Le lanceur crée ou réutilise le venv sélectionné (`VENV_DIR`, puis `.venv`, puis
+`venv`), met à jour `requirements-docs.txt` avec le pip du Python système et
+installe Chromium dans `tmp/docs-browsers/`. Il construit ensuite les trois
+formats dans `out/`. Cette préparation peut nécessiter Internet, y compris
+avec `--help`. Elle ne nécessite ni Siril ni les bibliothèques astronomiques.
+Pour utiliser les prérequis déjà installés sans préparation automatique :
 
 ```bash
 .venv/bin/python bin/build_documentation.py
@@ -63,6 +66,7 @@ ni Siril ni les bibliothèques astronomiques. Avec les prérequis déjà install
 Ouvrir `http://127.0.0.1:8000/`. Pour préparer manuellement les prérequis :
 
 ```bash
+python3 -m venv --without-pip .venv
 python3 -m pip --python .venv/bin/python install -r requirements-docs.txt
 PLAYWRIGHT_BROWSERS_PATH="$PWD/tmp/docs-browsers" \
   .venv/bin/python -m playwright install chromium

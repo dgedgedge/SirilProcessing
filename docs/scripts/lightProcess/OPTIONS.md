@@ -22,8 +22,18 @@
 | Mosaïque | `--mosaic`, `--mosaic-name` |
 | Post-traitement | `--postprocess`, `--no-postprocess`, mêmes options que `postProcess` |
 
+Les défauts d’empilement sont `--rejection-method winsorizedsigma` et
+`--stack-method average`, comme dans `darkLibUpdate`. Le nom court historique
+`winsor` reste accepté par `lightProcess`. Les valeurs JSON explicites restent
+prioritaires sur ces défauts.
+
 `--help` expose toutes les options. Les réglages peuvent provenir du fichier
 persistant de configuration ; `--save-config` enregistre les arguments.
+
+`--temperature-precision` vaut **0,5 °C** par défaut, comme dans
+`darkLibUpdate`. Ce pas d'arrondi sert au regroupement des poses et à la
+recherche des masters darks. Une valeur explicite en configuration ou en ligne
+de commande reste prioritaire.
 
 Pendant la calibration, les titres `=== Création du master flat … ===` puis
 `=== Calibration des lights … ===` mettent les opérations principales en
@@ -62,8 +72,8 @@ Les options `only` indiquent le point de reprise du processus.
 Voir [la référence commune](../postProcess/README.md#relance-autoghs-seul).
 
 `--color-only` reprend encore plus tard, sur les couches GHS/étoiles rendues,
-sans StarNet ni AutoGHS. `--enable-final-color` ajoute cette passe facultative
-au traitement complet ; `--disable-final-color` la désactive, et
+sans StarNet ni AutoGHS. La passe couleur suit AutoGHS par défaut dans le
+traitement complet ; `--disable-final-color` la désactive, et
 `--final-color-strength` règle sa force (3 par défaut, dans `[0,3]`). Ces réglages
 sont communs avec postProcess et mémorisables avec `-S`, sauf le mode de reprise.
 Voir [couleur finale et provenance](../postProcess/final-color.md).

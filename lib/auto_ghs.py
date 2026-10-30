@@ -12,6 +12,7 @@ import argparse
 import importlib
 import json
 import logging
+import platform
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
@@ -43,11 +44,15 @@ LOG_PEAK_PROMINENCE_FRACTION = 0.12
 class ComputeBackend:
     """Sélectionne le moteur avant calcul ; aucune reprise après son initialisation."""
 
-    def __init__(self, requested: str = "auto", required_bytes: int = 0) -> None:
+    def __init__(self, requested: str = "auto", required_bytes: int = 0,
+                 *, engine: str = 'AutoGHS') -> None:
         """Teste CUDA, réserve une marge VRAM et sinon choisit CPU seulement en auto.
 
         required_bytes estime les tableaux temporaires ; 20 % de la VRAM libre
         reste disponible. Une panne ultérieure se propage à l'appelant.
+        engine nomme le traitement dans le journal. Un choix CPU automatique
+        émet un warning ; sur macOS, ce moteur ne possède pas de backend Metal.
+        cuda reste accepté pour les contrôles internes exigeant NVIDIA.
         """
         if requested not in ("auto", "cpu", "cuda"):
             raise ValueError("compute-backend doit être auto, cpu ou cuda")
@@ -58,6 +63,8 @@ class ComputeBackend:
         if requested == "cpu":
             return
         try:
+            if platform.system() == 'Darwin':
+                raise RuntimeError('Ce moteur NumPy/CuPy ne possède pas de backend Metal Apple')
             cupy = importlib.import_module("cupy")
             if cupy.cuda.runtime.getDeviceCount() < 1:
                 raise RuntimeError("Aucun périphérique CUDA")
@@ -80,7 +87,8 @@ class ComputeBackend:
                     f"CUDA demandé mais indisponible : {error}"
                 ) from error
             self.reason = f"CPU selected before processing: {error}"
-        LOGGER.info("AutoGHS : backend %s (%s)", self.name, self.reason)
+            ComputeConfig.warn_cpu_fallback(engine, str(error))
+        LOGGER.info("%s : backend %s (%s)", engine, self.name, self.reason)
 
     def numpy(self, array: np.ndarray) -> np.ndarray:
         """Transfère un résultat vers NumPy ; les appels CUDA échoués restent fatals."""

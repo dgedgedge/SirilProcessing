@@ -2,9 +2,29 @@
 
 [Documentation](../docs/README.md)
 
+Les tests de couleur finale vérifient aussi son activation implicite dans un
+traitement complet, l'ordre GHS → couleur, les exports `_ghs`/`_saturated`, les
+surcharges JSON/CLI et le parcours sans GHS. Les défauts communs
+`winsorizedsigma`/`average` et le nom CLI long sont vérifiés pour darks et lights.
+
+Les tests d'installation vérifient l'ajout Linux de `requirements-power.txt`
+depuis PyPI sans contrainte de roue binaire, la propagation d'un échec de cette
+phase et son absence sur le parcours macOS.
+
+`test_postprocess_resume.py` couvre aussi la reprise d'un ancien échec AutoGHS
+sans rapport global, les chaînes incohérentes et fichiers modifiés, et la
+persistance du point de reprise avant un nouvel échec du rendu.
+
 Tous les tests du projet se trouvent dans `tests/`. Le fichier `pytest.ini`
 définit ce répertoire comme point de découverte par défaut et rend les imports
 du projet accessibles aux tests.
+
+`test_darkprocess.py` vérifie la validation des darks activée par défaut,
+la priorité CLI > JSON > défauts, l'absence d'écriture implicite du JSON et
+la transmission du contrôle lors d'un appel direct au traitement des groupes.
+Il vérifie aussi le défaut commun de température à 0,5 °C dans les darks et
+les lights et les surcharges JSON/CLI. `test_fits_info.py` contrôle l'effet de
+ce pas sur le regroupement, la correspondance et l'en-tête du master.
 
 ## Exécution
 
@@ -154,7 +174,7 @@ Sans CUDA, pytest affiche explicitement la raison du test ignoré (`-rs`). Il
 charge les six vrais modèles et peut télécharger les poids manquants ; les
 erreurs de téléchargement, de chargement et de calcul font échouer le test.
 Aucune variable d’activation n’est nécessaire. `COSMIC_MODEL_DIR` peut choisir
-le dossier des poids ; sinon le dossier ignoré `tmp/models/cosmicclarity` est utilisé.
+le dossier des poids ; sinon le dossier ignoré `tmp/cache/models/cosmicclarity` est utilisé.
 
 ## Qualité astrophotographique
 
@@ -254,6 +274,10 @@ Les tests `test_star_separation.py`, `test_star_rendering.py`, `test_auto_ghs.py
 et `test_final_render.py` couvrent respectivement l'adaptateur externe, le rendu
 stellaire/fusion, les mathématiques/recherches et le contrat du pipeline :
 
+Les tests de rendu stellaire vérifient aussi la réduction du renforcement de
+base jusqu'au premier essai admissible, l'arrêt immédiat lorsque la demande
+convient, les facteurs fractionnaires, l'épuisement borné à 1 et les largeurs
+non mesurables. Les couleurs, le support et les données sources sont préservés.
 Le rendu stellaire adaptatif est vérifié sur un champ synthétique de 36 pics
 colorés : davantage de pics franchissent le contraste indicatif 0,03, avec
 conservation des zéros, rapports RGB, plafond et garde de largeur. Les cas
@@ -396,9 +420,47 @@ intermédiaires périmés/manquants/non linéaires et les anciens rapports.
 Les tests de sessions vérifient que la reprise lightProcess saute calibration,
 stacking et mosaïque et garde les mêmes réglages.
 
-`test_cuda_environment.py` contrôle l’installation CUDA dans le seul venv cible,
+`test_cuda_environment.py` contrôle aussi la séparation des index PyTorch/PyPI,
+les pins torch identiques et les échecs de chacune des deux résolutions avant
+toute suppression des paquets en conflit.
+Il contrôle l’installation CUDA dans le seul venv cible,
 la résolution avant retrait des conflits, les échecs et la validité du graphe
-ONNX. Les contrôles matériels sont lancés séparément avec `install_cuda.sh`.
+ONNX. Les contrôles matériels sont lancés séparément avec `install_dependances.sh`.
+
+`test_macos_environment.py` couvre les plateformes Apple Silicon simulées,
+Rosetta et versions refusées avant mutation, l'ordre de résolution/retrait,
+les pins Mac sans CUDA et le graphe Add ONNX exécuté sur CPU. Le test matériel
+MPS/CoreML ne s'exécute que sur Darwin arm64 ; il est ignoré sous Linux.
+`test_compute_config.py` contrôle auto CUDA/MPS/CPU et la surcharge MPS
+persistante. `test_graxpert.py` vérifie la configuration CoreML sans préchargement
+NVIDIA. `test_venv_helpers.py` vérifie la sélection du venv existant, les erreurs
+sans création implicite et les six lanceurs de traitement/visualisation avec
+des outils réseau/pip interdits. Les arguments contenant des espaces sont
+transmis intacts. Le lanceur documentaire est vérifié séparément : préparation
+du venv, installation des dépendances documentaires et de Chromium, arrêt
+sur échec de pip avant la construction.
+Les choix publics `auto`/`cpu`, la migration CLI/JSON de l'ancien `cuda` global,
+les WARNING de choix CPU automatique et leur absence en CPU forcé sont couverts
+par les tests de configuration et des moteurs. Le Mac NumPy/CuPy signale
+l'absence de moteur Metal sans tenter d'importer CUDA.
+Sur un Mac réel, utiliser `bin/install_dependances.sh --check-only` avant traitement.
+
+`test_dependency_installation.py` vérifie l'installateur unique : sélection
+Linux/Mac, refus des plateformes non couvertes, nettoyage limité au venv,
+précontrôle NVIDIA avant suppression, réinstallation suivie du test et mode
+`--test` sans mutation. Les combinaisons `--reset --test` sont refusées.
+Les suppressions réelles des tests restent dans leurs dossiers temporaires.
+
+`test_installation_assets.py` vérifie le préchargement par défaut des modèles,
+les priorités de chemins, Gaia optionnel et l'absence d'écriture du JSON.
+`test_gaia_catalogue.py` utilise une archive bzip2 miniature pour vérifier les
+deux SHA, la décompression, la réutilisation sans réseau et les erreurs qui
+doivent conserver le fichier précédent. Les essais réels ont vérifié les
+poids et le catalogue Gaia déjà en cache, sans nouveau téléchargement massif.
+`test_resource_cache.py` vérifie l'arborescence commune, les anciens chemins,
+la vérification du pointeur Gaia et le nettoyage des modèles qui préserve Gaia
+et les fichiers étrangers. Les tests photométriques vérifient le passage
+automatique à `localgaia` avec préférences temporaires sans écriture utilisateur.
 
 Les contours d'annotation sont contrôlés par leurs dimensions angulaires et
 leur angle de position, après projection WCS avec rotation et inversion des

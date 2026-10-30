@@ -181,7 +181,11 @@ l’ancien point d’entrée `generate_docs_html.py`.
 Pour comprendre les responsabilités des modules communs, consulter
 l’[architecture](../architecture/README.md).
 
-## Installation du venv CUDA
+## Installation des dépendances du venv
 
-[Installer et vérifier les trois moteurs GPU](install_cuda/README.md) avec
-`bin/install_cuda.sh` pour lightProcess et postProcess.
+La [commande commune `install_dependances`](install_dependances/README.md)
+détecte automatiquement Linux CUDA ou Mac Apple Silicon. `--test` vérifie le
+venv sans installation ; `--reset` le supprime puis le recrée complètement.
+
+Les détails des moteurs sont décrits dans [CUDA](install_cuda/README.md)
+et [Apple Silicon MPS/CoreML](install_macos/README.md).

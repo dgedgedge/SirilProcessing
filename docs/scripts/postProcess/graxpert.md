@@ -22,18 +22,26 @@ diffus).
 Les services héritent de `ParameterizedComponent` et déclarent leurs enfants ;
 les paramètres suivent CLI > configuration JSON > défauts. Le manifeste contient
 uniquement les métadonnées, pas les poids. Les modèles restent exclus de Git et
-de l’archive dans `tmp/models/graxpert/3.0.2/model.onnx` par défaut.
+de l’archive dans `tmp/cache/models/graxpert/3.0.2/model.onnx` par défaut.
 
 ONNX Runtime est une dépendance optionnelle :
 
 ```bash
-bin/postProcess.sh --install-graxpert
+bin/install_dependances.sh
 ```
 
-Ce lancement installe le runtime CPU dans le venv du projet. Les poids sont
-acquis au premier traitement. Pour un GPU NVIDIA, installer la variante
-`onnxruntime-gpu` compatible avec l’environnement CUDA à la place du runtime
-CPU ; le projet ne prétend pas qu’un runtime CPU fournit CUDA.
+L’installeur prépare le runtime adapté à la plateforme et précharge les poids.
+Sous Linux NVIDIA, il utilise `onnxruntime-gpu` ; ne pas lui superposer le
+runtime CPU, qui partage les mêmes modules. Une installation CPU manuelle
+reste possible avec `requirements-graxpert.txt` dans un environnement distinct.
+Sur Apple Silicon, le paquet `onnxruntime` fournit CoreML : voir
+[l'installation Mac](../install_macos/README.md). La session choisit MLProgram
+avec `MLComputeUnits=ALL` pour autoriser CPU, GPU et Neural Engine. Les
+bibliothèques NVIDIA ne sont pas préchargées en l'absence du fournisseur CUDA.
+Le fournisseur déclaré ne certifie pas une exécution intégrale sur GPU.
+En mode auto, l'absence de fournisseur utilisable ou un échec d'initialisation
+produit un WARNING indiquant le choix CPU et sa cause. Les choix globaux sont
+`--compute-backend auto|cpu`.
 
 ```bash
 bin/postProcess.sh image_RGB.fits sorties/ --enable-graxpert
@@ -88,7 +96,7 @@ explicite. Dès que les poids sont installés, l’inférence fonctionne sans Gr
 | Option | Défaut | Rôle |
 |---|---|---|
 | `--enable-graxpert` / `--no-enable-graxpert` | automatique si poids locaux valides | Forcer l’activation / désactiver le moteur |
-| `--graxpert-model-dir` | `tmp/models/graxpert` dans le projet | Cache de poids |
+| `--graxpert-model-dir` | `tmp/cache/models/graxpert` dans le projet | Cache de poids |
 | `--graxpert-model-version` | `3.0.2` | Version épinglée et prise en charge |
 | `--graxpert-path` | `GraXpert-linux` | Exécutable utilisé seulement pour l’acquisition |
 | `--graxpert-strength` | 0,5 | Mélange relatif, de 0 à 1 |

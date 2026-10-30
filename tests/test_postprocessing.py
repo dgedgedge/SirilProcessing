@@ -159,7 +159,7 @@ def test_input_and_output_validation(tmp_path: Path, invalid: str) -> None:
 def test_direct_and_cli_share_calculation_and_exports(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Même configuration : calculs, exports et bandeau initial communs."""
+    """Même configuration sans couleur : exports et bandeau initial communs."""
     import lib.postprocessing as processing
 
     source = tmp_path / "source.fits"
@@ -192,6 +192,7 @@ def test_direct_and_cli_share_calculation_and_exports(
     config_path.write_text(json.dumps({
         "ghs_chroma": "enhanced", "star_faint_boost": 4,
         "compute_backend": "cpu", "gradient_smoothing": 0.6,
+        "enable_final_color": False,
     }))
     config = Config(config_path)
     args = configured_args(config, "--ghs-dynamic-target", "0.8")

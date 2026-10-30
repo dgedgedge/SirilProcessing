@@ -10,7 +10,7 @@
 diagnostics de qualité et du gradient, puis exports FITS et
 JPEG, puis annotation finale PNG. Les deux scripts appellent cette même classe en mémoire.
 
-La [couleur finale adaptative](final-color.md) est une étape facultative entre
+La [couleur finale adaptative](final-color.md) est activée par défaut entre
 AutoGHS et les exports. Son rapport porte le numéro `06_final_color` ; elle
 réutilise le fond GHS et les étoiles rendues, puis recompose la sortie colorée.
 Les exports `_ghs.fits/.jpg` conservent le rendu avant saturation ; les sorties
@@ -209,7 +209,15 @@ La reprise conserve l'entrée et la sortie de la commande complète.
 avant la remise à zéro du travail AutoGHS. L'orchestrateur conserve les clés des
 étapes amont du rapport et remplace `autoghs`, `annotation` et la passe couleur
 (sauf désactivation explicite). Un ancien résultat couleur n'est pas conservé implicitement.
-La provenance est enregistrée séparément après réussite ; elle comprend les
-chemins absolus, tailles et dates des fichiers source et préparé. Depuis
+Un point de reprise est enregistré **avant AutoGHS**, puis la provenance est
+actualisée après réussite ; elle comprend les chemins absolus, tailles et dates
+des fichiers source et préparé. Ainsi, un échec du rendu n'exige pas de disposer
+déjà des exports finaux pour relancer `--autoghs-only`.
+Pour un ancien traitement sans rapport global ni manifeste, les rapports
+d'étapes peuvent permettre la reprise : leurs chemins explicites doivent former
+une chaîne depuis la source jusqu'à l'entrée enregistrée d'AutoGHS. Les fichiers
+doivent exister et ne pas avoir été modifiés après leurs rapports. Cette
+compatibilité fondée sur les chemins et dates n'est pas une preuve d'intégrité
+cryptographique. Une chaîne incohérente ou absente reste bloquante. Depuis
 lightProcess, `lightprocess_final_images.json` retrouve les mêmes produits finaux
 avant tout travail de calibration/stacking/mosaïque, même pour un stack à une pose.

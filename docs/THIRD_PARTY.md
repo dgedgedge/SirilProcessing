@@ -31,7 +31,7 @@ Le texte livré est reproduit depuis le [répertoire SPDX des licences](https://
 
 Les poids neuronaux, exécutables externes, environnements virtuels et images
 personnelles ne sont pas inclus dans ces données embarquées. Les modèles
-Cosmic Clarity et GraXpert sont installés séparément dans `tmp/models/`, ignoré
+Cosmic Clarity et GraXpert sont installés séparément dans `tmp/cache/models/`, ignoré
 par Git. Le manifeste `lib/cosmic_clarity/models.json` conserve les URL, tailles
 et empreintes des poids Cosmic Clarity ; il ne contient pas les poids eux-mêmes.
 
@@ -44,6 +44,7 @@ et empreintes des poids Cosmic Clarity ; il ne contient pas les poids eux-mêmes
 | StarNet++ V2 historique | Séparation des étoiles via Siril | Licence spécifique, **non assimilable à la GPL ou à MIT** ; restrictions propres à l'archive V2, notamment au domaine d'utilisation. Lire le fichier `LICENSE` de l'[archive officielle installée](https://starnetastro.com/cli-tools/legacy/) ; binaire et modèle absents de Git |
 | Application GraXpert | Traitements externes facultatifs | [GNU GPLv3](https://github.com/Steffenhir/GraXpert/blob/main/License.md) pour l'application ; les modèles téléchargés doivent être examinés selon leur distribution |
 | Modèles Cosmic Clarity | Restauration native PyTorch | [Dépôt et licence MIT amont](https://github.com/setiastro/cosmicclarity/blob/main/LICENSE) ; conserver les notices accompagnant les fichiers de la version téléchargée |
+| Extrait Gaia DR3 astrométrique Siril, version 1.0.0 | Téléchargement facultatif de l'installateur pour le plate solving ; fichiers hors Git | [Zenodo 14692304](https://zenodo.org/records/14692304), **CC-BY-4.0**, crédit Ian Cass, Adrian Knagg-Baugh, Cécile Melis et Cyril Richard ; empreintes SHA-256 publiées avec le jeu de données |
 | NVIDIA CUDA, cuDNN et composants NVIDIA installés par pip | Calcul GPU facultatif | [Conditions NVIDIA CUDA](https://docs.nvidia.com/cuda/eula/index.html) et licences des composants ; ces bibliothèques ne deviennent pas MIT du fait de leur utilisation par CuPy ou PyTorch |
 | Chromium | Rendu des diagrammes et export PDF par Playwright | [Licence Chromium et notices tierces](https://chromium.googlesource.com/chromium/src/+/HEAD/LICENSE) ; téléchargé séparément |
 

@@ -169,8 +169,31 @@ def test_default_dynamic_target_is_full_starless_range() -> None:
     assert overridden.ghs_dynamic_target == 0.8
 
 
-def test_backend_missing_cuda_and_no_midrun_fallback(monkeypatch) -> None:
+@pytest.mark.parametrize('engine', ['AutoGHS', 'Couleur finale'])
+def test_apple_numpy_backend_warns_without_attempting_cuda(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, engine: str,
+) -> None:
+    """Sur Mac, l'absence de backend Metal est explicite et CuPy n'est pas recherché."""
+    monkeypatch.setattr('lib.auto_ghs.platform.system', lambda: 'Darwin')
+
+    def forbidden(name: str) -> None:
+        """Échoue si le moteur essaie un import CUDA sur Apple Silicon."""
+        raise AssertionError('CUDA import attempted')
+
+    monkeypatch.setattr('lib.auto_ghs.importlib.import_module', forbidden)
+    assert ComputeBackend('auto', engine=engine).name == 'cpu'
+    assert any(r.levelname == 'WARNING' and engine in r.message and 'Metal' in r.message
+               for r in caplog.records)
+    caplog.clear()
+    assert ComputeBackend('cpu', engine=engine).name == 'cpu'
+    assert not caplog.records
+
+
+def test_backend_missing_cuda_and_no_midrun_fallback(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
     """Auto choisit CPU avant calcul ; CUDA forcé et panne de calcul sont fatals."""
+    monkeypatch.setattr('lib.auto_ghs.platform.system', lambda: 'Linux')
 
     def unavailable(name):
         """Simule une installation CPU seule."""
@@ -178,6 +201,8 @@ def test_backend_missing_cuda_and_no_midrun_fallback(monkeypatch) -> None:
 
     monkeypatch.setattr("lib.auto_ghs.importlib.import_module", unavailable)
     assert ComputeBackend("auto").name == "cpu"
+    assert any(record.levelname == 'WARNING' and 'no cupy' in record.message
+               and 'AutoGHS' in record.message for record in caplog.records)
     with pytest.raises(RuntimeError, match="CUDA demandé"):
         ComputeBackend("cuda")
     monkeypatch.undo()
@@ -236,6 +261,7 @@ def test_auto_cuda_selection_vram_guard_and_fatal_runtime(monkeypatch) -> None:
     import lib.auto_ghs as module
 
     original_import = module.importlib.import_module
+    monkeypatch.setattr(module.platform, 'system', lambda: 'Linux')
 
     class CupyDouble:
         """Interface CuPy minimale appuyée sur NumPy pour le seul contrôle de sélection."""

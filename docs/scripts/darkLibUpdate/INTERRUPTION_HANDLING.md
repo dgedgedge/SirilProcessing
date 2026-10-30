@@ -55,7 +55,7 @@ if __name__ == "__main__":
 
 ### Gestion dans le traitement (`darkprocess.py`)
 ```python
-def process_all_groups(self, dark_groups, validate_darks: bool = False):
+def process_all_groups(self, dark_groups, validate_darks: bool = True):
     total_groups = len(dark_groups)
     processed_groups = 0
     
