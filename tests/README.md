@@ -2,6 +2,11 @@
 
 [Documentation](../docs/README.md)
 
+Les tests de séparation et de rendu final couvrent un fond StarNet brut
+supérieur à 1, sa conservation sur disque et la compensation du résidu signé
+sans perte de la somme. Une somme hors domaine, les valeurs négatives du fond
+et les NaN/Inf restent refusés.
+
 Les tests de couleur finale vérifient aussi son activation implicite dans un
 traitement complet, l'ordre GHS → couleur, les exports `_ghs`/`_saturated`, les
 surcharges JSON/CLI et le parcours sans GHS. Les défauts communs

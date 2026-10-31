@@ -2,6 +2,11 @@
 
 [postProcess](README.md) › AutoGHS
 
+Une sortie StarNet brute légèrement supérieure à 1 est conservée avec son
+résidu signé jusqu'à la [compensation des couches](star-rendering.md#politique-des-residus-negatifs).
+L'entrée et les couches corrigées doivent rester dans `[0,1]` ; aucun écrêtage
+indépendant ni normalisation globale de secours n'est appliqué.
+
 La phase AutoGHS, activée par défaut, termine le pipeline existant, après la
 restauration, sur son résultat **RGB linéaire avec étoiles**. Elle effectue une
 séparation StarNet, un étirement dédié aux étoiles, puis une optimisation RANGE du
@@ -223,7 +228,7 @@ Les deux modes laissent la couche d'étoiles inchangée.
 Les dépassements négatifs StarNet corrigeables sont compensés avant étirement,
 avec avertissement et mesures dans `residual_compensation`. Ils n’interrompent
 pas le rendu. Les couches corrigées doivent rester finies et bornées ; voir
-la [politique de compensation](star-rendering.md#politique-des-résidus-négatifs).
+la [politique de compensation](star-rendering.md#politique-des-residus-negatifs).
 
 Une panne StarNet, CUDA en cours de calcul, FITS, disque ou publication est
 **fatale**, sans reprise CPU ou substitution de rendu. La CLI retourne `1`.

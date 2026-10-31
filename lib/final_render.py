@@ -274,6 +274,8 @@ class AutoGHSFinalRenderer(processor):
         tolerance, finie dans [0,.05], est un seuil d’alerte diagnostique : un
         dépassement est consigné sans invalider une décomposition corrigeable.
         Les branches corrigées doivent être RGB, finies et bornées sur [0,1] ;
+        le fond StarNet brut peut dépasser 1 si son résidu signé reconstitue
+        une entrée bornée. Aucun écrêtage indépendant des couches n'est fait ;
         une incohérence de géométrie ou de domaine reste une erreur ValueError.
         Voir docs/scripts/postProcess/star-rendering.md.
         """
@@ -281,13 +283,15 @@ class AutoGHSFinalRenderer(processor):
             raise ValueError("ghs-negative-tolerance doit être dans [0,.05]")
         if starless.shape != stars.shape or not np.isfinite(stars).all():
             raise ValueError("Résidu StarNet incompatible")
-        validate_rgb(starless)
+        validate_rgb(starless, allow_upper_overshoot=True)
+        validate_rgb(starless + stars)
         negative = np.minimum(stars, 0)
         background, positive = starless + negative, stars - negative
         validate_rgb(background)
         validate_rgb(positive)
         minimum = float(stars.min())
         exceeded_count = int(np.count_nonzero(stars < -tolerance))
+        above_one_count = int(np.count_nonzero(starless > 1))
         if exceeded_count:
             LOGGER.warning(
                 "StarNet : %d valeur(s) RGB (%.6f %%) sous -%g, minimum=%g ; "
@@ -300,7 +304,9 @@ class AutoGHSFinalRenderer(processor):
             positive,
             {
                 "method": "flux-conserving nonnegative residual compensation",
-                "status": "CORRECTED" if exceeded_count else "SUCCESS",
+                "raw_starless_above_one_count": above_one_count,
+                "raw_starless_maximum": float(starless.max()),
+                "status": "CORRECTED" if exceeded_count or above_one_count else "SUCCESS",
                 "tolerance": tolerance,
                 "tolerance_exceeded": bool(exceeded_count),
                 "above_tolerance_count": exceeded_count,

@@ -585,3 +585,12 @@ def test_ordered_autoghs_directory_is_reset_on_rerun(
     with pytest.raises(ValueError, match="réinitialisé"):
         renderer.post_process(source, report, args)
     assert source.read_bytes() == before
+
+
+def test_starless_overshoot_cannot_hide_invalid_reconstructed_source() -> None:
+    """Refuser une décomposition dont la somme est réellement hors domaine."""
+    background = np.full((3, 8, 8), 1.00004, dtype=np.float32)
+    with pytest.raises(ValueError, match=r'\[0, 1\]'):
+        AutoGHSFinalRenderer.compensate_residual(
+            background, np.zeros_like(background), .005,
+        )

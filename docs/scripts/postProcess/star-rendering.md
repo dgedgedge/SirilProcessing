@@ -43,7 +43,11 @@ où l'interface historique est annoncée retirée. Aucune substitution automatiq
 vers un script non validé n'est effectuée.
 
 Après succès du processus, les dimensions, les canaux et les valeurs finies
-sont contrôlés. Un changement de convention `ROWORDER` est corrigé par un
+non négatives sont contrôlés. Le fond brut peut dépasser 1 lors du retour
+linéaire Siril/StarNet : il est conservé tel quel avec son résidu signé, et
+non écrêté indépendamment. Le journal et le rapport relèvent le nombre de
+valeurs RGB concernées (`raw_starless_above_one_count`) et le maximum
+(`raw_starless_maximum`). Un changement de convention `ROWORDER` est corrigé par un
 retournement vertical explicite du tableau ; la géométrie et les métadonnées
 publiées restent celles de la source. Les extensions FITS sont conservées.
 
@@ -69,6 +73,16 @@ stars_positive = stars_linear - negative
 
 Le flux est transféré dans le fond avant tout étirement, avec conservation de
 la somme linéaire. RANGE reçoit ce **fond corrigé**.
+Cette compensation s'applique également à un fond brut supérieur à 1 : son
+résidu signé négatif ramène le fond à l'intensité de l'entrée originale.
+La somme des couches doit elle-même rester dans `[0,1]`, puis les deux couches
+corrigées sont soumises au contrôle strict `[0,1]`. L'entrée scientifique,
+les valeurs négatives du fond brut et les NaN/Inf ne bénéficient d'aucune
+exception. Les diagnostics conservent le dépassement avant compensation.
+La séparation vérifie aussi que le fond brut et le résidu float32 reconstruisent
+l'entrée originale à `1e-6` près en intensité normalisée. Au-delà de cette marge
+d'arrondi, elle échoue explicitement : un dépassement extrême ne doit pas
+faire perdre le signal par annulation numérique.
 Dans les pixels concernés, le fond corrigé retrouve l’intensité originale et
 la couche d’étoiles devient nulle. Cela revient à borner le fond par l’original,
 en maintenant `fond_corrigé + étoiles_positives = image_originale`, à l’arrondi
