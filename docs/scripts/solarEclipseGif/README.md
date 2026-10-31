@@ -28,7 +28,7 @@ les images de diagnostic et la création du GIF.
 
 ## 3. Installation
 
-Le lanceur utilise Python et pip du système pour créer le venv sans pip et
-mettre à jour ses dépendances avant chaque exécution. Il lance ensuite le
-Python du venv. La sélection de l’environnement, les prérequis et l’exécution
-sans mise à jour sont décrits dans [Installation](../../INSTALLATION.md).
+Le lanceur utilise le Python du venv existant sans installer ni mettre à jour
+les dépendances, y compris avec `--help`. La sélection suit `VENV_DIR`, `.venv`,
+puis `venv`. Si l’environnement manque, il indique la commande d’installation.
+Voir [Installation](../../INSTALLATION.md) pour préparer les prérequis.

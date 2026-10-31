@@ -3,18 +3,25 @@
 [postProcess](README.md) › Calcul CPU/GPU
 
 [`ComputeConfig`](../../../lib/compute_config.py) déclare la politique commune
-`--compute-backend auto|cpu|cuda`, avec **auto par défaut**. Cette classe dérive
+`--compute-backend auto|cpu`, avec **auto par défaut**. Cette classe dérive
 de `ParameterizedComponent`, n'importe aucune bibliothèque GPU et ne charge
 aucun modèle. Sa méthode `add_arguments` évite les déclarations multiples dans
 les parseurs de la séquence et de ses moteurs.
 
 ## Choix du périphérique
 
-| Moteur | auto | cpu | cuda |
-|---|---|---|---|
-| Cosmic Clarity | CUDA si `torch.cuda.is_available()`, CPU sinon | PyTorch CPU | CUDA requis |
-| GraXpert | Fournisseur ONNX GPU fonctionnel, CPU sinon | ONNX CPU | `CUDAExecutionProvider` requis |
-| AutoGHS | CuPy/CUDA après contrôle et budget VRAM, NumPy sinon | NumPy | CuPy/CUDA requis |
+| Moteur | auto | cpu |
+|---|---|---|
+| Cosmic Clarity | CUDA disponible, puis MPS Apple disponible, CPU sinon | PyTorch CPU |
+| GraXpert | Fournisseur ONNX GPU/CoreML fonctionnel, CPU sinon | ONNX CPU |
+| AutoGHS et couleur finale | CuPy/CUDA après contrôle et budget VRAM ; NumPy sur Mac ou si CUDA inutilisable | NumPy/SciPy |
+
+En `auto`, chaque moteur qui choisit le CPU faute d'accélérateur utilisable
+émet un **WARNING** avec son nom, l'OS et la cause. Cela couvre un paquet/pilote
+absent, une VRAM insuffisante, un fournisseur ONNX absent ou non initialisable.
+Sur Mac, AutoGHS et la couleur finale précisent que leur moteur n'implémente
+pas Metal : ce n'est pas une invitation à installer CUDA sur Apple Silicon.
+Un choix CPU explicite ne produit pas cet avertissement.
 
 Chaque moteur vérifie ses propres dépendances : un CUDA disponible dans PyTorch
 n'installe ni CuPy ni un fournisseur ONNX GPU. Le choix du calcul ne désactive
@@ -39,16 +46,22 @@ La valeur générale suit CLI > JSON > défaut auto et se sauvegarde avec `-S` :
   --compute-backend auto -S
 ```
 
+L'ancienne valeur globale `cuda`, sur la ligne de commande ou dans le JSON,
+est convertie en `auto` avec un avertissement de migration. Elle n'impose plus
+NVIDIA : le CPU reste possible si l'accélération échoue au précontrôle. Le JSON
+n'est réécrit que si `-S` est demandé. Les choix publics sont `auto` et `cpu` ;
+il n'est pas nécessaire d'indiquer le fabricant ou le moteur Apple.
+
 Les surcharges propres aux moteurs restent prioritaires :
 
-- `--cosmic-device auto|cpu|cuda` ; défaut `null`, donc héritage du choix général ;
+- `--cosmic-device auto|cpu|cuda|mps` ; défaut `null`, donc héritage du choix général ;
 - `--graxpert-gpu` / `--no-graxpert-gpu` ; défaut `null`, donc héritage également.
 
 Les anciennes valeurs JSON `cosmic_device: "cuda"` ou `graxpert_gpu: false`
 restent des choix explicites. Elles ne sont pas écrasées par le réglage général.
 Retirer ces clés ou les mettre à `null` permet de retrouver l'héritage. Le choix
 `cosmic_device: "auto"` constitue une surcharge automatique de ce seul moteur,
-même si la politique générale est CPU ou CUDA.
+même si la politique générale est CPU.
 
 `ComputeConfig.requested(args, override)` résout une surcharge non nulle puis
 `compute_backend`, sinon auto. GraXpert adapte son ancienne surcharge booléenne
@@ -65,11 +78,29 @@ politique demandée, ceux d'AutoGHS le backend choisi et le motif du précontrô
 
 `tests/test_compute_config.py` vérifie la déclaration unique, le défaut auto,
 la sauvegarde et les priorités, la transmission aux moteurs tardifs et les
-surcharges historiques. Les disponibilités CUDA simulées vérifient la sélection
-CPU/CUDA ; un fournisseur ONNX non initialisable est testé séparément d'une
+surcharges historiques et la migration de l'ancien choix global CUDA.
+Les avertissements de choix CPU automatique, leur cause et leur absence en CPU
+forcé sont testés pour PyTorch, ONNX et NumPy/CuPy, notamment sur Mac simulé.
+Les disponibilités CUDA/MPS simulées vérifient la sélection
+CPU/CUDA/MPS ; un fournisseur ONNX non initialisable est testé séparément d'une
 inférence déjà commencée. Ces doubles ne valident pas une exécution matérielle
 GPU. Les tests des moteurs conservent leurs contrôles de panne et de reprise
 explicitement autorisée.
 
 Voir les détails de [Cosmic Clarity](cosmic-clarity.md),
 [GraXpert](graxpert.md), et du [backend AutoGHS](auto-ghs-algorithm.md#cpu-cuda-et-ressources).
+
+## Installation commune
+
+`bin/install_dependances.sh` détecte Linux CUDA ou Apple Silicon et sélectionne
+les dépendances adaptées. `--test` vérifie le venv sans le modifier ; `--reset`
+le recrée complètement. Voir [le guide commun](../install_dependances/README.md).
+
+`bin/install_dependances.sh` prépare et vérifie les trois dépendances CUDA dans le
+même venv. Voir [Installation CUDA](../install_cuda/README.md). L’option
+`--compute-backend` choisit le moteur et ne réalise pas cette installation.
+
+Sur Apple Silicon, utiliser [l'installation Mac](../install_macos/README.md)
+avec `bin/install_dependances.sh`. CoreML peut répartir GraXpert entre CPU, GPU et
+Neural Engine ; AutoGHS et la couleur finale restent sur CPU. Le choix `mps`
+est uniquement une surcharge Cosmic Clarity, pas une valeur de la politique globale.

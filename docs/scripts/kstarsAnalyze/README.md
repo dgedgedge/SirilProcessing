@@ -58,7 +58,7 @@ fichiers » et « Ajouter un dossier » permettent de charger les journaux.
 Tkinter doit être installé au niveau système (`python3-tk` sur Debian/Ubuntu).
 Il est déjà disponible sur la machine de développement.
 
-Pour lancer directement la fenêtre sans mise à jour :
+Pour lancer directement la fenêtre avec le Python du venv :
 
 ```bash
 .venv/bin/python bin/kstarsAnalyze.py --gui ~/Téléchargements/analyze --with-captures
@@ -217,10 +217,10 @@ interruptions restent rouges.
 Pour les journaux de guidage `.txt` au format PHD2, utiliser le
 [visualiseur de guide logs](../guideLogAnalyze/README.md).
 
-Le lanceur utilise Python et pip du système pour créer le venv sans pip et
-mettre à jour ses dépendances avant chaque exécution. Il lance ensuite le
-Python du venv. La sélection de l’environnement, les prérequis et l’exécution
-sans mise à jour sont décrits dans [Installation](../../INSTALLATION.md).
+Le lanceur utilise le Python du venv existant sans installer ni mettre à jour
+les dépendances, y compris avec `--help`. La sélection suit `VENV_DIR`, `.venv`,
+puis `venv`. Si l’environnement manque, il indique la commande d’installation.
+Voir [Installation](../../INSTALLATION.md) pour préparer les prérequis.
 
 
 <a id="options-de-ligne-de-commande"></a>

@@ -22,14 +22,18 @@ Les deux entrées utilisent le même
 [processeur complet et ses paramètres](pipeline.md). Elle ne réalise ni
 la calibration des poses brutes, ni leur empilement. Le
 [rendu final AutoGHS](auto-ghs.md) est exécuté après la restauration :
-il sépare les étoiles avec StarNet et produit deux images finales étoilées
-(`range` et `peak`), en FITS et JPEG, accompagnées de
-[comparatifs enregistrés dans le dossier GHS](render-exports.md). Il est activé par défaut ; `--disable-autoghs` conserve la sortie linéaire.
+il sépare les étoiles avec StarNet et produit une image finale étoilée RANGE,
+en FITS et [JPEG](render-exports.md), avec ses histogrammes de diagnostic.
+Il est activé par défaut ; `--disable-autoghs` conserve la sortie linéaire.
+
+La [passe couleur finale adaptative](final-color.md) suit GHS par défaut avant
+la fusion et l'annotation : `--disable-final-color` la désactive et `--color-only`
+permet de la relancer seule sur les couches GHS existantes.
 
 GraXpert est ajouté automatiquement à la comparaison lorsque des poids locaux
 valides sont présents, sauf désactivation explicite (`--no-enable-graxpert` ou
 configuration sauvegardée). ONNX Runtime s’installe avec
-`bin/postProcess.sh --install-graxpert`. `--enable-graxpert` force l’activation et
+`bin/install_dependances.sh`. `--enable-graxpert` force l’activation et
 l’acquisition des poids manquants ; voir [GraXpert et ses modèles](graxpert.md).
 
 <a id="manuel-d-utilisation"></a>
@@ -67,6 +71,11 @@ Chaque exécution crée un nom de base `<image>_postprocess` :
 
 Le rapport global et le FITS final sont donc au même niveau que le dossier
 d’étapes et partagent son nom de base.
+
+Avec la [couleur finale](final-color.md) activée, le rendu GHS est conservé
+dans `<image>_postprocess_ghs.fits/.jpg` et le résultat saturé porte le nom
+`<image>_postprocess_saturated.fits/.jpg`. Son annotation est
+`<image>_postprocess_saturated_annotated.png`.
 
 Le wrapper conserve le dossier de lancement pour résoudre les chemins relatifs.
 L’appel Python équivalent, avec le venv déjà activé, est :
@@ -171,17 +180,17 @@ bin/postProcess.sh image.fit rapports/details.json \
 Pour l’utilisation Python et l’ajout d’un traitement, consulter
 [le contrat de la séquence](../lightProcess/treatments/postprocess/SEQUENCE_PROCESSOR.md).
 
-Le lanceur utilise Python et pip du système pour créer le venv sans pip et
-mettre à jour ses dépendances avant chaque exécution. Il lance ensuite le
-Python du venv. La sélection de l’environnement, les prérequis et l’exécution
-sans mise à jour sont décrits dans [Installation](../../INSTALLATION.md).
+Le lanceur utilise le Python du venv existant sans installer ni mettre à jour
+les dépendances, y compris avec `--help`. La sélection suit `VENV_DIR`, `.venv`,
+puis `venv`. Si l’environnement manque, il indique la commande d’installation.
+Voir [Installation](../../INSTALLATION.md) pour préparer les prérequis.
 
 Les classes des traitements sont enregistrées avant le parsing. Les valeurs
 résolues sont ensuite liées aux classes avant la création des instances, y
 compris les enfants. Voir la [liaison des paramètres](../lightProcess/treatments/postprocess/SEQUENCE_PROCESSOR.md#résolution-et-liaison-hiérarchique-des-paramètres).
 
 Les poids Cosmic Clarity manquants ou corrompus sont téléchargés avant leur
-chargement dans `tmp/models/cosmicclarity/` par défaut, ou dans le dossier
+chargement dans `tmp/cache/models/cosmicclarity/` par défaut, ou dans le dossier
 `--cosmic-model-dir` résolu. Voir [installation et téléchargement](cosmic-clarity.md#installation-et-lancement).
 
 En mode `--quality-mode legacy`, pour la netteté Cosmic Clarity, les grands catalogues sont contrôlés selon la
@@ -250,13 +259,13 @@ Algorithme appliqué en mode comparatif :
    conservation de l’image d’entrée.
 
 ```bash
-bin/postProcess.sh --install-cosmic-clarity
+bin/install_dependances.sh
 bin/postProcess.sh image_RGB.fit --enable-clarity
 bin/postProcess.sh image_RGB.fit --disable-clarity --no-enable-graxpert
 ```
 
-L'option d'installation est capturée par le `.sh` ; elle utilise pip système
-pour installer les dépendances dans le venv et récupérer les poids vérifiés.
+L'installeur prépare séparément le venv et les poids vérifiés. Le lanceur
+`postProcess.sh` utilise ensuite ce venv sans installation ni mise à jour.
 `--enable-clarity` et `--disable-clarity` appartiennent au programme Python et
 peuvent être mémorisées avec `-S`.
 Les noms des rapports, l'ordre et les contrôles d'acceptation restent les mêmes.
@@ -319,6 +328,10 @@ Ce traitement utilise Python et ne lance pas Siril.
 
 Sur une image RGB linéaire, le traitement appelle successivement `platesolve`
 puis `spcc` dans Siril, avec **Gaia par défaut pour les deux commandes**.
+Pour le plate solving, le catalogue Gaia vérifié dans `tmp/cache/catalogues/gaia/`
+est utilisé automatiquement via `localgaia` et des préférences Siril temporaires.
+Sans cache conforme, le catalogue distant est utilisé. Le catalogue spectral
+SPCC reste distinct. Voir [le cache commun](../install_dependances/resources.md).
 L’astrométrie associe les pixels à des coordonnées célestes ; SPCC utilise les
 spectres stellaires Gaia DR3 et les réponses spectrales du capteur et des filtres
 pour étalonner les couleurs. `--photometry-method pcc` permet de choisir PCC.
@@ -547,6 +560,68 @@ Le mode par défaut compare les [chaînes complètes de restauration](restoratio
 <a id="r-sultats-et-journaux"></a>
 <a id="résultats-et-journaux"></a>
 
+<a id="relance-autoghs-seul"></a>
+
+### 3.7. Relancer uniquement StarNet et AutoGHS
+
+Reprendre **la même commande**, avec la même entrée, le même répertoire de
+sortie et les mêmes options, en ajoutant seulement `--autoghs-only` :
+
+```bash
+# Traitement complet.
+bin/postProcess.sh image_RGB.fits resultats/ --config reglages.json
+# Reprise du rendu final, sans changer l'entrée ni les paramètres.
+bin/postProcess.sh image_RGB.fits resultats/ --config reglages.json --autoghs-only
+```
+
+Le programme retrouve dans la provenance précédente le FITS linéaire réellement
+reçu par AutoGHS (par exemple la sortie de restauration). Il ne repart ni de
+l'entrée brute ni du rendu déjà étiré. Les paramètres sont résolus comme pour
+un traitement complet : CLI > JSON > défauts ; les options non mémorisées doivent
+donc être répétées dans la commande. Les options amont restent acceptées mais
+ne provoquent aucun recalcul amont dans ce mode.
+
+La reprise reste possible après un échec du rendu final : le point de reprise
+est écrit avant AutoGHS. Les anciens traitements sans rapport global peuvent
+être repris si leurs rapports d'étapes établissent un enchaînement cohérent
+jusqu'au FITS linéaire existant ; voir les
+[contrôles de provenance](pipeline.md). Les exports finaux ne sont pas requis.
+
+Cette option saute le gradient, la photométrie, la déconvolution, le débruitage,
+les comparaisons de restauration et leurs aperçus de qualité. Elle active AutoGHS
+et la saturation pour cet appel, même si la couleur est désactivée dans le JSON.
+Ajouter `--disable-final-color` pour l'écarter explicitement. Les options `only`
+indiquent le point de reprise : toutes les étapes suivantes sont ensuite exécutées.
+StarNet est relancé, puis les rendus et annotations sont remplacés
+aux emplacements habituels. Les étapes amont et leurs rapports sont conservés.
+Les prérequis Siril/StarNet et les contrôles de linéarité restent identiques.
+Le paramètre de reprise n'est jamais mémorisé avec `-S`.
+
+Depuis `lightProcess`, ajouter de même `--autoghs-only` à la commande complète :
+les sessions et le mode mosaïque restent identiques, mais la calibration, le
+stacking et la mosaïque sont aussi sautés. Les produits finaux précédents sont
+retrouvés avant de reprendre leur dernière partie. `--dry-run` vérifie les
+références et annonce la reprise sans exécuter les traitements.
+
+Un historique ou un intermédiaire manquant, une entrée modifiée ou une référence
+non linéaire entraîne une erreur avant la remise à zéro d'AutoGHS. Les nouveaux
+traitements conservent `<image>_postprocess_resume.json` (chemins, tailles et dates
+des fichiers ; ce n'est pas un hash du contenu). Les rapports antérieurs sont
+compatibles s'ils contiennent explicitement `autoghs.image_path`, sans pouvoir
+vérifier rétroactivement l'intégrité des fichiers. Si le traitement précédent
+n'a pas laissé de référence exploitable, refaire un traitement complet.
+
+La [dernière passe protégée](ghs-highlight-protection.md) est active par défaut.
+`--ghs-highlight-retention 0.95` renforce la conservation des nuances brillantes ;
+`--ghs-final-mode fixed` permet de comparer l'ancienne courbe finale.
+
+### 3.8. Annotation finale
+
+Une dernière [étape d’annotation](annotations.md) produit par défaut un PNG avec
+les noms des objets du champ et un encart de prise de vue en bas à gauche,
+après le rendu AutoGHS.
+Utiliser `--no-final-annotation` pour la désactiver.
+
 ## 4. Résultats et journaux
 
 <a id="rapports-images-et-journaux"></a>
@@ -583,15 +658,10 @@ rapports/
         ├── 001/separation_work/
         ├── 002_stars/
         ├── 003_ghs/
-        │   ├── 03_restoration_starless_ghs_range.fits
-        │   ├── 03_restoration_starless_ghs_peak.fits
-        │   ├── 03_restoration_ghs_comparison_starless.png
-        │   └── 03_restoration_ghs_comparison_with_stars.png
+        │   └── 03_restoration_starless_ghs_range.fits
         ├── 004_recomposition/
         │   ├── 03_restoration_render_range.fits
-        │   ├── 03_restoration_render_range.jpg
-        │   ├── 03_restoration_render_peak.fits
-        │   └── 03_restoration_render_peak.jpg
+        │   └── 03_restoration_render_range.jpg
         └── 005_diagnostics/
 ```
 
@@ -625,7 +695,8 @@ exécutées : `gradient`, `photometry`, `deconvolution`, `denoise`, ou
 `restoration` à la place des deux dernières en comparaison des chaînes. Chaque résultat
 indique son `output_image` lorsqu’une image doit être transmise. Le FITS final est
 celui référencé par la dernière étape active, recopié au niveau du rapport global
-sous le nom `<image>_postprocess.fits`.
+sous le nom `<image>_postprocess.fits`, ou avec le suffixe `_saturated` lorsque
+la passe couleur est exécutée (le rendu GHS est alors exporté séparément).
 
 Le log principal est recréé à chaque lancement. Avec `--log-level DEBUG`, les
 exceptions levées y incluent leur traceback. Une erreur non prise en charge au

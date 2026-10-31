@@ -11,25 +11,22 @@ la meilleure sortie acceptée de score positif est retenue. Les étapes gradient
 photométrie, ainsi que les options d’activation, restent inchangées.
 
 ```bash
-# Installation seule : pip système cible le venv choisi par le lanceur.
-bin/postProcess.sh --install-cosmic-clarity
+# Installation séparée des dépendances et des modèles.
+bin/install_dependances.sh
 
 # Traitement avec les réseaux, après installation.
 bin/postProcess.sh image_RGB.fit rapports/ \
   --enable-clarity --photometry-object M20
 
-# Installation et traitement dans la même commande.
-bin/postProcess.sh --install-cosmic-clarity image_RGB.fit \
-  --enable-clarity
-
 # Revenir au mode Siril seul.
 bin/postProcess.sh image_RGB.fit --disable-clarity --no-enable-graxpert
 ```
 
-`--install-cosmic-clarity` est consommé par le `.sh` : il n'est ni transmis au
-script Python ni enregistré dans la configuration. Il installe
-`requirements-cosmic-clarity.txt` (PyTorch 2.10.0 CUDA 12.8) et six poids, environ
-95 Mo au total. Les bibliothèques CUDA/PyTorch occupent plusieurs Go supplémentaires.
+`bin/install_dependances.sh` sélectionne PyTorch CUDA sous Linux ou MPS sur
+Apple Silicon, et précharge les modèles dont les six poids Cosmic Clarity,
+environ 95 Mo au total. Les bibliothèques CUDA/PyTorch occupent plusieurs Go
+supplémentaires. Les lanceurs de traitement utilisent ensuite le venv sans
+installer ni mettre à jour de module.
 Le moteur télécharge chaque poids nécessaire au moment de son premier chargement
 s’il est absent ou corrompu. Les fichiers conformes sont réutilisés sans accès
 réseau. Taille et SHA-256 sont vérifiés avant installation atomique ; une erreur
@@ -40,15 +37,18 @@ Le journal indique le téléchargement et le chemin utilisé. L’installation
 explicite permet de précharger les six poids, notamment avant un usage hors ligne.
 Le téléchargement automatique des poids n’installe pas PyTorch/CUDA.
 
-Le dossier par défaut est `tmp/models/cosmicclarity/` à la racine du projet, ignoré
+Le dossier par défaut est `tmp/cache/models/cosmicclarity/` à la racine du projet, ignoré
 par Git. `--cosmic-model-dir /chemin` change le dossier pour l'installation et
 le traitement ; ce chemin doit aussi être fourni à l'installation si une
 configuration de traitement utilise un dossier personnalisé. Le lanceur ne lit
 pas le JSON de configuration pour installer les poids.
 
 Le calcul hérite de `--compute-backend auto` : PyTorch choisit CUDA disponible,
-CPU sinon, avant de charger les modèles. `--cosmic-device auto|cpu|cuda` est
-une surcharge facultative (`null` par défaut). CUDA forcé indisponible reste
+puis MPS disponible sur Apple Silicon, CPU sinon, avant de charger les modèles.
+Ce choix CPU automatique émet un WARNING précisant l'accélérateur indisponible ;
+un CPU demandé explicitement reste silencieux sur ce point.
+`--cosmic-device auto|cpu|cuda|mps` est
+une surcharge facultative (`null` par défaut). CUDA ou MPS forcé indisponible reste
 une erreur ; une panne en cours d'inférence ne déclenche pas de reprise CPU.
 Siril 1.4 reste
 nécessaire pour les mesures stellaires, même avec les réseaux. Le traitement
@@ -69,8 +69,8 @@ Le rapport et le FITS final restent au même niveau que ce dossier.
 |---|---|---|
 | `--enable-clarity` | activé | Active le mode comparatif Cosmic Clarity + Siril |
 | `--disable-clarity` | désactivé | Écarte Cosmic Clarity ; GraXpert peut rester actif en débruitage |
-| `--cosmic-model-dir` | `<projet>/tmp/models/cosmicclarity` | Poids locaux vérifiés |
-| `--cosmic-device` | `null` (hérite du choix général `auto`) | Surcharge `auto`, `cuda` ou `cpu` |
+| `--cosmic-model-dir` | `<projet>/tmp/cache/models/cosmicclarity` | Poids locaux vérifiés |
+| `--cosmic-device` | `null` (hérite du choix général `auto`) | Surcharge `auto`, `cuda`, `mps` ou `cpu` |
 | `--cosmic-stellar-amount` | `0.5` | Mélange stellaire, entre 0 et 1 |
 | `--cosmic-nonstellar-amount` | `0.5` | Mélange des structures diffuses, entre 0 et 1 |
 | `--cosmic-nonstellar-radius` | `3.0` | Rayon en pixels, entre 1 et 8 |

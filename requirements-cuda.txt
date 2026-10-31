@@ -1,0 +1,9 @@
+# Ensemble cohérent CUDA 12.8, Python 3.11–3.14 ; ne pas installer onnxruntime CPU en parallèle.
+# Installer d'abord requirements-cosmic-clarity.txt depuis l'index PyTorch isolé.
+--index-url https://pypi.org/simple
+# Conserver le PyTorch CUDA déjà installé pendant la résolution PyPI.
+torch==2.10.0+cu128
+onnxruntime-gpu==1.26.0
+cupy-cuda12x[ctk]==14.2.0
+# Évite la sélection d'un toolkit CUDA 12.9 incompatible avec les pins PyTorch.
+cuda-toolkit==12.8.1

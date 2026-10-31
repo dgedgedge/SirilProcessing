@@ -6,6 +6,10 @@
 
 La validation des fichiers darks d'entrée ne se fait maintenant **que dans le cas où le master dark correspondant doit être mis à jour**. Cette optimisation améliore significativement les performances lors de traitements répétés.
 
+Elle est activée par défaut (`validate_darks: true`), y compris lors des appels
+directs aux méthodes de traitement. Une configuration explicite `false` ou
+`--no-validate-darks` permet de la désactiver depuis le script.
+
 ## Comportement précédent vs nouveau
 
 ### Comportement précédent (moins efficace)
@@ -23,7 +27,7 @@ La validation des fichiers darks d'entrée ne se fait maintenant **que dans le c
 2. Regrouper TOUS les darks (sans validation)
 3. Pour chaque groupe, vérifier si le master dark doit être mis à jour
 4. Si oui:
-   a. Valider SEULEMENT les darks de ce groupe (si --validate-darks activé)
+   a. Valider SEULEMENT les darks de ce groupe (activé par défaut)
    b. Effectuer le stacking avec les darks validés
 5. Si non, ignorer le groupe (pas de validation inutile)
 ```

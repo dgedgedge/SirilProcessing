@@ -22,18 +22,26 @@ diffus).
 Les services héritent de `ParameterizedComponent` et déclarent leurs enfants ;
 les paramètres suivent CLI > configuration JSON > défauts. Le manifeste contient
 uniquement les métadonnées, pas les poids. Les modèles restent exclus de Git et
-de l’archive dans `tmp/models/graxpert/3.0.2/model.onnx` par défaut.
+de l’archive dans `tmp/cache/models/graxpert/3.0.2/model.onnx` par défaut.
 
 ONNX Runtime est une dépendance optionnelle :
 
 ```bash
-bin/postProcess.sh --install-graxpert
+bin/install_dependances.sh
 ```
 
-Ce lancement installe le runtime CPU dans le venv du projet. Les poids sont
-acquis au premier traitement. Pour un GPU NVIDIA, installer la variante
-`onnxruntime-gpu` compatible avec l’environnement CUDA à la place du runtime
-CPU ; le projet ne prétend pas qu’un runtime CPU fournit CUDA.
+L’installeur prépare le runtime adapté à la plateforme et précharge les poids.
+Sous Linux NVIDIA, il utilise `onnxruntime-gpu` ; ne pas lui superposer le
+runtime CPU, qui partage les mêmes modules. Une installation CPU manuelle
+reste possible avec `requirements-graxpert.txt` dans un environnement distinct.
+Sur Apple Silicon, le paquet `onnxruntime` fournit CoreML : voir
+[l'installation Mac](../install_macos/README.md). La session choisit MLProgram
+avec `MLComputeUnits=ALL` pour autoriser CPU, GPU et Neural Engine. Les
+bibliothèques NVIDIA ne sont pas préchargées en l'absence du fournisseur CUDA.
+Le fournisseur déclaré ne certifie pas une exécution intégrale sur GPU.
+En mode auto, l'absence de fournisseur utilisable ou un échec d'initialisation
+produit un WARNING indiquant le choix CPU et sa cause. Les choix globaux sont
+`--compute-backend auto|cpu`.
 
 ```bash
 bin/postProcess.sh image_RGB.fits sorties/ --enable-graxpert
@@ -88,7 +96,7 @@ explicite. Dès que les poids sont installés, l’inférence fonctionne sans Gr
 | Option | Défaut | Rôle |
 |---|---|---|
 | `--enable-graxpert` / `--no-enable-graxpert` | automatique si poids locaux valides | Forcer l’activation / désactiver le moteur |
-| `--graxpert-model-dir` | `tmp/models/graxpert` dans le projet | Cache de poids |
+| `--graxpert-model-dir` | `tmp/cache/models/graxpert` dans le projet | Cache de poids |
 | `--graxpert-model-version` | `3.0.2` | Version épinglée et prise en charge |
 | `--graxpert-path` | `GraXpert-linux` | Exécutable utilisé seulement pour l’acquisition |
 | `--graxpert-strength` | 0,5 | Mélange relatif, de 0 à 1 |
@@ -121,8 +129,12 @@ fourniture de tuiles contient les éléments réels, sans compléter artificiell
 le lot. Le résultat est mélangé avec l’original selon l’intensité ; le uint16 est
 remis dans son échelle avant mélange, comme Siril.
 
-Les fournisseurs effectifs sont auditables. Si le GPU est demandé, le repli ONNX
-implicite vers CPU est désactivé. En cas de défaillance GPU, une nouvelle inférence
+Les fournisseurs enregistrés dans la session sont consignés dans le rapport.
+Une session GPU autorise les opérations auxiliaires sur CPU et exige qu’un
+fournisseur GPU reste enregistré. Cette vérification ne mesure pas la répartition
+des opérations ; seule une mesure sur GPU permet de confirmer son utilisation
+pour le modèle concerné. Le redémarrage automatique interne à ONNX est désactivé.
+En cas de défaillance GPU pendant le calcul, une nouvelle inférence
 sur toute l’image n’est autorisée que par `--graxpert-cpu-fallback`, et journalisée.
 Un contrat de modèle incorrect n’est pas traité comme une simple erreur GPU.
 Les appels restent séquentiels. La RAM contient l’image, ses marges et le modèle ;

@@ -465,7 +465,9 @@ def test_lightprocess_executes_common_exports_after_stack(
     final = directory / "field_combined_postprocess.fits"
     report = directory / "field_combined_postprocess.json"
     result = json.loads(report.read_text())
-    assert set(result) == {"gradient"}
+    assert set(result) == {"gradient", "annotation"}
+    assert result["annotation"]["status"] == "SKIPPED"
+    assert result["annotation"]["reason"] == "Aucun rendu non linéaire"
     assert final.read_bytes() == Path(result["gradient"]["output_image"]).read_bytes()
     assert source.is_file() and not final.with_suffix(".jpg").exists()
     work = directory / "field_combined_postprocess"
@@ -585,3 +587,55 @@ def test_lightprocess_dry_run_does_not_activate_guard(
     monkeypatch.setattr(cli, "PowerGuard", guard)
     assert run([root], "--dry-run") == 0
     guard.assert_not_called()
+
+
+@pytest.mark.parametrize('mosaic_mode', [False, True])
+@pytest.mark.parametrize('resume_mode', ['--autoghs-only', '--color-only'])
+def test_autoghs_only_reuses_final_images_without_upstream(
+    tmp_path: Path, pipeline: PipelineFixture, monkeypatch: pytest.MonkeyPatch,
+    mosaic_mode: bool, resume_mode: str,
+) -> None:
+    """La même commande avec le drapeau reprend les produits, sans travail amont."""
+    from lib.postprocess_resume import PostProcessResume
+
+    _, run, stack, mosaic, calibrated = pipeline
+    roots = [make_session(tmp_path, name, 0)[0] for name in ('north', 'south')]
+    images = [tmp_path / 'prior_final.fits'] if mosaic_mode else [
+        tmp_path / 'out' / root.name / f'{root.name}_combined.fits' for root in roots]
+    directory = tmp_path / 'work/field' if mosaic_mode else tmp_path / 'out'
+    for image in images:
+        image.parent.mkdir(parents=True, exist_ok=True)
+        image.touch()
+    PostProcessResume.save_final_images(directory, roots, mosaic_mode, images)
+    calls = []
+    monkeypatch.setattr(PostProcessResume, 'load', classmethod(lambda cls, *args: (images[0], {})))
+    monkeypatch.setattr(PostProcessResume, 'load_color', classmethod(lambda cls, *args: {}))
+
+    def process(
+        self: PostProcessingProcessor, image: Path, report: Path,
+        args: argparse.Namespace | None = None,
+    ) -> JSONReport:
+        """Trace la reprise et les réglages de la commande sans lancer les moteurs."""
+        assert self._get_args().ghs_final_strength == .8
+        calls.append(image)
+        return {'output_image': str(image)}
+
+    monkeypatch.setattr(PostProcessingProcessor, 'post_process', process)
+    options = ['--mosaic', '--mosaic-name', 'field'] if mosaic_mode else []
+    assert run(roots, *options, resume_mode, '--ghs-final-strength', '.8') == 0
+    assert calls == images
+    assert calibrated == {}
+    stack.assert_not_called()
+    mosaic.return_value.post_process.assert_not_called()
+
+
+def test_autoghs_only_missing_history_does_not_start_upstream(
+    tmp_path: Path, pipeline: PipelineFixture,
+) -> None:
+    """Une reprise impossible échoue sans relancer la calibration ou le stack."""
+    _, run, stack, mosaic, calibrated = pipeline
+    root, _ = make_session(tmp_path, 'field', 0)
+    assert run([root], '--autoghs-only') == 1
+    assert calibrated == {}
+    stack.assert_not_called()
+    mosaic.return_value.post_process.assert_not_called()

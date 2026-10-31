@@ -1,4 +1,4 @@
-"""JPEG orientés, conversion directe et comparatifs séparés avec historique."""
+"""JPEG orientés, conversion directe et copie du rendu final par le CLI."""
 
 import json
 from pathlib import Path
@@ -8,11 +8,8 @@ import pytest
 from astropy.io import fits
 from PIL import Image
 
-from lib.postprocess_paths import reset_work_dir
 from lib.render_exports import (
-    load_previous_previews,
     read_render_image,
-    write_render_comparisons,
     write_render_jpeg,
 )
 
@@ -60,57 +57,6 @@ def test_invalid_render_is_not_exported(
     with pytest.raises(ValueError):
         write_render_jpeg(source, destination)
     assert not destination.exists()
-
-
-def test_comparisons_keep_previous_pixels_after_reset(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Les anciens pixels survivent au nettoyage, avec séparation des populations."""
-    from matplotlib.figure import Figure
-
-    report_path = tmp_path / "05_autoghs.json"
-    work = reset_work_dir(report_path)
-    branches = {}
-    for key, channel in (("starless_image", 1), ("output_image", 0)):
-        data = np.zeros((3, 20, 20), dtype=np.float32)
-        data[channel] = 0.2
-        path = work / f"{key}.fits"
-        fits.writeto(path, data, fits.Header({"SPNLIN": True}))
-        branches[key] = str(path)
-    report_path.write_text(json.dumps({"status": "SUCCESS", "strategies": {"range": branches}}))
-    previous = load_previous_previews(report_path)
-    reset_work_dir(report_path)
-    for key, channel in (("starless_image", 1), ("output_image", 0)):
-        data = np.zeros((3, 20, 20), dtype=np.float32)
-        data[channel] = 0.8
-        fits.writeto(branches[key], data, fits.Header({"SPNLIN": True}))
-    captured = []
-    savefig = Figure.savefig
-
-    def inspect(figure: Figure, *args, **kwargs) -> None:
-        """Compare les valeurs affichées, indépendamment des nouveaux fichiers FITS."""
-        before, after = figure.axes
-        assert "précédente" in before.get_title() and "actuelle" in after.get_title()
-        channel = 1 if not captured else 0
-        assert np.asarray(before.images[0].get_array())[0, 0, channel] == 51
-        assert np.asarray(after.images[0].get_array())[0, 0, channel] == 204
-        captured.append(True)
-        savefig(figure, *args, **kwargs)
-
-    monkeypatch.setattr(Figure, "savefig", inspect)
-    paths = write_render_comparisons(
-        {"range": branches}, work / "003_ghs", "image", previous,
-    )
-    assert captured == [True, True]
-    assert all(Path(path).is_file() for path in paths.values())
-
-
-def test_invalid_previous_report_does_not_block_current_run(tmp_path: Path) -> None:
-    """Un historique absent ou corrompu ne fournit pas de faux rendu précédent."""
-    report = tmp_path / "report.json"
-    assert load_previous_previews(report) == {"starless": {}, "with_stars": {}}
-    report.write_text("{broken")
-    assert load_previous_previews(report) == {"starless": {}, "with_stars": {}}
 
 
 @pytest.mark.parametrize("with_jpeg", [False, True])

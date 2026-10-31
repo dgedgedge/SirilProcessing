@@ -14,10 +14,9 @@ histogrammes de la couche d'étoiles, sans intervenir dans le calcul.
 [`AutoGHSFinalRenderer`](../../../lib/final_render.py) orchestre les enfants,
 contrôle et publie leurs sorties ; il ne contient pas le moteur GHS.
 
-L'ordre est strict : **une séparation → une couche d'étoiles étirée → deux
-fonds GHS indépendants → deux fusions**, en mode both. Les deux recompositions
-reçoivent le même tableau d'étoiles rendu. Les tests contractuels enregistrent
-ces appels et vérifient sur disque leur contribution non nulle.
+L'ordre est strict : **une séparation → une couche d'étoiles étirée → un fond
+GHS RANGE → une fusion**. Les tests contractuels enregistrent ces appels et
+vérifient sur disque la contribution non nulle des étoiles au rendu final.
 
 ## Adaptateur StarNet V2 / Siril 1.4
 
@@ -44,7 +43,11 @@ où l'interface historique est annoncée retirée. Aucune substitution automatiq
 vers un script non validé n'est effectuée.
 
 Après succès du processus, les dimensions, les canaux et les valeurs finies
-sont contrôlés. Un changement de convention `ROWORDER` est corrigé par un
+non négatives sont contrôlés. Le fond brut peut dépasser 1 lors du retour
+linéaire Siril/StarNet : il est conservé tel quel avec son résidu signé, et
+non écrêté indépendamment. Le journal et le rapport relèvent le nombre de
+valeurs RGB concernées (`raw_starless_above_one_count`) et le maximum
+(`raw_starless_maximum`). Un changement de convention `ROWORDER` est corrigé par un
 retournement vertical explicite du tableau ; la géométrie et les métadonnées
 publiées restent celles de la source. Les extensions FITS sont conservées.
 
@@ -69,7 +72,17 @@ stars_positive = stars_linear - negative
 ```
 
 Le flux est transféré dans le fond avant tout étirement, avec conservation de
-la somme linéaire. Les deux stratégies reçoivent ce **même fond corrigé**.
+la somme linéaire. RANGE reçoit ce **fond corrigé**.
+Cette compensation s'applique également à un fond brut supérieur à 1 : son
+résidu signé négatif ramène le fond à l'intensité de l'entrée originale.
+La somme des couches doit elle-même rester dans `[0,1]`, puis les deux couches
+corrigées sont soumises au contrôle strict `[0,1]`. L'entrée scientifique,
+les valeurs négatives du fond brut et les NaN/Inf ne bénéficient d'aucune
+exception. Les diagnostics conservent le dépassement avant compensation.
+La séparation vérifie aussi que le fond brut et le résidu float32 reconstruisent
+l'entrée originale à `1e-6` près en intensité normalisée. Au-delà de cette marge
+d'arrondi, elle échoue explicitement : un dépassement extrême ne doit pas
+faire perdre le signal par annulation numérique.
 Dans les pixels concernés, le fond corrigé retrouve l’intensité originale et
 la couche d’étoiles devient nulle. Cela revient à borner le fond par l’original,
 en maintenant `fond_corrigé + étoiles_positives = image_originale`, à l’arrondi
@@ -111,7 +124,8 @@ La seconde courbe augmente surtout les faibles intensités et comprime doucement
 les fortes vers le même plafond. Le gain à l'origine vaut
 `ceiling*strength*faint_boost/asinh(strength)`, soit environ 5,89 par défaut,
 contre 1,18 avec `--star-faint-boost=1`. Le facteur est paramétrable
-de 1 à 10 et est sauvegardé par Config avec les autres options. Les étoiles
+de 1 à 10 : c'est le renforcement **demandé**, que la garde de largeur peut
+réduire automatiquement. Il est sauvegardé par Config avec les autres options. Les étoiles
 fortes ne sont pas toutes ramenées à une intensité commune.
 
 ### Adaptation à la répartition des pics
@@ -132,8 +146,19 @@ très faibles. Par défaut, `--star-histogram-strength=0.8` ajoute une adaptatio
 3. Mélanger cette proposition au rendu fixe avec la force demandée. Mesurer la
    largeur des profils ; si elle dépasse la garde, diviser la force par deux et
    réessayer, au plus huit fois. Retenir le premier essai admissible, ou conserver
-   le gain fixe si aucun ne passe. Un gain fixe lui-même hors limite reste une erreur.
+   le gain fixe si aucun ne passe.
 4. Appliquer `gain = target(L)/L` aux trois canaux, avec un gain nul si `L=0`.
+
+Si le rendu obtenu dépasse encore la limite de largeur, réduire `faint_boost`
+d'une unité et recommencer ces étapes sur les mêmes étoiles linéaires.
+La recherche commence à la valeur demandée et s'arrête au **premier rendu
+admissible**, sans essayer les renforcements plus faibles. La valeur 1 est
+toujours essayée en dernier : par exemple `5 → 4 → 3 → 2 → 1` ou
+`2,4 → 1,4 → 1`. La force asinh, le plafond et la limite de largeur restent
+inchangés. Les valeurs demandées en CLI/JSON ne sont pas réécrites.
+Avec un facteur limité à 10, la boucle comporte au plus dix essais de base.
+Si même le dernier essai dépasse la limite, l'erreur indique le seuil et
+les renforcements/rapports essayés. Les autres erreurs restent bloquantes.
 
 L'objectif est de répartir davantage les amplitudes des pics en logarithme.
 Il ne s'agit pas de forcer l'histogramme de **tous les pixels** à être plat :
@@ -150,7 +175,12 @@ saturé ne peut pas être rétablie.
 
 Aucun pixel stellaire nul n'est rendu positif par ce renforcement : il révèle
 les contributions déjà extraites et ne recrée pas une étoile absente du masque.
-Les rapports donnent `faint_boost`, le gain à l'origine de la courbe fixe
+Les rapports donnent `requested_faint_boost` (demande), `faint_boost` (retenu),
+et `width_adaptation` (pas, essais de base, rapports de largeur, acceptation,
+historique de l'adaptation des pics pour chaque essai et motif d'arrêt).
+Une largeur non mesurable reste signalée comme telle, sans certifier la garde.
+Le journal indique chaque renforcement refusé avec sa mesure et la réduction
+finalement retenue. Les rapports donnent aussi le gain à l'origine de la courbe fixe
 `fixed_curve_faint_intensity_gain`, et celui de la courbe retenue
 `faint_intensity_gain`. `histogram_balance` contient la force demandée/retenue,
 les points de la table, chaque essai et son rapport de largeur, ainsi que le
@@ -169,10 +199,13 @@ sont corrigés du niveau médian des extrémités ; les traversées de demi-haut
 sont interpolées. Les profils tronqués ou sans traversée exploitable sont
 exclus. Le rapport fournit le nombre de profils et les largeurs médianes ;
 `null` exprime une mesure impossible. Le seuil de rapport médian, 2 par défaut,
-provoque une erreur s'il est dépassé. Il s'agit d'un contrôle de profils locaux,
+déclenche la réduction du renforcement et ne provoque une erreur qu'après
+épuisement des essais de base. Il s'agit d'un contrôle de profils locaux,
 **pas d'un ajustement PSF**, ni d'une garantie d'absence de halos faibles.
 Ce seuil autorise un doublement de la largeur apparente médiane ; il constitue
 une garde heuristique de présentation, sans calibration physique.
+Le contrôle distinct après fusion reste bloquant si cette recomposition
+introduit un dépassement : il ne relance pas les traitements amont.
 
 ### Diagnostic spécifique des étoiles
 
@@ -185,7 +218,7 @@ Dans `05_autoghs_work/002_stars/`, `<image>_stars_diagnostic.png` présente :
 - un encart : objectif, effectif candidat, dépassements du seuil 0,03 pour le
   linéaire/le gain fixe/le rendu adapté, essais, force retenue et FWHM.
   Après recomposition, l'encart ajoute les effectifs dont le contraste réinséré
-  dépasse ce même seuil pour chaque stratégie.
+  dépasse ce même seuil après fusion RANGE.
 
 Les zéros sont exclus des axes logarithmiques et leur fraction est affichée.
 `<image>_stars_render.jpg` fournit aussi la couche entière en pleine résolution,
@@ -206,8 +239,8 @@ final = B_safe + S*(1-B_safe)
 Cette loi screen correspond à une expression PixelMath, et non à une simple
 addition de branches non linéaires. Elle est bornée pour des entrées bornées,
 conserve une contribution stellaire positive et ne recadre aucune branche.
-`headroom=0.95` réserve une marge commune aux canaux du fond. Les deux variantes
-produisent leurs propres FITS étoilés et sont vérifiées après fusion.
+`headroom=0.95` réserve une marge commune aux canaux du fond. Le rendu
+RANGE est écrit en FITS puis vérifié après fusion.
 
 Les diagnostics comparent l'addition hypothétique `B_safe+S` (potentiellement
 écrêtée) au résultat screen réellement retenu. Ils mesurent la contribution

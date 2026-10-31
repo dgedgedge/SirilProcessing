@@ -93,7 +93,7 @@ class GraXpertDenoiseProcessor(processor):
             return dict(
                 available=False,
                 reason="ONNX_RUNTIME_ABSENT",
-                detail="Installer avec bin/postProcess.sh --install-graxpert",
+                detail="Installer avec bin/install_dependances.sh",
             )
         providers = ort.get_available_providers()
         requested = GraXpertEngine.requested_backend(args)

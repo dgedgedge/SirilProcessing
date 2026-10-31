@@ -48,6 +48,10 @@ nav:
               - Extraction du gradient: docs/scripts/lightProcess/treatments/GRADIENT_EXTRACTION.md
               - Organisation des post-traitements: docs/scripts/lightProcess/treatments/postprocess/README.md
               - Paramètres et séquence: docs/scripts/lightProcess/treatments/postprocess/SEQUENCE_PROCESSOR.md
+      - Installation du venv CUDA: docs/scripts/install_cuda/README.md
+      - Installation des dépendances: docs/scripts/install_dependances/README.md
+      - Modèles et catalogue Gaia: docs/scripts/install_dependances/resources.md
+      - Installation Apple Silicon: docs/scripts/install_macos/README.md
       - 2.3. postProcess:
           - Manuel d’utilisation: docs/scripts/postProcess/README.md
           - Options et configuration: docs/scripts/postProcess/OPTIONS.md
@@ -62,9 +66,12 @@ nav:
               - Couleurs Cosmic Clarity: docs/scripts/postProcess/cosmic-color.md
               - GraXpert: docs/scripts/postProcess/graxpert.md
               - AutoGHS: docs/scripts/postProcess/auto-ghs.md
+              - Protection des hautes lumières: docs/scripts/postProcess/ghs-highlight-protection.md
               - Algorithme AutoGHS: docs/scripts/postProcess/auto-ghs-algorithm.md
               - Rendu des étoiles: docs/scripts/postProcess/star-rendering.md
-          - Exports et comparatifs: docs/scripts/postProcess/render-exports.md
+          - Annotation finale: docs/scripts/postProcess/annotations.md
+          - Couleur finale après GHS: docs/scripts/postProcess/final-color.md
+          - Exports FITS et JPEG: docs/scripts/postProcess/render-exports.md
           - Gestion de l’énergie: docs/scripts/postProcess/power-guard.md
       - 2.4. solarEclipseGif:
           - Présentation: docs/scripts/solarEclipseGif/README.md
@@ -90,6 +97,7 @@ nav:
   - 4. Maintenance et vérification:
       - Sommaire de la documentation: docs/README.md
       - Contribuer à la documentation: docs/CONTRIBUTING.md
+      - Outils, données et licences: docs/THIRD_PARTY.md
       - Tests: tests/README.md
 theme:
   name: readthedocs

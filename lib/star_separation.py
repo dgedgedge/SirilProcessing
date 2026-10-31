@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import configparser
 import json
+import logging
 import os
 import re
 import time
@@ -23,6 +24,8 @@ from lib.processor import processor
 from lib.restoration_quality import normalized_planes
 from lib.siril_utils import Siril
 from lib.type_defs import JSONReport
+
+MAX_LINEAR_RECONSTRUCTION_ERROR = 1e-6  # Unités normalisées, marge d'arrondi float32.
 
 
 def quote_siril(value: Path | str) -> str:
@@ -64,13 +67,29 @@ def write_rgb(
         hdul.writeto(destination, overwrite=False, checksum=True)
 
 
-def validate_rgb(data: np.ndarray) -> None:
-    """Exige trois plans RGB non vides, finis et normalisés sans écrêtage implicite."""
+def validate_rgb(data: np.ndarray, *, allow_upper_overshoot: bool = False) -> None:
+    """Exige trois plans finis non négatifs, normalement bornés à 1.
+
+    Parameters
+    ----------
+    data : np.ndarray
+        Plans RGB de forme (3, hauteur, largeur), sans modification en place.
+    allow_upper_overshoot : bool, optional
+        Réserver à la sortie StarNet brute avant compensation du résidu signé.
+        Autorise uniquement les valeurs au-dessus de 1, sans les écrêter.
+        Les entrées scientifiques et les couches corrigées restent strictes.
+
+    Raises
+    ------
+    ValueError
+        Géométrie invalide, données non finies, valeurs négatives ou dépassement
+        de 1 sans autorisation explicite.
+    """
     if data.ndim != 3 or data.shape[0] != 3 or data.size == 0:
         raise ValueError("AutoGHS nécessite un FITS RGB linéaire à trois plans")
     if not np.isfinite(data).all():
         raise ValueError("AutoGHS refuse les pixels NaN/Inf")
-    if data.min() < 0 or data.max() > 1:
+    if data.min() < 0 or (not allow_upper_overshoot and data.max() > 1):
         raise ValueError(
             "AutoGHS nécessite des intensités dans [0, 1], sans écrêtage implicite"
         )
@@ -256,15 +275,32 @@ class StarNetSeparator(processor):
             "ROWORDER", "BOTTOM-UP"
         ):
             result = result[:, ::-1, :].copy()
-        validate_rgb(result)
-        # Réécrire sur le modèle original garantit WCS, extensions et orientation.
-        starless.unlink()
-        write_rgb(source, starless, result, role="STARLESS")
+        # La pseudo-inverse MTF peut dépasser 1 : conserver le résultat brut
+        # et son résidu signé jusqu'à la compensation qui conserve leur somme.
+        validate_rgb(result, allow_upper_overshoot=True)
+        above_one_count = int(np.count_nonzero(result > 1))
+        starless_maximum = float(result.max())
+        if above_one_count:
+            logging.warning(
+                "StarNet : %d valeur(s) RGB du fond au-dessus de 1, maximum=%.9g ; "
+                "conservées avec le résidu signé pour compensation avant AutoGHS",
+                above_one_count, starless_maximum,
+            )
         residual = data - result
-        write_rgb(source, stars, residual, role="STARS")
         reconstruction = data.astype(np.float64) - (
             result.astype(np.float64) + residual.astype(np.float64)
         )
+        reconstruction_error = float(np.max(abs(reconstruction)))
+        if reconstruction_error > MAX_LINEAR_RECONSTRUCTION_ERROR:
+            raise ValueError(
+                "La séparation StarNet ne conserve pas la somme linéaire en float32 : "
+                f"écart {reconstruction_error:.9g} > {MAX_LINEAR_RECONSTRUCTION_ERROR:g}"
+            )
+        del reconstruction
+        # Réécrire sur le modèle original garantit WCS, extensions et orientation.
+        starless.unlink()
+        write_rgb(source, starless, result, role="STARLESS")
+        write_rgb(source, stars, residual, role="STARS")
         log = work / "separate.log"
         text = log.read_text(encoding="utf-8", errors="replace") if log.exists() else ""
         version = re.search(r"siril\s+(\d+\.\d+(?:\.\d+)?)", text, re.IGNORECASE)
@@ -284,9 +320,11 @@ class StarNetSeparator(processor):
             "method": "siril-1.4-legacy-starnet-stretch",
             "prestretch": "Siril unlinked MTF + pseudoinverse; TIFF16 quantization",
             "mask": "signed linear subtraction after inverse MTF",
+            "raw_starless_above_one_count": above_one_count,
+            "raw_starless_maximum": starless_maximum,
             "negative_fraction": float(np.mean(residual < 0)),
             "negative_minimum": float(residual.min()),
-            "reconstruction_max_abs": float(np.max(abs(reconstruction))),
+            "reconstruction_max_abs": reconstruction_error,
             "duration_seconds": time.monotonic() - started,
             "script_path": str(work / "separate.sps"),
             "log_path": str(log),

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 from pathlib import Path
 
 import numpy as np
@@ -24,6 +25,8 @@ PEAK_QUANTILE_RANGE = (0.05, 0.95)  # Exclure les extrêmes du calage des pics.
 PEAK_OUTPUT_RANGE = (0.04, 0.65)  # Niveaux visés pour un plafond de référence 0,85.
 REFERENCE_STAR_CEILING = 0.85
 MAX_BALANCE_ATTEMPTS = 8  # Réductions par moitiés avant de conserver le gain fixe.
+FAINT_BOOST_STEP = 1.0  # Décrément du renforcement de base, jusqu'au minimum 1.
+LOGGER = logging.getLogger(__name__)
 
 
 def stellar_peak_positions(data: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -179,7 +182,7 @@ class ConservativeStarRenderer(processor):
         parser.add_argument("--star-strength", type=float, default=2.0)
         parser.add_argument(
             "--star-faint-boost", type=float, default=cls.default_faint_boost,
-            help="Gain supplémentaire des étoiles faibles, avec compression douce des fortes",
+            help="Gain demandé des étoiles faibles, réduit automatiquement si la largeur dépasse la limite",
         )
         parser.add_argument(
             "--star-histogram-strength", type=float, default=cls.default_histogram_strength,
@@ -211,6 +214,99 @@ class ConservativeStarRenderer(processor):
         faint_boost: float = default_faint_boost,
         histogram_strength: float = default_histogram_strength,
     ) -> tuple[np.ndarray, JSONReport]:
+        """Retient le premier rendu stellaire respectant la limite de largeur.
+
+        Parameters
+        ----------
+        data : np.ndarray
+            Étoiles RGB normalisées dans [0, 1], de forme (3, hauteur, largeur).
+            Les résidus négatifs doivent avoir été compensés par l'appelant.
+        strength : float, optional
+            Force asinh dans ]0, 20], conservée pendant la recherche.
+        ceiling : float, optional
+            Plafond normalisé dans ]0, 1[, conservé pendant la recherche.
+        max_width_ratio : float, optional
+            Limite du rapport médian des largeurs après/avant, au moins 1.
+        faint_boost : float, optional
+            Renforcement demandé dans [1, 10]. Après échec de l'adaptation des
+            pics, il diminue par pas de 1, avec un dernier essai à 1 inclus.
+        histogram_strength : float, optional
+            Mélange adaptatif demandé dans [0, 1], réduit par moitiés à chaque
+            essai de renforcement de base avant de tester sa courbe fixe.
+
+        Returns
+        -------
+        tuple[np.ndarray, JSONReport]
+            Étoiles float32 et mesures, dont les renforcements demandé/retenu
+            et l'historique ``width_adaptation``. Une largeur non mesurable
+            reste admissible mais n'est pas une validation de la garde.
+
+        Raises
+        ------
+        ValueError
+            Entrées invalides ou aucun renforcement essayé admissible, même à 1.
+            La recherche est bornée à dix essais et ne modifie pas la source.
+        """
+        requested_boost = faint_boost
+        attempts: list[JSONReport] = []
+        while True:
+            rendered, report = ConservativeStarRenderer._render_candidate(
+                data, strength, ceiling, max_width_ratio, faint_boost,
+                histogram_strength,
+            )
+            ratio = report["fwhm"]["median_ratio"]
+            accepted = ratio is None or ratio <= max_width_ratio
+            attempts.append({
+                "faint_boost": faint_boost,
+                "median_width_ratio": ratio,
+                "accepted": accepted,
+                "histogram_balance": report["histogram_balance"],
+            })
+            if accepted:
+                report["requested_faint_boost"] = requested_boost
+                report["width_adaptation"] = {
+                    "step": FAINT_BOOST_STEP,
+                    "iterations": attempts,
+                    "stop_reason": (
+                        "unmeasurable width" if ratio is None
+                        else "requested boost" if len(attempts) == 1
+                        else "width limited"
+                    ),
+                }
+                if len(attempts) > 1:
+                    width_text = "non mesurable" if ratio is None else f"{ratio:.6f}"
+                    LOGGER.info(
+                        "Étoiles : renforcement réduit de %g à %g ; "
+                        "rapport médian de largeur %s ; limite %g",
+                        requested_boost, faint_boost, width_text, max_width_ratio,
+                    )
+                return rendered, report
+            LOGGER.info(
+                "Étoiles : renforcement %g refusé ; rapport médian de largeur "
+                "%.6f > limite %g", faint_boost, ratio, max_width_ratio,
+            )
+            if faint_boost <= 1:
+                history = "; ".join(
+                    f"gain {item['faint_boost']:g} : ratio {item['median_width_ratio']:.6f}"
+                    for item in attempts
+                )
+                raise ValueError(
+                    "Gonflement des profils stellaires supérieur à la limite "
+                    f"{max_width_ratio:g} après {len(attempts)} essai(s) : {history}"
+                )
+            # Ne pas conserver les grandes images des essais refusés en mémoire.
+            del rendered
+            faint_boost = max(1.0, faint_boost - FAINT_BOOST_STEP)
+
+    @staticmethod
+    def _render_candidate(
+        data: np.ndarray,
+        strength: float,
+        ceiling: float,
+        max_width_ratio: float,
+        faint_boost: float,
+        histogram_strength: float,
+    ) -> tuple[np.ndarray, JSONReport]:
         """Retourne un rendu monotone borné et ses mesures sur les étoiles seules.
 
         Une courbe rationnelle multiplie les faibles intensités par faint_boost.
@@ -219,8 +315,10 @@ class ConservativeStarRenderer(processor):
         histogram_strength=0 désactive cette adaptation ; avec faint_boost=1
         cela reproduit l'ancien asinh. Les rapports RGB et zéros sont conservés.
         Les résidus négatifs doivent être compensés explicitement par l'appelant.
-        Les paramètres non finis/hors limites et un gonflement excessif mesurable
-        lèvent ValueError. Aucun traitement spatial n'est appliqué.
+        Les paramètres et unités sont ceux de ``render``. Les valeurs non finies
+        ou hors limites lèvent ValueError. Un dépassement de largeur est retourné
+        dans le rapport pour que ``render`` essaie un renforcement inférieur.
+        Aucun traitement spatial n'est appliqué.
         """
         validate_rgb(data)
         if not np.isfinite([
@@ -298,11 +396,6 @@ class ConservativeStarRenderer(processor):
         rendered = data * gain[None]
         validate_rgb(rendered)
         widths = profile_widths(data, rendered)
-        if (
-            widths["median_ratio"] is not None
-            and widths["median_ratio"] > max_width_ratio
-        ):
-            raise ValueError("Gonflement des profils stellaires supérieur à la limite")
         return rendered.astype(np.float32), {
             "method": "asinh + faint boost + log peak quantiles, shared RGB gain",
             "strength": strength,
