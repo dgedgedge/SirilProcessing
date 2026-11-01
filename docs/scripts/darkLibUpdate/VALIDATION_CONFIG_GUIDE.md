@@ -8,11 +8,15 @@ Les options de validation peuvent maintenant être sauvegardées et restaurées 
 
 ## Options de validation disponibles
 
-- `--validate-darks` : Active la validation des fichiers darks
+- `--validate-darks` : Active la validation des fichiers darks (activée par défaut)
 - `--no-validate-darks` : Désactive la validation des fichiers darks
 - `--validation-report` : Génère un rapport détaillé de validation
 - `--no-validation-report` : Désactive la génération du rapport de validation
 - `--input-dirs DIR1 DIR2 ...` : Spécifie les répertoires d'entrée
+
+Sans valeur sauvegardée, `validate_darks` vaut `true`. Une valeur JSON explicite
+`false` est respectée. La ligne de commande reste prioritaire sur le JSON ;
+une désactivation temporaire avec `--no-validate-darks` ne modifie pas le fichier.
 
 ## Utilisation
 

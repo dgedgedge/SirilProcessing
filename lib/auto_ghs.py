@@ -12,6 +12,7 @@ import argparse
 import importlib
 import json
 import logging
+import platform
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
@@ -19,6 +20,8 @@ from types import ModuleType
 import numpy as np
 
 from lib.compute_config import ComputeConfig
+from lib.ghs_final_stretch import ProtectedGHSFinalizer
+from lib.ghs_log_histogram import DEFAULT_LOG_RMS_WEIGHT
 from lib.processor import processor
 from lib.restoration_quality import normalized_planes
 from lib.star_rendering import color_drift
@@ -41,11 +44,15 @@ LOG_PEAK_PROMINENCE_FRACTION = 0.12
 class ComputeBackend:
     """Sélectionne le moteur avant calcul ; aucune reprise après son initialisation."""
 
-    def __init__(self, requested: str = "auto", required_bytes: int = 0) -> None:
+    def __init__(self, requested: str = "auto", required_bytes: int = 0,
+                 *, engine: str = 'AutoGHS') -> None:
         """Teste CUDA, réserve une marge VRAM et sinon choisit CPU seulement en auto.
 
         required_bytes estime les tableaux temporaires ; 20 % de la VRAM libre
         reste disponible. Une panne ultérieure se propage à l'appelant.
+        engine nomme le traitement dans le journal. Un choix CPU automatique
+        émet un warning ; sur macOS, ce moteur ne possède pas de backend Metal.
+        cuda reste accepté pour les contrôles internes exigeant NVIDIA.
         """
         if requested not in ("auto", "cpu", "cuda"):
             raise ValueError("compute-backend doit être auto, cpu ou cuda")
@@ -56,6 +63,8 @@ class ComputeBackend:
         if requested == "cpu":
             return
         try:
+            if platform.system() == 'Darwin':
+                raise RuntimeError('Ce moteur NumPy/CuPy ne possède pas de backend Metal Apple')
             cupy = importlib.import_module("cupy")
             if cupy.cuda.runtime.getDeviceCount() < 1:
                 raise RuntimeError("Aucun périphérique CUDA")
@@ -78,7 +87,8 @@ class ComputeBackend:
                     f"CUDA demandé mais indisponible : {error}"
                 ) from error
             self.reason = f"CPU selected before processing: {error}"
-        LOGGER.info("AutoGHS : backend %s (%s)", self.name, self.reason)
+            ComputeConfig.warn_cpu_fallback(engine, str(error))
+        LOGGER.info("%s : backend %s (%s)", engine, self.name, self.reason)
 
     def numpy(self, array: np.ndarray) -> np.ndarray:
         """Transfère un résultat vers NumPy ; les appels CUDA échoués restent fatals."""
@@ -383,7 +393,7 @@ class HistogramAnalyzer:
 
 
 class GHSOptimizer(processor):
-    """Recherche range/peak indépendante de StarNet et du rendu stellaire."""
+    """Recherche RANGE indépendante de StarNet et du rendu stellaire."""
 
     @classmethod
     def get_prefix(cls) -> str:
@@ -391,13 +401,31 @@ class GHSOptimizer(processor):
         return "ghs"
 
     @classmethod
+    def parameter_children(cls) -> tuple[type[processor], ...]:
+        """Déclare le moteur de recherche de présentation finale."""
+        return (ProtectedGHSFinalizer,)
+
+    @staticmethod
+    def range_strategy(value: str) -> str:
+        """Accepte les anciens choix CLI/JSON et les normalise vers RANGE seul.
+
+        Le paramètre caché garde les anciennes commandes utilisables. Il ne
+        réactive ni PEAK ni le double calcul. Les autres valeurs sont refusées.
+        """
+        if value not in ('range', 'both', 'peak'):
+            raise ValueError('Stratégie GHS inconnue ; seul RANGE est exécuté')
+        return 'range'
+
+    @classmethod
     def add_arguments(cls, parser: argparse.ArgumentParser) -> None:
         """Déclare les réglages locaux de recherche, de couleur et de calcul."""
         parser.add_argument(
-            "--ghs-strategy", choices=("both", "range", "peak"), default="both"
+            "--ghs-strategy", type=cls.range_strategy, default="range",
+            help=argparse.SUPPRESS,
         )
         ComputeConfig.add_arguments(parser)
         parser.add_argument("--ghs-max-iterations", type=int, default=8)
+        ProtectedGHSFinalizer.add_arguments(parser)
         parser.add_argument(
             "--ghs-dynamic-target", type=float, default=1.0,
             help="Étendue RGB minimale visée sur [0,1] après GHS (ex. 0.8)",
@@ -445,6 +473,7 @@ class GHSOptimizer(processor):
         options = argparse.Namespace(
             **{name: getattr(args, name, value) for name, value in defaults.items()}
         )
+        options.ghs_strategy = GHSOptimizer.range_strategy(options.ghs_strategy)
         if (
             not isinstance(options.ghs_max_iterations, int)
             or not 1 <= options.ghs_max_iterations <= 32
@@ -482,7 +511,50 @@ class GHSOptimizer(processor):
             raise ValueError("Paramètres d’égalisation GHS invalides")
         if options.ghs_chroma not in ("off", "balanced", "enhanced"):
             raise ValueError("Politique de chroma inconnue")
+        if not np.isfinite(options.ghs_final_strength) or not (
+            0 <= options.ghs_final_strength <= 10
+        ):
+            raise ValueError("ghs-final-strength doit être compris entre 0 et 10")
+        if options.ghs_final_mode not in ("auto", "fixed"):
+            raise ValueError("ghs-final-mode doit être auto ou fixed")
+        if (not np.isfinite(options.ghs_highlight_retention)
+                or not 0 < options.ghs_highlight_retention <= 1):
+            raise ValueError("ghs-highlight-retention doit être dans ]0,1]")
+        if (not np.isfinite(options.ghs_log_rms_weight)
+                or not 0 <= options.ghs_log_rms_weight <= 10):
+            raise ValueError("ghs-log-rms-weight doit être dans [0,10]")
         return options
+
+    def final_stretch(
+        self, data: np.ndarray, analyzer: HistogramAnalyzer,
+        backend: ComputeBackend, strength: float, mode: str = "auto",
+        retention: float = 0.9, stars: np.ndarray | None = None,
+        headroom: float = 0.95,
+        rms_weight: float = DEFAULT_LOG_RMS_WEIGHT,
+    ) -> tuple[np.ndarray, JSONReport]:
+        """Délègue la dernière passe à la recherche D/B/SP/HP protégée.
+
+        strength borne D en mode auto, ou fixe D en mode fixed ; zéro désactive.
+        retention est la fraction de contraste brillant à conserver dans ]0,1].
+        stars permet de vérifier aussi la recomposition screen à étoiles fixes.
+        rms_weight pondère le gain relatif de régularité logarithmique ; dans
+        [0,10], deux par défaut, zéro désactive sa contribution au classement.
+        Le moteur conserve l'identité si aucun candidat n'améliore le signal
+        diffus sous contraintes. Les erreurs de données/backend sont propagées.
+        Voir docs/scripts/postProcess/ghs-highlight-protection.md.
+        """
+        if not np.isfinite(strength) or not 0 <= strength <= 10:
+            raise ValueError("ghs-final-strength doit être compris entre 0 et 10")
+        output, report = ProtectedGHSFinalizer().search(
+            data, analyzer, backend, strength, mode, retention, stars, headroom, rms_weight,
+        )
+        parameters = report["parameters"]
+        LOGGER.info(
+            "GHS final %s : %s ; D=%.3f B=%.2f SP=%.5f HP=%.5f",
+            mode, report["status"], parameters["D"], parameters["B"],
+            parameters["SP"], parameters["HP"],
+        )
+        return output, report
 
     def balance_histogram(
         self, data: np.ndarray, analyzer: HistogramAnalyzer,
@@ -603,19 +675,25 @@ class GHSOptimizer(processor):
         strategy: str,
         args: argparse.Namespace,
         backend: ComputeBackend,
+        rendered_stars: np.ndarray | None = None, headroom: float = 0.95,
     ) -> tuple[np.ndarray, JSONReport]:
-        """Optimise un fond linéaire par prédiction scalaire et contrôle RGB des finalistes.
+        """Optimise l'étendue robuste RANGE par prédiction puis contrôle RGB.
 
+        strategy doit valoir range ; cet argument conserve la signature des
+        appels internes existants, sans autre recherche disponible.
         Le plateau est le premier ralentissement relatif du gain de largeur à
         moins de 20 % du gain marginal maximal observé. Trois finalistes voisins
         et les meilleurs scores prédits sont vérifiés sur les vrais pixels RGB.
-        BP est recalé avant chaque recherche. Une seconde boucle linéaire vise
-        l'étendue RGB configurée après GHS. Une exception backend n'est jamais
-        assimilée à une convergence.
+        BP est recalé avant chaque recherche. L’égalisation, l’expansion de
+        dynamique et la chroma précèdent la recherche finale D/B/SP/HP protégée,
+        appliquée au fond avant fusion stellaire. rendered_stars et headroom
+        permettent d'en vérifier aussi la recomposition à étoiles fixes.
+        Une exception backend n'est jamais
+        assimilée à une convergence. Voir auto-ghs-algorithm.md.
         """
         validate_rgb(data)
-        if strategy not in ("range", "peak"):
-            raise ValueError("Une stratégie range ou peak est requise")
+        if strategy != "range":
+            raise ValueError("Seule la stratégie range est disponible")
         options = self.options(args)
         analyzer = HistogramAnalyzer(
             options.ghs_bins,
@@ -631,7 +709,7 @@ class GHSOptimizer(processor):
         blackpoint_records: list[JSONReport] = []
         histograms = [initial.report()]
         stop = "max_iterations"
-        metric = "range_width" if strategy == "range" else "peak_width"
+        metric = "range_width"
         baseline_iqr = max(float(initial.metrics["iqr"]), 1e-12)
         baseline_noise = initial.metrics["background_noise_proxy"]
         for iteration in range(options.ghs_max_iterations):
@@ -646,9 +724,6 @@ class GHSOptimizer(processor):
                 current = linear_blackpoint(current, bp_used, xp=xp)
                 state = analyzer.analyze(current, backend)
                 histograms.append(state.report())
-            if strategy == "peak" and state.metrics["peak_ambiguous"]:
-                stop = "ambiguous principal peak"
-                break
             sp = max(0.0, float(state.metrics["peak"]) - 1.5 / options.ghs_bins)
             concentration = CONCENTRATION_SCHEDULE[
                 min(iteration, len(CONCENTRATION_SCHEDULE) - 1)
@@ -747,8 +822,6 @@ class GHSOptimizer(processor):
                     2, int(state.metrics["significant_peaks"]) + 1
                 ):
                     rejection = "histogram bifurcation"
-                elif strategy == "peak" and metrics["peak_ambiguous"]:
-                    rejection = "ambiguous principal peak"
                 # L'écart inter-quantiles supérieur ne doit pas s'effondrer en hautes lumières.
                 elif (
                     metrics["q_high"] > HIGHLIGHT_BOUNDARY
@@ -821,11 +894,17 @@ class GHSOptimizer(processor):
             current = render_chroma(current, options.ghs_chroma, xp=xp)
             state = analyzer.analyze(current, backend)
             histograms.append(state.report())
-        output = (
-            before_chroma
-            if options.ghs_chroma == "off"
-            else backend.numpy(current).astype(np.float32)
+        chroma_diagnostics = color_drift(before_chroma, backend.numpy(current))
+        current, presentation_stretch = self.final_stretch(
+            current, analyzer, backend, options.ghs_final_strength,
+            options.ghs_final_mode, options.ghs_highlight_retention,
+            rendered_stars, headroom,
+            options.ghs_log_rms_weight,
         )
+        if presentation_stretch["status"] == "applied":
+            state = analyzer.analyze(current, backend)
+            histograms.append(state.report())
+        output = backend.numpy(current).astype(np.float32)
         validate_rgb(output)
         return output, {
             "status": "SUCCESS" if len(histograms) > 1 else "NO_IMPROVEMENT",
@@ -834,6 +913,7 @@ class GHSOptimizer(processor):
             "iterations": records,
             "histogram_balance": histogram_balance,
             "dynamic_range": dynamic_report,
+            "presentation_stretch": presentation_stretch,
             "blackpoint_iterations": blackpoint_records,
             "post_ghs": post_ghs_metrics,
             "histograms": histograms,
@@ -843,7 +923,7 @@ class GHSOptimizer(processor):
             "clip_mode": "rgbblend",
             "chroma": options.ghs_chroma,
             "parameters": vars(options),
-            "chroma_diagnostics": color_drift(before_chroma, output),
+            "chroma_diagnostics": chroma_diagnostics,
             "colorimetry": "human weights are an intensity proxy, primaries unknown",
             "noise_metric": (
                 "MAD of horizontal differences in lower-quartile pairs / sqrt(2); "
@@ -857,15 +937,11 @@ class GHSOptimizer(processor):
         output_path: Path,
         args: argparse.Namespace | None = None,
     ) -> JSONReport:
-        """Traite un fond seul avec une stratégie explicite, pour les appels internes."""
+        """Traite un fond seul avec RANGE et écrit un FITS distinct de la source."""
         args = self.options(self._get_args(args))
-        if args.ghs_strategy == "both":
-            raise ValueError(
-                "Le moteur seul nécessite range ou peak ; both relève de la phase finale"
-            )
         data = normalized_planes(input_path)
         backend = ComputeBackend(args.compute_backend, data.nbytes * 16)
-        result, report = self.optimize(data, args.ghs_strategy, args, backend)
+        result, report = self.optimize(data, "range", args, backend)
         output = Path(output_path).with_suffix(".fits")
         if Path(input_path).resolve() in (
             output.resolve(),

@@ -122,3 +122,61 @@ def test_invalid_intensities_are_never_silently_clipped(value: float) -> None:
 
     with pytest.raises(ValueError):
         validate_rgb(np.full((3, 8, 8), value))
+
+
+@pytest.mark.parametrize('peak', [1.00004351, 16777216.0])
+def test_raw_starless_overshoot_is_preserved_for_compensation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, peak: float,
+) -> None:
+    """Conserver le léger dépassement MTF et produire un résidu additif compensable."""
+    from unittest.mock import Mock
+    from lib.final_render import AutoGHSFinalRenderer
+
+    source = tmp_path / 'source.fits'
+    data = np.full((3, 8, 9), .4, dtype=np.float32)
+    raw = data.copy()
+    raw[0, 3, 4] = peak
+    fits.writeto(source, data)
+    executable = tmp_path / 'starnet++'
+    executable.touch()
+    executable.chmod(0o755)
+
+    def separate(script: str, work: str, **kwargs: object) -> bool:
+        """Émet la sortie réseau brute, sans modifier l'entrée originale."""
+        fits.writeto(Path(work) / 'starless_linear.fits', raw)
+        return True
+
+    runner = Mock()
+    runner.run_siril_script.side_effect = separate
+    monkeypatch.setattr('lib.star_separation.Siril', Mock(return_value=runner))
+    if peak > 2:
+        with pytest.raises(ValueError, match='somme linéaire en float32'):
+            StarNetSeparator().post_process(
+                source, tmp_path / 'separation.json',
+                argparse.Namespace(starnet_path=executable),
+            )
+        return
+    report = StarNetSeparator().post_process(
+        source, tmp_path / 'separation.json', argparse.Namespace(starnet_path=executable),
+    )
+    background = fits.getdata(report['starless_linear'])
+    residual = fits.getdata(report['stars_linear'])
+    assert report['raw_starless_above_one_count'] == 1
+    assert report['raw_starless_maximum'] == pytest.approx(1.00004351)
+    np.testing.assert_array_equal(background, raw)
+    corrected, stars, audit = AutoGHSFinalRenderer.compensate_residual(
+        background, residual, .005,
+    )
+    assert corrected.max() <= 1 and stars.min() >= 0
+    np.testing.assert_allclose(corrected + stars, data, atol=1e-7)
+    assert audit['raw_starless_above_one_count'] == 1
+    np.testing.assert_array_equal(fits.getdata(source), data)
+
+
+@pytest.mark.parametrize('value', [np.nan, np.inf, -.001])
+def test_raw_starless_still_rejects_nonfinite_and_negative(value: float) -> None:
+    """L'exception de borne haute ne relâche pas les autres contrôles RGB."""
+    from lib.star_separation import validate_rgb
+
+    with pytest.raises(ValueError):
+        validate_rgb(np.full((3, 8, 8), value), allow_upper_overshoot=True)

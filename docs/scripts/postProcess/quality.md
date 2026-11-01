@@ -304,12 +304,12 @@ Le moteur utilise l’inférence Python native ONNX. Il est activé par défaut 
 des poids locaux valides sont présents, sauf choix explicite contraire ;
 `--enable-graxpert` permet aussi d’acquérir les poids manquants.
 Les poids 3.0.2 sont importés ou acquis automatiquement dans
-`tmp/models/graxpert/`, avec taille/SHA256 épinglés. Le CLI GraXpert sert seulement
+`tmp/cache/models/graxpert/`, avec taille/SHA256 épinglés. Le CLI GraXpert sert seulement
 à acquérir des poids absents, selon le mécanisme officiel ; il ne traite plus
 les images utilisateur. Le repli CPU est contrôlé explicitement.
 
 Voir [GraXpert natif : installation, options et algorithme](graxpert.md) pour
-`--install-graxpert`, les modèles, la normalisation, le tuilage, les fournisseurs
+l’installeur commun, les modèles, la normalisation, le tuilage, les fournisseurs
 et les résultats des validations réelles et simulées.
 
 ## Vérification et limites

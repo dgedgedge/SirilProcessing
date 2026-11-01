@@ -14,6 +14,14 @@ Le script utilise PostProcessingProcessor, commun avec lightProcess, pour
 exécuter les traitements, diagnostics et exports.
 Le rendu final AutoGHS avec séparation StarNet est activé par défaut
 (--disable-autoghs le désactive) et produit des FITS et JPEG.
+--autoghs-only reprend la même entrée, la même sortie et les mêmes paramètres
+du traitement complet. Le FITS linéaire précédent est retrouvé dans les rapports ;
+StarNet, AutoGHS, la saturation, les exports et l’annotation sont relancés.
+--disable-final-color écarte explicitement la saturation de cette reprise.
+--color-only reprend les couches GHS existantes pour la couleur et les exports,
+sans relancer les traitements amont. La passe couleur est active par défaut
+dans le traitement complet ; --disable-final-color la désactive.
+La dernière passe recherche D/B/HP avec protection des hautes lumières par défaut.
 Les chemins relatifs sont résolus depuis le dossier de lancement.
 Le second argument facultatif choisit le répertoire de sortie.
 

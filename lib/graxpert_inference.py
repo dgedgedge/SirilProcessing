@@ -98,14 +98,25 @@ class GraXpertEngine(ParameterizedComponent):
         return ComputeConfig.requested(args)
 
     def _create_session(self, model: Path, gpu: bool) -> ort.InferenceSession:
-        """Crée une session sans repli CPU implicite lorsque le GPU est exigé."""
+        """Crée la session GPU disponible, CoreML/MLProgram inclus sur macOS.
+
+        Les opérations auxiliaires peuvent rester sur CPU ; une demande GPU
+        exige toujours un fournisseur GPU enregistré dans la session. Ce
+        contrôle ne mesure pas la répartition des opérations. Le redémarrage
+        automatique de la session après un échec reste désactivé. Les versions
+        ONNX sans preload_dlls conservent leur chargement habituel.
+        """
         import onnxruntime as ort
 
         ort.disable_telemetry_events()
+        available = ort.get_available_providers()
+        if gpu and 'CUDAExecutionProvider' in available and hasattr(ort, 'preload_dlls'):
+            # Les installations CUDA du venv fournissent les DLL/.so NVIDIA ;
+            # les charger avant la création de session, sans modifier le système.
+            ort.preload_dlls(directory='')
         options = ort.SessionOptions()
         options.intra_op_num_threads = CpuConfig.get_limit()
         options.inter_op_num_threads = 1
-        available = ort.get_available_providers()
         if gpu:
             providers = [
                 provider for provider in GPU_PROVIDERS if provider in available
@@ -113,11 +124,19 @@ class GraXpertEngine(ParameterizedComponent):
             ]
             if not providers:
                 raise RuntimeError("Aucun fournisseur ONNX GPU disponible")
-            options.add_session_config_entry("session.disable_cpu_ep_fallback", "1")
+            # Autoriser les opérations auxiliaires affectées au CPU par ONNX.
+            providers.append("CPUExecutionProvider")
         else:
             providers = ["CPUExecutionProvider"]
+        # CoreML répartit les opérations compatibles entre CPU/GPU/Neural Engine.
+        # Son enregistrement seul ne prouve pas un calcul GPU pur.
+        configured = [
+            (provider, {'ModelFormat': 'MLProgram', 'MLComputeUnits': 'ALL'})
+            if provider == 'CoreMLExecutionProvider' else provider
+            for provider in providers
+        ]
         session = ort.InferenceSession(
-            str(model), sess_options=options, providers=providers
+            str(model), sess_options=options, providers=configured
         )
         session.disable_fallback()
         if gpu and not any(
@@ -150,7 +169,7 @@ class GraXpertEngine(ParameterizedComponent):
             return self._create_session(model, True)
         except (RuntimeError, ort.capi.onnxruntime_pybind11_state.Fail,
                 ort.capi.onnxruntime_pybind11_state.RuntimeException) as error:
-            logging.info('GraXpert : accélérateur indisponible au démarrage, CPU choisi : %s', error)
+            ComputeConfig.warn_cpu_fallback('GraXpert', str(error))
             self.gpu = False
             return self._create_session(model, False)
 
@@ -264,6 +283,9 @@ class GraXpertEngine(ParameterizedComponent):
                 image = np.repeat(image, 3, axis=-1)
             if self.gpu is None:
                 self.gpu = any(provider in GPU_PROVIDERS for provider in ort.get_available_providers())
+                if not self.gpu:
+                    ComputeConfig.warn_cpu_fallback('GraXpert',
+                                                   'aucun fournisseur ONNX GPU/CoreML disponible')
                 logging.info("GraXpert : mode auto, périphérique choisi avant calcul : %s",
                              'GPU' if self.gpu else 'CPU')
             model = self.models.ensure_model()

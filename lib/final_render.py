@@ -1,4 +1,4 @@
-"""Dernière phase facultative : StarNet → étoiles → deux GHS → deux fusions.
+"""Dernière phase facultative : StarNet → étoiles → GHS RANGE → fusion.
 
 Les artefacts sont écrits dans des sous-dossiers visibles et ordonnés.
 Le rapport SUCCESS est écrit uniquement après réussite de tous les rendus.
@@ -21,11 +21,7 @@ from astropy.io import fits
 
 from lib.auto_ghs import ComputeBackend, GHSOptimizer, HistogramAnalyzer
 from lib.postprocess_paths import reset_ordered_work_dir
-from lib.render_exports import (
-    load_previous_previews,
-    write_render_comparisons,
-    write_render_jpeg,
-)
+from lib.render_exports import write_render_jpeg
 from lib.processor import processor
 from lib.restoration_quality import normalized_planes
 from lib.star_rendering import (
@@ -59,23 +55,19 @@ def atomic_report(path: Path, report: JSONReport) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def strategy_annotation(strategy: str, report: JSONReport) -> str:
+def ghs_annotation(report: JSONReport) -> str:
     """Résume l'objectif et les recherches GHS consignées dans le rapport.
 
     Les recherches comptent les passages ayant évalué des candidats ; un arrêt
     préalable sur distribution constante ou pic ambigu n'ajoute aucun passage.
     Les applications acceptées et les corrections BP sont comptées séparément.
     Les métriques décrivent le fond optimisé avant fusion, même sur le PNG avec
-    étoiles. Une information absente est affichée comme non renseignée.
+    étoiles. Le GHS final explicite est distingué des recherches sous contraintes.
+    Une information absente est affichée comme non renseignée.
     """
-    objectives = {
-        "range": "Élargir l’étendue robuste des intensités entre les quantiles "
-        "configurés, sous contraintes de bruit et d’écrêtage.",
-        "peak": "Élargir le pic principal de l’histogramme à demi-hauteur "
-        "logarithmique, sous les mêmes contraintes.",
-    }
     lines = ["OBJECTIF", textwrap.fill(
-        objectives.get(strategy, "Objectif non renseigné."), width=38
+        "Élargir l’étendue robuste des intensités entre les quantiles "
+        "configurés, sous contraintes de bruit et d’écrêtage.", width=38
     ), "", "BOUCLE GHS — FOND SANS ÉTOILES"]
     records = report.get("iterations")
     if records is None:
@@ -108,15 +100,30 @@ def strategy_annotation(strategy: str, report: JSONReport) -> str:
             f"Cible : {dynamic['target']:.2f} — "
             + ("atteinte" if dynamic['target_reached'] else "non atteinte"),
         ])
+    presentation = report.get("presentation_stretch")
+    if presentation is not None:
+        lines.extend([
+            "", "GHS FINAL — SANS ÉTOILES",
+            f"D : {presentation['parameters']['D']:.2f} — "
+            + {"applied": "appliqué", "disabled": "désactivé",
+               "constant distribution": "distribution constante"}.get(
+                presentation["status"], presentation["status"],
+            ),
+        ])
+        if presentation.get("mode") == "auto":
+            parameters = presentation["parameters"]
+            lines.extend([
+                f"B : {parameters['B']:.2f} — SP : {parameters['SP']:.4f}",
+                f"HP : {parameters['HP']:.4f}",
+            ])
     reasons = {
         "max_iterations": "limite d’itérations atteinte",
         "constant distribution": "distribution constante",
-        "ambiguous principal peak": "pic principal ambigu",
         "no admissible improvement": "aucune amélioration admissible",
     }
     reason = report.get("stop_reason", "non renseigné")
     lines.extend(["", "Arrêt GHS :", textwrap.fill(reasons.get(reason, reason), 38)])
-    metric = "range_width" if strategy == "range" else "peak_width"
+    metric = "range_width"
     initial = report.get("initial", {}).get(metric)
     final = report.get("final", {}).get(metric)
     if initial is not None and final is not None:
@@ -128,7 +135,7 @@ def strategy_annotation(strategy: str, report: JSONReport) -> str:
 
 
 def histogram_figure(
-    reports: dict[str, JSONReport], destination: Path, *, with_stars: bool = False
+    report: JSONReport, destination: Path, *, with_stars: bool = False
 ) -> None:
     """Trace les effectifs avec axes Y linéaire et logarithmique, X linéaire.
 
@@ -136,82 +143,73 @@ def histogram_figure(
     de pseudo-effectif. Le log1p utilisé par l'analyse GHS reste indépendant
     de cette présentation. Une distribution entièrement vide garde un axe
     log valide de 1 à 10 pixels.
-    Les panneaux numérotés identifient stratégie, objectif et échelle. Une
+    Les deux panneaux numérotés identifient l'objectif RANGE et l'échelle. Une
     légende commune distingue les étapes sans répéter les mêmes libellés.
     Avec ``with_stars=True``, seuls les histogrammes finaux recomposés sont
     tracés ; sinon, la figure contient uniquement les états sans étoiles.
-    Un encart par stratégie rappelle l’objectif et les statistiques de boucle
+    Un encart rappelle l’objectif et les statistiques de boucle
     du fond avant fusion. Le PNG est écrit dans ``destination``.
     """
     from matplotlib.backends.backend_agg import FigureCanvasAgg
     from matplotlib.figure import Figure
 
-    figure = Figure(figsize=(16, 6.5 * len(reports)), constrained_layout=True)
+    figure = Figure(figsize=(16, 6.5), constrained_layout=True)
     figure.suptitle(
         "Images finales avec étoiles recomposées"
         if with_stars else "Évolution de l’image sans étoiles"
     )
     FigureCanvasAgg(figure)
-    grid = figure.add_gridspec(len(reports), 3, width_ratios=(1, 1, 0.8))
-    axes = np.asarray([
-        [figure.add_subplot(grid[row, column]) for column in range(2)]
-        for row in range(len(reports))
-    ])
+    grid = figure.add_gridspec(1, 3, width_ratios=(1, 1, 0.8))
+    axes = [figure.add_subplot(grid[0, column]) for column in range(2)]
     legend_handles = {}
-    for row, (strategy, report) in enumerate(reports.items()):
-        states = report["histograms"]
-        selection = sorted({0, len(states) // 2, len(states) - 1})
-        curves = []
-        for index in ([] if with_stars else selection):
-            if index == 0:
-                label = "Sans étoiles — entrée linéaire"
-                color = "C0"
-            elif index == len(states) - 1:
-                label = "Sans étoiles — rendu final"
-                color = "C2"
-            else:
-                label = "Sans étoiles — étape intermédiaire"
-                color = "C1"
-            curves.append((states[index]["counts"], label, color))
-        if with_stars:
-            curves.append((
-                report["recomposed_histogram"]["counts"],
-                "Image finale — étoiles recomposées", "C3",
-            ))
-        maximum = 0.0
-        for raw_counts, label, color in curves:
-            counts = np.asarray(raw_counts)
-            maximum = max(maximum, float(np.max(counts)))
-            x = (np.arange(len(counts)) + 0.5) / len(counts)
-            line, = axes[row, 0].plot(x, counts, label=label, color=color)
-            legend_handles[label] = line
-            axes[row, 1].plot(
-                x, np.ma.masked_less_equal(counts, 0), label=label, color=color
-            )
-        axes[row, 1].set_ylim(1, max(10, maximum * 1.2))
-        axes[row, 1].set_yscale("log")
-        objective = {
-            "range": "étendue globale",
-            "peak": "pic principal",
-        }.get(strategy, "")
-        for column in (0, 1):
-            axes[row, column].set_title(
-                f"{2 * row + column + 1}. {strategy.upper()} — {objective}\n"
-                "Effectifs en échelle "
-                + ("linéaire" if column == 0 else "logarithmique")
-            )
-            axes[row, column].set_xlabel("Intensité (linéaire sur cet axe)")
-            axes[row, column].set_xlim(0, 1)
-            axes[row, column].set_ylabel("Nombre de pixels")
-    for row, (strategy, report) in enumerate(reports.items()):
-        annotation = figure.add_subplot(grid[row, 2])
-        annotation.set_axis_off()
-        annotation.text(
-            0.03, 0.98, strategy_annotation(strategy, report),
-            transform=annotation.transAxes, va="top", fontsize=9,
-            bbox={"boxstyle": "round,pad=0.7", "facecolor": "#f3f5f7",
-                  "edgecolor": "#c5cbd1"},
+    states = report["histograms"]
+    selection = sorted({0, len(states) // 2, len(states) - 1})
+    curves = []
+    for index in ([] if with_stars else selection):
+        if index == 0:
+            label = "Sans étoiles — entrée linéaire"
+            color = "C0"
+        elif index == len(states) - 1:
+            label = "Sans étoiles — rendu final"
+            color = "C2"
+        else:
+            label = "Sans étoiles — étape intermédiaire"
+            color = "C1"
+        curves.append((states[index]["counts"], label, color))
+    if with_stars:
+        curves.append((
+            report["recomposed_histogram"]["counts"],
+            "Image finale — étoiles recomposées", "C3",
+        ))
+    maximum = 0.0
+    for raw_counts, label, color in curves:
+        counts = np.asarray(raw_counts)
+        maximum = max(maximum, float(np.max(counts)))
+        x = (np.arange(len(counts)) + 0.5) / len(counts)
+        line, = axes[0].plot(x, counts, label=label, color=color)
+        legend_handles[label] = line
+        axes[1].plot(
+            x, np.ma.masked_less_equal(counts, 0), label=label, color=color
         )
+    axes[1].set_ylim(1, max(10, maximum * 1.2))
+    axes[1].set_yscale("log")
+    for column, axis in enumerate(axes):
+        axis.set_title(
+            f"{column + 1}. RANGE — étendue globale\n"
+            "Effectifs en échelle "
+            + ("linéaire" if column == 0 else "logarithmique")
+        )
+        axis.set_xlabel("Intensité (linéaire sur cet axe)")
+        axis.set_xlim(0, 1)
+        axis.set_ylabel("Nombre de pixels")
+    annotation = figure.add_subplot(grid[0, 2])
+    annotation.set_axis_off()
+    annotation.text(
+        0.03, 0.98, ghs_annotation(report),
+        transform=annotation.transAxes, va="top", fontsize=9,
+        bbox={"boxstyle": "round,pad=0.7", "facecolor": "#f3f5f7",
+              "edgecolor": "#c5cbd1"},
+    )
     figure.legend(
         handles=list(legend_handles.values()),
         loc="outside lower center", ncol=2, fontsize=9,
@@ -225,9 +223,9 @@ class AutoGHSFinalRenderer(processor):
 
     Activé par défaut ; --disable-autoghs conserve une sortie linéaire. Les enfants
     déclarent leurs propres options et Config assure leur rémanence explicite.
-    Les deux sorties de both utilisent exactement les mêmes étoiles rendues.
-    Les JPEG accompagnent les FITS ; les comparatifs sont rangés avec les fonds
-    GHS et capturent le rendu précédent avant réinitialisation du dossier.
+    Un seul fond RANGE est optimisé puis recomposé avec les étoiles rendues.
+    Les JPEG accompagnent les FITS et les histogrammes diagnostiquent le rendu.
+    Aucun comparatif de stratégies ou d’exécutions précédentes n’est généré.
     """
 
     enabled_by_default = True
@@ -276,6 +274,8 @@ class AutoGHSFinalRenderer(processor):
         tolerance, finie dans [0,.05], est un seuil d’alerte diagnostique : un
         dépassement est consigné sans invalider une décomposition corrigeable.
         Les branches corrigées doivent être RGB, finies et bornées sur [0,1] ;
+        le fond StarNet brut peut dépasser 1 si son résidu signé reconstitue
+        une entrée bornée. Aucun écrêtage indépendant des couches n'est fait ;
         une incohérence de géométrie ou de domaine reste une erreur ValueError.
         Voir docs/scripts/postProcess/star-rendering.md.
         """
@@ -283,13 +283,15 @@ class AutoGHSFinalRenderer(processor):
             raise ValueError("ghs-negative-tolerance doit être dans [0,.05]")
         if starless.shape != stars.shape or not np.isfinite(stars).all():
             raise ValueError("Résidu StarNet incompatible")
-        validate_rgb(starless)
+        validate_rgb(starless, allow_upper_overshoot=True)
+        validate_rgb(starless + stars)
         negative = np.minimum(stars, 0)
         background, positive = starless + negative, stars - negative
         validate_rgb(background)
         validate_rgb(positive)
         minimum = float(stars.min())
         exceeded_count = int(np.count_nonzero(stars < -tolerance))
+        above_one_count = int(np.count_nonzero(starless > 1))
         if exceeded_count:
             LOGGER.warning(
                 "StarNet : %d valeur(s) RGB (%.6f %%) sous -%g, minimum=%g ; "
@@ -302,7 +304,9 @@ class AutoGHSFinalRenderer(processor):
             positive,
             {
                 "method": "flux-conserving nonnegative residual compensation",
-                "status": "CORRECTED" if exceeded_count else "SUCCESS",
+                "raw_starless_above_one_count": above_one_count,
+                "raw_starless_maximum": float(starless.max()),
+                "status": "CORRECTED" if exceeded_count or above_one_count else "SUCCESS",
                 "tolerance": tolerance,
                 "tolerance_exceeded": bool(exceeded_count),
                 "above_tolerance_count": exceeded_count,
@@ -330,7 +334,7 @@ class AutoGHSFinalRenderer(processor):
         output_path: Path,
         args: argparse.Namespace | None = None,
     ) -> JSONReport:
-        """Produit et publie les rendus étoilés, branches, histogrammes et diagnostics.
+        """Publie un rendu RANGE étoilé, ses couches et ses diagnostics.
 
         Parameters
         ----------
@@ -344,8 +348,9 @@ class AutoGHSFinalRenderer(processor):
         Returns
         -------
         dict
-            output_images contient les résultats principaux par stratégie ;
-            output_image référence range (ou peak si seul) pour l'API historique.
+            output_image et output_jpeg référencent le rendu RANGE. Les cartes
+            output_images/output_jpegs gardent une seule entrée range pour les
+            lecteurs de rapports existants.
 
         Raises
         ------
@@ -365,8 +370,6 @@ class AutoGHSFinalRenderer(processor):
             validate_rgb(data)
             header = fits.getheader(source)
             validate_linear_header(header)
-            if options.ghs_strategy not in ("both", "range", "peak"):
-                raise ValueError("Stratégie AutoGHS inconnue")
             headroom = getattr(args, "ghs_headroom", 0.95)
             max_color_drift = getattr(args, "star_max_color_drift", 0.08)
             max_chroma_excess = getattr(args, "star_max_chroma_excess", 0.10)
@@ -388,7 +391,6 @@ class AutoGHSFinalRenderer(processor):
                 raise ValueError(
                     "L’entrée ne peut pas se trouver dans le dossier réinitialisé"
                 )
-            previous_previews = load_previous_previews(report_path)
             separation_dir = reset_ordered_work_dir(report_path)
             work_root = separation_dir.parent
             stars_dir = work_root / "002_stars"
@@ -409,7 +411,7 @@ class AutoGHSFinalRenderer(processor):
                 raise ValueError(
                     "StarNet n’a extrait aucune contribution stellaire positive"
                 )
-            # Une seule transformation stellaire commune aux variantes.
+            # Les étoiles suivent leur propre rendu avant la fusion avec RANGE.
             stars, star_report = ConservativeStarRenderer.render(
                 positive,
                 getattr(args, "star_strength", 2.0),
@@ -443,15 +445,7 @@ class AutoGHSFinalRenderer(processor):
                 row_order=header.get("ROWORDER", "BOTTOM-UP"),
             )
             star_positions = stellar_peak_positions(positive)
-            strategies = (
-                ("range", "peak")
-                if options.ghs_strategy == "both"
-                else (options.ghs_strategy,)
-            )
             optimizer = GHSOptimizer()
-            rendered: dict[str, JSONReport] = {}
-            outputs: dict[str, str] = {}
-            jpegs: dict[str, str] = {}
             analyzer = HistogramAnalyzer(
                 options.ghs_bins,
                 options.ghs_q_low,
@@ -460,73 +454,65 @@ class AutoGHSFinalRenderer(processor):
             )
             # Histograms CPU des sorties finales ; le calcul GHS conserve ses tableaux GPU.
             cpu = ComputeBackend("cpu")
-            for strategy in strategies:
-                stretched, branch = optimizer.optimize(
-                    background.copy(), strategy, args, backend
+            stretched, branch = optimizer.optimize(
+                background, "range", args, backend,
+                rendered_stars=stars, headroom=headroom,
+            )
+            starless_path = ghs_dir / f"{source.stem}_starless_ghs_range.fits"
+            write_rgb(
+                source, starless_path, stretched, nonlinear=True, role="STARLESS"
+            )
+            final, fusion = recompose(stretched, stars, headroom)
+            fusion["peak_contrast"] = peak_visibility(
+                final - headroom * stretched, star_positions,
+            )
+            profile_ratio = fusion["star_profiles_after_fusion"]["median_ratio"]
+            if profile_ratio is not None and profile_ratio > getattr(
+                args, "star_max_width_ratio",
+                ConservativeStarRenderer.default_max_width_ratio,
+            ):
+                raise ValueError("Recomposition : gonflement stellaire excessif")
+            color = fusion["star_color_after_fusion"]
+            if (
+                color["chromaticity_mean_abs"] > max_color_drift
+                or color["chroma_mean_change"] > max_chroma_excess
+            ):
+                raise ValueError(
+                    "Recomposition : dérive de couleur stellaire excessive"
                 )
-                starless_path = ghs_dir / f"{source.stem}_starless_ghs_{strategy}.fits"
-                write_rgb(
-                    source, starless_path, stretched, nonlinear=True, role="STARLESS"
-                )
-                final, fusion = recompose(stretched, stars, headroom)
-                fusion["peak_contrast"] = peak_visibility(
-                    final - headroom * stretched, star_positions,
-                )
-                profile_ratio = fusion["star_profiles_after_fusion"]["median_ratio"]
-                if profile_ratio is not None and profile_ratio > getattr(
-                    args, "star_max_width_ratio",
-                    ConservativeStarRenderer.default_max_width_ratio,
-                ):
-                    raise ValueError("Recomposition : gonflement stellaire excessif")
-                color = fusion["star_color_after_fusion"]
-                if (
-                    color["chromaticity_mean_abs"] > max_color_drift
-                    or color["chroma_mean_change"] > max_chroma_excess
-                ):
-                    raise ValueError(
-                        "Recomposition : dérive de couleur stellaire excessive"
-                    )
-                final_path = recomposition_dir / f"{source.stem}_render_{strategy}.fits"
-                write_rgb(source, final_path, final, nonlinear=True, role="WITHSTARS")
-                # Relire les artefacts réellement écrits, pas seulement les tableaux mémoire.
-                disk = normalized_planes(final_path)
-                validate_rgb(disk)
-                if disk.shape != data.shape or not fits.getheader(final_path).get(
-                    "SPNLIN"
-                ):
-                    raise RuntimeError("FITS final invalide après écriture")
-                jpeg_path = final_path.with_suffix(".jpg")
-                write_render_jpeg(final_path, jpeg_path)
-                jpegs[strategy] = str(jpeg_path)
-                branch.update(
-                    {
-                        "output_image": str(final_path),
-                        "output_jpeg": str(jpeg_path),
-                        "starless_image": str(starless_path),
-                        "recomposition": fusion,
-                        "recomposed_histogram": analyzer.analyze(final, cpu).report(),
-                        "color_change_from_linear": color_drift(data, final),
-                    }
-                )
-                rendered[strategy] = branch
-                outputs[strategy] = str(final_path)
-            star_report["recomposed_visibility"] = {
-                strategy: branch["recomposition"]["peak_contrast"]
-                for strategy, branch in rendered.items()
-            }
+            final_path = recomposition_dir / f"{source.stem}_render_range.fits"
+            write_rgb(source, final_path, final, nonlinear=True, role="WITHSTARS")
+            # Relire les artefacts réellement écrits, pas seulement les tableaux mémoire.
+            disk = normalized_planes(final_path)
+            validate_rgb(disk)
+            if disk.shape != data.shape or not fits.getheader(final_path).get(
+                "SPNLIN"
+            ):
+                raise RuntimeError("FITS final invalide après écriture")
+            jpeg_path = final_path.with_suffix(".jpg")
+            write_render_jpeg(final_path, jpeg_path)
+            branch.update(
+                {
+                    "output_image": str(final_path),
+                    "output_jpeg": str(jpeg_path),
+                    "starless_image": str(starless_path),
+                    "recomposition": fusion,
+                    "recomposed_histogram": analyzer.analyze(final, cpu).report(),
+                    "color_change_from_linear": color_drift(data, final),
+                }
+            )
+            rendered = {"range": branch}
+            star_report["recomposed_visibility"] = {"range": fusion["peak_contrast"]}
             write_star_diagnostic(
                 positive, stars, star_report, stars_diagnostic,
                 row_order=header.get("ROWORDER", "BOTTOM-UP"),
             )
-            comparison_paths = write_render_comparisons(
-                rendered, ghs_dir, source.stem, previous_previews,
-            )
             histogram_path = diagnostics_dir / f"{source.stem}_ghs_histograms.png"
-            histogram_figure(rendered, histogram_path)
+            histogram_figure(branch, histogram_path)
             recomposed_histogram_path = (
                 diagnostics_dir / f"{source.stem}_ghs_histograms_with_stars.png"
             )
-            histogram_figure(rendered, recomposed_histogram_path, with_stars=True)
+            histogram_figure(branch, recomposed_histogram_path, with_stars=True)
             digest = hashlib.sha256()
             with source.open("rb") as stream:
                 for block in iter(lambda: stream.read(1024 * 1024), b""):
@@ -535,7 +521,7 @@ class AutoGHSFinalRenderer(processor):
             result = {
                 "status": (
                     "SUCCESS"
-                    if any(item["status"] == "SUCCESS" for item in rendered.values())
+                    if branch["status"] == "SUCCESS"
                     else "NO_IMPROVEMENT"
                 ),
                 "algorithm": "AutoGHS v1; experimental histogram heuristics",
@@ -545,6 +531,8 @@ class AutoGHSFinalRenderer(processor):
                     ).hexdigest()
                     for module in (
                         "auto_ghs.py",
+                        "ghs_final_stretch.py",
+                        "ghs_log_histogram.py",
                         "final_render.py",
                         "render_exports.py",
                         "star_rendering.py",
@@ -572,15 +560,10 @@ class AutoGHSFinalRenderer(processor):
                     "diagnostic_path": str(stars_diagnostic),
                 },
                 "strategies": rendered,
-                "output_images": outputs,
-                "output_jpegs": jpegs,
-                "output_jpeg": jpegs[strategies[0]],
-                "comparison_paths": comparison_paths,
-                "comparison_previous": {
-                    kind: [strategy for strategy in rendered if strategy in images]
-                    for kind, images in previous_previews.items()
-                },
-                "output_image": outputs[strategies[0]],
+                "output_images": {"range": str(final_path)},
+                "output_jpegs": {"range": str(jpeg_path)},
+                "output_jpeg": str(jpeg_path),
+                "output_image": str(final_path),
                 "histogram_path": str(histogram_path),
                 "histogram_paths": {
                     "starless": str(histogram_path),

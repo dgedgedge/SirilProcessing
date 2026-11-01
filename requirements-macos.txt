@@ -1,0 +1,4 @@
+# Apple Silicon natif ; aucun paquet CUDA. Installer via bin/install_dependances.sh.
+--index-url https://pypi.org/simple
+torch==2.10.0
+onnxruntime==1.26.0

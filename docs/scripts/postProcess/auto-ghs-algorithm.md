@@ -13,8 +13,8 @@ StarNet et de la publication. `ghs_transfer` traite une intensité scalaire,
 `ComputeBackend` sélectionne NumPy/CuPy avant le traitement.
 
 `optimize(data, strategy, args, backend)` reçoit un tableau RGB CPU float32,
-normalisé, sans étoiles ; retourne le tableau étiré et son rapport. Les deux
-stratégies partent de copies indépendantes du même fond linéaire. Le moteur
+normalisé, sans étoiles ; retourne le tableau étiré et son rapport. `strategy`
+vaut toujours `range`, seule recherche disponible. Le moteur
 ne relance ni StarNet ni le rendu stellaire. Les paramètres sont déclarés par
 `add_arguments`, puis résolus par `Config` ; le point d'entrée reste postProcess.
 
@@ -73,7 +73,7 @@ utilisés pour la CDF, les prédictions et les diagnostics d'écrêtage.
 Le pic principal est le maximum de cette courbe. Sa largeur est celle de la
 composante contiguë au-dessus de la **demi-hauteur logarithmique** autour de ce
 maximum. Un pic touchant une limite, vide ou supporté par moins de trois classes
-est ambigu ; la stratégie peak s'arrête sans inventer une largeur optimale.
+est ambigu ; cette indication reste un diagnostic de la forme du pic.
 Les bosses significatives sont les pics d'une proéminence d'au moins 12 % du
 maximum log, espacés d'au moins `bins//128` classes, avec un minimum de deux.
 La rugosité de la pente droite est conservée comme diagnostic.
@@ -109,7 +109,7 @@ Sont rejetés les candidats qui dépassent les budgets d'écrêtage, une médian
 Y de 0,45, l'amplification maximale des proxys bruit/IQR, ou qui créent plus
 d'une bosse significative supplémentaire (avec un seuil minimal de deux).
 Une compression de plus de 20 % de la largeur robuste près de la borne haute
-est également rejetée. Les candidats peak au pic ambigu sont refusés.
+est également rejetée.
 Le meilleur finaliste doit améliorer la largeur retenue de plus de
 `ghs-min-gain` relativement au meilleur état examiné.
 
@@ -121,7 +121,7 @@ marge de classes ni de condition de gain supplémentaire pour appliquer BP.
 Un support positif constant n’est pas annulé. La correction est recalculée
 sur les pixels courants à chaque passage, indépendamment du pic détecté.
 
-Les arrêts normaux sont : distribution constante, pic ambigu, absence de
+Les arrêts normaux sont : distribution constante, absence de
 finaliste admissible ou gain marginal insuffisant, et limite d'itérations.
 Une exception de calcul ne devient jamais un arrêt de convergence.
 
@@ -130,8 +130,7 @@ Une exception de calcul ne devient jamais un arrêt de convergence.
 Après les recherches GHS et avant l’expansion finale de dynamique, une courbe
 CDF globale redistribue les intensités pour réduire leur concentration. L’option
 `--ghs-histogram-strength` vaut 0,7 par défaut : 0 désactive l’opération, 1 applique
-toute la courbe construite. Ce réglage est commun à RANGE et PEAK, qui gardent
-leurs recherches initiales indépendantes.
+toute la courbe construite. Ce réglage intervient après la recherche RANGE.
 
 Les effectifs bruts de luminance sont plafonnés à
 `ghs-histogram-clip * effectif_moyen` (facteur 4 par défaut, de 1 à 16).
@@ -151,15 +150,15 @@ préservée. Cette étape peut aussi amplifier le bruit ; le rapport
 `histogram_balance` conserve les métriques avant/après, le plafond, la force et
 la fraction de pixels dont le gain a été limité par le gamut. L’histogramme
 intermédiaire est enregistré et les encarts rappellent les deux réglages.
-La boucle de dynamique intervient ensuite et la chroma optionnelle termine
-le rendu sans étoiles.
+La boucle de dynamique, la chroma optionnelle et le GHS final de présentation
+interviennent ensuite, avant la recomposition stellaire.
 
 ## Boucle complémentaire d’expansion de la dynamique
 
-Après la recherche RANGE ou PEAK, une seconde boucle vérifie l’étendue réelle
+Après la recherche RANGE, une seconde boucle vérifie l’étendue réelle
 `max(RGB)-min(RGB)` sur tous les pixels et canaux, en unités `[0,1]`. La cible
 `--ghs-dynamic-target` vaut `1.0` par défaut ; `0.8` est également possible.
-Ce critère est distinct de la largeur robuste de RANGE et de celle du pic PEAK.
+Ce critère est distinct de la largeur robuste de RANGE.
 Il mesure les bornes occupées, sans imposer une répartition uniforme ; un pixel
 extrême peut donc suffire à étendre cette mesure.
 
@@ -179,7 +178,7 @@ Il s’agit d’une expansion **linéaire commune** après les GHS, sans nouvell
 recherche D/B/SP et sans écrêtage supérieur volontaire. Les gardes d’amplification
 de bruit de la recherche GHS ne bloquent pas cette phase : elle amplifie aussi
 le bruit présent. Les métriques finales et celles de `post_ghs` permettent de
-comparer ces effets. La chroma éventuelle et la fusion viennent ensuite ; la
+comparer ces effets. La chroma éventuelle, le GHS final et la fusion viennent ensuite ; la
 marge de fusion `ghs-headroom` peut réduire l’étendue du fond dans le rendu étoilé.
 
 Le rapport conserve `iterations` pour les recherches GHS, `blackpoint_iterations`
@@ -197,6 +196,39 @@ C'est une saturation **dans les coordonnées RGB du FITS**, expérimentale,
 non une conversion OKLab, sRGB ou une restitution perceptuelle calibrée.
 Les tests vérifient gris, direction, gamut et diagnostic de chromaticité ;
 le défaut reste `off` en attente de qualification visuelle plus étendue.
+
+<a id="ghs-final-de-presentation"></a>
+
+## GHS final de présentation
+
+Après la recherche principale, l'égalisation, l'expansion et la chroma,
+`GHSOptimizer.final_stretch` délègue au moteur `ProtectedGHSFinalizer`.
+La [recherche finale D/B/SP/HP protégée](ghs-highlight-protection.md) utilise les
+pixels RGB, des régions fixes et une validation complète du fond et de sa fusion.
+Le classement combine contraste diffus, visibilité par rapport au fond et aux
+hautes lumières, bruit et régression robuste de la queue logarithmique.
+Le RMS relatif est pondéré par `--ghs-log-rms-weight 2`,
+la pente par 0,15, et la fenêtre peut s'étendre à 0,875 si le support le permet.
+Le meilleur score admissible est choisi après réévaluation des trois finalistes
+sur tous les pixels. SP est exploré jusqu'à P90 ; LP reste à zéro.
+La page spécialisée définit les régions,
+le score borné d'histogramme et ses cas non mesurables.
+Elle remplace l'application systématique de la courbe finale fixe.
+`--ghs-final-strength` borne D dans `[0,10]` (défaut 1,25 ; zéro désactive).
+Une largeur robuste inférieure ou égale à `1e-7` conserve la distribution.
+
+Le mode comparatif `--ghs-final-mode fixed` utilise B=SP=LP=0 et HP=1.
+Pour le transfert scalaire, avec `a = exp(D) − 1`, sa courbe vaut
+`T(x) = (1 − exp(−a × x))/(1 − exp(−a))` pour D>0, et l'identité pour D=0.
+RGBBlend adapte le résultat lié ; cette formule n'est pas trois transferts RGB
+indépendants. Ce mode fixe n'est pas soumis aux gardes de présentation et peut
+amplifier davantage le bruit et compresser les hautes lumières.
+
+`presentation_stretch` consigne les paramètres et mesures, ainsi que le statut
+`applied`, `disabled`, `constant distribution` ou `no admissible improvement`.
+`chroma_diagnostics` reste mesuré avant cette dernière passe. Celle-ci n'ajoute
+pas d'acceptation à `iterations` : les figures indiquent séparément D/B/SP/HP.
+Les histogrammes et `final` portent sur le fond retenu après cette étape.
 
 ## CPU, CUDA et ressources
 
@@ -227,8 +259,8 @@ linéaire et logarithmique (graduations en puissances de 10). Les classes vides
 sont masquées dans la vue log, sans ajouter de pseudo-effectif ; X reste linéaire.
 Cette présentation est distincte du `log1p` interne utilisé pour analyser les pics.
 
-En mode `both`, les panneaux sont numérotés : 1/2 = RANGE (étendue globale), 3/4 = PEAK
-(pic principal), avec la vue linéaire à gauche et logarithmique à droite.
+Les deux panneaux RANGE sont numérotés : 1 = échelle linéaire à gauche,
+2 = échelle logarithmique à droite. Aucun panneau PEAK n’est calculé.
 Chaque titre indique son objectif et son échelle. Les populations sont séparées
 entre deux PNG : la figure sans étoiles montre l’entrée linéaire, une étape
 intermédiaire et le rendu final (au plus trois courbes par panneau) ; la figure
@@ -236,11 +268,11 @@ avec étoiles montre uniquement le rendu final recomposé (une courbe par pannea
 Chaque figure possède sa légende commune. Ces panneaux ne représentent pas les
 étoiles seules.
 
-Un encart par stratégie rappelle son objectif et résume la boucle GHS : recherches
+Un encart rappelle l’objectif RANGE et résume la boucle GHS : recherches
 ayant évalué des candidats / limite configurée, GHS acceptés, recherches sans
 application, nombre de candidats examinés et corrections du point noir appliquées.
 Il indique la raison d’arrêt et la largeur initiale/finale du critère, avec son
 gain relatif si la largeur initiale est positive. Ces mesures concernent le fond
 avant fusion, y compris sur la figure avec étoiles. Un arrêt avant toute recherche
-(distribution constante ou pic ambigu) compte zéro recherche ; la chroma ne compte
+(distribution constante) compte zéro recherche ; la chroma ne compte
 pas comme une itération GHS. Les données absentes ne sont pas remplacées par zéro.

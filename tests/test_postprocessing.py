@@ -64,6 +64,8 @@ def test_saved_parameters_priorities_and_snapshots(tmp_path: Path) -> None:
     defaults = configured_args(config)
     assert defaults.enable_postprocess is True
     assert defaults.enable_autoghs is True and defaults.compute_backend == "auto"
+    assert defaults.ghs_final_mode == "auto"
+    assert defaults.ghs_highlight_retention == .9
     config.set("enable_postprocess", False)
     assert configured_args(config).enable_postprocess is False
     assert configured_args(config, "--postprocess").enable_postprocess is True
@@ -157,7 +159,7 @@ def test_input_and_output_validation(tmp_path: Path, invalid: str) -> None:
 def test_direct_and_cli_share_calculation_and_exports(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Même configuration : calculs, exports et bandeau initial communs."""
+    """Même configuration sans couleur : exports et bandeau initial communs."""
     import lib.postprocessing as processing
 
     source = tmp_path / "source.fits"
@@ -190,6 +192,7 @@ def test_direct_and_cli_share_calculation_and_exports(
     config_path.write_text(json.dumps({
         "ghs_chroma": "enhanced", "star_faint_boost": 4,
         "compute_backend": "cpu", "gradient_smoothing": 0.6,
+        "enable_final_color": False,
     }))
     config = Config(config_path)
     args = configured_args(config, "--ghs-dynamic-target", "0.8")
@@ -283,3 +286,68 @@ def test_postprocess_cli_owns_and_releases_power_guard(
                                       "--config", str(tmp_path / "settings.json")])
     assert module.main() == expected
     assert events == ["enter", "process", "exit"]
+
+
+def test_autoghs_only_skips_linear_steps_and_quality(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Une reprise avec couleur explicitement désactivée garde exports et annotation."""
+    from lib.final_render import AutoGHSFinalRenderer
+    from lib.quality_preview import QualityMaskPreview
+
+    source = tmp_path / 'linear.fits'
+    rendered = tmp_path / 'rendered.fits'
+    data = np.full((3, 100, 160), .2, dtype='f4')
+    fits.writeto(source, data)
+    fits.writeto(rendered, data, fits.Header({'SPNLIN': True}))
+    original = source.read_bytes()
+    calls = []
+
+    def render(
+        self: AutoGHSFinalRenderer, input_path: Path, output_path: Path,
+        args: argparse.Namespace | None = None,
+    ) -> JSONReport:
+        """Remplace seulement le calcul externe pour vérifier le séquencement."""
+        assert input_path == source
+        calls.append(output_path.name)
+        assert args.enable_autoghs is True
+        return {'status': 'SUCCESS', 'output_image': str(rendered)}
+
+    def forbidden(*args: object, **kwargs: object) -> None:
+        """Échoue si le mode ciblé tente un traitement linéaire ou son aperçu."""
+        raise AssertionError('Traitement linéaire lancé en mode AutoGHS seul')
+
+    monkeypatch.setattr(AutoGHSFinalRenderer, 'post_process', render)
+    for treatment in _PostProcessorSequence.default_processors():
+        if treatment is not AutoGHSFinalRenderer:
+            monkeypatch.setattr(treatment, 'post_process', forbidden)
+    monkeypatch.setattr(QualityMaskPreview, 'ensure_for_run', forbidden)
+    monkeypatch.setattr(QualityMaskPreview, 'write_gradient_points', forbidden)
+    (tmp_path / 'run.json').write_text(json.dumps(
+        {'autoghs': {'image_path': str(source)}}))
+    args = argparse.Namespace(autoghs_only=True, enable_autoghs=False,
+                              enable_final_color=False, final_color_explicit=True)
+    result = PostProcessingProcessor().post_process(source, tmp_path / 'run.json', args)
+    assert calls == ['05_autoghs.json']
+    assert set(result['treatments']) == {'autoghs', 'annotation'}
+    assert Path(result['output_annotated_image']).is_file()
+    assert result['quality_preview_path'] is None
+    assert source.read_bytes() == original
+    assert args.enable_autoghs is False
+
+
+def test_autoghs_only_not_persisted_and_final_options_persisted(tmp_path: Path) -> None:
+    """Une relance ciblée ne change pas le mode des exécutions suivantes."""
+    config = Config(tmp_path / 'settings.json')
+    args = configured_args(config, '--autoghs-only', '--ghs-final-mode', 'fixed',
+                           '--ghs-highlight-retention', '0.95', '-S')
+    config.bind_parameters(args)
+    assert PostProcessingProcessor()._get_args().autoghs_only is True
+    assert config.save_requested(args)
+    saved = json.loads(Path(config.config_file).read_text())
+    assert 'autoghs_only' not in saved
+    assert saved['ghs_final_mode'] == 'fixed'
+    assert saved['ghs_highlight_retention'] == .95
+    restored = configured_args(config)
+    assert restored.autoghs_only is False
+    assert restored.ghs_final_mode == 'fixed'

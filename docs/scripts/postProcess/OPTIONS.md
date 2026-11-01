@@ -21,14 +21,14 @@ traitements peuvent donc être remplacés par une configuration sauvegardée.
 | `-l`, `--log-level` | `INFO` par défaut ; aussi `DEBUG`, `WARNING`, `ERROR`, `CRITICAL` |
 
 `-S` mémorise les paramètres Siril, les activations/désactivations et les réglages
-rémanents des **cinq traitements**, y compris ceux désactivés. Les clés déjà
+rémanents des traitements, y compris ceux désactivés. Les clés déjà
 présentes concernant d’autres traitements sont conservées. Sans `-S`, aucune
 écriture du fichier de configuration n’est effectuée.
 
 Restent propres à l’exécution : les chemins d’entrée et de rapport, le niveau
 de journalisation, `--gradient-output`, `--photometry-object`,
 `--photometry-coordinates`, `--photometry-force`, `--photometry-output` et
-`--deconvolution-output`. Ces paramètres ne sont pas mémorisés par `-S`.
+`--deconvolution-output`, `--autoghs-only` et `--color-only`. Ces paramètres ne sont pas mémorisés par `-S`.
 Les anciens noms `--photometry-siril-path` et `--photometry-siril-mode` sont des
 alias des réglages Siril communs.
 
@@ -55,14 +55,50 @@ désactivation explicite, même avec des poids présents.
 
 ## 2. Choix du calcul CPU/GPU
 
-`--compute-backend auto|cpu|cuda` s'applique aux moteurs de postProcess et se
+`--compute-backend auto|cpu` s'applique aux moteurs de postProcess et se
 sauvegarde avec `-S`. Le défaut `auto` choisit l'accélérateur disponible pour
-chaque moteur, CPU sinon, avant calcul. Les options propres aux moteurs restent
+chaque moteur, CPU sinon avec un WARNING indiquant la cause, avant calcul.
+L'ancien choix global `cuda` est converti en `auto` avec avertissement.
+Les options propres aux moteurs restent
 des surcharges explicites, y compris dans les anciens JSON. Voir la
 [politique commune, ses priorités et ses limites](compute-backend.md).
+Sur Apple Silicon, `auto` sélectionne MPS pour Cosmic Clarity et CoreML pour
+GraXpert lorsqu'ils sont utilisables. `--cosmic-device mps` force ce seul moteur ;
+AutoGHS et la saturation restent sur CPU. Voir [le guide Mac](../install_macos/README.md).
 
 <a id="options-des-traitements"></a>
 
 ## 3. Options des traitements
 
 Les tableaux des sections suivantes décrivent les options de chaque étape. Les références spécialisées complètent celles de [GraXpert](graxpert.md#paramètres), [AutoGHS](auto-ghs.md#paramètres) et de la [politique CPU/GPU](compute-backend.md).
+
+AutoGHS recherche par défaut un renforcement final protégé
+(`--ghs-final-mode auto`), avec D borné par `--ghs-final-strength 1.25`,
+avant recomposition. `--ghs-final-strength 0` le désactive.
+Cette option est rémanente avec `-S` et commune à postProcess et à lightProcess.
+
+## Annotation finale
+
+| Option | Défaut | Rôle |
+|---|---|---|
+| `--final-annotation` / `--no-final-annotation` | activé | [Copie PNG avec encart de prise de vue](annotations.md), après le rendu final |
+
+Les options `--annotation-objects` / `--no-annotation-objects` (actif),
+`--annotation-magnitude` (14, entre 0 et 25) et `--annotation-max-objects`
+(40, entre 0 et 200) règlent les noms astronomiques. Elles sont mémorisables
+avec `-S` ; les détails figurent dans [Annotation finale](annotations.md).
+
+## Relance AutoGHS et protection des hautes lumières
+
+| Option | Défaut | Rôle |
+|---|---|---|
+| `--autoghs-only` | désactivé | Reprendre à StarNet/AutoGHS, puis saturation, exports et annotation ; saturation activée pour cet appel sauf `--disable-final-color` explicite ; non mémorisable |
+| `--color-only` | désactivé | Reprendre seulement la couleur, la fusion et les exports sur les couches GHS existantes ; non mémorisable |
+| `--enable-final-color` / `--disable-final-color` | activé | Activer/désactiver la [couleur finale adaptative](final-color.md) après GHS ; mémorisable avec `-S` |
+| `--final-color-strength` | `3.0` | Excès de gain chromatique maximal, dans `[0,3]` ; 0 redonne le rendu GHS sans renforcement ; mémorisable |
+| `--ghs-final-mode` | `auto` | Recherche D/B/SP/HP protégée ; `fixed` pour comparer l'ancienne courbe |
+| `--ghs-highlight-retention` | `0.9` | Conservation minimale des indicateurs de contraste brillant, dans `]0,1]` |
+| `--ghs-log-rms-weight` | `2.0` | Poids du gain relatif de régularité de la queue log ; `[0,10]`, zéro désactive ce terme ; mémorisable avec `-S` |
+
+Voir [le mode de relance](README.md#relance-autoghs-seul) et
+[la méthode de protection](ghs-highlight-protection.md).

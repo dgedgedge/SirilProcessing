@@ -71,4 +71,9 @@ Public License, version 3 (GPLv3)**. Le texte intégral figure dans le fichier
 Les composants tiers et les poids des modèles conservent leurs licences
 respectives, précisées notamment dans les guides
 [Cosmic Clarity](docs/scripts/postProcess/cosmic-clarity.md) et
-[GraXpert](docs/scripts/postProcess/graxpert.md).
+[GraXpert](docs/scripts/postProcess/graxpert.md). Le catalogue
+[OpenNGC](data/openngc/README.md), utilisé pour les annotations, reste sous
+licence CC BY-SA 4.0.
+
+L'[inventaire des outils, données tierces et licences](docs/THIRD_PARTY.md)
+précise les composants livrés dans le dépôt et ceux installés séparément.

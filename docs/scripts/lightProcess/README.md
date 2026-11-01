@@ -43,10 +43,10 @@ le JSON reste prioritaire sur le défaut ; `--postprocess` permet de l’annuler
 Voir le [pipeline commun](../postProcess/pipeline.md)
 et les [contrôles de qualité](../postProcess/quality.md).
 
-Le lanceur utilise Python et pip du système pour créer le venv sans pip et
-mettre à jour ses dépendances avant chaque exécution. Il lance ensuite le
-Python du venv. La sélection de l’environnement, les prérequis et l’exécution
-sans mise à jour sont décrits dans [Installation](../../INSTALLATION.md).
+Le lanceur utilise le Python du venv existant sans installer ni mettre à jour
+les dépendances, y compris avec `--help`. La sélection suit `VENV_DIR`, `.venv`,
+puis `venv`. Si l’environnement manque, il indique la commande d’installation.
+Voir [Installation](../../INSTALLATION.md) pour préparer les prérequis.
 
 Les classes des traitements sont enregistrées avant le parsing. Les valeurs
 résolues sont ensuite liées aux classes avant la création des instances, y

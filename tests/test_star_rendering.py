@@ -177,3 +177,66 @@ def test_invalid_histogram_strength(strength: float) -> None:
         ConservativeStarRenderer.render(
             np.full((3, 8, 8), 0.1), histogram_strength=strength,
         )
+
+
+def width_limited_star() -> np.ndarray:
+    """Construit une étoile brillante dont le renforcement élargit le profil."""
+    y, x = np.indices((80, 80))
+    light = 0.8 * np.exp(-((x - 25.3) ** 2 + (y - 25.7) ** 2) / 4)
+    return np.array([light, 0.7 * light, 0.4 * light], dtype=np.float32)
+
+
+def test_first_admissible_base_boost_is_selected() -> None:
+    """S'arrêter à 2 après les rejets 5/4/3, en préservant source et couleurs."""
+    data = width_limited_star()
+    original = data.copy()
+    rendered, report = ConservativeStarRenderer.render(
+        data, max_width_ratio=1.4, histogram_strength=0,
+    )
+    iterations = report['width_adaptation']['iterations']
+    assert [item['faint_boost'] for item in iterations] == [5, 4, 3, 2]
+    assert [item['accepted'] for item in iterations] == [False, False, False, True]
+    assert report['requested_faint_boost'] == 5
+    assert report['faint_boost'] == 2
+    assert report['fwhm']['median_ratio'] == pytest.approx(1.31525, abs=1e-4)
+    assert report['width_adaptation']['stop_reason'] == 'width limited'
+    reference, _ = ConservativeStarRenderer.render(
+        data, faint_boost=2, max_width_ratio=1.4, histogram_strength=0,
+    )
+    np.testing.assert_array_equal(rendered, reference)
+    np.testing.assert_array_equal(data, original)
+    np.testing.assert_array_equal(rendered > 0, data > 0)
+    np.testing.assert_allclose(rendered[1], 0.7 * rendered[0], atol=1e-7)
+    assert rendered.max() <= 0.85
+
+
+def test_admissible_requested_boost_is_unchanged() -> None:
+    """Ne pas essayer de force inférieure lorsque la première satisfait la garde."""
+    _, report = ConservativeStarRenderer.render(width_limited_star())
+    assert report['faint_boost'] == report['requested_faint_boost'] == 5
+    assert len(report['width_adaptation']['iterations']) == 1
+    assert report['width_adaptation']['stop_reason'] == 'requested boost'
+
+
+@pytest.mark.parametrize('boost, attempts', [(5, 5), (1.4, 2), (1, 1), (10, 10)])
+def test_no_admissible_boost_fails_with_bounded_diagnostics(
+    boost: float, attempts: int,
+) -> None:
+    """Inclure le gain minimal et les mesures dans une erreur bornée et explicite."""
+    with pytest.raises(ValueError) as failure:
+        ConservativeStarRenderer.render(
+            width_limited_star(), faint_boost=boost,
+            max_width_ratio=1, histogram_strength=0,
+        )
+    message = str(failure.value)
+    assert f'après {attempts} essai(s)' in message
+    assert f'gain {boost:g} : ratio' in message
+    assert 'gain 1 : ratio 1.113038' in message
+
+
+def test_unmeasurable_width_remains_explicit() -> None:
+    """Ne pas inventer de mesure ou de validation sur un champ constant."""
+    _, report = ConservativeStarRenderer.render(np.zeros((3, 20, 20)))
+    assert report['fwhm']['median_ratio'] is None
+    assert report['width_adaptation']['stop_reason'] == 'unmeasurable width'
+    assert len(report['width_adaptation']['iterations']) == 1

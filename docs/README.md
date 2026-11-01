@@ -48,3 +48,4 @@ restent dans les rubriques des scripts concernés.
 - [Exécuter les tests et connaître leur portée](../tests/README.md).
 - [Construire et publier les trois formats](scripts/generate_docs_html/README.md).
 - [Licence GNU GPL version 3 du projet](../README.md#licence).
+- [Outils, données tierces et licences](THIRD_PARTY.md).

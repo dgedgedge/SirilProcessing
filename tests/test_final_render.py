@@ -1,4 +1,4 @@
-"""Contrat both, publication complète, config persistante et erreurs sans reprise."""
+"""Rendu RANGE unique, publication complète, configuration et erreurs sans reprise."""
 
 import argparse
 import configparser
@@ -65,10 +65,10 @@ def fake_separation(monkeypatch):
 
 
 @pytest.mark.parametrize("chroma", ["off", "balanced", "enhanced"])
-def test_both_contract_and_published_artifacts(
+def test_single_range_contract_and_published_artifacts(
     linear_rgb: Path, fake_separation, tmp_path: Path, monkeypatch, chroma: str
 ) -> None:
-    """Une séparation, un rendu stellaire, deux fonds et deux fusions effectives."""
+    """Une séparation, un rendu stellaire, un fond RANGE et une seule fusion effective."""
     import lib.final_render as module
 
     original = linear_rgb.read_bytes()
@@ -81,10 +81,10 @@ def test_both_contract_and_published_artifacts(
         render_calls.append(1)
         return real_render(*args, **kwargs)
 
-    def optimize(self, data, strategy, *args):
-        """Vérifie que les deux fonds partent des mêmes pixels."""
+    def optimize(self, data, strategy, *args, **kwargs):
+        """Capture le seul appel d’optimisation du fond."""
         optimize_calls.append((strategy, data.copy()))
-        return real_optimize(self, data, strategy, *args)
+        return real_optimize(self, data, strategy, *args, **kwargs)
 
     def fusion(background, stars, *args):
         """Conserve l'identité de la couche d'étoiles effectivement incorporée."""
@@ -102,20 +102,18 @@ def test_both_contract_and_published_artifacts(
         ),
     )
     assert len(fake_separation) == len(render_calls) == 1
-    assert [call[0] for call in optimize_calls] == ["range", "peak"]
-    np.testing.assert_array_equal(optimize_calls[0][1], optimize_calls[1][1])
-    assert len(fusion_calls) == 2 and fusion_calls[0] is fusion_calls[1]
-    assert set(result["output_images"]) == {"range", "peak"}
-    assert set(result["output_jpegs"]) == {"range", "peak"}
+    assert [call[0] for call in optimize_calls] == ["range"]
+    assert len(fusion_calls) == 1
+    assert set(result["output_images"]) == {"range"}
+    assert set(result["output_jpegs"]) == {"range"}
     assert result["output_jpeg"] == result["output_jpegs"]["range"]
     from PIL import Image
     for path in result["output_jpegs"].values():
         with Image.open(path) as image:
             assert image.format == "JPEG" and image.size == (48, 48)
-    assert set(result["comparison_paths"]) == {"starless", "with_stars"}
-    assert all(Path(path).parent == tmp_path / "05_autoghs_work/003_ghs"
-               and Path(path).is_file() for path in result["comparison_paths"].values())
-    assert result["comparison_previous"] == {"starless": [], "with_stars": []}
+    assert "comparison_paths" not in result and "comparison_previous" not in result
+    assert not list((tmp_path / "05_autoghs_work").rglob("*comparison*"))
+    assert not list((tmp_path / "05_autoghs_work").rglob("*peak*"))
     assert result["histogram_paths"]["starless"] == result["histogram_path"]
     assert len(set(result["histogram_paths"].values())) == 2
     assert all(Path(path).is_file() for path in result["histogram_paths"].values())
@@ -131,7 +129,14 @@ def test_both_contract_and_published_artifacts(
     assert Path(result["stars"]["diagnostic_path"]).is_file()
     assert Path(result["stars"]["output_jpeg"]).is_file()
     assert result["parameters"]["star_histogram_strength"] == 0.8
+    assert result["parameters"]["ghs_final_strength"] == 1.25
     for strategy, path in result["output_images"].items():
+        presentation = result["strategies"][strategy]["presentation_stretch"]
+        assert presentation["mode"] == "auto"
+        assert presentation["status"] in ("applied", "no admissible improvement")
+        assert 0 <= presentation["parameters"]["D"] <= 1.25
+        if presentation["status"] == "applied":
+            assert presentation["full_validation"][presentation["selected_validation"]]["rejections"] == []
         final = fits.getdata(path)
         background = fits.getdata(result["strategies"][strategy]["starless_image"])
         np.testing.assert_allclose(
@@ -149,7 +154,9 @@ def test_both_contract_and_published_artifacts(
     assert json.loads((tmp_path / "05_autoghs.json").read_text()) == result
 
 
-@pytest.mark.parametrize("failure", ["separation", "optimize", "fusion", "publication"])
+@pytest.mark.parametrize(
+    "failure", ["separation", "optimize", "final_stretch", "fusion", "publication"],
+)
 def test_failure_publishes_nothing(
     linear_rgb: Path, fake_separation, tmp_path: Path, monkeypatch, failure: str
 ) -> None:
@@ -164,6 +171,8 @@ def test_failure_publishes_nothing(
         monkeypatch.setattr(StarNetSeparator, "post_process", fail)
     elif failure == "optimize":
         monkeypatch.setattr(GHSOptimizer, "optimize", fail)
+    elif failure == "final_stretch":
+        monkeypatch.setattr(GHSOptimizer, "final_stretch", fail)
     elif failure == "fusion":
         monkeypatch.setattr(module, "recompose", fail)
     else:
@@ -239,10 +248,10 @@ def test_invalid_residual_tolerance_is_rejected(tolerance: float) -> None:
         AutoGHSFinalRenderer.compensate_residual(data, data * 0, tolerance)
 
 
-def test_both_renderings_survive_local_starnet_overshoot(
+def test_range_rendering_survives_local_starnet_overshoot(
     linear_rgb: Path, fake_separation, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """La correction rejoint les deux GHS, les exports et les diagnostics réels."""
+    """La correction rejoint le GHS RANGE, les exports et les diagnostics réels."""
     separate = StarNetSeparator.post_process
 
     def with_overshoot(
@@ -264,7 +273,7 @@ def test_both_renderings_survive_local_starnet_overshoot(
     )
     assert result["status"] in ("SUCCESS", "NO_IMPROVEMENT")
     assert result["residual_compensation"]["tolerance_exceeded"]
-    assert set(result["output_images"]) == {"range", "peak"}
+    assert set(result["output_images"]) == {"range"}
     assert all(Path(path).is_file() for path in result["output_jpegs"].values())
 
 
@@ -288,6 +297,10 @@ def test_configuration_persistence_precedence_and_instance_snapshot(
             "0.8",
             "--ghs-histogram-strength",
             "0.7",
+            "--ghs-final-strength",
+            "1.0",
+            "--ghs-log-rms-weight",
+            "3.0",
             "--star-faint-boost",
             "4",
             "--star-histogram-strength",
@@ -301,26 +314,35 @@ def test_configuration_persistence_precedence_and_instance_snapshot(
     assert config.save_requested(args)
     saved = json.loads(path.read_text())
     assert saved["starnet_path"] == str(tmp_path / "starnet++")
-    assert saved["enable_autoghs"] and saved["ghs_strategy"] == "peak"
+    assert saved["enable_autoghs"] and saved["ghs_strategy"] == "range"
     assert saved["ghs_dynamic_target"] == 0.8
     assert saved["ghs_histogram_strength"] == 0.7
+    assert saved["ghs_final_strength"] == 1.0
+    assert saved["ghs_log_rms_weight"] == 3.0
     assert saved["star_faint_boost"] == 4
     assert saved["star_histogram_strength"] == 0.6
     parser = argparse.ArgumentParser()
     config.register(_PostProcessorSequence, parser)
-    assert parser.parse_args([]).ghs_strategy == "peak"
+    assert parser.parse_args([]).ghs_strategy == "range"
     assert parser.parse_args([]).ghs_dynamic_target == 0.8
     assert parser.parse_args([]).ghs_histogram_strength == 0.7
+    assert parser.parse_args([]).ghs_final_strength == 1.0
+    assert parser.parse_args([]).ghs_log_rms_weight == 3.0
     assert parser.parse_args([]).star_faint_boost == 4
     assert parser.parse_args([]).star_histogram_strength == 0.6
     updated = config.parse_args(
         parser, ["--ghs-strategy", "range", "--starnet-path", "/other/starnet++",
-                 "--ghs-dynamic-target", "0.9"]
+                 "--ghs-dynamic-target", "0.9", "--ghs-final-strength", "1.25",
+                 "--ghs-log-rms-weight", "1.0"]
     )
     assert updated.ghs_strategy == "range"
     assert updated.ghs_dynamic_target == 0.9
+    assert updated.ghs_final_strength == 1.25
+    assert updated.ghs_log_rms_weight == 1.0
     assert renderer._get_args().ghs_dynamic_target == 0.8
-    assert renderer._get_args().ghs_strategy == "peak"
+    assert renderer._get_args().ghs_strategy == "range"
+    assert renderer._get_args().ghs_final_strength == 1.0
+    assert renderer._get_args().ghs_log_rms_weight == 3.0
     assert json.loads(path.read_text()) == saved
 
 
@@ -372,37 +394,6 @@ def test_disabled_stage_preserves_existing_pipeline(
         linear_rgb, tmp_path / "all.json", args
     )
     assert result == {}
-
-
-def test_second_branch_failure_never_publishes_first(
-    linear_rgb: Path, fake_separation, tmp_path: Path, monkeypatch
-) -> None:
-    """Une panne au second rendu conserve le premier FITS avec un rapport ERROR."""
-    import lib.final_render as module
-
-    real_fusion = module.recompose
-    calls = []
-
-    def fusion(*args, **kwargs):
-        """Échoue après une première recomposition entièrement calculée."""
-        calls.append(1)
-        if len(calls) == 2:
-            raise OSError("second branch disk failure")
-        return real_fusion(*args, **kwargs)
-
-    monkeypatch.setattr(module, "recompose", fusion)
-    with pytest.raises(OSError, match="second branch"):
-        AutoGHSFinalRenderer().post_process(
-            linear_rgb,
-            tmp_path / "05_autoghs.json",
-            argparse.Namespace(
-                compute_backend="cpu", ghs_bins=256, ghs_max_iterations=1
-            ),
-        )
-    assert len(calls) == 2
-    assert json.loads((tmp_path / "05_autoghs.json").read_text())["status"] == "ERROR"
-    assert len(list((tmp_path / "05_autoghs_work/004_recomposition").glob("*.fits"))) == 1
-    assert not list(tmp_path.glob("05_autoghs_render_*"))
 
 
 @pytest.mark.parametrize("header", [{"SPNLIN": True}, {"HISTORY": "GHS (pivot: 0.1)"}])
@@ -477,9 +468,8 @@ def test_histogram_figure_uses_real_log_axis(
         assert left.get_xlim() == right.get_xlim() == (0, 1)
         assert left.get_title() == "1. RANGE — étendue globale\nEffectifs en échelle linéaire"
         assert right.get_title() == "2. RANGE — étendue globale\nEffectifs en échelle logarithmique"
-        assert figure.axes[2].get_title() == "3. PEAK — pic principal\nEffectifs en échelle linéaire"
-        assert figure.axes[3].get_title() == "4. PEAK — pic principal\nEffectifs en échelle logarithmique"
-        assert len({axis.get_title() for axis in figure.axes[:4]}) == 4
+        assert len(figure.axes) == 3
+        assert not figure.axes[2].axison
         assert left.get_legend() is None and right.get_legend() is None
         assert len(figure.legends) == 1
         assert right.get_legend_handles_labels()[1] == [
@@ -503,18 +493,16 @@ def test_histogram_figure_uses_real_log_axis(
     monkeypatch.setattr(Figure, 'savefig', capture)
     destination = tmp_path / "histograms.png"
     histogram_figure(
-        {strategy: {"histograms": [{"counts": counts}],
-                    "recomposed_histogram": {"counts": [2 * count for count in counts]}}
-         for strategy in ("range", "peak")},
+        {"histograms": [{"counts": counts}],
+         "recomposed_histogram": {"counts": [2 * count for count in counts]}},
         destination, with_stars=with_stars,
     )
     assert captured == [True] and destination.stat().st_size > 0
 
 
-@pytest.mark.parametrize("strategy", ["range", "peak"])
-def test_strategy_annotation_counts_searches_and_applications(strategy: str) -> None:
+def test_ghs_annotation_counts_searches_and_applications() -> None:
     """Distingue recherches, applications, candidats et BP sans compter la chroma."""
-    from lib.final_render import strategy_annotation
+    from lib.final_render import ghs_annotation
 
     report = {
         "iterations": [
@@ -527,27 +515,33 @@ def test_strategy_annotation_counts_searches_and_applications(strategy: str) -> 
         "initial": {"range_width": 0.01, "peak_width": 0.02},
         "final": {"range_width": 0.02, "peak_width": 0.04},
     }
-    text = strategy_annotation(strategy, report)
+    text = ghs_annotation(report)
     for expected in ["Recherches effectuées : 3 / 8", "GHS appliqués : 2",
                      "Recherches sans application : 1", "Candidats examinés : 6",
                      "Corrections du point noir : 1", "+100.0 %"]:
         assert expected in text
     assert "aucune amélioration admissible" in text
-    assert ("quantiles" if strategy == "range" else "demi-hauteur") in text
+    assert "quantiles" in text
     report["iterations"] = []
     report["stop_reason"] = "constant distribution"
-    assert "Recherches effectuées : 0 / 8" in strategy_annotation(strategy, report)
-    assert "distribution constante" in strategy_annotation(strategy, report)
-    assert "non renseignées" in strategy_annotation(strategy, {})
+    assert "Recherches effectuées : 0 / 8" in ghs_annotation(report)
+    assert "distribution constante" in ghs_annotation(report)
+    assert "non renseignées" in ghs_annotation({})
     report["dynamic_range"] = {
         "iterations": [{"BP": 0.01}, {"BP": 0.002}], "max_iterations": 32,
         "initial_width": 0.12, "final_width": 0.8, "target": 0.8,
         "target_reached": True, "stop_reason": "target reached",
     }
     report["histogram_balance"] = {"strength": 0.5, "clip_limit": 4}
-    annotated = strategy_annotation(strategy, report)
+    annotated = ghs_annotation(report)
     assert "ÉGALISATION PARTIELLE" in annotated
     assert "Force : 0.50 — plafond : 4.0" in annotated
+    report["presentation_stretch"] = {
+        "parameters": {"D": 1.25}, "status": "applied",
+    }
+    final_annotation = ghs_annotation(report)
+    assert "GHS FINAL — SANS ÉTOILES" in final_annotation
+    assert "D : 1.25 — appliqué" in final_annotation
     for expected in ["BOUCLE D’EXPANSION RGB", "Passages : 2 / 32",
                      "0.120 → 0.800", "Cible : 0.80 — atteinte"]:
         assert expected in annotated
@@ -567,10 +561,19 @@ def test_ordered_autoghs_directory_is_reset_on_rerun(
     first = renderer.post_process(linear_rgb, report, args)
     stale = tmp_path / "05_autoghs_work/obsolete.fits"
     stale.write_bytes(b"obsolete")
+    work = tmp_path / "05_autoghs_work"
+    (work / "003_ghs/linear_starless_ghs_peak.fits").write_bytes(b"obsolete")
+    (work / "003_ghs/linear_ghs_comparison_starless.png").write_bytes(b"obsolete")
+    (work / "004_recomposition/linear_render_peak.fits").write_bytes(b"obsolete")
+    (work / "004_recomposition/linear_render_peak.jpg").write_bytes(b"obsolete")
+    legacy = json.loads(report.read_text())
+    legacy["strategies"]["peak"] = dict(legacy["strategies"]["range"])
+    report.write_text(json.dumps(legacy))
     second = renderer.post_process(linear_rgb, report, args)
     assert first["output_images"] == second["output_images"]
-    assert second["comparison_previous"] == {"starless": ["range"], "with_stars": ["range"]}
-    assert all(Path(path).is_file() for path in second["comparison_paths"].values())
+    assert "comparison_previous" not in second and "comparison_paths" not in second
+    assert not list((tmp_path / "05_autoghs_work").rglob("*peak*"))
+    assert not list((tmp_path / "05_autoghs_work").rglob("*comparison*"))
     assert not stale.exists()
     assert len(fake_separation) == 2
     assert sorted(path.name for path in tmp_path.iterdir()) == [
@@ -582,3 +585,12 @@ def test_ordered_autoghs_directory_is_reset_on_rerun(
     with pytest.raises(ValueError, match="réinitialisé"):
         renderer.post_process(source, report, args)
     assert source.read_bytes() == before
+
+
+def test_starless_overshoot_cannot_hide_invalid_reconstructed_source() -> None:
+    """Refuser une décomposition dont la somme est réellement hors domaine."""
+    background = np.full((3, 8, 8), 1.00004, dtype=np.float32)
+    with pytest.raises(ValueError, match=r'\[0, 1\]'):
+        AutoGHSFinalRenderer.compensate_residual(
+            background, np.zeros_like(background), .005,
+        )

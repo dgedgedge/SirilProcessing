@@ -2,7 +2,17 @@
 
 [Documentation](README.md)
 
-Les lanceurs actuels ciblent Linux avec Bash. L’installation comprend les
+Les lanceurs de traitement utilisent Bash sous Linux et macOS Apple Silicon.
+La [commande commune d'installation](scripts/install_dependances/README.md)
+détecte la plateforme : `./bin/install_dependances.sh`. Ajouter `--test` pour
+vérifier sans installer, ou `--reset` pour recréer complètement le venv.
+Les modèles Cosmic Clarity et GraXpert sont préchargés par défaut ; `--assets-only`
+permet de les préparer dans un venv existant. Ajouter `--with-gaia` pour l'extrait
+Gaia astrométrique facultatif (1,14 Go à télécharger, 1,52 Go installé).
+GraXpert nécessite un cache vérifié ou son application officielle pour acquérir
+un modèle absent. Le catalogue spectral Gaia SPCC n'est pas inclus.
+Le [guide Mac MPS/CoreML](scripts/install_macos/README.md) détaille les limites
+de validation et les logiciels natifs requis. L’installation comprend les
 paquets Python du projet et les logiciels astronomiques externes. **Installer
 les dépendances Python n’installe ni Siril, ni StarNet, ni l’application GraXpert.**
 
@@ -16,13 +26,13 @@ les dépendances Python n’installe ni Siril, ni StarNet, ni l’application Gr
 | Python 3, `venv` et pip système | Tous les lanceurs | Gestionnaire de paquets du système ; pip doit prendre en charge `--python` |
 | Siril 1.4.x | Calibration, alignement, stacking, photométrie et contrôles de restauration | Logiciel externe ; modes Flatpak, natif ou AppImage |
 | StarNet++ V2 historique et son modèle | Séparation des étoiles pour AutoGHS, actif par défaut | Archive CLI externe, puis chemin configuré dans Siril ou avec `--starnet-path` |
-| ONNX Runtime et poids GraXpert 3.0.2 | Moteur de débruitage GraXpert, facultatif | `--install-graxpert` pour le runtime CPU ; poids importés ou acquis séparément |
+| ONNX Runtime et poids GraXpert 3.0.2 | Moteur de débruitage GraXpert, facultatif | `install_dependances.sh` pour le runtime adapté et les poids |
 | Application GraXpert | Acquisition des poids manquants uniquement | Logiciel externe, inutile si un modèle local conforme est déjà présent |
-| PyTorch et poids Cosmic Clarity | Moteurs de netteté et débruitage Cosmic Clarity | `--install-cosmic-clarity` pour les dépendances optionnelles et les poids |
+| PyTorch et poids Cosmic Clarity | Moteurs de netteté et débruitage Cosmic Clarity | `install_dependances.sh` pour les dépendances et les poids |
 | CuPy ou fournisseur ONNX GPU | Accélération AutoGHS ou GraXpert | Dépendances GPU distinctes ; le calcul CPU reste disponible |
 | Tkinter | Interfaces graphiques des visualiseurs | Paquet système, par exemple `python3-tk` sous Debian/Ubuntu |
 | MkDocs, Playwright et Chromium | Construction du site, du HTML autonome et du PDF | `requirements-docs.txt`, puis navigateur Chromium séparément |
-| `dbus-python` et services d’énergie Linux | PowerGuard, facultatif | `requirements-power.txt` ; l’absence de ces services ne bloque pas le calcul |
+| `dbus-python` et services d’énergie Linux | PowerGuard | `requirements-power.txt` installé automatiquement sous Linux ; l’absence des services ne bloque pas le calcul |
 
 Siril reste nécessaire même si les réseaux GraXpert ou Cosmic Clarity sont
 utilisés : les mesures et contrôles stellaires passent aussi par Siril.
@@ -33,33 +43,36 @@ pas besoin de Siril, StarNet ou des modèles de traitement.
 
 ## 2. Environnement Python et lanceurs
 
-Les lanceurs `.sh` utilisent Python et pip **du système** pour créer et mettre
-à jour leur environnement virtuel, puis exécutent les scripts avec le Python
-de cet environnement. Ils ne nécessitent pas pip dans le venv.
+Les lanceurs de traitement et de visualisation utilisent
+uniquement le **venv déjà installé**. Ils ne créent aucun environnement et
+n’installent ni ne mettent à jour ses dépendances. L’aide `--help` ne déclenche
+aucune opération pip.
 
-Depuis la racine du projet :
+Le lanceur documentaire `build_docs.sh` prépare en revanche automatiquement son
+venv, met à jour `requirements-docs.txt` et installe Chromium. Ce parcours de
+construction peut nécessiter Internet, y compris avec `--help`. Voir le
+[guide documentaire](scripts/generate_docs_html/README.md) pour un appel direct
+sans préparation automatique.
+
+Préparer les dépendances séparément, puis lancer le traitement :
 
 ```bash
+./bin/install_dependances.sh
 ./bin/lightProcess.sh /chemin/vers/la/session
+./bin/postProcess.sh --help
 ```
 
 Le module partagé `bin/venv_helpers.sh` sélectionne `VENV_DIR` s’il est défini,
-sinon `.venv`, puis `venv` lorsqu’il existe déjà. Sans environnement existant,
-il crée `.venv`. Il utilise `python3` pour retrouver l’interpréteur système,
-même lorsqu’un venv est activé dans le terminal, puis effectue l’équivalent de :
+sinon `.venv`, puis le dossier historique `venv`. Le venv activé dans le terminal
+ne remplace pas cette sélection. Si le Python choisi manque ou n’est pas
+exécutable, le lanceur s’arrête et affiche la commande d’installation ciblant
+cet environnement. Aucun venv n’est créé implicitement.
 
-```bash
-python3 -m venv --without-pip .venv
-python3 -m pip --python .venv/bin/python install --upgrade -r requirements.txt
-```
-
-Ces commandes manuelles supposent un terminal sans venv activé. Le Python
-système doit fournir les modules `venv` et `pip` avec prise en charge de
-`--python` (pip 22.3 ou plus récent). Un échec de création ou d’installation
-interrompt le lanceur. Les paquets système ne sont pas modifiés.
-
-Chaque lancement vérifie les mises à jour et peut nécessiter Internet, y compris
-avec `--help`. Pour exécuter sans mise à jour, appeler directement le script :
+L’[installeur commun](scripts/install_dependances/README.md) assure la préparation
+Linux CUDA ou Mac, les mises à jour et le préchargement des modèles. Les
+traitements peuvent encore avoir besoin du réseau pour une ressource absente
+ou un service astronomique distant ; le choix du venv n’utilise pas le réseau.
+On peut aussi appeler directement le Python du venv :
 
 ```bash
 .venv/bin/python bin/postProcess.py --help
@@ -67,7 +80,7 @@ avec `--help`. Pour exécuter sans mise à jour, appeler directement le script :
 ```
 
 `requirements.txt` inclut les traitements, les visualiseurs, la documentation
-HTML/PDF et les tests. Les lanceurs KStars et guide logs utilisent seulement
+HTML/PDF et les tests. Pour une installation limitée aux visualiseurs KStars et guide logs, utiliser
 `requirements-analyze.txt`. Le fichier `requirements-docs.txt` permet une
 installation documentaire seule, avec MkDocs et Playwright. Chromium est installé
 séparément pour les exports HTML/PDF ; voir le [guide documentaire](scripts/generate_docs_html/README.md).
@@ -147,16 +160,16 @@ Le moteur du projet utilise **ONNX Runtime et les poids GraXpert 3.0.2**.
 L’application GraXpert sert seulement à acquérir un modèle absent des caches ;
 l’inférence sur les images se fait ensuite directement en Python/ONNX.
 
-Installer le runtime CPU optionnel dans le venv sélectionné :
+Préparer le runtime adapté à la plateforme et les modèles avec :
 
 ```bash
-bin/postProcess.sh --install-graxpert
+bin/install_dependances.sh
 ```
 
-Cette commande installe `requirements-graxpert.txt` ; elle n’installe pas
-l’application GraXpert et ne télécharge pas les poids. Les dépendances ainsi
-préparées servent aussi à l’enchaînement depuis lightProcess, si les deux
-lanceurs utilisent le même venv.
+Cette commande ne fournit pas l’application GraXpert, nécessaire uniquement
+pour acquérir des poids absents. Pour une installation CPU manuelle limitée,
+utiliser `requirements-graxpert.txt` dans un venv distinct du venv CUDA.
+Les lanceurs de traitement utilisent ensuite l’environnement préparé sans le modifier.
 
 Le moteur s’active automatiquement si un poids local conforme est présent
 dans le cache du projet ou dans un cache GraXpert/Siril, sauf désactivation
@@ -171,7 +184,7 @@ explicite. Pour acquérir un modèle absent :
 Le modèle pris en charge reste celui du manifeste du projet, même si le numéro
 de version de l’application externe diffère. Une fois le poids validé importé,
 l’exécutable GraXpert n’est plus nécessaire à l’inférence. Le cache du projet
-est `tmp/models/graxpert/`, exclu de Git et de l’archive.
+est `tmp/cache/models/graxpert/`, exclu de Git et de l’archive.
 `--no-enable-graxpert` désactive ce moteur. Voir
 [GraXpert : modèles, activation et périphériques](scripts/postProcess/graxpert.md)
 pour les contrôles d’intégrité, les erreurs d’acquisition et l’option GPU.
@@ -182,20 +195,35 @@ pour les contrôles d’intégrité, les erreurs d’acquisition et l’option G
 ## 6. Cosmic Clarity et accélération GPU
 
 Les dépendances Cosmic Clarity sont optionnelles et séparées de
-`requirements.txt`. Le lanceur fournit :
+`requirements.txt`. L’installeur commun fournit :
 
 ```bash
-bin/postProcess.sh --install-cosmic-clarity
+bin/install_dependances.sh
 ```
 
-Cette commande installe les dépendances PyTorch CUDA déclarées dans
-`requirements-cosmic-clarity.txt` et précharge les six poids nécessaires dans
-`tmp/models/cosmicclarity/`. Ce moteur effectue son inférence dans Python :
+Cette commande sélectionne les dépendances adaptées à Linux CUDA ou Mac,
+puis précharge les modèles, dont les six poids Cosmic Clarity dans
+`tmp/cache/models/cosmicclarity/`. Ce moteur effectue son inférence dans Python :
 il ne nécessite pas l’installation de l’application graphique Cosmic Clarity.
+Le fichier PyTorch sélectionne son index CUDA officiel avec `--index-url`,
+sans index complémentaire PyPI. L'installateur CUDA commun installe ensuite
+les paquets PyPI dans une phase séparée.
 La comparaison Cosmic Clarity est activée par défaut ; `--disable-clarity`
 permet de l’écarter. Siril reste requis pour les contrôles.
 Voir [Cosmic Clarity](scripts/postProcess/cosmic-clarity.md) pour les versions
 épinglées, les prérequis GPU, les erreurs et les volumes de téléchargement.
+
+Pour installer ensemble **PyTorch CUDA, ONNX Runtime GPU et CuPy** dans le
+même venv utilisé par lightProcess et postProcess :
+
+```bash
+./bin/install_dependances.sh
+```
+
+Le [guide de l'installateur CUDA](scripts/install_cuda/README.md) décrit les
+prérequis NVIDIA, les versions cohérentes CUDA 12.8, `--check-only`,
+`--install-only` et la sélection du venv. La commande commune précharge aussi
+les poids par défaut ; utiliser `--no-models` pour différer leur acquisition.
 
 `--compute-backend auto`, réglage général par défaut, choisit le GPU disponible
 pour chaque moteur ou le CPU avant calcul. **Ce choix n’installe aucune
@@ -214,7 +242,9 @@ Tkinter pour les interfaces graphiques. Pour construire la documentation,
 utiliser `requirements-docs.txt` et installer Chromium pour Playwright selon
 le [guide documentaire](scripts/generate_docs_html/README.md).
 
-PowerGuard utilise facultativement `requirements-power.txt` et les services
+L'installeur inclut `requirements-power.txt` sous Linux, sans l'installer sous
+macOS. `dbus-python` peut nécessiter une compilation et des en-têtes système
+Python/D-Bus/GLib, qui restent à fournir séparément. PowerGuard utilise les services
 D-Bus Linux d’inhibition de veille et de profil énergétique. Les scripts de
 haut niveau l’activent pendant les calculs ; son indisponibilité laisse le
 traitement continuer. Voir la [gestion de l’énergie](scripts/postProcess/power-guard.md).

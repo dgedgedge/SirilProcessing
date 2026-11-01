@@ -22,7 +22,8 @@ axes. Les fichiers identifiés comme darks ou bias sont ignorés dans les lights
 Les rejets sont comptés dans les statistiques de sous-session.
 
 La clé de groupe rassemble caméra, température arrondie selon la précision
-configurée, exposition, gain et binning. Chaque groupe est calibré séparément.
+configurée (pas de **0,5 °C** par défaut), exposition, gain et binning.
+Chaque groupe est calibré séparément.
 Le premier light du groupe sert de référence pour chercher les masters.
 
 ## Recherche du master dark

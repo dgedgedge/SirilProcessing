@@ -99,7 +99,7 @@ class TestFitsInfoGrouping:
         """Test la génération de clés de groupement"""
         info = FitsInfo(valid_dark_fits)
         
-        # Test avec précision par défaut (0.2°C)
+        # Test avec précision par défaut (0.5°C)
         group_key = info.group_key()
         expected = "TestCamera_T-15.0_E300_G125_B1x1"
         assert group_key == expected
@@ -124,6 +124,20 @@ class TestFitsInfoGrouping:
         
         assert "T-15.0_" in key_02
         assert "T-15.0_" in key_10  # -15.0 arrondi à 1.0 reste -15.0
+
+    def test_default_temperature_grouping(self, valid_dark_fits: Path) -> None:
+        """Regrouper à 0,5 °C et conserver ce pas dans le master enregistré."""
+        first = FitsInfo(valid_dark_fits)
+        second = FitsInfo(valid_dark_fits)
+        first.set_temperature(-15.05)
+        second.set_temperature(-15.2)
+
+        assert "T-15.0_" in first.group_key()
+        assert first.is_equivalent(second)
+        assert not first.is_equivalent(second, temperature_precision=0.2)
+
+        first.update_header()
+        assert FitsInfo(valid_dark_fits).temperature() == -15.0
 
     def test_is_equivalent_same_group(self, sample_dark_group):
         """Test que des darks du même groupe sont équivalents"""

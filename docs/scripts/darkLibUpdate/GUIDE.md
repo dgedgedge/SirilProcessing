@@ -96,7 +96,9 @@ python bin/darkLibUpdate.py [OPTIONS]
 --no-validate-darks   # Désactive la validation
 ```
 - **Description** : Valide les fichiers darks pour détecter les capots ouverts
-- **Défaut** : `True` (activé par configuration)
+- **Défaut** : `True` (activé même sans configuration sauvegardée). Une valeur
+  `false` sauvegardée reste respectée ; `--no-validate-darks` désactive le contrôle
+  pour l’exécution courante.
 - **Fonctionnement** : 
   - Analyse statistique (médiane, MAD, percentiles)
   - Détection pixels chauds
@@ -174,6 +176,7 @@ python bin/darkLibUpdate.py [OPTIONS]
 ```
 - **Description** : Précision d'arrondi pour la température
 - **Défaut** : `0.5°C`
+- **Cohérence** : Même défaut dans `lightProcess` pour retrouver les masters.
 - **Usage** : Plus petit = groupes plus fins, plus grand = groupes plus larges
 
 #### `-a, --max-age` (Âge maximum)

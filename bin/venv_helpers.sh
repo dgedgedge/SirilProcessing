@@ -1,13 +1,8 @@
 #!/usr/bin/env bash
-# Bibliothèque sourcée par les lanceurs ; Python et pip restent fournis par le système.
+# Bibliothèque sourcée par les lanceurs : sélection d'un environnement déjà installé.
 
-prepare_project_venv() {
-  # Reçoit le fichier requirements et expose SELECTED_VENV pour l'exécution.
-  # Retrouve le Python de base même si un venv est déjà activé dans le terminal.
-  local requirements_file="$1"
-  local system_python
-  system_python="$(python3 -c 'import sys; print(sys._base_executable)')" || return
-
+locate_project_venv() {
+  # Même priorité que l'installeur : VENV_DIR, .venv, puis le dossier historique venv.
   if [[ -n "${VENV_DIR:-}" ]]; then
     SELECTED_VENV="${VENV_DIR}"
   elif [[ -d "${PROJECT_ROOT}/.venv" ]]; then
@@ -17,8 +12,15 @@ prepare_project_venv() {
   else
     SELECTED_VENV="${PROJECT_ROOT}/.venv"
   fi
+}
 
-  "${system_python}" -m venv --without-pip "${SELECTED_VENV}" || return
-  "${system_python}" -m pip --python "${SELECTED_VENV}/bin/python" \
-    install --upgrade --quiet --disable-pip-version-check -r "${requirements_file}" || return
+select_project_venv() {
+  # Les traitements exigent un environnement existant et ne le modifient pas.
+  locate_project_venv
+  if [[ ! -x "${SELECTED_VENV}/bin/python" ]]; then
+    printf 'Environnement Python absent ou incomplet : %s\n' "${SELECTED_VENV}" >&2
+    printf 'Installez les dépendances avec : "%s/bin/install_dependances.sh" --venv "%s"\n' \
+      "${PROJECT_ROOT}" "${SELECTED_VENV}" >&2
+    return 1
+  fi
 }

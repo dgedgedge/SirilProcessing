@@ -235,7 +235,7 @@ class FitsInfo:
         Format: "TEMP_EXPTIME_GAIN_CAMERA_BINNING"
 
         Args:
-            temperature_precision: Précision d'arrondi pour la température (par défaut 0.2°C)
+            temperature_precision: Pas d'arrondi de la température en °C (défaut : 0.5)
         """
         if self.validData():
             rounded_temp = round(
@@ -261,14 +261,14 @@ class FitsInfo:
             return None
 
     def is_equivalent(
-        self, other: FitsInfo, temperature_precision: float = 0.2
+        self, other: FitsInfo, temperature_precision: float = 0.5
     ) -> bool:
         """
         Compare tous les attributs (sauf le nom de fichier) avec un autre FitsInfo.
         Retourne True si tous les champs sont égaux, y compris la commande de stacking si disponible.
 
         Args:
-            temperature_precision: Précision d'arrondi pour la température (par défaut 0.2°C)
+            temperature_precision: Pas d'arrondi de la température en °C (défaut : 0.5)
         """
         if not isinstance(other, FitsInfo):
             return False
@@ -322,7 +322,7 @@ class FitsInfo:
         return new_info
 
     def update_header(
-        self, source_info: FitsInfo = None, temperature_precision: float = 0.2
+        self, source_info: FitsInfo | None = None, temperature_precision: float = 0.5
     ) -> None:
         """
         Met à jour l'entête FITS du fichier associé à cette instance (self.filepath)
@@ -334,7 +334,7 @@ class FitsInfo:
 
         Args:
             source_info: FitsInfo source pour les métadonnées (None = utiliser self)
-            temperature_precision: Précision d'arrondi pour la température (par défaut 0.2°C)
+            temperature_precision: Pas d'arrondi de la température en °C (défaut : 0.5)
         """
         # Si aucune source fournie, utiliser self comme source
         if source_info is None:

@@ -59,6 +59,7 @@ def test_cosmic_auto_selects_only_available_cuda(
     from lib.cosmic_clarity.inference import select_device
 
     monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.backends.mps, "is_available", lambda: False)
     assert select_device("auto").type == "cuda"
     monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
     assert select_device("auto").type == "cpu"
@@ -66,8 +67,82 @@ def test_cosmic_auto_selects_only_available_cuda(
         select_device("cuda")
 
 
+@pytest.mark.parametrize('legacy_cli', [False, True])
+def test_generic_policy_migrates_legacy_cuda_without_implicit_save(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, legacy_cli: bool,
+) -> None:
+    """L'ancien CUDA global devient auto sur CLI/JSON ; -S seul mémorise la migration."""
+    path = tmp_path / 'settings.json'
+    path.write_text(json.dumps({'compute_backend': 'cuda'} if not legacy_cli else {}))
+    config = Config(path)
+    parser = argparse.ArgumentParser()
+    config.add_arguments(parser)
+    config.register(ComputeConfig, parser)
+    flags = ['--compute-backend', 'cuda'] if legacy_cli else []
+    args = config.parse_args(parser, flags)
+    assert args.compute_backend == 'auto'
+    assert 'remplacé par auto' in caplog.text
+    assert json.loads(path.read_text()) == ({'compute_backend': 'cuda'} if not legacy_cli else {})
+    args.save_config = True
+    assert config.save_requested(args)
+    assert json.loads(path.read_text())['compute_backend'] == 'auto'
+    assert next(a for a in parser._actions if a.dest == 'compute_backend').choices == ('auto', 'cpu')
+    with pytest.raises(SystemExit):
+        parser.parse_args(['--compute-backend', 'gpu'])
+
+
+@pytest.mark.parametrize('system, expected', [('Linux', 'CUDA'), ('Darwin', 'MPS/Metal')])
+def test_cosmic_cpu_warning_only_in_auto(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    system: str, expected: str,
+) -> None:
+    """Le CPU choisi faute de GPU avertit avec le bon OS ; CPU forcé reste silencieux."""
+    import platform
+    torch = pytest.importorskip('torch')
+    from lib.cosmic_clarity.inference import select_device
+
+    monkeypatch.setattr(platform, 'system', lambda: system)
+    monkeypatch.setattr(torch.cuda, 'is_available', lambda: False)
+    monkeypatch.setattr(torch.backends.mps, 'is_available', lambda: False)
+    assert select_device('auto').type == 'cpu'
+    assert any(record.levelname == 'WARNING' and 'Cosmic Clarity' in record.message
+               and expected in record.message and system in record.message for record in caplog.records)
+    caplog.clear()
+    assert select_device('cpu').type == 'cpu'
+    assert not caplog.records
+
+
+def test_mps_selection_and_persistent_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Apple MPS est préféré au CPU en auto et sa surcharge respecte CLI > JSON."""
+    torch = pytest.importorskip('torch')
+    from lib.cosmic_clarity.inference import select_device
+
+    monkeypatch.setattr(torch.cuda, 'is_available', lambda: False)
+    monkeypatch.setattr(torch.backends.mps, 'is_available', lambda: True)
+    assert select_device('auto').type == select_device('mps').type == 'mps'
+    assert select_device('cpu').type == 'cpu'
+    with pytest.raises(RuntimeError, match='CUDA indisponible'):
+        select_device('cuda')
+    config = Config(tmp_path / 'settings.json')
+    parser = argparse.ArgumentParser()
+    config.add_arguments(parser)
+    config.register(_PostProcessorSequence, parser)
+    args = config.parse_args(parser, ['--cosmic-device', 'mps', '-S'])
+    config.bind_parameters(args)
+    assert ComputeConfig.requested(CosmicClarityDenoiseProcessor()._get_args(), 'cosmic_device') == 'mps'
+    assert config.save_requested(args)
+    parser = argparse.ArgumentParser()
+    config.register(_PostProcessorSequence, parser)
+    assert parser.parse_args([]).cosmic_device == 'mps'
+    assert parser.parse_args(['--cosmic-device', 'cpu']).cosmic_device == 'cpu'
+    monkeypatch.setattr(torch.backends.mps, 'is_available', lambda: False)
+    assert select_device('auto').type == 'cpu'
+    with pytest.raises(RuntimeError, match='MPS indisponible'):
+        select_device('mps')
+
+
 def test_graxpert_auto_resolves_before_inference(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Un GPU annoncé mais inutilisable choisit CPU au démarrage seulement."""
     pytest.importorskip("onnxruntime")
@@ -86,6 +161,8 @@ def test_graxpert_auto_resolves_before_inference(
     monkeypatch.setattr(engine, "_create_session", create)
     assert engine._initialize_session(Path("model.onnx")) is session
     assert calls == [True, False] and engine.gpu is False
+    assert any(record.levelname == 'WARNING' and 'missing driver' in record.message
+               and 'GraXpert' in record.message for record in caplog.records)
     engine.backend, engine.gpu = "cuda", True
     calls.clear()
     with pytest.raises(RuntimeError):

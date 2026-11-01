@@ -22,8 +22,9 @@ import numpy as np
 from astropy.io import fits
 
 from lib.parameterized_component import ParameterizedComponent
+from lib.resource_cache import ResourceCache
 
-DEFAULT_MODEL_DIR = Path(__file__).resolve().parents[1] / "tmp/models/graxpert"
+DEFAULT_MODEL_DIR = ResourceCache().model_directory('graxpert')
 DEFAULT_MODEL_VERSION = "3.0.2"
 MANIFEST_PATH = Path(__file__).with_name("graxpert_models.json")
 
@@ -72,7 +73,7 @@ class GraXpertModels(ParameterizedComponent):
             help="Exécutable utilisé uniquement pour télécharger les poids absents",
         )
         parser.add_argument(
-            "--graxpert-model-dir", type=Path, default=DEFAULT_MODEL_DIR
+            "--graxpert-model-dir", type=ResourceCache.graxpert_argument, default=DEFAULT_MODEL_DIR
         )
         parser.add_argument("--graxpert-model-version", default=DEFAULT_MODEL_VERSION)
 
@@ -101,10 +102,12 @@ class GraXpertModels(ParameterizedComponent):
         roots = (
             data_root / "GraXpert",
             Path.home() / ".var/app/org.siril.Siril/data/GraXpert",
+            Path.home() / 'Library/Application Support/GraXpert',
         )
-        return tuple(
+        legacy = Path(__file__).resolve().parents[1] / 'tmp/models/graxpert' / self.version / 'model.onnx'
+        return (legacy, *tuple(
             root / "denoise-ai-models" / self.version / "model.onnx" for root in roots
-        )
+        ))
 
     def find_local_model(self) -> Path | None:
         """Retourne le premier poids local vérifié, sans copie ni téléchargement.

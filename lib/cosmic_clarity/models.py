@@ -17,8 +17,11 @@ from tempfile import NamedTemporaryFile
 from typing import TypedDict
 from urllib.request import urlopen
 
+from lib.resource_cache import ResourceCache
 
-DEFAULT_MODEL_DIR = Path(__file__).resolve().parents[2] / 'tmp' / 'models' / 'cosmicclarity'
+
+DEFAULT_MODEL_DIR = ResourceCache().model_directory('cosmicclarity')
+LEGACY_MODEL_DIR = Path(__file__).resolve().parents[2] / 'tmp/models/cosmicclarity'
 MANIFEST_PATH = Path(__file__).with_name('models.json')
 STELLAR_MODEL = 'deep_sharp_stellar_cnn_AI3_5s.pth'
 DENOISE_MODEL = 'deep_denoise_cnn_AI3_6.pth'
@@ -58,7 +61,7 @@ def verify_model(directory: Path, name: str) -> Path:
             or sha256_file(path) != entry['sha256']):
         raise ValueError(
             f'Modèle absent ou corrompu : {path}. Exécuter '
-            'bin/postProcess.sh --install-cosmic-clarity '
+            'bin/install_dependances.sh --assets-only '
             f'--cosmic-model-dir "{directory}"'
         )
     return path
@@ -77,12 +80,20 @@ def ensure_model(directory: Path, name: str) -> Path:
     except ValueError:
         pass
     directory.mkdir(parents=True, exist_ok=True)
-    logging.info("Téléchargement du poids Cosmic Clarity : %s", directory / name)
+    legacy = None
+    if directory.resolve() != LEGACY_MODEL_DIR.resolve():
+        try:
+            legacy = verify_model(LEGACY_MODEL_DIR, name)
+        except ValueError:
+            pass
+    logging.info("%s du poids Cosmic Clarity : %s",
+                 'Import depuis l’ancien cache' if legacy is not None else 'Téléchargement',
+                 directory / name)
     temporary = None
     try:
         with NamedTemporaryFile(dir=directory, suffix='.part', delete=False) as dst:
             temporary = Path(dst.name)
-            with urlopen(entry['url'], timeout=120) as src:
+            with (legacy.open('rb') if legacy is not None else urlopen(entry['url'], timeout=120)) as src:
                 while block := src.read(1024 * 1024):
                     dst.write(block)
         if (temporary.stat().st_size != entry['size']

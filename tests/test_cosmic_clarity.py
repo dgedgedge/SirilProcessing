@@ -211,10 +211,10 @@ def test_processor_quality_and_source_preservation(
     if status == 'no_safe_improvement':
         final.write_bytes(b'previous output')
     with caplog.at_level('INFO'):
-        result = cls().post_process(source, report, arguments())
+        result = cls().post_process(source, report, arguments('--no-enable-graxpert'))
     treatment = 'Déconvolution' if operation == 'sharpen' else 'Débruitage'
     assert f'{treatment} — début de l’évaluation Cosmic Clarity' in caplog.text
-    assert f'{treatment} — début de l’évaluation Siril' in caplog.text
+    assert f'{treatment} — Évaluation du moteur Siril' in caplog.text
     assert f'{treatment} — évaluation Cosmic Clarity : statut=' in caplog.text
     assert f'{treatment} — évaluation Siril : statut=' in caplog.text
     if status == 'accepted':
@@ -436,62 +436,6 @@ def test_sharpen_forced_manual_matching(
     result = CosmicClaritySharpenProcessor().post_process(source, tmp_path / 'report.json', args)
     assert captured == {'radius': 1.2, 'minimum': 9, 'fraction': 0.42}
     assert result['matching']['mode'] == 'common'
-
-
-@pytest.mark.parametrize('install,run,fail', [(True, False, False), (True, True, False),
-                                           (False, True, False), (True, True, True)])
-def test_shell_install_flag(
-    tmp_path: Path, install: bool, run: bool, fail: bool,
-) -> None:
-    """Le .sh consomme l'installation, cible le venv et transmet les arguments intacts."""
-    root = Path(__file__).resolve().parents[1]
-    bindir = tmp_path / 'bin'
-    bindir.mkdir()
-    shutil.copyfile(root / 'bin/postProcess.sh', bindir / 'postProcess.sh')
-    (bindir / 'venv_helpers.sh').write_text('prepare_project_venv() { SELECTED_VENV="$VENV_DIR"; }\n')
-    venv = tmp_path / 'venv space'
-    (venv / 'bin').mkdir(parents=True)
-    stub = f'''#!{sys.executable}
-import json, os, sys
-if sys.argv[1:2] == ['-c']:
-    print(os.environ['STUB_SYSTEM_PYTHON'])
-else:
-    with open(os.environ['STUB_LOG'], 'a') as stream:
-        stream.write(json.dumps(sys.argv) + '\\n')
-    if sys.argv[1:3] == ['-m', 'pip'] and os.environ['FAIL_PIP'] == '1':
-        sys.exit(9)
-'''
-    for path in (bindir / 'python3', venv / 'bin/python'):
-        path.write_text(stub)
-        path.chmod(0o755)
-    log = tmp_path / 'calls.jsonl'
-    env = {**os.environ, 'PATH': f'{bindir}:{os.environ["PATH"]}',
-           'VENV_DIR': str(venv), 'STUB_SYSTEM_PYTHON': str(bindir / 'python3'),
-           'STUB_LOG': str(log), 'FAIL_PIP': '1' if fail else '0'}
-    options = ['--cosmic-model-dir', str(tmp_path / 'models space')]
-    if install:
-        options.append('--install-cosmic-clarity')
-    if run:
-        options += ['image space.fit', '--enable-clarity']
-    result = subprocess.run(['bash', str(bindir / 'postProcess.sh'), *options], env=env, capture_output=True, text=True)
-    assert result.returncode == (9 if fail else 0), result.stderr
-    calls = [json.loads(line) for line in log.read_text().splitlines()]
-    assert all('--install-cosmic-clarity' not in call for call in calls)
-    if install:
-        assert calls[0][1:8] == [
-            '-m', 'pip', '--python', str(venv / 'bin/python'),
-            'install', '--upgrade', '--quiet',
-        ]
-        assert '--disable-pip-version-check' in calls[0]
-    if fail:
-        assert len(calls) == 1
-    elif run:
-        assert calls[-1][1:] == [str(bindir / 'postProcess.py'), '--cosmic-model-dir',
-                                str(tmp_path / 'models space'), 'image space.fit',
-                                '--enable-clarity']
-    else:
-        assert calls[-1][1:] == [str(tmp_path / 'lib/cosmic_clarity/models.py'),
-                                '--directory', str(tmp_path / 'models space')]
 
 
 def test_classic_backend_does_not_require_torch() -> None:
