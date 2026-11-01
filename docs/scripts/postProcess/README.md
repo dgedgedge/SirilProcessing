@@ -622,6 +622,10 @@ les noms des objets du champ et un encart de prise de vue en bas à gauche,
 après le rendu AutoGHS.
 Utiliser `--no-final-annotation` pour la désactiver.
 
+L’encart final affiche aussi les poses indépendantes retenues/total et, pour
+une mosaïque, le nombre de panneaux et le détail par panneau. Voir la
+[provenance des compteurs](annotations.md#2-informations-affichees-et-limites).
+
 ## 4. Résultats et journaux
 
 <a id="rapports-images-et-journaux"></a>

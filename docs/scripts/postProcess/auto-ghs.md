@@ -3,7 +3,7 @@
 [postProcess](README.md) › AutoGHS
 
 Une sortie StarNet brute légèrement supérieure à 1 est conservée avec son
-résidu signé jusqu'à la [compensation des couches](star-rendering.md#politique-des-residus-negatifs).
+résidu signé jusqu'à la [compensation des couches](star-rendering.md).
 L'entrée et les couches corrigées doivent rester dans `[0,1]` ; aucun écrêtage
 indépendant ni normalisation globale de secours n'est appliqué.
 

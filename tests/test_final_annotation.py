@@ -112,11 +112,19 @@ def test_last_stage_integration(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(_PostProcessorSequence, 'post_process', sequence)
     monkeypatch.setattr(QualityMaskPreview, 'ensure_for_run', lambda *args: None)
     monkeypatch.setattr(QualityMaskPreview, 'write_gradient_points', lambda *args: None)
+    source.with_suffix('.drizzle.json').write_text(json.dumps({
+        'status': 'completed', 'output': str(source),
+        'metadata': {'unique_inputs': 20},
+        'final_selection': {'independent_retained': 12, 'effective_stack_entries': 36},
+    }))
     report = tmp_path / 'source_postprocess.json'
-    result = PostProcessingProcessor().post_process(source, report, argparse.Namespace())
+    result = PostProcessingProcessor().post_process(
+        source, report, argparse.Namespace(enable_final_color=False),
+    )
     assert result['output_image'] == str(report.with_suffix('.fits'))
     assert result['output_annotated_image'] == str(tmp_path / 'source_postprocess_annotated.png')
     assert result['treatments']['annotation']['status'] == 'SUCCESS'
+    assert 'Images empilées (retenues/total) : 12/20' in result['treatments']['annotation']['lines']
     assert json.loads(report.read_text()) == result['treatments']
     assert Path(result['output_image']).read_bytes() == rendered.read_bytes()
 
@@ -171,3 +179,10 @@ def test_catalog_names_written_to_final_image(tmp_path: Path) -> None:
         source, report, argparse.Namespace(annotation_objects=False),
     )
     assert result['objects']['status'] == 'DISABLED'
+
+
+def test_acquisition_lines_start_with_metadata_without_title() -> None:
+    """Une seule métadonnée suffit et n'est pas précédée d'un titre technique."""
+    assert FinalImageAnnotator.acquisition_lines(
+        fits.Header({'OBJECT': 'M33', 'GAIN': 125})
+    ) == ['Gain : 125']

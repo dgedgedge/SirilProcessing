@@ -9,6 +9,7 @@
 | [postprocessing.py](../../lib/postprocessing.py) | Exécuter le [pipeline complet de post-traitement](../scripts/postProcess/pipeline.md) commun à lightProcess et postProcess |
 | [annotation_catalog.py](../../lib/annotation_catalog.py) | Charger OpenNGC hors ligne et projeter les positions sur le WCS final pour les [annotations](../scripts/postProcess/annotations.md) |
 | [final_annotation.py](../../lib/final_annotation.py) | Produire la [copie annotée finale](../scripts/postProcess/annotations.md) et son encart de prise de vue |
+| [stacking_annotation.py](../../lib/stacking_annotation.py) | Lire la provenance des poses et panneaux pour les [compteurs annotés](../scripts/postProcess/annotations.md) |
 | [postprocess_resume.py](../../lib/postprocess_resume.py) | Conserver la provenance et retrouver l’entrée linéaire pour la [reprise du rendu final](../scripts/postProcess/README.md#relance-autoghs-seul) |
 | [cuda_environment.py](../../lib/cuda_environment.py) | Installer les dépendances du venv commun et vérifier les trois moteurs [CUDA](../scripts/install_cuda/README.md) |
 | [macos_environment.py](../../lib/macos_environment.py) | Installer les dépendances Apple Silicon et contrôler MPS/CoreML ; [guide Mac](../scripts/install_macos/README.md) |

@@ -492,3 +492,7 @@ référence avec la force zéro et rejettent les couches modifiées. La configur
 contrôle CLI > JSON, l'activation facultative et le mode de reprise non rémanent.
 La parité CPU/CUDA est vérifiée quand CUDA est disponible. Les tests de sessions
 couvrent `--color-only` avec et sans mosaïque, sans calibration ni stacking.
+
+`test_stacking_annotation.py` vérifie les comptes indépendants des poids, les
+panneaux de mosaïque, les métadonnées absentes/incohérentes et les rapports
+périmés. L’intégration de l’encart utilise explicitement le stack d’origine.

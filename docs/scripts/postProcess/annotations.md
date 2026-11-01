@@ -27,18 +27,67 @@ de désigner le FITS scientifique.
 
 ## 2. Informations affichées et limites
 
-Le panneau utilise les cartes présentes dans l'en-tête du FITS final : `OBJECT`,
+Le panneau utilise les cartes présentes dans l'en-tête du FITS final :
 `DATE-OBS`, `TELESCOP`, `INSTRUME`, `FILTER`, `EXPTIME` (secondes), `GAIN`,
 `OFFSET` et `CCD-TEMP` (degrés Celsius). La date est reproduite sans inventer de
 fuseau horaire. Les champs absents, vides et les nombres non finis sont omis.
 Un en-tête sans ces informations affiche « Informations non renseignées ».
+La ligne « Objet » est omise : les noms des objets sont déjà placés sur l'image.
+La carte FITS `OBJECT` reste inchangée.
 
-Le titre précise « en-tête de référence ». En particulier, une mosaïque peut
+L'encart commence directement par les métadonnées disponibles, sans ligne de
+titre. En particulier, une mosaïque peut
 hériter des valeurs d'un seul panneau. `EXPTIME` est donc présenté comme
 « Pose de référence » ; `STACKCNT` et `LIVETIME` ne sont pas utilisés pour
 prétendre connaître le nombre total de poses ou l'intégration de la mosaïque.
+
+Les comptes d'empilement sont affichés séparément à partir des rapports du
+stack ou de la mosaïque **d'origine**, et non de cet en-tête de référence :
+
+```text
+Images empilées (retenues/total) : 164/313
+```
+
+Pour une mosaïque :
+
+```text
+Mosaïque : 3 panneaux
+Images empilées par panneau (retenues/total) :
+P1 · M_31-Part_1 : 8/10
+P2 · M_31-Part_2 : 8/10
+P3 · M_31-Part_3 : 5/10
+```
+
+`xx/yy` signifie **poses indépendantes effectivement retenues / poses
+indépendantes proposées au moteur de stacking**, après les préparations de
+calibration et de compatibilité. Ce n'est pas nécessairement le nombre de
+fichiers bruts acquis. Les répétitions introduites par la pondération ne
+comptent pas comme des poses supplémentaires. Le nombre de panneaux vient
+de la liste des images de la mosaïque, dans son ordre de construction.
+Ces nombres ne sont pas convertis en durée totale ni en couverture commune.
+
+`lib.stacking_annotation.StackingAnnotation` consulte le rapport voisin
+`<stack>.drizzle.json` terminé : `metadata.unique_inputs` fournit le dénominateur
+et `final_selection.independent_retained` le numérateur. Pour une mosaïque,
+`<mosaïque>.json` doit référencer son `output_image` et ses `input_files` ;
+chaque panneau fournit son propre rapport d'empilement. Les chemins relatifs
+sont résolus par rapport au rapport qui les contient, les liens symboliques
+sont résolus et l'identité du produit est contrôlée.
+
+Un rapport étranger, incomplet, non terminé, supérieur à 32 Mio ou antérieur à
+une modification du FITS n'est pas utilisé. Un panneau réempilé après le rapport
+de mosaïque ne fournit pas non plus de compte à cette ancienne mosaïque.
+Ces contrôles de chemins et dates ne prouvent pas une intégrité cryptographique.
+Sans provenance exploitable, aucun compte de stack n'est inventé ; pour un
+panneau manquant, la ligne indique `inconnu`. L'annotation reste produite.
+Le sous-rapport `stacking` conserve les comptes, les rapports sources, les
+motifs d'indisponibilité et le statut `AVAILABLE`, `PARTIAL`, `UNAVAILABLE` ou
+`INVALID`. Les rapports de stacking/mosaïque doivent donc rester disponibles.
+
 Les noms sont issus du catalogue local [OpenNGC](https://github.com/mattiaverga/OpenNGC)
-(Mattia Verga et contributeurs, CC BY-SA 4.0). L'extrait livré comprend 12 159
+(Mattia Verga et contributeurs, CC BY-SA 4.0). L'encart affiche :
+« Catalogue des objets : OpenNGC — Mattia Verga et contributeurs (CC BY-SA 4.0) ».
+L'extrait livré comprend 12 159
 entrées NGC/IC et complémentaires : galaxies, amas et nébuleuses ; il exclut les
 doublons, objets inexistants, étoiles simples/doubles, novae et entrées
 indéterminées. Sa [provenance et sa licence](../../../data/openngc/README.md)
@@ -70,13 +119,19 @@ les rectangles des textes, les omissions et les crédits du catalogue.
 ## 3. Module et présentation
 
 `lib.final_annotation.FinalImageAnnotator` implémente le contrat `processor`.
-`post_process(fits_final, rapport_json, args)` est appelé en dernier par
+`post_process(fits_final, rapport_json, args, acquisition_source=stack_initial)` est appelé en dernier par
 `PostProcessingProcessor`, après les exports scientifiques. `acquisition_lines`
 isole la lecture des métadonnées ; `draw_panel` et `draw_objects` réalisent la
 composition Pillow. `lib.annotation_catalog.AnnotationCatalog` charge les
 coordonnées et les projette avec Astropy, indépendamment de la présentation.
 Un préfiltre sphérique autour du centre du champ réduit les projections WCS ;
 les centres hors de l’image sont ensuite exclus en pixels.
+`StackingAnnotation.describe` isole la lecture de provenance des comptes.
+Le paramètre `acquisition_source` est transmis par l'orchestrateur, également
+en reprise GHS/couleur. Sans ce paramètre, l'annotateur autonome consulte les
+rapports associés au FITS qu'il reçoit ; il ne recherche pas un fichier par
+supposition à partir du nom d'un export final.
+
 
 La taille de police dépend de la plus petite dimension de l'image. Le texte
 revient automatiquement à la ligne et la police diminue si nécessaire pour
@@ -98,6 +153,13 @@ l'orientation, la conservation exacte des pixels extérieurs au panneau et du
 FITS source, les informations absentes, les poses de référence, les cas ignorés
 et les priorités de configuration. `tests/test_postprocessing.py` couvre
 l'intégration commune aux deux points d'entrée.
+Il vérifie que les compteurs viennent du stack initial même lorsque le FITS
+rendu ne porte pas ces informations. `test_stacking_annotation.py` couvre les
+comptes indépendants des pondérations, l'ordre des panneaux, les rapports
+absents/incohérents/périmés et les listes répétées ou trop volumineuses.
+Les exemples 164/313 et 8/10, 8/10, 5/10 ont été vérifiés dans les rapports
+existants M33 et M31 ; aucun nom d'objet n'intervient dans le calcul.
+
 
 `tests/test_annotation_catalog.py` vérifie les identifiants de M31/M32/M110,
 les rotations WCS, le passage RA=0, les orientations, les seuils de magnitude,

@@ -1,6 +1,7 @@
 """Dernier export de présentation : encart de prise de vue sur le rendu final.
 
-Les valeurs viennent exclusivement de l'en-tête FITS, sans reconstitution d'une
+Les cartes de prise de vue viennent du FITS. Les comptes de poses/panneaux
+viennent des rapports de l'image scientifique d'origine, sans inventer une
 intégration totale de mosaïque. Voir docs/scripts/postProcess/annotations.md.
 """
 
@@ -18,6 +19,7 @@ from PIL import Image, ImageDraw, ImageFont
 from lib.annotation_catalog import AnnotationCatalog, SkyObject
 from lib.processor import processor
 from lib.render_exports import read_render_image
+from lib.stacking_annotation import StackingAnnotation
 from lib.type_defs import JSONReport
 
 
@@ -25,7 +27,7 @@ class FinalImageAnnotator(processor):
     """Produit un PNG distinct, orienté comme le JPEG, avec noms célestes et encart inférieur gauche.
 
     Aucun pixel scientifique n'est modifié. Les données manquantes sont omises,
-    et les poses décrivent l'en-tête de référence, jamais un total supposé.
+    et la durée d'une pose décrit l'en-tête de référence, jamais un total supposé.
     """
 
     @classmethod
@@ -62,10 +64,11 @@ class FinalImageAnnotator(processor):
         EXPTIME est en secondes, CCD-TEMP en degrés Celsius. DATE-OBS est
         reproduite sans inventer de fuseau. Les valeurs numériques non finies
         sont omises ; ni STACKCNT ni LIVETIME ne sont totalisés sur une mosaïque.
+        OBJECT n'est pas affiché : les noms célestes sont placés sur l'image.
         """
-        lines = ["Prise de vue · en-tête de référence"]
+        lines: list[str] = []
         for key, label, unit in (
-            ("OBJECT", "Objet", ""), ("DATE-OBS", "Date", ""),
+            ("DATE-OBS", "Date", ""),
             ("TELESCOP", "Instrument", ""), ("INSTRUME", "Caméra", ""),
             ("FILTER", "Filtre", ""), ("EXPTIME", "Pose de référence", " s"),
             ("GAIN", "Gain", ""), ("OFFSET", "Offset", ""),
@@ -81,7 +84,7 @@ class FinalImageAnnotator(processor):
             value = " ".join(str(value).split())
             if value:
                 lines.append(f"{label} : {value}{unit}")
-        if len(lines) == 1:
+        if not lines:
             lines.append("Informations non renseignées")
         return lines
 
@@ -254,6 +257,7 @@ class FinalImageAnnotator(processor):
     def post_process(
         self, input_path: Path, output_path: Path,
         args: argparse.Namespace | None = None,
+        *, acquisition_source: Path | None = None,
     ) -> JSONReport:
         """Annote un FITS rendu et écrit le PNG et son audit JSON.
 
@@ -265,6 +269,9 @@ class FinalImageAnnotator(processor):
             Rapport JSON ; le PNG voisin du FITS porte le suffixe `_annotated.png`.
         args : argparse.Namespace, optional
             Surcharge locale ; final_annotation=False désactive l'export.
+        acquisition_source : Path, optional
+            Stack/mosaïque d'origine pour les rapports de comptes de poses.
+            Sans surcharge, consulter les rapports associés au FITS fourni.
 
         Returns
         -------
@@ -293,11 +300,18 @@ class FinalImageAnnotator(processor):
                 if not isinstance(maximum, int) or not 0 <= maximum <= 200:
                     raise ValueError("annotation-max-objects doit être entre 0 et 200")
                 lines = self.acquisition_lines(header)
+                stacking = StackingAnnotation.describe(
+                    acquisition_source if acquisition_source is not None else source
+                )
+                lines.extend(stacking['lines'])
                 objects, sky_audit = [], {"status": "DISABLED"}
                 if getattr(runtime, "annotation_objects", True):
                     objects, sky_audit = AnnotationCatalog.project(header, limit)
                     if sky_audit["status"] == "SUCCESS":
-                        lines.append("Objets : OpenNGC · Mattia Verga · CC BY-SA 4.0")
+                        lines.append(
+                            "Catalogue des objets : OpenNGC — "
+                            "Mattia Verga et contributeurs (CC BY-SA 4.0)"
+                        )
                 with read_render_image(source) as image:
                     box = self.draw_panel(image, lines)
                     if sky_audit["status"] == "SUCCESS":
@@ -307,6 +321,7 @@ class FinalImageAnnotator(processor):
                     "status": "SUCCESS", "output_annotated_image": str(destination),
                     "lines": lines, "panel_bounds": list(box),
                     "metadata_scope": "reference_fits_header",
+                    "stacking": stacking,
                     "objects": sky_audit,
                 }
         report.write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8")

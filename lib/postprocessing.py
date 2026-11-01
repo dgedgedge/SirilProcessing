@@ -362,6 +362,7 @@ class PostProcessingProcessor(processor):
             annotation = FinalImageAnnotator().post_process(
                 Path(summary["output_image"]),
                 report.with_name(report.stem + "_annotation.json"), args=runtime,
+                acquisition_source=source,
             )
             results["annotation"] = annotation
             if annotation.get("output_annotated_image"):
