@@ -440,8 +440,8 @@ class DocumentationBuilder:
                 markdown = (self.root / rel).read_text(encoding="utf-8")
                 destination.write_text(markdown, encoding="utf-8")
                 body, _ = renderer.render_markdown_document(markdown, rel)
-                renderer.copy_referenced_sources(self.root, staging, rel, body)
-            self._stage_metadata(staging)
+                renderer.copy_referenced_data(self.root, staging, rel, body)
+            self._stage_metadata(staging, self.root)
             mermaid = self._mermaid()
             self._exports(sources, staging, work, mermaid, navigation)
             home = staging / "README.md"
@@ -482,12 +482,14 @@ class DocumentationBuilder:
             print(f"PDF : {self.output / 'downloads/documentation.pdf'}")
 
     @staticmethod
-    def _stage_metadata(staging: Path) -> None:
+    def _stage_metadata(staging: Path, source_root: Path | None = None) -> None:
         """Expose les références cachées sous des noms acceptés par l’archive Pages.
 
         upload-pages-artifact exclut .github. Les guides et JSON liés gardent
         leur contenu, mais leurs chemins temporaires deviennent github_meta et
-        copilot_meta. Les Markdown du dépôt ne sont pas modifiés.
+        copilot_meta. Si source_root est fourni, les liens Python et shell sont
+        dirigés vers GitHub sans copier le code. Les Markdown du dépôt restent
+        inchangés.
         """
         for name in ("github", "copilot"):
             source = staging / f".{name}"
@@ -502,6 +504,21 @@ class DocumentationBuilder:
                 parsed = urlsplit(target)
                 if parsed.scheme or parsed.netloc:
                     return match.group(0)
+                if (
+                    source_root is not None
+                    and Path(unquote(parsed.path)).suffix
+                    in renderer.DOCUMENT_CODE_EXTENSIONS
+                ):
+                    source = (
+                        source_root / path.relative_to(staging).parent
+                        / unquote(parsed.path)
+                    ).resolve()
+                    if source.is_relative_to(source_root) and source.is_file():
+                        target = renderer.project_source_url(
+                            source_root, source,
+                            query=parsed.query, fragment=parsed.fragment,
+                        )
+                        return f"]({target})"
                 target = target.replace(".github/", "github_meta/")
                 target = target.replace(".copilot/", "copilot_meta/")
                 return f"]({target})"

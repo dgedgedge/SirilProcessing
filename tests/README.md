@@ -1,250 +1,501 @@
-# lightProcess — parcours de traitement
+# Tests et non-régression
 
-[Documentation](../../../README.md) › [lightProcess](../README.md)
+[Documentation](../docs/README.md)
 
-Le CLI parcourt les sessions fournies et délègue chacune à `LightProcessor`.
-Cette classe découvre et calibre ses sous-sessions, rassemble leurs sorties et
-produit un stack unique. Le CLI gère ensuite la mosaïque optionnelle.
-`--postprocess` ajoute le [post-traitement commun](../../postProcess/pipeline.md)
-des stacks finaux ou de la mosaïque assemblée.
-La découverte des sous-sessions appartient également à `LightProcessor` : la
-validation CLI délègue à `discover_subsessions`. L'orchestration complète peut
-être appelée directement par `process_target`, sans passer par le script CLI.
-Son résultat indique l'image unique, les nombres de sous-sessions traitées,
-les échecs et les statistiques WCS. Une sous-session en échec est signalée ;
-les sous-sessions suivantes sont traitées et les calibrations réussies sont
-empilées ensemble.
+Les tests de séparation et de rendu final couvrent un fond StarNet brut
+supérieur à 1, sa conservation sur disque et la compensation du résidu signé
+sans perte de la somme. Une somme hors domaine, les valeurs négatives du fond
+et les NaN/Inf restent refusés.
 
-Chaque calibration comporte elle-même une boucle sur les groupes de lights
-et un sous-traitement des flats. Les schémas ci-dessous détaillent ces niveaux.
+Les tests de couleur finale vérifient aussi son activation implicite dans un
+traitement complet, l'ordre GHS → couleur, les exports `_ghs`/`_saturated`, les
+surcharges JSON/CLI et le parcours sans GHS. Les défauts communs
+`winsorizedsigma`/`average` et le nom CLI long sont vérifiés pour darks et lights.
 
-## Vocabulaire et périmètre du stacking
+Les tests d'installation vérifient l'ajout Linux de `requirements-power.txt`
+depuis PyPI sans contrainte de roue binaire, la propagation d'un échec de cette
+phase et son absence sur le parcours macOS.
 
-Une **session** est un répertoire fourni en paramètre à la commande.
-Ses **sous-sessions** sont les répertoires d’acquisition contenant `light/`
-ou `Light/`, avec éventuellement `flat/` ou `Flat/`, immédiatement en dessous.
-Si la session contient directement `light/`, elle est traitée comme une unique
-sous-session. Un **groupe de calibration** réunit des lights compatibles par
-leurs métadonnées au sein d’une sous-session.
+`test_postprocess_resume.py` couvre aussi la reprise d'un ancien échec AutoGHS
+sans rapport global, les chaînes incohérentes et fichiers modifiés, et la
+persistance du point de reprise avant un nouvel échec du rendu.
 
-Les FITS calibrés de toutes les sous-sessions d’une session sont réunis pour
-produire un seul résultat de stacking. Ce traitement est identique avec une
-ou plusieurs sous-sessions. Avec `--mosaic`, les résultats de stacking des
-sessions sont ensuite assemblés ; les poses calibrées ne sont pas ajoutées
-aux entrées de la mosaïque.
+Tous les tests du projet se trouvent dans `tests/`. Le fichier `pytest.ini`
+définit ce répertoire comme point de découverte par défaut et rend les imports
+du projet accessibles aux tests.
 
-<a id="diagramme-boucles-lightprocess"></a>
+`test_darkprocess.py` vérifie la validation des darks activée par défaut,
+la priorité CLI > JSON > défauts, l'absence d'écriture implicite du JSON et
+la transmission du contrôle lors d'un appel direct au traitement des groupes.
+Il vérifie aussi le défaut commun de température à 0,5 °C dans les darks et
+les lights et les surcharges JSON/CLI. `test_fits_info.py` contrôle l'effet de
+ce pas sur le regroupement, la correspondance et l'en-tête du master.
 
-## 1. Boucles principales et mosaïque finale
+## Exécution
 
-Pour chaque session fournie, `LightProcessor` calibre les sous-sessions puis
-empile leurs sorties en une image unique. Le CLI conserve la coordination des
-sessions indépendantes, de la mosaïque et du post-traitement. Le mode simulation
-journalise les traitements prévus sans lancer Siril ; le schéma montre le
-parcours d’exécution effectif.
+Depuis la racine du projet, avec les dépendances de `requirements.txt` installées :
 
-```mermaid
-flowchart TD
-    START["Sessions fournies à la commande"] --> ROOTS{"Session suivante ?"}
-    ROOTS -->|Oui| DISCOVER
-    subgraph LIGHT_PROCESSOR["Traitement d’une session par LightProcessor"]
-        DISCOVER["LightProcessor.process_target<br/>Découvrir les sous-sessions<br/>ou la session directement fournie"]
-        DISCOVER --> SESSIONS{"Sous-session suivante ?"}
-        SESSIONS -->|Oui| CALIBRATE[["Calibrer les groupes<br/>Détail : schéma 2"]]
-        CALIBRATE --> SESSION_RESULT["Enregistrer sorties calibrées,<br/>succès, échecs et statistiques"]
-        SESSION_RESULT --> SESSIONS
-        SESSIONS -->|Non| GATHER["Réunir les FITS calibrés<br/>Relire le disque avec --force-stacking<br/>Dédupliquer les chemins"]
-        GATHER --> INPUTS{"Des FITS calibrés sont disponibles ?"}
-        INPUTS -->|Non| EMPTY["Journaliser l'absence de sortie combinée"]
-        INPUTS -->|Oui| CACHE{"Stack à jour, paramètres compatibles<br/>et reconstruction non forcée ?"}
-        CACHE -->|Oui| REUSE["Réutiliser le stack de la session"]
-        CACHE -->|Non| STACK[["Sélectionner, aligner et empiler<br/>Détail : schéma 3"]]
-        STACK --> STACK_OK{"Résultat de stacking disponible ?"}
-        STACK_OK -->|Oui| TARGET_RESULT["Retourner l'image unique de la session"]
-        STACK_OK -->|Non| STACK_FAIL["Journaliser l’échec du stacking"]
-        REUSE --> TARGET_RESULT
-    end
-    EMPTY --> ROOTS
-    STACK_FAIL --> ROOTS
-    TARGET_RESULT --> ROOTS
-    ROOTS -->|Non| MOSAIC_REQUEST{"--mosaic demandé ?"}
-    MOSAIC_REQUEST -->|Non| FINAL_STACKS["Retenir les stacks finaux disponibles"]
-    MOSAIC_REQUEST -->|Oui| MOSAIC_COUNT{"Au moins deux résultats<br/>de stacking disponibles ?"}
-    MOSAIC_COUNT -->|Non| MOSAIC_FAILURE["Mosaïque indisponible<br/>Aucun panneau post-traité"]
-    MOSAIC_FAILURE --> END
-    subgraph MOSAIC["Sous-traitement final : mosaïque optionnelle"]
-        MOSAIC_COUNT -->|Oui| MOSAIC_INPUTS["Collecter un résultat<br/>de stacking par session"]
-        MOSAIC_INPUTS --> MOSAIC_GRADIENT{"Gradient mosaïque activé ?"}
-        MOSAIC_GRADIENT -->|Oui, par défaut| MOSAIC_CORRECT["Corriger conjointement<br/>le gradient des panneaux"]
-        MOSAIC_CORRECT --> MOSAIC_PREPARE["Préparer les panneaux"]
-        MOSAIC_GRADIENT -->|Non| MOSAIC_PREPARE
-        MOSAIC_PREPARE --> MOSAIC_CONVERT["convert mosaic_"]
-        MOSAIC_CONVERT --> MOSAIC_SOLVE["seqplatesolve mosaic_"]
-        MOSAIC_SOLVE --> MOSAIC_REG["seqapplyreg mosaic_ -framing=max"]
-        MOSAIC_REG --> MOSAIC_STACK["stack r_mosaic_<br/>Normalisation, recouvrement et raccords"]
-        MOSAIC_STACK --> MOSAIC_CROP["Conserver la mosaïque complète<br/>Recadrer si activé"]
-        MOSAIC_CROP --> MOSAIC_RESULT["Vérifier la sortie et écrire le rapport<br/>Nettoyer sauf --keep-intermediate"]
-        MOSAIC_RESULT --> MOSAIC_OK{"Mosaïque produite avec succès ?"}
-    end
-    MOSAIC_OK -->|Oui| POST_REQUEST
-    MOSAIC_OK -->|Non| MOSAIC_FAILURE
-    FINAL_STACKS --> POST_REQUEST{"--postprocess activé ?"}
-    POST_REQUEST -->|Non| END["Bilan final"]
-    POST_REQUEST -->|Oui| POST["PostProcessingProcessor<br/>Chaque stack final ou la mosaïque réussie<br/>Rapports, diagnostics, FITS et JPEG"]
-    POST --> END
+```bash
+# Suite complète, y compris le contrôle de synthèse de non-régression
+.venv/bin/python -m pytest -q
+
+# Non-régression avec vérification du nombre de tests collectés et réussis
+.venv/bin/python -m pytest -q tests/test_regression_summary.py
+
+# Tests de mosaïque et d’accès à Siril
+.venv/bin/python -m pytest -q tests/test_mosaic.py tests/test_mosaic_validation.py tests/test_integrated_script.py tests/test_simplified_mosaic.py tests/test_siril_validation.py
+
+# Post-traitements FITS (Siril classique + backend Cosmic Clarity)
+.venv/bin/python -m pytest -q tests/test_postprocess.py tests/test_deconvolution.py tests/test_denoising.py tests/test_cosmic_clarity.py tests/test_cosmic_inference.py
+
+# Couverture des bibliothèques
+.venv/bin/python -m pytest --cov=lib --cov-report=html
 ```
 
-La mosaïque nécessite au moins deux sessions fournies et deux résultats de
-stacking disponibles. Son nom est validé avant la calibration ; le schéma
-regroupe les erreurs de ses traitements dans la branche d’échec finale.
-Si la mosaïque est demandée mais indisponible ou en échec, les stacks des
-panneaux ne sont pas post-traités en remplacement. Le bilan global signale
-aussi les calibrations, stacks ou post-traitements échoués.
-Voir [la mosaïque](../MOSAIC.md) pour ses traitements et les replis du recadrage.
+`test_regression_summary.py` découvre récursivement les `test_*.py` dans
+`tests/`, s’exclut lui-même pour éviter une récursion, puis exécute ces tests
+dans un sous-processus. Il vérifie le succès de l’exécution et compare le
+nombre de tests réussis au nombre collecté par pytest. Le compte rendu est
+écrit dans `regression_summary.txt` dans le répertoire temporaire du test.
+Un nouveau fichier `test_*.py` est ainsi inclus automatiquement.
 
-<a id="diagramme-calibration-lightprocess"></a>
+La suite complète exécute aussi cette synthèse, donc répète les autres tests.
+Pour une exécution simple sans ce contrôle supplémentaire :
 
-## 2. Sous-traitement d’une sous-session : groupes, flats et lights
-
-Les groupes sont indépendants : l’échec d’un groupe est journalisé puis la
-boucle poursuit avec le suivant. Les flats de la sous-session sont chargés
-et filtrés pour chaque groupe de lights concerné. Le code conserve la durée
-majoritaire des flats compatibles ; il ne produit pas un master pour chaque
-durée de flat présente.
-
-```mermaid
-flowchart TD
-    SESSION["Entrée : une sous-session"] --> LIGHTS["Lister les lights et<br/>lire leurs métadonnées"]
-    LIGHTS --> GROUPS["Écarter les fichiers invalides<br/>Grouper caméra, température,<br/>exposition, gain et binning"]
-    GROUPS --> NEXT{"Groupe de lights suivant ?"}
-    NEXT -->|Non| SUMMARY["Résumé de la sous-session<br/>Retour des FITS calibrés<br/>produits ou réutilisés"]
-    subgraph GROUP_LOOP["Boucle sur les groupes de calibration"]
-        NEXT -->|Oui| DARK_MODE{"Darks activés ?"}
-        DARK_MODE -->|Oui| DARK_LIGHT["Chercher le master dark adapté aux lights"]
-        DARK_LIGHT --> DARK_FOUND{"Master dark trouvé ?"}
-        DARK_FOUND -->|Non| EARLY_FAILURE["Échec du groupe<br/>sans séquence préparée"]
-        EARLY_FAILURE --> NEXT
-        DARK_FOUND -->|Oui| FLAT_SELECTION
-        DARK_MODE -->|Non| FLAT_SELECTION["Sélectionner les flats compatibles<br/>Caméra, gain et binning<br/>Garder la durée de pose majoritaire"]
-        FLAT_SELECTION --> CALIBRATED_CACHE{"Calibrations exportées réutilisables<br/>sans --force et avec CFA adapté ?"}
-        CALIBRATED_CACHE -->|Non| PREPARE_LIGHTS["Préparer la séquence de lights"]
-        CALIBRATED_CACHE -->|Oui| REUSE_GROUP["Réutiliser les calibrations<br/>et leur séquence"]
-        REUSE_GROUP --> NEXT
-        PREPARE_LIGHTS --> HAS_FLATS{"Flats compatibles disponibles ?"}
-        subgraph FLAT_PROCESS["Sous-traitement : master flat du groupe"]
-            HAS_FLATS -->|Oui| FLAT_DARK_MODE{"Darks activés ?"}
-            FLAT_DARK_MODE -->|Oui| FIND_FLAT_DARK["Chercher le master dark adapté aux flats"]
-            FIND_FLAT_DARK --> FLAT_DARK_FOUND{"Dark des flats trouvé ?"}
-            FLAT_DARK_FOUND -->|Non| FAILURE["Échec du groupe : journaliser la cause"]
-            FLAT_DARK_FOUND -->|Oui| PREPARE_FLATS["Préparer les flats et<br/>convertir dans flat_process"]
-            FLAT_DARK_MODE -->|Non| PREPARE_FLATS
-            PREPARE_FLATS --> CALIBRATE_FLATS["Calibrer les flats avec<br/>leur dark si activé<br/>Sinon conserver la séquence convertie"]
-            CALIBRATE_FLATS --> STACK_FLATS["Empiler les flats en médiane<br/>avec normalisation multiplicative"]
-            STACK_FLATS --> FLAT_OK{"Siril réussi et master flat présent ?"}
-            FLAT_OK -->|Non| FAILURE
-            FLAT_OK -->|Oui| USE_FLAT["Utiliser le master flat créé"]
-        end
-
-        HAS_FLATS -->|Non| CONVERT_LIGHTS["Nettoyer process et convertir les lights"]
-        USE_FLAT --> CONVERT_LIGHTS
-        CONVERT_LIGHTS --> CALIBRATE_LIGHTS["Calibrer les lights avec<br/>les masters disponibles<br/>Conserver le CFA en Drizzle auto ou force<br/>Dématricer en mode off"]
-        CALIBRATE_LIGHTS --> LIGHT_OK{"Siril réussi et sorties<br/>calibrées présentes ?"}
-        LIGHT_OK -->|Non| FAILURE
-        LIGHT_OK -->|Oui| EXPORT["Copier les pp_light_*.fit(s)<br/>Exporter la séquence Siril associée"]
-        EXPORT --> CLEANUP["Nettoyer les séquences temporaires<br/>sauf --keep-intermediate"]
-        FAILURE --> CLEANUP
-        CLEANUP --> NEXT
-    end
+```bash
+.venv/bin/python -m pytest -q --ignore=tests/test_regression_summary.py
 ```
 
-Les échecs de préparation ou de lecture rejoignent aussi la sortie d’échec du
-groupe. Sans lights ou sans groupe valide, la sous-session s’arrête avant la
-boucle. L’absence de dark des lights interrompt le groupe avant toute reprise
-des calibrations. Le nettoyage protégé par `finally` commence seulement après
-la préparation réussie de la séquence de lights ; il concerne ensuite les
-séquences temporaires, sauf `--keep-intermediate`.
-Les règles de choix des masters figurent dans [Calibration](CALIBRATION.md).
+## Domaines couverts
 
-<a id="diagramme-stacking-lightprocess"></a>
-
-## 3. Sous-traitement de stacking d’une session
-
-Ce sous-traitement est appelé pour chaque session dans la boucle de
-stacking. Les contrôles de qualité précèdent les pondérations. Les contrôles
-supplémentaires après dématriçage ou réalignement vérifient les transformations,
-sans recalculer les seuils FWHM, rondeur, comptage ou profils stellaires.
-
-```mermaid
-flowchart TD
-    INPUT["FITS calibrés d'une seule session"] --> PRESENT["Écarter les fichiers disparus"]
-    PRESENT --> INITIAL_COUNT{"Nombre de fichiers existants ?"}
-    INITIAL_COUNT -->|Aucun| FAIL["Échec du stack et rapport<br/>associé si disponible"]
-    INITIAL_COUNT -->|Un| ONE_EXISTING["Retourner cette image directement<br/>Sans sélection ni empilement"]
-    INITIAL_COUNT -->|Plusieurs| LAYOUT["Conserver la structure FITS majoritaire"]
-    LAYOUT --> COUNT{"Nombre d'entrées compatibles ?"}
-    COUNT -->|Aucune| FAIL
-    COUNT -->|Une| ONE["Retourner cette image directement<br/>Sans sélection ni empilement"]
-    COUNT -->|Plusieurs| INPUT_LINKS["00_inputs : préparer les liens ou copies"]
-    INPUT_LINKS --> REGISTER["01_registration : convertir,<br/>détecter les étoiles<br/>Astrométrie si activée puis alignement"]
-    REGISTER --> GEOMETRY["02_quality : contrôler les transformations<br/>et lire les mesures des<br/>poses indépendantes"]
-    GEOMETRY --> QUALITY["Appliquer les critères de sélection<br/>FWHM, rondeur, nombre d'étoiles"]
-    QUALITY --> PROFILES["Mesurer et filtrer les profils stellaires<br/>R80 et allongement cohérent"]
-    PROFILES --> WEIGHTS["Calculer les poids des poses retenues<br/>FWHM et rondeur, sans créer de répétitions"]
-    WEIGHTS --> DRIZZLE["Analyser le dithering, l'échantillonnage<br/>la couverture et les ressources"]
-    DRIZZLE --> DRIZZLE_CHOICE{"Drizzle sélectionné ?"}
-    DRIZZLE_CHOICE -->|Oui| CAPABILITY["03_capability : vérifier<br/>la compatibilité Siril"]
-    CAPABILITY --> SUPPORTED{"Compatibilité vérifiée ?"}
-    SUPPORTED -->|Oui| DIAGNOSTICS
-    SUPPORTED -->|Non| DISABLE["Désactiver Drizzle<br/>Consigner la compatibilité échouée"]
-    DISABLE --> DIAGNOSTICS
-    DRIZZLE_CHOICE -->|Non| SKIP["03_capability : écrire SKIPPED.txt"]
-    SKIP --> DIAGNOSTICS["Écrire le diagnostic Drizzle"]
-    DIAGNOSTICS --> RETAINED{"Analyse valide et poses retenues ?"}
-    RETAINED -->|Non| FAIL
-    RETAINED -->|Oui| FORCE_FAILURE{"Compatibilité échouée<br/>en mode force ?"}
-    FORCE_FAILURE -->|Oui| FAIL
-    FORCE_FAILURE -->|Non| ENABLED{"Drizzle toujours activé ?"}
-    ENABLED -->|Oui| DRIZZLE_OPTIONS["Préparer les paramètres Drizzle<br/>Conserver les transformations<br/>initiales contrôlées"]
-    ENABLED -->|Non| STANDARD{"Branche standard : images CFA ?"}
-    STANDARD -->|Oui| DEBAYER["04_debayer_registration :<br/>dématricer et réaligner<br/>Contrôler la nouvelle<br/>séquence avant application"]
-    STANDARD -->|Non| ROBUST
-    DEBAYER --> ROBUST{"Réalignement robuste activé ?"}
-    ROBUST -->|Oui| REALIGN["04_realign : appliquer<br/>l'alignement puis réaligner<br/>Contrôler les nouvelles transformations"]
-    ROBUST -->|Non| APPLY
-    REALIGN --> APPLY["04_applyreg : appliquer l'alignement<br/>aux poses indépendantes<br/>Cadrage commun natif Siril : framing=min"]
-    DRIZZLE_OPTIONS --> APPLY
-    APPLY --> REPEAT["Créer les répétitions par<br/>liens vers les FITS alignés"]
-    REPEAT --> STACK["04_stacking : empiler avec la<br/>méthode et les seuils demandés"]
-    STACK --> RESULT["FITS final et rapport de stacking"]
-    RESULT --> RETURN["Retour à la boucle des sessions"]
-    ONE --> RETURN
-    ONE_EXISTING --> RETURN
-```
-
-Les échecs Siril, les séquences illisibles et l’absence de transformation
-admissible interrompent le sous-traitement. Le cas d’une seule image renvoie
-son chemin sans produire les rapports des étapes non exécutées. Le détail des
-commandes et du cadrage est donné dans [Alignement et empilement](STACKING.md).
-
-## Pages de référence
-
-| Étape | Détail |
+| Domaine | Fichiers de tests |
 |---|---|
-| Entrées et calibration | [Découverte, groupement, darks, flats et CFA](CALIBRATION.md) |
-| Choix des poses | [Sélection des images](../filter/stacking/IMAGE_SELECTION.md) |
-| Contrôle des pixels | [Profils stellaires R80 et allongement](../filter/stacking/STELLAR_PROFILE_FILTER.md) |
-| Alignement et stacking | [Scripts exécutés et branche standard/Drizzle](STACKING.md) |
-| Décision Drizzle | [Conditions, ressources et paramètres](../filter/stacking/DRIZZLE_SPECIFICATION.md) |
-| Sorties et relance | [Fichiers, cache, journaux et options de reprise](OUTPUTS.md) |
-| Assemblage de champs | [Mosaïque optionnelle](../MOSAIC.md) |
-| Séquences | [Images, mesures, transformations et écritures](../reference/SIRIL_SEQUENCE.md) |
+| Métadonnées FITS | `test_fits_info.py` |
+| Calibration et reprises | `test_lightprocessor_calibration.py`, `test_force_recalc.py` |
+| Sessions, stacking et orchestration mosaïque | `test_session_pipeline.py` |
+| Sélection et profils stellaires | `test_quality_filter.py`, `test_stellar_quality.py` |
+| Drizzle et transformations | `test_drizzle.py`, `test_registration_geometry.py` |
+| Séquences Siril | `test_siril_sequence.py` |
+| Post-traitements Siril et backend Cosmic Clarity | `test_postprocessor.py`, `test_postprocess.py`, `test_deconvolution.py`, `test_denoising.py`, `test_deconvolution_quality.py`, `test_photometric_color.py`, `test_cosmic_clarity.py`, `test_cosmic_inference.py` |
+| Pipeline de post-traitement partagé | `test_postprocessing.py`, `test_session_pipeline.py` |
+| Boucle solaire : centrage, corrections et sélection vide | `test_solar_eclipse_sequence.py` |
+| Qualité astrophotographique, chaînes et GraXpert | `test_restoration_quality.py`, `test_restoration_chains.py`, `test_restoration_summary.py`, `test_graxpert.py`, `test_restoration.py` |
+| Mosaïque : noms, entrées, préparation et script généré | `test_mosaic.py`, `test_mosaic_validation.py`, `test_integrated_script.py`, `test_simplified_mosaic.py` |
+| Configuration, lancement et journaux Siril | `test_siril_validation.py` |
+| Génération et navigation HTML, titres uniques et ancres du monofichier | `test_docs_html.py` |
+| Synthèse de non-régression | `test_regression_summary.py` |
 
-## Après le stacking ou la mosaïque
+## Isolation et automatisation
 
-Le script autonome [postProcess](../../postProcess/README.md) peut ensuite
-traiter le FITS produit : correction du gradient, étalonnage photométrique,
-comparaison des chaînes de restauration, puis rendu AutoGHS facultatif.
-Sans comparaison de chaînes, la déconvolution précède le débruitage.
+`test_solar_eclipse_sequence.py` vérifie l’ordre réel des corrections sur des
+images constantes synthétiques : recadrage et rotation de l’image et du masque,
+normalisation puis filtrage du fond. Il impose seulement les détections du
+disque et le déplacement de corrélation, pour tester les départs cohérents ou
+incohérents, la mémorisation du centre et l’absence d’images film. Les sorties
+doivent garder la taille prévue, une intensité de 100 et un facteur unité.
+Un essai complet sur cinq FITS synthétiques exécute aussi le modèle solaire,
+les corrections, les slots et les écritures : GIF de 64 × 64 pixels durant
+une seconde, avec trois PNG de debug. Les FITS de cet essai renseignent
+l’exposition et le gain. Voir la [correspondance des six diagrammes avec le
+code](../docs/scripts/generate_docs_html/DIAGRAMS.md).
+
+`test_calibration_logging.py` vérifie les titres INFO et leur ordre pour les
+quatre combinaisons dark/flat, la reprise sans nouvel appel Siril, la simulation
+et l’arrêt après échec du master flat. Les détails de préparation restent en
+DEBUG. Les scénarios utilisent de petits FITS et simulent les produits Siril.
+
+`test_drizzle.py` vérifie l’ordre des bandeaux INFO du stacking sur les branches
+CFA standard et Drizzle forcé, ainsi que l’absence de titres pour les étapes
+non exécutées après un échec. `test_session_pipeline.py` vérifie les bandeaux
+de réutilisation dans les journaux de stacking, sans annonces de recalcul.
+
+`test_postprocessing.py` compare les appels scientifiques, les paramètres et
+les exports FITS/JPEG entre l’appel du processeur complet et le CLI autonome.
+Il vérifie aussi les priorités de configuration, les instantanés indépendants,
+les déclarations uniques partagées avec la mosaïque, les chemins protégés et
+la fermeture du journal sur erreur ou interruption sans activation énergétique
+dans la bibliothèque. Le CLI autonome détient et libère son propre PowerGuard.
+Les bandeaux INFO du début de post-traitement sont vérifiés dans la console
+capturée et les fichiers des deux modes d’appel. `test_postprocessor.py`
+vérifie les titres et numéros des étapes actives, avec restauration groupée,
+restauration par étape ou photométrie désactivée.
+`test_restoration_chains.py` vérifie les sous-titres en tirets pour les calculs
+et contrôles réellement exécutés, sans nouveau bandeau pour un calcul réutilisé.
+`test_restoration.py` vérifie aussi l’ordre des titres pour les moteurs évalués
+séparément et le classement final.
+`test_session_pipeline.py` couvre l’option `--postprocess`, les stacks repris,
+la mosaïque finale seule, la simulation et les échecs sans perte des stacks.
+Deux scénarios vérifient l’enchaînement activé par défaut, sans option, sur un
+stack et une mosaïque ; les tests limités aux étapes amont le désactivent
+explicitement. Les désactivations JSON/CLI restent testées séparément.
+Les moteurs simulés isolent l’enchaînement de la validation astrophotographique.
+Les scénarios PowerGuard vérifient un contexte unique dans lightProcess pour
+la calibration, les stacks, la mosaïque et les post-traitements, même lorsque
+ces derniers sont désactivés. La simulation ne demande pas de protection ;
+une erreur ou une interruption libère celle détenue par le script.
+
+```bash
+PIP_NO_INDEX=1 .venv/bin/python -m pytest -q tests/test_postprocessing.py tests/test_session_pipeline.py tests/test_render_exports.py
+```
+
+Les données de test sont créées dans des répertoires temporaires, notamment
+avec la fixture `tmp_path`. `conftest.py` fournit les fixtures partagées, les
+FITS simulés et l’environnement du wrapper `lightProcess.sh`.
+Les tests Siril utilisent des commandes simulées ou de faux exécutables ;
+ils ne constituent pas une validation d’un stacking réel sur les acquisitions.
+
+Le workflow GitHub **Documentation MkDocs** exécute les tests des générateurs
+avec `unittest`. La suite de non-régression complète s’exécute avec les
+commandes pytest ci-dessus ; aucun workflow GitHub dédié à cette suite
+n’est actuellement configuré.
+
+## Refactoring des moteurs Siril
+
+`test_deconvolution.py` et `test_denoising.py` couvrent les objets d’exécution
+indépendants, les copies des options et l’audit des essais. Le repli adaptatif
+vérifie aussi que le recadrage ne change pas la fraction minimale d’appariement.
+Les tests appellent directement les méthodes des moteurs de type `processor`.
+Les doubles de calcul sont injectés dans ces moteurs ; `test_restoration.py` contrôle leur
+orchestration sur la même entrée.
+
+Pour mesurer la couverture des deux modules sans créer d’artefact dans le dépôt :
+
+```bash
+PIP_NO_INDEX=1 COVERAGE_FILE=/tmp/siril-refactoring.coverage \
+  .venv/bin/python -m pytest -q \
+  --cov=lib.deconvolution --cov=lib.denoising \
+  tests/test_deconvolution.py tests/test_denoising.py \
+  tests/test_restoration.py tests/test_cosmic_clarity.py \
+  tests/test_processor_args.py tests/test_processor_parameters.py
+```
+
+Ce contrôle porte sur ces modules et utilise des exécutions Siril simulées.
+Il ne mesure pas la couverture complète du dépôt ni la validité d’un traitement
+réel sur GPU.
+
+Le test `test_cosmic_inference.py::test_real_weights_cuda` appartient à la
+non-régression et s’exécute automatiquement si PyTorch et CUDA sont disponibles.
+Sans CUDA, pytest affiche explicitement la raison du test ignoré (`-rs`). Il
+charge les six vrais modèles et peut télécharger les poids manquants ; les
+erreurs de téléchargement, de chargement et de calcul font échouer le test.
+Aucune variable d’activation n’est nécessaire. `COSMIC_MODEL_DIR` peut choisir
+le dossier des poids ; sinon le dossier ignoré `tmp/cache/models/cosmicclarity` est utilisé.
+
+## Qualité astrophotographique
+
+Les tests synthétiques utilisent un ciel/bruit et des structures connus, y compris
+une galaxie et un filament effacés, une nébulosité dominante, du signal rouge et
+du bruit corrélé. Les décisions UNKNOWN sont vérifiées sans faux bonus de bruit.
+Les champs stellaires denses vérifient que le lissage ne transforme pas les
+étoiles en faux signal diffus. Une image majoritairement couverte de signal
+vérifie que le ciel connu dans les quatre coins reste exploitable, tandis
+qu’un champ sans ciel identifiable conserve UNKNOWN.
+Les tests des chaînes évaluent 12/18 variantes et 11/17 opérations élémentaires
+avec cache par entrée effective ; le choix final ne somme pas les scores locaux.
+Les synthèses distinguent rejets locaux et globaux, erreurs, indisponibilités,
+UNKNOWN et candidats acceptés mais moins bien classés ; elles conservent les
+audits écrits avant une erreur et les références des calculs réutilisés.
+La conclusion explicative est vérifiée sur une chaîne retenue et une entrée
+conservée, avec traduction des régions UNKNOWN et des limites du contrôle diffus.
+`test_quality_preview.py` vérifie les couleurs des masques, les cadres verts,
+l’orientation de l’aperçu, le cas sans ciel et la conservation des données.
+`test_power_guard.py` vérifie les services D-Bus facultatifs, les ressources
+acquises et leur libération même après une erreur de traitement.
+La conservation du type du cookie est contrôlée systématiquement ; si
+`dbus-python` est disponible, sa sérialisation réelle en `UInt32` est également
+vérifiée sans connexion à un service système.
+Les tests de paramètres vérifient l’activation des chaînes par défaut et la
+priorité CLI > configuration > défauts.
+GraXpert est testé par des sessions ONNX et une acquisition de poids simulées,
+sans réseau. L’activation automatique est vérifiée sur les caches locaux valides,
+absents, corrompus ou inaccessibles, ainsi que ses priorités CLI/configuration,
+sa sauvegarde et son intégration aux comparaisons et aux chaînes.
+Les scénarios à deux moteurs isolent les caches utilisateur.
+Les tests de transmission entre déconvolution et débruitage désactivent
+explicitement AutoGHS, dont le rendu est couvert par ses propres tests.
+Une inférence CPU réelle conditionnelle sur un extrait de M33 est
+exécutée lorsque ONNX Runtime, les poids et l’image exemple sont disponibles.
+Les nouveaux contrôles de flux sont diagnostiques par défaut : ces tests ne
+remplacent pas une calibration sur plusieurs références astrophotographiques.
+Voir [le contrat et les limites](../docs/scripts/postProcess/quality.md).
+
+`test_docs_html.py` vérifie la navigation, l’exclusion des commentaires de code
+du sommaire, les diagrammes et la copie des JSON liés dans l’export HTML.
+Les liens Python et shell pointent vers GitHub sans copie du code. Les poids
+binaires et les cibles hors dépôt restent exclus.
+`test_documentation_site.py` couvre les ancres distinctes des chapitres, leurs
+liens internes, les ressources embarquées du monofichier et la protection des
+dossiers. Une construction MkDocs complète rend les diagrammes dans Chromium
+et génère le PDF avant de publier les téléchargements sur le site.
+Le test de cadrage utilise Chromium en mode impression sur des figures larges
+et hautes : elles doivent tenir dans la largeur disponible et sous 247 mm de
+hauteur, avec évitement des coupures. Ce test est ignoré si Playwright ou son
+navigateur ne sont pas installés ; les autres erreurs du navigateur sont bloquantes.
+Il compare aussi la hauteur et l’espacement des libellés HTML intégrés aux SVG
+entre écran et impression pour détecter les textes superposés dans le PDF.
+Avec le cache Mermaid disponible, un test vérifie aussi les losanges élargis
+sur des choix courts, longs et multilignes, en disposition verticale et
+horizontale : largeur augmentée, hauteur diminuée, libellés inchangés et
+contenus dans la forme. Ce test est ignoré si le cache manque ; construire la
+documentation avant de le lancer. Une version Mermaid incompatible est refusée.
+Le même scénario vérifie le placement automatique de groupes imbriqués avant
+et après ajout d’une branche, d’une boucle et d’un libellé multiligne : hauteur
+réduite avec les réglages communs, textes conservés et aucun symbole superposé.
+Le diagramme réel de calibration est aussi rendu : la sortie « Oui » du choix
+de reprise doit partir à droite du losange et la sortie « Non » à gauche,
+sans coordonnées fixes pour les symboles.
+Tous les diagrammes réels sous `docs/` sont également rendus et contrôlés avec
+`fixtures/documentation_crossings.js` : les intersections transverses des
+flèches sont recherchées dans un repère SVG commun. Des cas synthétiques
+vérifient le détecteur, les jonctions et les transformations des groupes.
+L’échantillonnage des courbes exclut les extrémités proches et les segments
+quasi colinéaires ; une inspection visuelle reste nécessaire pour les contacts,
+recouvrements et libellés. Le [relevé des croisements et convergences](../docs/scripts/generate_docs_html/DIAGRAMS.md#croisements-et-convergences)
+explique les convergences conservées et les croisements supprimés.
+Le workflow documentaire construit les exports avant les tests pour préparer
+le cache Mermaid nécessaire à ces vérifications avant publication.
+Les tests vérifient aussi l’ordre commun des rubriques, le sommaire imbriqué,
+les accès directs aux options sans duplication des chapitres, le regroupement
+des annexes et les ancres conservées après numérotation des manuels. Une cible
+absente ou hors des sources de navigation est refusée explicitement.
+
+## AutoGHS, StarNet et rendu final
+
+Le GHS final sans étoiles est vérifié à D=1,25, avec désactivation à 0,
+distribution constante, forces invalides et entrées non finies. RANGE,
+avec et sans chroma, doit reproduire exactement l’application
+de la courbe validée au fond déjà rendu, sans modifier les recherches amont.
+Le contrat de publication vérifie son application avant la fusion stellaire
+et sa présence dans les rapports ; la configuration vérifie CLI > JSON >
+défaut, la sauvegarde explicite et les instantanés indépendants par instance.
+
+Les tests de compensation vérifient les dépassements locaux StarNet de type
+M31, même supérieurs au seuil d’alerte : branches positives, somme linéaire
+conservée, données d’entrée inchangées et diagnostic explicite. Un scénario
+complet produit le rendu RANGE et son JPEG après compensation. Les seuils
+invalides et les branches corrigées hors domaine restent refusés.
+
+Les tests `test_star_separation.py`, `test_star_rendering.py`, `test_auto_ghs.py`
+et `test_final_render.py` couvrent respectivement l'adaptateur externe, le rendu
+stellaire/fusion, les mathématiques/recherches et le contrat du pipeline :
+
+Les tests de rendu stellaire vérifient aussi la réduction du renforcement de
+base jusqu'au premier essai admissible, l'arrêt immédiat lorsque la demande
+convient, les facteurs fractionnaires, l'épuisement borné à 1 et les largeurs
+non mesurables. Les couleurs, le support et les données sources sont préservés.
+Le rendu stellaire adaptatif est vérifié sur un champ synthétique de 36 pics
+colorés : davantage de pics franchissent le contraste indicatif 0,03, avec
+conservation des zéros, rapports RGB, plafond et garde de largeur. Les cas
+constants, plateaux et forces invalides sont couverts. Les exports étoiles
+FITS/JPEG et le diagnostic PNG sont vérifiés dans le pipeline. La cible de
+dynamique 1,0 est testée pour RANGE ; la configuration préserve les
+surcharges et la nouvelle force stellaire sauvegardée.
+
+```bash
+.venv/bin/python -m pytest -q tests/test_star_separation.py tests/test_star_rendering.py tests/test_auto_ghs.py tests/test_final_render.py tests/test_postprocessor.py
+```
+
+Le contrat exige une séparation, un rendu stellaire, un seul traitement RANGE
+et une fusion avec la couche d'étoiles ; les valeurs du FITS final sont vérifiées,
+ainsi que les métadonnées, extensions et la source
+inchangée. Les pannes d'extraction, calcul, fusion et publication sont injectées
+sans autoriser de reprise. La configuration vérifie priorité, sauvegarde
+explicite et instantanés d'instance. Les histogrammes constants, gaussiens,
+points noirs ambigus/sûrs, limites des courbes, convergence et déterminisme sont
+vérifiés ; la chroma RGB optionnelle conserve la direction au gris et le gamut.
+
+`tests/data/auto_ghs_siril_1_4_4.json` contient des références **réellement
+calculées par Siril 1.4.4**, et non par une deuxième copie de l'implémentation
+Python. L'écart maximal GHS observé d'environ `1.02e-6` motive la tolérance absolue `2e-6`.
+Le point noir de référence donne un écart nul. Les branches B négatives passent
+les tests mathématiques, mais la CLI Siril locale les refuse.
+
+La validation réelle est volontairement opt-in : elle nécessite Siril Flatpak,
+StarNet V2, ses poids, et un dossier temporaire accessible depuis Flatpak. La
+commande suivante crée ses FITS et rapports **dans `tmp/autoghs-validation/`**,
+qui est réinitialisé par pytest et ne doit contenir que ces données de test :
+
+```bash
+SIRIL_AUTOGHS_INTEGRATION=1 .venv/bin/python -m pytest -q tests/test_auto_ghs_integration.py --basetemp=tmp/autoghs-validation
+```
+
+Le test CLI utilise un extrait RGB 512 × 512 de `imagesExample/M_33_combined.fits`.
+Le chemin StarNet vient des préférences Siril ; `STARNET_PATH` permet une
+surcharge pour cette validation. Siril est en Flatpak par défaut ; pour une
+installation native ou AppImage (macOS, Windows), définir `SIRIL_MODE=native` et
+`SIRIL_PATH=/chemin/siril-cli`, utilisés par les deux tests. La CLI désactive les traitements amont pour
+ne pas les réexécuter et conserve le chemin réellement résolu dans un JSON
+isolé avec `-S`. Elle vérifie les deux sorties **avec étoiles**, les deux fonds,
+le rendu stellaire, les histogrammes, la reconstruction linéaire, l'absence
+d'écrêtage, les indicateurs non linéaires et les données originales intactes.
+Un second test recalcule les oracles mathématiques dans le Siril installé et
+compare la recomposition screen à la commande PixelMath réelle ; l’écart screen
+mesuré est de `5.96e-8` environ.
+
+Le test CuPy est ignoré sans CUDA/CuPy fonctionnel. Des doubles couvrent
+l'absence initiale de CUDA et une panne après initialisation ; ils ne valident
+pas une exécution matérielle GPU. Une inspection astrophotographique sur
+nébuleuse, IFN, bande étroite, ciel bruité et étoiles très brillantes reste
+nécessaire pour qualifier les heuristiques de rendu. Voir
+[AutoGHS](../docs/scripts/postProcess/auto-ghs.md), son
+[algorithme](../docs/scripts/postProcess/auto-ghs-algorithm.md) et le
+[traitement des étoiles](../docs/scripts/postProcess/star-rendering.md).
+
+La politique générale de calcul est vérifiée par `test_compute_config.py` :
+déclaration unique, défaut auto, transmission aux moteurs créés tardivement,
+sauvegarde, surcharges historiques et choix CPU/CUDA selon la disponibilité.
+Les doubles de disponibilité ne constituent pas une validation matérielle GPU.
+
+```bash
+.venv/bin/python -m pytest -q tests/test_compute_config.py
+```
+
+Les tests de `test_final_render.py` vérifient aussi la publication de deux PNG
+distincts (sans étoiles et avec étoiles recomposées), l’absence de mélange de
+leurs courbes et les axes logarithmiques, y compris avec des classes vides.
+
+Les encarts AutoGHS sont vérifiés sur des recherches acceptées, refusées et
+un arrêt avant recherche, avec distinction des candidats et corrections BP.
+
+Les tests AutoGHS vérifient les dossiers visibles et ordonnés, le numéro fixe 05
+même après fusion des étapes de restauration, la conservation des produits
+partiels accompagnés d’un rapport ERROR et la réinitialisation sans produits
+périmés lors d’une relance. Une source dans le dossier réinitialisé est protégée.
+
+Le test CLI du nom de sortie vérifie le dossier, le rapport et le FITS
+`<image>_postprocess`, avec Clarity activé puis désactivé.
+
+La boucle d’expansion AutoGHS est vérifiée pour RANGE avec les cibles
+0,8/0,9, le gain borné, les images déjà étendues ou constantes, la limite de
+passages et les paramètres invalides. Les tests vérifient BP sur le premier RGB
+strictement positif, la conservation des valeurs supérieures et la sérialisation
+du rapport complet, avec les deux boucles distinguées dans les figures.
+
+L’égalisation partielle AutoGHS est vérifiée sur un histogramme concentré :
+diminution de la dispersion des effectifs, étalement des intensités, monotonie,
+respect des bornes, conservation des ratios RGB, désactivation et cas constant.
+Le renforcement stellaire vérifie le gain des faibles intensités, le plafond,
+l’absence de nouveaux pixels stellaires et la reproduction du rendu antérieur
+avec un facteur 1. Les gardes de largeur et de couleur restent actives.
+
+Les tests des chaînes de restauration vérifient que masques et opérations sont
+placés directement dans `<rapport>_work/`, sans niveau `001`, y compris après
+une relance sur une ancienne arborescence. Une entrée située dans le dossier
+réinitialisé est refusée avant toute suppression.
+
+Le défaut stellaire `star_faint_boost=5` est vérifié contre le facteur 3 : gain
+des très faibles intensités proche de 5/3, même support positif, ratios RGB et
+plafond conservés. Les profils gaussiens sont contrôlés aux deux réglages.
+
+`test_render_exports.py` vérifie les exports JPEG RGB pleine résolution, les
+intensités directes, l’orientation ROWORDER, l’intégrité du FITS, les entrées
+invalides et la copie du JPEG principal par le CLI. Le contrat AutoGHS vérifie
+un seul appel RANGE, une seule fusion, l’absence des produits PEAK et des
+comparatifs, puis leur nettoyage lors d’une relance sur un ancien dossier. Les
+anciens choix de stratégie CLI/JSON sont normalisés vers RANGE ; le moteur
+PEAK n’est plus exécutable. Les histogrammes du fond et de l’image étoilée
+restent distincts.
+
+`test_final_annotation.py` contrôle l’encart final de prise de vue : provenance
+des cartes FITS, placement automatique, conservation des pixels hors panneau,
+absence de totalisation supposée des mosaïques et options de configuration.
+
+`test_annotation_catalog.py` vérifie OpenNGC, la projection WCS avec rotation
+et passage RA=0, les orientations et les exclusions automatiques d’étiquettes.
+
+`test_ghs_final_stretch.py` vérifie la recherche automatique D/B/SP/HP sur trois
+distributions spatiales, la conservation du contraste brillant et du petit cœur,
+les fusions à étoiles fixes et le retour à l'identité. `test_postprocessing.py`
+vérifie que `--autoghs-only` saute tous les traitements linéaires et leurs aperçus,
+garde les exports et ne persiste pas le mode de relance.
+
+`test_ghs_log_histogram.py` confronte la régression semi-log à une pente
+exponentielle connue, vérifie sa résistance à une bosse secondaire, les
+classes vides, les bordures, la borne haute conditionnelle 0,75/0,875 et le
+classement renforcé du RMS relatif face à la pente. Les tests du moteur final
+contrôlent aussi SP variable, la visibilité des tons moyens, la distinction
+entre P98 sombre et hautes lumières, et la parité CPU/CUDA lorsqu'elle est disponible.
+Ils vérifient aussi les bornes hautes figées, le meilleur score sur tout le champ
+parmi trois finalistes, et la conservation d'un champ déjà rectiligne. Les tests
+de configuration couvrent le poids RMS, ses limites et sa priorité CLI/JSON.
+
+`test_postprocess_resume.py` vérifie la reprise avec la même entrée initiale,
+la conservation des réglages et rapports amont, les reprises répétées, les
+intermédiaires périmés/manquants/non linéaires et les anciens rapports.
+Les tests de sessions vérifient que la reprise lightProcess saute calibration,
+stacking et mosaïque et garde les mêmes réglages.
+
+`test_cuda_environment.py` contrôle aussi la séparation des index PyTorch/PyPI,
+les pins torch identiques et les échecs de chacune des deux résolutions avant
+toute suppression des paquets en conflit.
+Il contrôle l’installation CUDA dans le seul venv cible,
+la résolution avant retrait des conflits, les échecs et la validité du graphe
+ONNX. Les contrôles matériels sont lancés séparément avec `install_dependances.sh`.
+
+`test_macos_environment.py` couvre les plateformes Apple Silicon simulées,
+Rosetta et versions refusées avant mutation, l'ordre de résolution/retrait,
+les pins Mac sans CUDA et le graphe Add ONNX exécuté sur CPU. Le test matériel
+MPS/CoreML ne s'exécute que sur Darwin arm64 ; il est ignoré sous Linux.
+`test_compute_config.py` contrôle auto CUDA/MPS/CPU et la surcharge MPS
+persistante. `test_graxpert.py` vérifie la configuration CoreML sans préchargement
+NVIDIA. `test_venv_helpers.py` vérifie la sélection du venv existant, les erreurs
+sans création implicite et les six lanceurs de traitement/visualisation avec
+des outils réseau/pip interdits. Les arguments contenant des espaces sont
+transmis intacts. Le lanceur documentaire est vérifié séparément : préparation
+du venv, installation des dépendances documentaires et de Chromium, arrêt
+sur échec de pip avant la construction.
+Les choix publics `auto`/`cpu`, la migration CLI/JSON de l'ancien `cuda` global,
+les WARNING de choix CPU automatique et leur absence en CPU forcé sont couverts
+par les tests de configuration et des moteurs. Le Mac NumPy/CuPy signale
+l'absence de moteur Metal sans tenter d'importer CUDA.
+Sur un Mac réel, utiliser `bin/install_dependances.sh --check-only` avant traitement.
+
+`test_dependency_installation.py` vérifie l'installateur unique : sélection
+Linux/Mac, refus des plateformes non couvertes, nettoyage limité au venv,
+précontrôle NVIDIA avant suppression, réinstallation suivie du test et mode
+`--test` sans mutation. Les combinaisons `--reset --test` sont refusées.
+Les suppressions réelles des tests restent dans leurs dossiers temporaires.
+
+`test_installation_assets.py` vérifie le préchargement par défaut des modèles,
+les priorités de chemins, Gaia optionnel et l'absence d'écriture du JSON.
+`test_gaia_catalogue.py` utilise une archive bzip2 miniature pour vérifier les
+deux SHA, la décompression, la réutilisation sans réseau et les erreurs qui
+doivent conserver le fichier précédent. Les essais réels ont vérifié les
+poids et le catalogue Gaia déjà en cache, sans nouveau téléchargement massif.
+`test_resource_cache.py` vérifie l'arborescence commune, les anciens chemins,
+la vérification du pointeur Gaia et le nettoyage des modèles qui préserve Gaia
+et les fichiers étrangers. Les tests photométriques vérifient le passage
+automatique à `localgaia` avec préférences temporaires sans écriture utilisateur.
+
+Les contours d'annotation sont contrôlés par leurs dimensions angulaires et
+leur angle de position, après projection WCS avec rotation et inversion des
+lignes. Les tailles distinctes de M31/M32 et le repli vers un marqueur de centre
+lorsque les dimensions sont absentes sont également vérifiés.
+
+Les noms usuels d'annotation sont vérifiés pour M31/M33/M42, avec priorité au
+français disponible, conservation des identifiants et repli vers le nom original
+ou les seuls identifiants lorsque le catalogue ne fournit pas de nom usuel.
+
+Les tests GraXpert vérifient aussi la configuration des sessions mixtes GPU/CPU,
+le refus d’une session sans fournisseur GPU lorsque celui-ci est demandé, et
+la désactivation du redémarrage implicite ONNX. Ces tests simulent les
+fournisseurs ; ils ne valident pas la répartition réelle des opérations sur GPU.
+
+`test_final_color.py` vérifie aussi que `--autoghs-only` reprend à GHS puis
+exécute la saturation malgré un JSON désactivé, sauf `--disable-final-color`
+explicite, sans modifier les paramètres mémorisés.
+Il vérifie la passe couleur après GHS : conservation de Y et
+la direction des écarts RGB, ciel et cœur inchangés, couleurs fortes moins
+renforcées, gamut, force nulle et entrées invalides. Les tests de reprise
+interdisent les appels amont, exécutent deux reprises identiques, réexportent la
+référence avec la force zéro et rejettent les couches modifiées. La configuration
+contrôle CLI > JSON, l'activation facultative et le mode de reprise non rémanent.
+La parité CPU/CUDA est vérifiée quand CUDA est disponible. Les tests de sessions
+couvrent `--color-only` avec et sans mosaïque, sans calibration ni stacking.
+
+`test_stacking_annotation.py` vérifie les comptes indépendants des poids, les
+panneaux de mosaïque, les métadonnées absentes/incohérentes et les rapports
+périmés. L’intégration de l’encart utilise explicitement le stack d’origine.
 
 Les tests de `test_session_pipeline.py` appellent aussi directement
 `LightProcessor.process_target`, sans lancer le CLI : session directe, une ou
@@ -263,3 +514,12 @@ enfant, les instantanés indépendants et la sauvegarde sélective.
 Le calcul du nom automatique de mosaïque appartient au script `lightProcess.py` ;
 ses cas de préfixe, mot commun, liste vide et session unique sont vérifiés
 dans `test_session_pipeline.py`.
+
+Le test de préparation du site exécute `DocumentationBuilder.build` sur un
+mini-guide lié à un JSON et à un fichier Python : seul le JSON est copié.
+Le rendu navigateur et MkDocs y sont simulés ; la construction réelle des
+exports et du site se vérifie avec `.venv/bin/python bin/build_documentation.py`.
+
+`test_config.py` contrôle également l'import de `Config` sans autre module
+applicatif et la déclaration parent/enfant sans héritage applicatif : alias,
+paramètres non rémanents, préfixes, copies indépendantes et sauvegarde explicite.
