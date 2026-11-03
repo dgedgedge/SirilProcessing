@@ -4,7 +4,7 @@
 
 ## Responsabilité et interface
 
-[`PostProcessingProcessor`](../../../lib/postprocessing.py) hérite de
+[`PostProcessingProcessor`](../../../lib/postprocess.py) hérite de
 [`processor`](../../../lib/processor.py). Il porte l’exécution complète qui
 était dans `bin/postProcess.py` : séquence scientifique, journal par image,
 diagnostics de qualité et du gradient, puis exports FITS et
@@ -87,6 +87,9 @@ Les deux scripts enregistrent `PostProcessingProcessor` avec `Config.register`
 avant le parsing, puis lient les paramètres avant l’instanciation. La classe
 déclare `_PostProcessorSequence` par `parameter_children` ; la récursion conserve
 les instantanés des étapes et des moteurs créés tardivement.
+L’option `--postprocess` de `lightProcess`, qui active ce pipeline final, est
+déclarée par son orchestrateur `LightProcessor` plutôt que par le traitement
+réutilisé `PostProcessingProcessor`.
 
 Les options de correction du gradient, photométrie, restauration, étoiles,
 AutoGHS et calcul CPU/GPU ont les mêmes noms, défauts et règles de priorité :

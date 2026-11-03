@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from lib.config import Config
 from lib.darkprocess import DarkLib
-from lib.siril_utils import Siril
+from lib.siril import Siril
 
 
 def main() -> None:

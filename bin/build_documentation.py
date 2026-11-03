@@ -49,7 +49,7 @@ class DocumentationSection:
 
 
 class SingleFileLinks(HTMLParser):
-    """Réécrit liens/ancres et embarque les sources et images dans un chapitre."""
+    """Réécrit les liens internes et embarque les données/images d’un chapitre."""
 
     def __init__(self, root: Path, document: Path, chapters: dict[Path, str]) -> None:
         """Configure la racine autorisée et les identifiants uniques des chapitres."""
@@ -59,7 +59,7 @@ class SingleFileLinks(HTMLParser):
         self.parts: list[str] = []
 
     def _target(self, value: str) -> str:
-        """Convertit un lien local vers un chapitre ou une ressource embarquée."""
+        """Convertit un lien local vers un chapitre, un dépôt ou une ressource."""
         link = urlsplit(html.unescape(value))
         if link.scheme or link.netloc:
             return value
@@ -73,7 +73,15 @@ class SingleFileLinks(HTMLParser):
         if path in self.chapters:
             suffix = f"-{unquote(link.fragment)}" if link.fragment else ""
             return f"#{self.chapters[path]}{suffix}"
-        allowed = renderer.DOCUMENT_SOURCE_EXTENSIONS | {
+        if (
+            path.is_relative_to(self.root)
+            and path.suffix in renderer.DOCUMENT_CODE_EXTENSIONS
+            and path.is_file()
+        ):
+            return renderer.project_source_url(
+                self.root, path, query=link.query, fragment=link.fragment
+            )
+        allowed = renderer.DOCUMENT_DATA_EXTENSIONS | {
             ".png",
             ".jpg",
             ".jpeg",

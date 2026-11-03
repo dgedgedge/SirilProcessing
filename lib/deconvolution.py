@@ -21,7 +21,7 @@ from lib.deconvolution_quality import (
     log_quality_diagnostics,
 )
 from lib.postprocess_paths import reset_ordered_work_dir, treatment_file_prefix
-from lib.siril_utils import Siril
+from lib.siril import Siril
 from lib.processor import processor
 from lib.restoration import RestorationComparisonProcessor
 from lib.type_defs import ConfigValue, JSONReport, StarMeasurement
@@ -413,7 +413,6 @@ class _DeconvolutionExecution:
         name = f"{self.tag}{name}"
         script = "\n".join(
             [
-                "requires 1.4",
                 f"cd {_quote(self.work)}",
                 "setext fit",
                 "set32bits",

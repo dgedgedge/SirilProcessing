@@ -119,7 +119,7 @@ du constructeur, écrit un rapport JSON dans `output_path` et retourne
 `output_image` pour transmettre la mosaïque au traitement suivant.
 
 `Mosaic` crée son `gradient_processor` (`GradientExtractor`) dans son constructeur.
-`Mosaic.add_arguments()` délègue aussi à `gradient_processor.add_arguments()` :
+`Mosaic.add_arguments()` délègue aussi à `GradientExtractor.add_arguments()` :
 le script appelant déclare ainsi les options de la mosaïque et de son gradient
 en un seul appel. `Mosaic.set_from_args()` configure également ce composant.
 
@@ -281,8 +281,13 @@ restent les valeurs de repli. Seuls les sous-dossiers temporaires `input` et
 `output` sont nettoyés après l’appel, même en cas d’échec Siril, sauf avec
 `keep_intermediate=True`. Le répertoire nommé de la mosaïque reste présent.
 
+Le script `lightProcess.py` calcule lui-même le nom automatique à partir des
+répertoires de session avec `calculate_common_basename`.
+
 `lightProcess.py` instancie `Mosaic()` et lui délègue la déclaration de
-`--mosaic-name` via `add_arguments(parser, include_inputs=False)`. Après le
+`--mosaic-name` via `Config.register(Mosaic, parser)`. Cette unique classe
+expose par défaut les options communes ; les panneaux sont fournis par
+le pipeline. Après le
 stacking, il configure la mosaïque avec `set_from_args(args)`, puis appelle
 `post_process()` sans repasser les paramètres :
 le premier stack est `input_path`, les autres sont `args.mosaic_inputs`.
@@ -291,7 +296,11 @@ dans `<work_dir>/<nom>/<nom>_mosaic.json`, à côté du FITS final.
 
 Pour un usage autonome ou dans une séquence de processeurs, l’option
 `--mosaic-inputs FITS [FITS ...]` remplace les panneaux du constructeur pour
-cet appel. Elle n’est pas exposée par `lightProcess`, qui fournit exclusivement
-ses stacks de sessions. Les chemins sont dédupliqués et au moins deux images
+cet appel. Elle est exposée en appelant
+`Mosaic.add_arguments(parser, include_inputs=True)` ; l'appel sans cette option,
+utilisé par `lightProcess`, reçoit exclusivement les stacks de sessions.
+En Python, `input_files` au constructeur ou `mosaic_inputs` dans le Namespace
+permettent de fournir les panneaux sans cette option CLI.
+Les chemins sont dédupliqués et au moins deux images
 distinctes sont nécessaires. La méthode directe `create_mosaic()` reste
 disponible pour les anciens appels Python.

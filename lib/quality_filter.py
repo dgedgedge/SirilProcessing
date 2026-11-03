@@ -12,7 +12,7 @@ from collections.abc import Sequence
 import numpy as np
 from astropy.io import fits
 
-from lib.siril_sequence import SequenceImage, SirilSequence
+from lib.siril import SequenceImage, SirilSequence
 from lib.type_defs import ConfigMap, JSONReport
 
 

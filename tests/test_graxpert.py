@@ -410,7 +410,9 @@ def test_real_model_on_m33_crop_when_available(tmp_path, monkeypatch, project_ro
     header["CRPIX2"] -= 1100
     source, candidate = tmp_path / "m33.fits", tmp_path / "m33_native.fits"
     fits.writeto(source, data, header)
-    report = GraXpertEngine(argparse.Namespace()).process(source, candidate)
+    report = GraXpertEngine(
+        argparse.Namespace(compute_backend="cpu"),
+    ).process(source, candidate)
     result = fits.getdata(candidate)
     assert result.shape == data.shape
     assert np.isfinite(result).all()

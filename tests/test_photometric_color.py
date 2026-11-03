@@ -42,8 +42,8 @@ def fake_siril(monkeypatch, rgb):
 
 def arguments(*options):
     parser = argparse.ArgumentParser()
-    from lib.siril_utils import Siril
-    Siril.add_arguments(parser, photometry_aliases=True)
+    from lib.siril import Siril
+    Siril.add_arguments(parser)
     _PostProcessorSequence().add_arguments(parser)
     return parser.parse_args(['--disable-denoise', '--disable-autoghs', '--disable-deconvolution', *options])
 

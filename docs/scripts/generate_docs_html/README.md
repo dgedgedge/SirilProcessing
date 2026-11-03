@@ -29,10 +29,12 @@ Les diagrammes très étendus sont réduits pour tenir sur une page ; le HTML
 autonome permet de les consulter avec le zoom du navigateur.
 
 Le monofichier conserve les liens internes entre chapitres et embarque les
-sources Python/shell/JSON et images locales explicitement liées. Les liens vers
-des sites externes restent externes. Les fichiers non liés, les poids `.onnx`/
-`.pth`, les FITS et les caches ne sont pas embarqués. Le site propose aussi les
-pages HTML individuelles et leurs sources liées.
+images locales et les configurations JSON explicitement liées. Les liens vers
+les fichiers Python et shell du dépôt pointent vers leur version sur GitHub :
+le code n’est pas recopié dans l’export. Les autres liens vers des sites externes
+restent externes. Les fichiers non liés, les poids `.onnx`/`.pth`, les FITS et
+les caches ne sont pas embarqués. Le site propose aussi les pages HTML
+individuelles et les configurations liées.
 
 Le PDF et le HTML autonome suivent l’ordre des rubriques et proposent un
 sommaire imbriqué. Les références d’options sont regroupées avec le manuel de

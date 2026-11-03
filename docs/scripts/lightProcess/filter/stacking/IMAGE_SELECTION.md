@@ -76,7 +76,8 @@ finaux dans `final_selection` (poses indépendantes et entrées pondérées).
 
 ## Réglages par défaut
 
-Ces valeurs sont celles de `Config.DEFAULTS` dans [lib/config.py](../../../../../lib/config.py).
+Ces valeurs sont déclarées par `SessionStackingProcessor` dans
+[lib/light_stacking.py](../../../../../lib/light_stacking.py).
 Une configuration enregistrée ou des arguments CLI peuvent les remplacer.
 
 | Critère | Option CLI | Défaut | Effet |
@@ -101,7 +102,7 @@ natifs via les objets `SequenceImage`. Voir [sa méthode et ses sources](STELLAR
 
 Pour `quality_mask()` dans [lib/quality_filter.py](../../../../../lib/quality_filter.py), les mesures proviennent du fichier `<séquence>.seq` produit
 par Siril à l’étape `01_registration`, puis copié dans `02_quality`.
-`SirilSequence.read()` dans [lib/siril_sequence.py](../../../../../lib/siril_sequence.py)
+`SirilSequence.read()` dans [lib/siril.py](../../../../../lib/siril.py)
 lit les entrées et expose les mesures via les objets `SequenceImage` et
 `RegistrationData`. Voir [le module de séquences](../../reference/SIRIL_SEQUENCE.md) pour la
 lecture, les chemins de fichiers, la modification et l’écriture. Le premier groupe
@@ -393,7 +394,7 @@ effectivement validé et conserver ses limites connues.
 Points de référence :
 
 - [lib/config.py](../../../../../lib/config.py) et [bin/lightProcess.py](../../../../../bin/lightProcess.py) : valeurs par défaut et options ;
-- [lib/lightprocessor.py](../../../../../lib/lightprocessor.py) : compatibilité FITS et préparation des entrées ;
+- [lib/light_stacking.py](../../../../../lib/light_stacking.py) : compatibilité FITS et préparation des entrées ;
 - [lib/quality_filter.py](../../../../../lib/quality_filter.py) : `quality_mask()`, filtres FWHM, rondeur et nombre d’étoiles, application de la sélection et pondérations FWHM/rondeur ;
 - [lib/drizzle.py](../../../../../lib/drizzle.py) : lecture des mesures Siril, orchestration du stack et diagnostic Drizzle ;
 - [tests/test_quality_filter.py](../../../../../tests/test_quality_filter.py), [tests/test_drizzle.py](../../../../../tests/test_drizzle.py) et [tests/test_lightprocessor_calibration.py](../../../../../tests/test_lightprocessor_calibration.py) : vérification des comportements ;

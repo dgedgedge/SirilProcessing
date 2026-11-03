@@ -11,10 +11,13 @@ from lib.type_defs import JSONReport
 
 
 class processor(ParameterizedComponent):
-    """Traitement configurable produisant un rapport JSON et une image facultative.
+    """Traitement configurable produisant des sorties décrites par un rapport JSON.
 
-    La clé output_image désigne l’image transmise au traitement suivant.
-    output_path désigne un rapport JSON, jamais un répertoire.
+    ``input_path`` désigne une image ou une séquence selon le traitement.
+    ``output_path`` désigne le produit principal ou, pour les étapes qui
+    l'exigent, le chemin du rapport JSON. La forme exacte des sorties est propre
+    à chaque traitement ; ``output_image`` désigne l'image transmise à une étape
+    suivante lorsqu'il y en a une.
     """
 
     enabled_by_default = True
@@ -26,5 +29,5 @@ class processor(ParameterizedComponent):
         output_path: Path,
         args: argparse.Namespace | None = None,
     ) -> JSONReport:
-        """Traite l'image configurée ; args permet une surcharge pour cet appel."""
+        """Traite les entrées configurées ; args permet une surcharge ponctuelle."""
         raise NotImplementedError

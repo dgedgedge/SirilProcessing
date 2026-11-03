@@ -11,7 +11,8 @@ import pytest
 from astropy.io import fits
 
 from lib.lightprocessor import LightProcessor
-from lib.siril_utils import Siril
+from lib.light_calibration import SequenceCalibrationProcessor
+from lib.siril import Siril
 
 
 def write_frame(path: Path, image_type: str, exposure: float) -> None:
@@ -66,8 +67,17 @@ def calibration(
     siril.run_siril_script.side_effect = run_script
     monkeypatch.setattr(Siril, "create_with_defaults", lambda: siril)
     processor = LightProcessor(
-        session, str(dark_library), output_dir=tmp_path / "out",
-        work_dir=tmp_path / "work", keep_intermediate=True,
+        session,
+        output_dir=tmp_path / "out",
+        work_dir=tmp_path / "work",
+        keep_intermediate=True,
+        siril=siril,
+        calibration_processor=SequenceCalibrationProcessor(
+            siril,
+            tmp_path / "work",
+            keep_intermediate=True,
+            dark_library_path=dark_library,
+        ),
     )
     return processor, siril.run_siril_script
 
@@ -84,8 +94,8 @@ def test_calibration_stages_match_actual_masters(
 ) -> None:
     """Les titres suivent l’ordre des opérations et nomment les masters utilisés."""
     processor, run_script = calibration
-    processor.use_dark = use_dark
-    processor.calibration.use_dark = use_dark
+    processor.calibration_processor.use_dark = use_dark
+    processor.calibration_processor.calibration.use_dark = use_dark
     if not use_flat:
         for path in (processor.session_dir / "Flat").iterdir():
             path.unlink()
@@ -159,3 +169,23 @@ def test_failed_flat_does_not_announce_light_calibration(
     assert "=== Création du master flat" in caplog.text
     assert "Échec de la création du master flat" in caplog.text
     assert "=== Calibration des lights" not in caplog.text
+
+
+def test_missing_flat_dark_fails_before_light_calibration(
+    calibration: tuple[LightProcessor, Mock],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Un dark flat absent garde l'annonce de l'étape qui ne peut aboutir."""
+    processor, run_script = calibration
+    flat_dark = (
+        Path(processor.calibration_processor.dark_library_path) / "dark_flat.fit"
+    )
+    flat_dark.unlink()
+    caplog.set_level(logging.INFO)
+
+    assert not processor.process_session({"drizzle": "off"})
+
+    assert "=== Création du master flat" in caplog.text
+    assert "aucun master dark adapté pour calibrer les flats" in caplog.text
+    assert "=== Calibration des lights" not in caplog.text
+    run_script.assert_not_called()

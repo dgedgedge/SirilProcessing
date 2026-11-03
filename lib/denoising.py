@@ -15,7 +15,7 @@ from astropy.io import fits
 from lib.deconvolution import _quote, compare_star_catalogs
 from lib.deconvolution_quality import artifact_metrics, assess_denoising, denoising_criteria
 from lib.postprocess_paths import reset_ordered_work_dir
-from lib.siril_utils import Siril
+from lib.siril import Siril
 from lib.processor import processor
 from lib.restoration import RestorationComparisonProcessor
 from lib.type_defs import JSONReport
@@ -88,7 +88,6 @@ class _DenoisingExecution:
         """Construit les commandes Siril de traitement et de catalogues."""
         return "\n".join(
             [
-                "requires 1.4",
                 f"cd {_quote(self.work)}",
                 "setext fit",
                 "set32bits",

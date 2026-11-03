@@ -10,6 +10,7 @@ import pytest
 from lib.config import Config
 from lib.darkprocess import DarkLib
 from lib.lightprocessor import LightProcessor
+from lib.light_stacking import SessionStackingProcessor
 
 
 @pytest.mark.parametrize("treatment", [DarkLib, LightProcessor])
@@ -77,9 +78,9 @@ def test_direct_group_processing_validates_by_default(tmp_path: Path) -> None:
     assert darklib.stack_and_save_master_dark.call_args.args[-1] is True
 
 
-@pytest.mark.parametrize('treatment', [DarkLib, LightProcessor])
+@pytest.mark.parametrize('treatment', [DarkLib, SessionStackingProcessor])
 def test_common_stacking_defaults_and_long_cli_name(
-    tmp_path: Path, treatment: type[DarkLib] | type[LightProcessor],
+    tmp_path: Path, treatment: type[DarkLib] | type[SessionStackingProcessor],
 ) -> None:
     """Les deux scripts exposent winsorizedsigma/average et acceptent leur CLI."""
     config = Config(tmp_path / 'config.json')

@@ -198,7 +198,7 @@ def test_final_catalogs_use_relative_siril_output_names(tmp_path, monkeypatch):
                     (Path(directory) / output).write_text("catalog")
             return True
 
-    monkeypatch.setattr("lib.siril_utils.Siril", lambda **kwargs: Runner())
+    monkeypatch.setattr("lib.siril.Siril", lambda **kwargs: Runner())
     comparison = dict(
         status="validated",
         pairs=[],

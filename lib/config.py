@@ -13,41 +13,48 @@ from collections.abc import Sequence
 from copy import deepcopy
 from pathlib import Path
 from threading import Lock
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
-from lib.parameterized_component import ParameterizedComponent
-from lib.type_defs import ArgumentProvider, ConfigValue
+if TYPE_CHECKING:
+    from lib.type_defs import ArgumentProvider, ConfigValue
 
 
-class _LegacyDefaults:
-    """Vue de compatibilité des défauts appartenant aux traitements."""
+@runtime_checkable
+class _ParameterProvider(Protocol):
+    """Contrat structurel des classes qui déclarent et reçoivent des paramètres.
 
-    def __get__(
-        self, instance: Config | None, owner: type[Config]
-    ) -> dict[str, ConfigValue]:
-        """Assemble à la demande les défauts historiques des traitements et de Siril."""
-        from lib.darkprocess import DarkLib
-        from lib.lightprocessor import LightProcessor
-        from lib.siril_utils import Siril
+    Les fournisseurs sont transmis par les appelants ; Config ne charge aucune
+    classe de service ou de traitement pour les découvrir.
+    """
 
-        return {
-            **DarkLib.CONFIG_DEFAULTS,
-            **LightProcessor.CONFIG_DEFAULTS,
-            **Siril.CONFIG_DEFAULTS,
-        }
+    @classmethod
+    def add_arguments(cls, parser: argparse.ArgumentParser) -> None:
+        """Déclare les options du fournisseur dans le parseur partagé."""
+        ...
+
+    @classmethod
+    def parameter_children(cls) -> tuple[type[_ParameterProvider], ...]:
+        """Retourne les classes enfants dont les paramètres doivent être liés."""
+        ...
+
+    @classmethod
+    def bind_parameters(cls, args: argparse.Namespace) -> None:
+        """Capture les valeurs résolues pour les futures instances."""
+        ...
 
 
 class Config:
     """
     Classe pour charger, sauvegarder et accéder à la configuration du script.
-    Gère la persistance des paramètres dans un fichier JSON.
-    Une seule instance et un seul fichier sont utilisés par processus.
+    Gère la persistance des paramètres dans un fichier JSON. Les appelants
+    transmettent les fournisseurs d'options : aucun composant applicatif n'est
+    importé ici. Une seule instance et un seul fichier sont utilisés par
+    processus. La résolution et la liaison n'écrivent jamais le fichier ;
+    le programme principal demande explicitement la sauvegarde.
     """
 
     _instance = None
     _instance_lock = Lock()
-
-    # Vue de compatibilité ; les déclarations restent dans les traitements.
-    DEFAULTS = _LegacyDefaults()
 
     def __new__(cls, config_file: Path | str | None = None) -> Config:
         """Retourne l’instance unique du processus sous verrou de création."""
@@ -68,8 +75,10 @@ class Config:
                 self._config = {}
                 self._runtime = {}
                 self._parameters = {}
-                self._parameter_classes: dict[type[ParameterizedComponent], set[str]] = {}
-                self._path_parameters = set()
+                self._parameter_classes: dict[
+                    type[_ParameterProvider], set[str]
+                ] = {}
+                self._path_parameters: set[str] = set()
                 self.load()
             elif config_file is not None:
                 requested = str(Path(config_file).expanduser().resolve())
@@ -105,16 +114,19 @@ class Config:
         self,
         provider: ArgumentProvider,
         parser: argparse.ArgumentParser,
-        **kwargs: ConfigValue,
     ) -> ArgumentProvider:
-        """Interroge un traitement sans changer son API argparse historique.
+        """Enregistre les options déclarées par un traitement dans le parseur.
 
         parameter_persistence indique, par destination, les exceptions à la
         rémanence des options. Les arguments positionnels sont toujours locaux
         à l'exécution. config_keys permet de conserver les anciennes clés JSON.
+        Le fournisseur décide lui-même des options à exposer via
+        ``add_arguments(parser)`` ; les options déclarées par une classe enfant
+        utilisent aussi les métadonnées de cette classe. register n’accepte pas
+        de réglages propres à un appelant.
         """
         previous = set(parser._actions)
-        provider.add_arguments(parser, **kwargs)
+        provider.add_arguments(parser)
         provider_class = provider if isinstance(provider, type) else type(provider)
         if not isinstance(provider, type):
             defaults = getattr(provider, "argument_defaults", lambda: {})()
@@ -123,7 +135,7 @@ class Config:
                     action.default = defaults[action.dest]
         if (
             isinstance(provider_class, type)
-            and issubclass(provider_class, ParameterizedComponent)
+            and isinstance(provider_class, _ParameterProvider)
         ):
             self._register_parameter_classes(provider_class)
             self._parameter_classes[provider_class].update(
@@ -135,13 +147,29 @@ class Config:
         ):
             for child in provider.processors:
                 self._register_parameter_classes(type(child))
-        persistence = getattr(provider, "parameter_persistence", {})
-        aliases = getattr(provider, "config_keys", {})
-        self._path_parameters.update(getattr(provider, "config_path_parameters", ()))
+        provider_class = provider if isinstance(provider, type) else type(provider)
+        if isinstance(provider_class, type) and isinstance(
+            provider_class, _ParameterProvider
+        ):
+            self._path_parameters.update(
+                getattr(provider_class, "config_path_parameters", ())
+            )
         for action in parser._actions:
             if action in previous or action.dest == argparse.SUPPRESS:
                 continue
             dest = action.dest
+            owner = (
+                self._parameter_owner(provider_class, dest)
+                if isinstance(provider_class, type)
+                and isinstance(provider_class, _ParameterProvider)
+                else None
+            )
+            metadata_provider = owner or provider
+            persistence = getattr(metadata_provider, "parameter_persistence", {})
+            aliases = getattr(metadata_provider, "config_keys", {})
+            self._path_parameters.update(
+                getattr(metadata_provider, "config_path_parameters", ())
+            )
             key = aliases.get(dest, dest)
             persistent = bool(action.option_strings) and persistence.get(dest, True)
             metadata = (key, persistent, action.default)
@@ -165,7 +193,7 @@ class Config:
                 action.default = value
         return provider
 
-    def _register_parameter_classes(self, cls: type[ParameterizedComponent]) -> None:
+    def _register_parameter_classes(self, cls: type[_ParameterProvider]) -> None:
         """Recense récursivement les classes et leurs destinations propres."""
         if cls in self._parameter_classes:
             return
@@ -180,6 +208,18 @@ class Config:
         self._parameter_classes[cls] = destinations
         for child in cls.parameter_children():
             self._register_parameter_classes(child)
+
+    def _parameter_owner(
+        self, cls: type[_ParameterProvider], destination: str
+    ) -> type[_ParameterProvider] | None:
+        """Trouve la classe la plus spécialisée qui déclare une option."""
+        for child in cls.parameter_children():
+            owner = self._parameter_owner(child, destination)
+            if owner is not None:
+                return owner
+        if destination in self._parameter_classes.get(cls, set()):
+            return cls
+        return None
 
     def bind_parameters(self, args: argparse.Namespace) -> None:
         """Capture les valeurs pour les classes et leurs futurs enfants.
@@ -198,11 +238,6 @@ class Config:
             names = destinations | common | getattr(cls, 'parameter_dependencies', set())
             prefixes = getattr(cls, 'parameter_prefixes', ())
             names |= {name for name in vars(args) if prefixes and name.startswith(prefixes)}
-            if cls.__module__ == "lib.cosmic_clarity.processors":
-                names |= {
-                    name for name in vars(args)
-                    if name.startswith(("cosmic_", "deconvolution_", "denoise_"))
-                }
             cls.bind_parameters(argparse.Namespace(**{
                 name: deepcopy(value) for name, value in vars(args).items()
                 if name in names
@@ -235,9 +270,10 @@ class Config:
         return self.save()
 
     def load(self) -> None:
-        """
-        Charge la configuration depuis le fichier.
-        Si le fichier n'existe pas ou est invalide, utilise les valeurs par défaut.
+        """Charge les valeurs persistées, sans connaître les défauts applicatifs.
+
+        Les traitements enregistrés appliquent ensuite leurs défauts déclarés
+        lorsque leurs options sont inscrites dans le parseur.
         """
         if os.path.exists(self.config_file):
             try:
@@ -265,16 +301,7 @@ class Config:
             for dest, (key, persistent, _) in self._parameters.items():
                 if persistent and dest in self._runtime:
                     self._config[key] = deepcopy(self._runtime[dest])
-            paths = self._path_parameters
-            if not self._parameters:
-                from lib.darkprocess import DarkLib
-                from lib.lightprocessor import LightProcessor
-
-                paths = (
-                    DarkLib.config_path_parameters
-                    | LightProcessor.config_path_parameters
-                )
-            for key in paths:
+            for key in self._path_parameters:
                 value = self._config.get(key)
                 if value is not None:
                     self._config[key] = (
@@ -327,9 +354,11 @@ class Config:
         raise TypeError(f"Valeur non sérialisable: {type(value).__name__}")
 
     def get(self, key: str, default: ConfigValue = None) -> ConfigValue:
-        """
-        Récupère une valeur de configuration.
-        Si la clé n'existe pas, renvoie la valeur par défaut spécifiée ou celle définie dans DEFAULTS.
+        """Retourne la valeur résolue, une valeur JSON ou le défaut fourni.
+
+        Les traitements enregistrés résolvent leurs propres valeurs par défaut
+        dans ``_parameters``. Hors de ce contexte, l'appelant doit fournir le
+        défaut déclaré par la classe propriétaire.
         """
         if key in self._runtime:
             return self._runtime[key]
@@ -344,8 +373,6 @@ class Config:
                     if persistent
                     else declared_default
                 )
-        if default is None and key in self.DEFAULTS:
-            default = self.DEFAULTS[key]
         return self._config.get(key, default)
 
     def set(self, key: str, value: ConfigValue) -> None:
@@ -379,31 +406,30 @@ class Config:
         return dict(self._config)
 
     def set_from_args(self, args: argparse.Namespace) -> None:
-        """Compatibilité : copie les paramètres rémanents sans écrire le fichier.
+        """Copie les paramètres persistants enregistrés, sans écrire le fichier.
 
-        Les applications enregistrées utilisent leurs déclarations locales.
-        Les anciens appelants conservent les clés et alias historiques.
+        Les traitements doivent être enregistrés avant l'appel afin que
+        ``Config`` connaisse les destinations, alias, chemins et règles de
+        persistance applicables.
+
+        Raises
+        ------
+        RuntimeError
+            Si aucun paramètre n'a été enregistré.
         """
-        if self._parameters:
-            self.capture_args(args)
-            for dest, (key, persistent, _) in self._parameters.items():
-                if persistent and hasattr(args, dest):
-                    self.set(key, deepcopy(getattr(args, dest)))
-            return
-        from lib.darkprocess import DarkLib
-        from lib.lightprocessor import LightProcessor
-
-        paths = DarkLib.config_path_parameters | LightProcessor.config_path_parameters
-        defaults = self.DEFAULTS
-        aliases = DarkLib.config_keys
-        for dest, value in vars(args).items():
-            key = aliases.get(dest, dest)
-            if key in defaults or key in DarkLib.legacy_parameters:
-                if value is not None:
-                    if key in paths:
-                        value = (
-                            [os.path.abspath(item) for item in value]
-                            if isinstance(value, list)
-                            else os.path.abspath(value)
-                        )
-                    self.set(key, deepcopy(value))
+        if not self._parameters:
+            raise RuntimeError(
+                "Aucun paramètre enregistré ; appeler Config.register avant "
+                "set_from_args."
+            )
+        self.capture_args(args)
+        for dest, (key, persistent, _) in self._parameters.items():
+            if persistent and hasattr(args, dest):
+                value = deepcopy(getattr(args, dest))
+                if key in self._path_parameters and value is not None:
+                    value = (
+                        [os.path.abspath(item) for item in value]
+                        if isinstance(value, list)
+                        else os.path.abspath(value)
+                    )
+                self.set(key, value)

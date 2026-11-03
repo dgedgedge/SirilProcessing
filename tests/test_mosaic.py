@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from lib.mosaic import Mosaic, calculate_common_basename
+from lib.mosaic import Mosaic
 from lib.processor import processor
 
 
@@ -35,7 +35,8 @@ def test_mosaic_processor_passes_image_to_next_step(tmp_path, monkeypatch, gradi
     sequence = _PostProcessorSequence([mosaic, Next()])
     parser = argparse.ArgumentParser()
     sequence.add_arguments(parser)
-    args = parser.parse_args(['--mosaic-inputs', str(second), str(first)])
+    args = parser.parse_args([])
+    args.mosaic_inputs = [second, first]
     report = tmp_path/'report.json'
     result = sequence.post_process(first, report, args)
     assert observed == [first, second]
@@ -76,7 +77,7 @@ def test_mosaic_uses_parsed_options_and_cleans_operation(tmp_path, monkeypatch, 
     second.touch()
     mosaic = Mosaic()
     parser = argparse.ArgumentParser()
-    mosaic.add_arguments(parser)
+    mosaic.add_arguments(parser, include_inputs=True)
     args = parser.parse_args(['--mosaic-name', 'panels', '--mosaic-inputs', str(second)])
     args.output_dir = tmp_path/'results'
     args.work_dir = tmp_path/'work'
@@ -123,25 +124,6 @@ def test_mosaic_uses_parsed_options_and_cleans_operation(tmp_path, monkeypatch, 
     assert (work/'input').exists() == keep
     assert (work/'output').exists() == keep
     assert mosaic.mosaic_name == 'mosaic' and mosaic.input_files == []
-
-
-@pytest.mark.parametrize("session_names, expected", [
-    (["session_M31_nord", "session_M31_sud"], "session_M31"),
-    (["NGC7000_panel1", "NGC7000_panel2", "NGC7000_panel3"], "NGC7000_panel"),
-    (["M42_rouge", "M42_vert", "M42_bleu"], "M42"),
-    (["IC1396_A", "IC1396_B"], "IC1396"),
-    (["session1", "session2"], "session"),
-    (["A", "B"], ""),
-    (["completely_different", "names_here"], ""),
-    (["single_session"], "single_session"),
-    (["M31_mosaic_part_1", "M31_mosaic_part_2"], "M31_mosaic_part"),
-    (["2023_10_15_M31", "2023_10_15_M42"], "2023_10_15_M"),
-    ([], ""),
-    (["north_M31", "south_M31"], "M31"),
-])
-def test_calculate_common_basename(session_names, expected):
-    session_dirs = [Path(name) for name in session_names]
-    assert calculate_common_basename(session_dirs) == expected
 
 
 def test_mosaic_accepts_explicit_input_files(tmp_path):
@@ -208,7 +190,7 @@ def test_mosaic_owns_and_configures_its_gradient(tmp_path, monkeypatch):
     factory.assert_called_once_with()
     gradient = mosaic.gradient_processor
     parser = argparse.ArgumentParser()
-    mosaic.add_arguments(parser)
+    mosaic.add_arguments(parser, include_inputs=True)
     assert parser.parse_args([]).gradient_method == 'rbf'
     args = parser.parse_args(['--gradient-method', 'polynomial', '--gradient-max-order', '2'])
     mosaic.set_from_args(args)
@@ -243,7 +225,7 @@ def test_mosaic_can_skip_gradient(tmp_path, monkeypatch):
         panel.touch()
     mosaic = Mosaic(tmp_path/'out', tmp_path/'work', 'field', panels)
     parser = argparse.ArgumentParser()
-    mosaic.add_arguments(parser)
+    mosaic.add_arguments(parser, include_inputs=True)
     assert parser.parse_args([]).mosaic_gradient is True
     assert parser.parse_args(['--mosaic-gradient']).mosaic_gradient is True
     mosaic.set_from_args(parser.parse_args(['--no-mosaic-gradient']))
@@ -295,7 +277,7 @@ def test_full_mosaic_survives_cleanup_and_crop_failure(tmp_path, monkeypatch, gr
         panel.touch()
     mosaic = Mosaic(tmp_path/'out', tmp_path/'work', 'field', panels)
     parser = argparse.ArgumentParser()
-    mosaic.add_arguments(parser)
+    mosaic.add_arguments(parser, include_inputs=True)
     args = parser.parse_args([] if crop_enabled else ['--no-mosaic-crop'])
     args.keep_intermediate = False
     work = tmp_path/'work/mosaic_field'
@@ -335,7 +317,7 @@ def test_excessive_crop_returns_full_mosaic_and_report_after_cleanup(tmp_path, m
         path.touch()
     mosaic = Mosaic(tmp_path/'out', tmp_path/'work', 'field', panels)
     parser = argparse.ArgumentParser()
-    mosaic.add_arguments(parser)
+    mosaic.add_arguments(parser, include_inputs=True)
     mosaic.set_from_args(parser.parse_args([]))
     work = tmp_path/'work/mosaic_field'
     def run(*args):
@@ -362,3 +344,62 @@ def test_excessive_crop_returns_full_mosaic_and_report_after_cleanup(tmp_path, m
     assert not (work/'field_mosaic.fits').exists()
     assert not (work/'output').exists()
     assert json.loads(report.read_text()) == result
+
+
+@pytest.mark.parametrize('include_inputs', [False, True])
+def test_single_mosaic_class_declares_session_or_standalone_options(
+    tmp_path: Path, include_inputs: bool,
+) -> None:
+    """La même classe expose les panneaux CLI uniquement pour l'usage autonome."""
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    Mosaic.add_arguments(parser, include_inputs=include_inputs)
+    assert parser.parse_args([]).mosaic_crop is True
+    assert parser.parse_args([]).mosaic_gradient is True
+    panels = [tmp_path / 'first.fits', tmp_path / 'second.fits']
+    options = ['--mosaic-inputs', *map(str, panels)]
+    if include_inputs:
+        assert parser.parse_args(options).mosaic_inputs == panels
+    else:
+        assert '--mosaic-inputs' not in parser.format_help()
+        with pytest.raises(SystemExit) as error:
+            parser.parse_args(options)
+        assert error.value.code == 2
+
+
+def test_mosaic_registration_binds_gradient_and_preserves_instances(
+    tmp_path: Path,
+) -> None:
+    """Mosaic remplit seule le contrat Config avec un enfant et des captures isolées."""
+    import argparse
+    import json
+    from lib.config import Config
+
+    config = Config(tmp_path / 'config.json')
+    parser = argparse.ArgumentParser()
+    config.add_arguments(parser)
+    config.register(Mosaic, parser)
+    args = config.parse_args(parser, [
+        '--mosaic-name', 'field', '--no-mosaic-crop',
+        '--gradient-smoothing', '0.4', '-S',
+    ])
+    config.bind_parameters(args)
+    first = Mosaic()
+    assert first._get_args().mosaic_name == 'field'
+    assert first._get_args().mosaic_crop is False
+    assert first.gradient_processor._get_args().gradient_smoothing == 0.4
+    assert config.save_requested(args)
+    saved = json.loads(Path(config.config_file).read_text())
+    assert saved['mosaic_crop'] is False
+    assert saved['gradient_smoothing'] == 0.4
+    assert 'mosaic_name' not in saved
+
+    args.mosaic_crop = True
+    args.gradient_smoothing = 0.8
+    config.bind_parameters(args)
+    second = Mosaic()
+    assert second._get_args().mosaic_crop is True
+    assert second.gradient_processor._get_args().gradient_smoothing == 0.8
+    assert first._get_args().mosaic_crop is False
+    assert first.gradient_processor._get_args().gradient_smoothing == 0.4

@@ -2,10 +2,14 @@
 
 [Documentation](../../../README.md) › [lightProcess](../README.md) › [Références](README.md)
 
-Le module [lib/siril_sequence.py](../../../../lib/siril_sequence.py) centralise la lecture,
-l’écriture et la modification des fichiers `.seq`. Toute manipulation d’une
-image appartenant à une séquence passe par un objet `SequenceImage` obtenu depuis
-`SirilSequence`.
+Le module [lib/siril.py](../../../../lib/siril.py) regroupe l’exécution de Siril
+et la lecture, l’écriture et la modification des fichiers `.seq`. Cette page
+détaille le modèle de séquence ; l’exécution des scripts ajoute aussi
+automatiquement `requires 1.4`, journalise leur sortie et lève une erreur fatale
+en cas d’échec.
+
+Toute manipulation d’une image appartenant à une séquence passe par un objet
+`SequenceImage` obtenu depuis `SirilSequence`.
 
 ## Objets disponibles
 
@@ -23,7 +27,7 @@ le module n’en invente pas.
 ## Lecture et fichiers transmis aux traitements
 
 ```python
-from lib.siril_sequence import SirilSequence
+from lib.siril import SirilSequence
 
 sequence = SirilSequence.read('/chemin/01_registration/light_.seq')
 image = sequence.images[0]

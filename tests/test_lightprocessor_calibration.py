@@ -1,6 +1,9 @@
+from argparse import Namespace
+import importlib.util
 from pathlib import Path
 import subprocess
 import sys
+from unittest.mock import Mock
 
 import pytest
 import numpy as np
@@ -8,7 +11,23 @@ from astropy.io import fits
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from lib.lightprocessor import CalibrationProfile, discover_session_roots, stack_session_outputs
+from lib.light_calibration import (
+    CalibrationProfile,
+    MasterFlatProcessor,
+    SequenceCalibrationProcessor,
+)
+from lib.lightprocessor import LightProcessor
+from lib.light_stacking import SessionStackingProcessor
+from lib.processor import processor
+
+_light_process_spec = importlib.util.spec_from_file_location(
+    "light_process_cli_tests",
+    Path(__file__).parents[1] / "bin" / "lightProcess.py",
+)
+assert _light_process_spec is not None and _light_process_spec.loader is not None
+_light_process_cli = importlib.util.module_from_spec(_light_process_spec)
+_light_process_spec.loader.exec_module(_light_process_cli)
+discover_session_roots = _light_process_cli.discover_session_roots
 
 
 def _write_fits_frame(path, image_type, exptime=180.0, temperature=-10.0, gain=125.0):
@@ -67,6 +86,149 @@ def test_light_calibration_uses_dark_and_flat():
     assert command.startswith("calibrate light_seq")
 
 
+def test_sequence_calibration_uses_shared_processor_hierarchy():
+    assert issubclass(SequenceCalibrationProcessor, processor)
+    assert issubclass(MasterFlatProcessor, processor)
+    assert issubclass(SessionStackingProcessor, processor)
+    assert LightProcessor.parameter_children() == (
+        SequenceCalibrationProcessor,
+        SessionStackingProcessor,
+    )
+    assert SequenceCalibrationProcessor.parameter_children() == (MasterFlatProcessor,)
+
+
+def test_child_options_are_declared_and_bound_by_their_processor(tmp_path):
+    import argparse
+
+    from lib.config import Config
+
+    session_dir = tmp_path / "session"
+    (session_dir / "light").mkdir(parents=True)
+    config = Config(tmp_path / "config.json")
+    parser = argparse.ArgumentParser()
+    config.register(LightProcessor, parser)
+    config.add_arguments(parser)
+    args = config.parse_args(
+        parser,
+        [
+            str(session_dir),
+            "--drizzle",
+            "force",
+            "--fwhm-filter",
+            "none",
+            "--force-stacking",
+            "--no-dark",
+            "--dark-lib",
+            str(tmp_path / "configured-dark-library"),
+            "--temperature-precision",
+            "0.2",
+            "--save-config",
+        ],
+    )
+    config.bind_parameters(args)
+    stacking = SessionStackingProcessor(siril=Mock())
+    stacking_args = stacking._get_args()
+
+    assert args.stack_method == SessionStackingProcessor.CONFIG_DEFAULTS["stack_method"]
+    assert stacking_args.drizzle == "force"
+    assert stacking_args.fwhm_filter == "none"
+    assert stacking_args.force_stacking is True
+    calibration = SequenceCalibrationProcessor(
+        Mock(),
+        tmp_path / "calibration-work",
+    )
+    assert calibration.use_dark is False
+    assert calibration.temp_precision == 0.2
+    assert calibration.dark_library_path == str(
+        tmp_path / "configured-dark-library"
+    )
+    light_processor = LightProcessor(
+        session_dir,
+        tmp_path / "out",
+        tmp_path / "work",
+        siril=Mock(),
+        calibration_processor=SequenceCalibrationProcessor(
+            Mock(),
+            tmp_path / "work",
+            dark_library_path=str(tmp_path / "missing-dark-library"),
+            args=Namespace(no_dark=True, temperature_precision=0.2),
+        ),
+    )
+    assert light_processor.calibration_processor.use_dark is False
+    assert light_processor.calibration_processor.dark_library_path == str(
+        tmp_path / "missing-dark-library"
+    )
+    assert "force_stacking" not in LightProcessor.parameter_persistence
+    assert SessionStackingProcessor.parameter_persistence["force_stacking"] is False
+    assert config.save_requested(args)
+    assert "force_stacking" not in config.to_dict()
+    assert config.to_dict()["no_dark"] is True
+    assert config.to_dict()["dark_library_path"] == str(
+        tmp_path / "configured-dark-library"
+    )
+    assert config.to_dict()["temperature_precision"] == 0.2
+
+
+def test_light_processor_does_not_accept_calibration_dark_toggle(tmp_path):
+    import inspect
+
+    assert "use_dark" not in inspect.signature(LightProcessor).parameters
+    assert "temp_precision" not in inspect.signature(LightProcessor).parameters
+    assert "dark_library_path" not in inspect.signature(LightProcessor).parameters
+
+
+def test_light_processor_from_config_applies_dark_setting_to_calibration(
+    tmp_path, monkeypatch
+):
+    from lib.config import Config
+    from lib.siril import Siril
+
+    session_dir = tmp_path / "session"
+    (session_dir / "light").mkdir(parents=True)
+    config = Config(tmp_path / "config.json")
+    config.set("no_dark", True)
+    config.set("temperature_precision", 0.25)
+    siril = Mock()
+    monkeypatch.setattr(Siril, "create_with_defaults", lambda: siril)
+
+    light_processor = LightProcessor.from_config(
+        session_dir,
+        dark_library_path=str(tmp_path / "missing-dark-library"),
+        output_dir=tmp_path / "out",
+        work_dir=tmp_path / "work",
+    )
+
+    assert light_processor.calibration_processor.use_dark is False
+    assert light_processor.calibration_processor.temp_precision == 0.25
+    assert light_processor.calibration_processor.dark_library_path == str(
+        tmp_path / "missing-dark-library"
+    )
+    assert light_processor.siril is siril
+    assert light_processor.calibration_processor.siril is siril
+
+
+def test_master_flat_processor_rejects_empty_sequence(tmp_path):
+    siril = Mock()
+    processor = MasterFlatProcessor(
+        siril, tmp_path, CalibrationProfile(), keep_intermediate=False
+    )
+
+    with pytest.raises(ValueError, match="aucune image"):
+        processor.post_process(
+            tmp_path / "flat.fit",
+            tmp_path / "master_flat",
+            args=Namespace(
+                sequence_name="flat_group",
+                flat_files=[],
+                flat_dark_path=None,
+                group_key="group",
+                dry_run=False,
+            ),
+        )
+
+    siril.run_siril_script.assert_not_called()
+
+
 def test_discover_session_roots_for_target_with_multiple_sessions(tmp_path):
     target_root = tmp_path / "M_33"
     session_01 = target_root / "session_01"
@@ -82,34 +244,14 @@ def test_discover_session_roots_for_target_with_multiple_sessions(tmp_path):
     assert discovered == [session_01, session_02]
 
 
-def test_generate_siril_script_rebuilds_calibrated_sequence(tmp_path, monkeypatch):
-    session_dir = tmp_path / "session_test"
-    session_dir.mkdir()
-    (session_dir / "light").mkdir()
-
-    dark_lib = tmp_path / "dark_lib"
-    dark_lib.mkdir()
-
-    lightprocessor_module = __import__("lib.lightprocessor", fromlist=["LightProcessor"])
-
-    class DummySiril:
-        @staticmethod
-        def create_with_defaults():
-            return DummySiril()
-
-    monkeypatch.setattr(lightprocessor_module, "Siril", DummySiril)
-
-    processor = lightprocessor_module.LightProcessor(
-        session_dir=session_dir,
-        dark_library_path=str(dark_lib),
-        output_dir=tmp_path / "out",
-        work_dir=tmp_path / "work",
-        use_dark=True,
+def test_generate_siril_script_rebuilds_calibrated_sequence(tmp_path):
+    calibration = SequenceCalibrationProcessor(
+        Mock(),
+        tmp_path / "work",
     )
 
-    script = processor._generate_siril_script(
+    script = calibration._generate_script(
         sequence_name="light_seq",
-        group_key="group_key",
         dark_path="/tmp/master_dark.fit",
         flat_path="/tmp/master_flat.fit",
         stack_params={"method": "average", "rejection": "sigma", "rejection_low": 2.5, "rejection_high": 3.0},
@@ -120,35 +262,17 @@ def test_generate_siril_script_rebuilds_calibrated_sequence(tmp_path, monkeypatc
     assert "stack r_pp_light_seq" not in script
 
 
-def test_generate_flat_master_script_stacks_calibrated_sequence_without_reconvert(tmp_path, monkeypatch):
-    session_dir = tmp_path / "session_test"
-    session_dir.mkdir()
-    (session_dir / "light").mkdir()
-
-    dark_lib = tmp_path / "dark_lib"
-    dark_lib.mkdir()
-
-    lightprocessor_module = __import__("lib.lightprocessor", fromlist=["LightProcessor"])
-
-    class DummySiril:
-        @staticmethod
-        def create_with_defaults():
-            return DummySiril()
-
-    monkeypatch.setattr(lightprocessor_module, "Siril", DummySiril)
-
-    processor = lightprocessor_module.LightProcessor(
-        session_dir=session_dir,
-        dark_library_path=str(dark_lib),
-        output_dir=tmp_path / "out",
-        work_dir=tmp_path / "work",
-        use_dark=True,
+def test_generate_flat_master_script_stacks_calibrated_sequence_without_reconvert(tmp_path):
+    processor = MasterFlatProcessor(
+        Mock(),
+        tmp_path / "work",
+        CalibrationProfile(),
     )
 
-    script = processor._generate_flat_master_script(
-        flat_sequence_name="flat_seq",
-        master_flat_output_base=str(tmp_path / "work" / "master_flat"),
-        flat_dark_path="/tmp/master_dark.fit",
+    script = processor._generate_script(
+        sequence_name="flat_seq",
+        output_base=tmp_path / "work" / "master_flat",
+        dark_path="/tmp/master_dark.fit",
     )
 
     assert "calibrate flat_seq -dark=/tmp/master_dark.fit -cc=dark -cfa" in script
@@ -156,32 +280,13 @@ def test_generate_flat_master_script_stacks_calibrated_sequence_without_reconver
     assert "stack pp_flat_seq median -norm=mul -out=" in script
 
 
-def test_export_calibrated_outputs_from_process_copies_only_pp_sequence(tmp_path, monkeypatch):
-    session_dir = tmp_path / "session_test"
-    session_dir.mkdir()
-    (session_dir / "light").mkdir()
-
-    dark_lib = tmp_path / "dark_lib"
-    dark_lib.mkdir()
-
-    import lib.lightprocessor as lightprocessor_module
-
-    class DummySiril:
-        @staticmethod
-        def create_with_defaults():
-            return DummySiril()
-
-    monkeypatch.setattr(lightprocessor_module, "Siril", DummySiril)
-
-    processor = lightprocessor_module.LightProcessor(
-        session_dir=session_dir,
-        dark_library_path=str(dark_lib),
-        output_dir=tmp_path / "out",
-        work_dir=tmp_path / "work",
-        use_dark=True,
+def test_export_calibrated_outputs_from_process_copies_only_pp_sequence(tmp_path):
+    processor = SequenceCalibrationProcessor(
+        Mock(),
+        tmp_path / "work",
     )
 
-    process_dir = processor.work_dir / "process"
+    process_dir = tmp_path / "work" / "process"
     process_dir.mkdir(parents=True)
     for index in range(1, 4):
         (process_dir / f"light_seq_{index:05d}.fits").write_bytes(b"raw")
@@ -189,7 +294,7 @@ def test_export_calibrated_outputs_from_process_copies_only_pp_sequence(tmp_path
     (process_dir / "pp_other_seq_00001.fits").write_bytes(b"other")
 
     calibrated_output_dir = tmp_path / "calibrated"
-    processor._export_calibrated_outputs_from_process("light_seq", calibrated_output_dir)
+    processor.export_calibrated_outputs("light_seq", calibrated_output_dir)
 
     exported = sorted(path.name for path in calibrated_output_dir.glob("*.fits"))
 
@@ -262,7 +367,6 @@ def test_light_process_wrapper_runs_dry_run_pipeline(
 ])
 def test_stack_selection_only_after_registration(tmp_path, monkeypatch, method, roundness, platesolve, reject_percent, retained, effective, simulated_registered_sequence):
     import json
-    import lib.lightprocessor as processor
     import lib.drizzle as drizzle
     from lib.quality_filter import quality_mask
 
@@ -328,14 +432,21 @@ def test_stack_selection_only_after_registration(tmp_path, monkeypatch, method, 
                 raise AssertionError(script_name)
             return True
 
-    monkeypatch.setattr(processor, 'Siril', DummySiril)
+    stacker = SessionStackingProcessor(siril=DummySiril())
     cfg = dict(method=method, roundness_filter=roundness, fwhm_filter='1.8k',
                fwhm_reject_percent=reject_percent, fwhm_weighted=True, fwhm_weight_max_extra=2,
                drizzle='off')
     if platesolve is not None:
         cfg['enable_stack_platesolve'] = platesolve
     report = {}
-    result = stack_session_outputs(sources, tmp_path/'out', tmp_path/'work', 'target_name', cfg, stack_report=report)
+    result = stacker.stack_outputs(
+        sources,
+        tmp_path / "out",
+        tmp_path / "work",
+        "target_name",
+        cfg,
+        stack_report=report,
+    )
     assert result == tmp_path/'out/target_name_combined.fits'
     assert calls == ['01_registration.sps', '04_realign.sps', '04_applyreg.sps', '04_stacking.sps']
     assert selections == [4]
@@ -344,7 +455,7 @@ def test_stack_selection_only_after_registration(tmp_path, monkeypatch, method, 
     assert report['kept_effective_for_stack'] == effective
 
 
-def test_stack_session_outputs_force_stacking_cleans_previous_artifacts(tmp_path):
+def test_stacking_processor_force_cleans_previous_artifacts(tmp_path):
     source_a = tmp_path / "source_a.fits"
     source_b = tmp_path / "source_b.fits"
     source_a.write_bytes(b"dummy-a")
@@ -373,24 +484,23 @@ def test_stack_session_outputs_force_stacking_cleans_previous_artifacts(tmp_path
             assert not stale_output_fit.exists()
             return False
 
-    import lib.lightprocessor as lightprocessor_module
-    original = lightprocessor_module.Siril
-    lightprocessor_module.Siril = DummySiril
-    try:
-        result = stack_session_outputs(
-            [source_a, source_b],
-            output_dir,
-            work_dir,
-            target_name,
-            {"method": "average", "rejection": "sigma", "rejection_low": 3.0, "rejection_high": 3.0},
-            force_stacking=True,
-        )
-        assert result is None
-    finally:
-        lightprocessor_module.Siril = original
+    result = SessionStackingProcessor(siril=DummySiril()).stack_outputs(
+        [source_a, source_b],
+        output_dir,
+        work_dir,
+        target_name,
+        {
+            "method": "average",
+            "rejection": "sigma",
+            "rejection_low": 3.0,
+            "rejection_high": 3.0,
+        },
+        force_stacking=True,
+    )
+    assert result is None
 
 
-def test_stack_session_outputs_always_rebuilds_transient_stack_dirs(tmp_path):
+def test_stacking_processor_rebuilds_transient_stack_dirs(tmp_path):
     source_a = tmp_path / "source_a.fits"
     source_b = tmp_path / "source_b.fits"
     source_a.write_bytes(b"dummy-a")
@@ -426,29 +536,106 @@ def test_stack_session_outputs_always_rebuilds_transient_stack_dirs(tmp_path):
             assert prepared_inputs == ["M33_001.fits", "M33_002.fits"]
             return False
 
-    import lib.lightprocessor as lightprocessor_module
-    original = lightprocessor_module.Siril
-    lightprocessor_module.Siril = DummySiril
-    try:
-        result = stack_session_outputs(
-            [source_a, source_b],
-            output_dir,
-            work_dir,
-            target_name,
-            {"method": "average", "rejection": "sigma", "rejection_low": 3.0, "rejection_high": 3.0},
+    result = SessionStackingProcessor(siril=DummySiril()).stack_outputs(
+        [source_a, source_b],
+        output_dir,
+        work_dir,
+        target_name,
+        {
+            "method": "average",
+            "rejection": "sigma",
+            "rejection_low": 3.0,
+            "rejection_high": 3.0,
+        },
+    )
+    assert result is None
+
+
+def test_stacking_processor_post_process_reuses_single_calibrated_image(tmp_path):
+    source = tmp_path / "calibrated.fits"
+    source.touch()
+    report = {}
+    stacker = SessionStackingProcessor(siril=Mock())
+
+    result = stacker.post_process(
+        input_path=source,
+        output_path=tmp_path / "out" / "target_combined.fits",
+        args=Namespace(
+            output_files=[source],
+            work_dir=tmp_path / "work",
+            target_name="target",
+            stack_params={},
+            force_stacking=False,
+            stack_report=report,
+        ),
+    )
+
+    assert result == {
+        "status": "ok",
+        "input_image": str(source),
+        "output_image": str(source),
+    }
+
+
+def test_stacking_processor_requires_execution_context(tmp_path):
+    stacker = SessionStackingProcessor(siril=Mock())
+
+    with pytest.raises(ValueError, match="Paramètres d'exécution"):
+        stacker.post_process(
+            input_path=tmp_path / "input.fits",
+            output_path=tmp_path / "output.fits",
+            args=Namespace(),
         )
-        assert result is None
-    finally:
-        lightprocessor_module.Siril = original
+
+
+def test_stacking_processor_filters_incompatible_and_unreadable_fits(tmp_path):
+    stacker = SessionStackingProcessor(siril=Mock())
+    matching = [tmp_path / f"matching_{index}.fits" for index in range(2)]
+    incompatible = tmp_path / "incompatible.fits"
+    unreadable = tmp_path / "unreadable.fits"
+    for path in matching:
+        fits.writeto(path, np.ones((4, 4), dtype=np.float32))
+    fits.writeto(incompatible, np.ones((5, 5), dtype=np.float32))
+    unreadable.write_text("not a FITS file")
+
+    kept, stats = stacker._filter_compatible_stack_inputs(
+        [*matching, incompatible, unreadable]
+    )
+
+    assert kept == matching
+    assert stats == {
+        "rejected_incompatible_layout": 1,
+        "rejected_unreadable_layout": 1,
+    }
+
+
+def test_stacking_processor_keeps_unreadable_files_if_no_layout_can_be_read(
+    tmp_path,
+):
+    stacker = SessionStackingProcessor(siril=Mock())
+    files = [tmp_path / "one.fits", tmp_path / "two.fits"]
+    for path in files:
+        path.write_text("not a FITS file")
+
+    kept, stats = stacker._filter_compatible_stack_inputs(files)
+
+    assert kept == files
+    assert stats == {
+        "rejected_incompatible_layout": 0,
+        "rejected_unreadable_layout": 0,
+    }
 
 
 def test_calibrated_sequence_preserves_siril_selection(tmp_path):
-    from lib.lightprocessor import save_calibrated_sequence
+    from lib.light_calibration import SequenceCalibrationProcessor
+
     source=tmp_path/'process';source.mkdir()
     output=tmp_path/'export';output.mkdir()
     original="S 'pp_light_' 1 2 1 5 0 4 0\nL 1\nI 1 1\nI 2 0\n"
     (source/'pp_light_.seq').write_text(original)
-    result=save_calibrated_sequence('light',output,source)
+    result = SequenceCalibrationProcessor.save_calibrated_sequence(
+        'light', output, source
+    )
     assert result.read_text()==original
     assert not result.is_symlink()
     (source/'pp_light_.seq').unlink()
@@ -456,9 +643,25 @@ def test_calibrated_sequence_preserves_siril_selection(tmp_path):
 
 
 def test_calibrated_sequence_uses_actual_indices_and_rgb_layers(tmp_path):
-    from lib.lightprocessor import save_calibrated_sequence
+    from lib.light_calibration import SequenceCalibrationProcessor
+
     for index in (2,5):
         fits.writeto(tmp_path/f'pp_light_{index:05d}.fit', np.ones((3,4,4), dtype=np.float32))
-    result=save_calibrated_sequence('light',tmp_path)
+    result = SequenceCalibrationProcessor.save_calibrated_sequence(
+        'light', tmp_path
+    )
     assert "S 'pp_light_' 2 2 2 5 0 4 0" in result.read_text()
     assert 'L 3\nI 2 1\nI 5 1\n' in result.read_text()
+
+
+def test_list_calibrated_outputs_is_owned_by_sequence_processor(tmp_path):
+    from lib.light_calibration import SequenceCalibrationProcessor
+
+    expected = tmp_path / "pp_light_00001.fit"
+    ignored = tmp_path / "light_00001.fit"
+    expected.touch()
+    ignored.touch()
+
+    assert SequenceCalibrationProcessor.list_calibrated_outputs(tmp_path) == [
+        expected
+    ]

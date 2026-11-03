@@ -130,16 +130,40 @@ def test_invalid_json_root_falls_back_to_defaults(tmp_path, invalid):
     path = tmp_path / 'settings.json'
     path.write_text(json.dumps(invalid))
     config = Config(path)
-    assert config.get('siril_mode') == 'flatpak'
+    from lib.siril import Siril
+
+    parser = argparse.ArgumentParser()
+    config.register(Siril, parser)
+    args = config.parse_args(parser, [])
+    assert args.siril_mode == Siril.CONFIG_DEFAULTS['siril_mode']
+    assert config.get('siril_mode') == Siril.CONFIG_DEFAULTS['siril_mode']
 
 
 def test_legacy_set_from_args_normalizes_paths(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     config = Config(tmp_path / 'config.json')
+    from lib.darkprocess import DarkLib
+
+    config.register(DarkLib, argparse.ArgumentParser())
     config.set_from_args(argparse.Namespace(work_dir='work', input_dirs=['darks'], max_age=12))
     assert config.get('work_dir') == str(tmp_path / 'work')
     assert config.get('input_dirs') == [str(tmp_path / 'darks')]
     assert config.get('max_age_days') == 12
+
+
+def test_set_from_args_requires_registered_parameters(tmp_path):
+    config = Config(tmp_path / 'config.json')
+
+    with pytest.raises(RuntimeError, match='Config.register'):
+        config.set_from_args(argparse.Namespace(custom='value'))
+
+
+def test_generic_config_save_does_not_need_registered_processors(tmp_path):
+    config = Config(tmp_path / 'config.json')
+    config.set('custom', 'value')
+
+    assert config.save()
+    assert json.loads(Path(config.config_file).read_text()) == {'custom': 'value'}
 
 
 def test_subclass_can_select_file_in_init(tmp_path):
@@ -166,3 +190,94 @@ def test_atomic_replace_failure_keeps_file_and_cleans_temporary(tmp_path, monkey
     assert not config.save()
     assert path.read_bytes() == original
     assert list(tmp_path.iterdir()) == [path]
+
+
+def test_config_import_does_not_load_application_classes(tmp_path: Path) -> None:
+    """Le stockage fonctionne sans importer les composants ni leurs dépendances."""
+    import subprocess
+    import sys
+    import textwrap
+
+    script = textwrap.dedent('''\
+        import builtins
+        import json
+        import sys
+
+        original_import = builtins.__import__
+
+        def guarded_import(name, *args, **kwargs):
+            """Refuse tout chargement applicatif autre que le stockage testé."""
+            if name.startswith('lib.') and name != 'lib.config':
+                raise ImportError(f'Import applicatif interdit : {name}')
+            return original_import(name, *args, **kwargs)
+
+        builtins.__import__ = guarded_import
+        from lib.config import Config
+
+        config = Config(sys.argv[1])
+        config.set('custom', 42)
+        assert config.save()
+        with open(sys.argv[1]) as stream:
+            assert json.load(stream) == {'custom': 42}
+    ''')
+    result = subprocess.run(
+        [sys.executable, '-c', script, str(tmp_path / 'isolated.json')],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_binding_accepts_independent_provider_classes(tmp_path: Path) -> None:
+    """Le contrat déclaratif fonctionne sans hériter d'une classe applicative."""
+    class IndependentChild:
+        """Fournisseur externe déclarant ses propres métadonnées de persistance."""
+
+        parameter_persistence = {'temporary': False}
+        config_keys = {'value': 'saved_value'}
+        parameter_prefixes = ('external_',)
+        captured: argparse.Namespace | None = None
+
+        @classmethod
+        def add_arguments(cls, parser: argparse.ArgumentParser) -> None:
+            """Déclare une valeur rémanente et une option d'exécution."""
+            parser.add_argument('--value', type=int, default=3)
+            parser.add_argument('--temporary', action='store_true')
+
+        @classmethod
+        def parameter_children(cls) -> tuple[type, ...]:
+            """Déclare l'absence d'enfant pour cette feuille."""
+            return ()
+
+        @classmethod
+        def bind_parameters(cls, args: argparse.Namespace) -> None:
+            """Conserve le Namespace indépendant transmis par le stockage."""
+            cls.captured = args
+
+    class IndependentParent(IndependentChild):
+        """Expose les options de l'enfant sans dépendance à nos composants."""
+
+        @classmethod
+        def parameter_children(cls) -> tuple[type, ...]:
+            """Déclare le fournisseur enfant transmis par le programme principal."""
+            return (IndependentChild,)
+
+    path = tmp_path / 'independent.json'
+    path.write_text(json.dumps({'saved_value': 7, 'temporary': True}))
+    config = Config(path)
+    parser = argparse.ArgumentParser()
+    config.add_arguments(parser)
+    config.register(IndependentParent, parser)
+    assert config.parse_args(parser, []).value == 7
+    args = config.parse_args(parser, ['--value', '9', '--temporary', '-S'])
+    args.external_items = ['original']
+    config.bind_parameters(args)
+    assert IndependentChild.captured.value == 9
+    assert IndependentChild.captured.temporary is True
+    args.external_items.append('changed')
+    assert IndependentChild.captured.external_items == ['original']
+    assert json.loads(path.read_text())['saved_value'] == 7
+    assert config.save_requested(args)
+    assert json.loads(path.read_text()) == {'saved_value': 9}

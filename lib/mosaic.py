@@ -3,7 +3,6 @@
 Module de mosaïque pour assembler plusieurs sessions de light en utilisant Siril.
 
 Ce module fournit des fonctionnalités pour :
-- Calculer un nom de base commun à partir de plusieurs répertoires de session
 - Assembler les fichiers light traités en préparation pour Siril
 - Exécuter le script Siril de mosaïque
 """
@@ -20,71 +19,17 @@ from pathlib import Path
 from lib.mosaic_crop import crop_mosaic
 from lib.postprocess import GradientExtractor
 from lib.processor import processor
-from lib.siril_utils import Siril
+from lib.siril import Siril
 from lib.type_defs import JSONReport
-
-
-def calculate_common_basename(session_dirs: list[Path]) -> str:
-    """
-    Calcule le nom de base commun à partir d'une liste de répertoires de session.
-
-    Args:
-        session_dirs: Liste des répertoires de session
-
-    Returns:
-        Nom de base commun (peut être vide si moins de 3 caractères)
-
-    Examples:
-        >>> calculate_common_basename([Path("session_M31_nord"), Path("session_M31_sud")])
-        'session_M31'
-        >>> calculate_common_basename([Path("NGC7000_panel1"), Path("NGC7000_panel2")])
-        'NGC7000'
-    """
-    if not session_dirs:
-        return ""
-
-    # Extraire les noms de base (basename) de chaque répertoire
-    basenames = [session_dir.name for session_dir in session_dirs]
-
-    if len(basenames) == 1:
-        return basenames[0]
-
-    # Trouver le préfixe commun
-    common_prefix = ""
-    min_length = min(len(name) for name in basenames)
-
-    for i in range(min_length):
-        char = basenames[0][i]
-        if all(name[i] == char for name in basenames):
-            common_prefix += char
-        else:
-            break
-
-    # Nettoyer le préfixe commun (enlever les caractères de fin non alphanumériques)
-    common_prefix = common_prefix.rstrip("_-. ")
-
-    # Essayer aussi de trouver un suffixe commun et l'enlever du préfixe
-    if len(common_prefix) >= 3:
-        return common_prefix
-
-    # Si le préfixe est trop court, essayer une approche par mots
-    words_sets = [
-        set(name.replace("_", " ").replace("-", " ").split()) for name in basenames
-    ]
-    common_words = set.intersection(*words_sets) if words_sets else set()
-
-    if common_words:
-        # Prendre le mot le plus long
-        longest_word = max(common_words, key=len)
-        if len(longest_word) >= 3:
-            return longest_word
-
-    return common_prefix
 
 
 class Mosaic(processor):
     """
-    Classe pour gérer la création de mosaïques à partir de plusieurs sessions light.
+    Assemble les panneaux d'une mosaïque avec gradient, recadrage et rapport.
+
+    La même classe traite les stacks produits par lightProcess et les panneaux
+    fournis par un appel Python autonome. Les entrées indépendantes en CLI sont
+    exposées uniquement avec ``add_arguments(parser, include_inputs=True)``.
     """
 
     parameter_persistence = dict.fromkeys(
@@ -131,8 +76,18 @@ class Mosaic(processor):
 
     @classmethod
     def add_arguments(
-        cls, parser: argparse.ArgumentParser, include_inputs: bool = True
+        cls, parser: argparse.ArgumentParser, *, include_inputs: bool = False
     ) -> None:
+        """Déclare les options communes et, sur demande, les panneaux autonomes.
+
+        Parameters
+        ----------
+        parser : argparse.ArgumentParser
+            Parseur partagé avec les autres traitements.
+        include_inputs : bool, optional
+            Expose --mosaic-inputs pour un appel autonome. Par défaut, les
+            panneaux sont fournis par l'appelant ou le pipeline de sessions.
+        """
         GradientExtractor.add_arguments(parser)
         parser.add_argument(
             "--mosaic-gradient",
@@ -369,8 +324,7 @@ class Mosaic(processor):
         pydir_path = script_dir / "pydir.py"
 
         # Script Siril pour la mosaïque
-        script_content = f"""requires 1.2.0
-# Script de mosaïque automatique pour {self.mosaic_name}
+        script_content = f"""# Script de mosaïque automatique pour {self.mosaic_name}
 # Généré automatiquement par SirilProcessing
 
 cd "{input_dir}"

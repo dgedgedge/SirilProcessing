@@ -6,7 +6,7 @@
 |---|---|
 | [parameterized_component.py](../../lib/parameterized_component.py) | Partager la déclaration et la capture des paramètres entre services et traitements |
 | [processor.py](../../lib/processor.py) | Ajouter le contrat de traitement d’image aux composants configurables |
-| [postprocessing.py](../../lib/postprocessing.py) | Exécuter le [pipeline complet de post-traitement](../scripts/postProcess/pipeline.md) commun à lightProcess et postProcess |
+| [postprocess.py](../../lib/postprocess.py) | Regrouper les moteurs, la séquence et le [pipeline complet de post-traitement](../scripts/postProcess/pipeline.md) commun à lightProcess et postProcess |
 | [annotation_catalog.py](../../lib/annotation_catalog.py) | Charger OpenNGC hors ligne et projeter les positions sur le WCS final pour les [annotations](../scripts/postProcess/annotations.md) |
 | [final_annotation.py](../../lib/final_annotation.py) | Produire la [copie annotée finale](../scripts/postProcess/annotations.md) et son encart de prise de vue |
 | [stacking_annotation.py](../../lib/stacking_annotation.py) | Lire la provenance des poses et panneaux pour les [compteurs annotés](../scripts/postProcess/annotations.md) |
@@ -26,7 +26,7 @@
 | [star_separation.py](../../lib/star_separation.py) | Adapter StarNet V2 via le service Siril existant |
 | [star_rendering.py](../../lib/star_rendering.py) | Étendre modérément les étoiles et recomposer les branches |
 | [compute_config.py](../../lib/compute_config.py) | Partager la [politique CPU/GPU](../scripts/postProcess/compute-backend.md) et les surcharges des moteurs |
-| [config.py](../../lib/config.py) | Centraliser les réglages, leurs valeurs par défaut et leur persistance |
+| [config.py](../../lib/config.py) | Charger les réglages JSON, résoudre les déclarations des classes utilisatrices et sauvegarder explicitement |
 | [fits_info.py](../../lib/fits_info.py) | Donner accès aux caractéristiques des FITS et aux informations nécessaires à leur regroupement et à leur validation |
 | [restoration_quality.py](../../lib/restoration_quality.py) | Évaluer les candidats sur des masques indépendants des moteurs et du gradient |
 | [restoration_chains.py](../../lib/restoration_chains.py) | Organiser la comparaison des chaînes complètes, active par défaut |
@@ -36,10 +36,11 @@
 | [graxpert_inference.py](../../lib/graxpert_inference.py) | Exécuter le modèle ONNX avec préservation des FITS |
 | [graxpert_models.py](../../lib/graxpert_models.py) | Acquérir et vérifier les poids à la demande |
 | [graxpert.py](../../lib/graxpert.py) | Encapsuler le débruitage ONNX natif GraXpert |
-| [siril_utils.py](../../lib/siril_utils.py) | Encapsuler la configuration et l’exécution de Siril |
-| [siril_sequence.py](../../lib/siril_sequence.py) | Représenter les séquences Siril et leurs images, en conservant l’association entre fichiers, mesures et transformations |
+| [siril.py](../../lib/siril.py) | Centraliser l’exécution de Siril (prérequis `requires 1.4`, erreurs fatales) et la lecture, la modification et l’écriture des séquences FITS |
 | [darkprocess.py](../../lib/darkprocess.py) | Gérer la constitution et la mise à jour de la bibliothèque de master darks |
-| [lightprocessor.py](../../lib/lightprocessor.py) | Organiser les sessions de lights, leur calibration et la préparation des entrées du stack final |
+| [lightprocessor.py](../../lib/lightprocessor.py) | Découvrir les sessions de lights, grouper les images et orchestrer leur calibration |
+| [light_calibration.py](../../lib/light_calibration.py) | Calibrer une séquence de lights et construire récursivement le master flat associé avec l'interface commune des traitements |
+| [light_stacking.py](../../lib/light_stacking.py) | Empiler les FITS calibrés d'une session avec l'interface commune des traitements |
 | [quality_filter.py](../../lib/quality_filter.py) | Centraliser les décisions de sélection, les contrôles d’alignement et les pondérations des poses |
 | [stellar_quality.py](../../lib/stellar_quality.py) | Mesurer la forme et l’étalement des étoiles dans les pixels des images |
 | [drizzle.py](../../lib/drizzle.py) | Évaluer l’intérêt du Drizzle et orchestrer les étapes du stacking |
@@ -54,3 +55,13 @@ Pour les règles de traitement et les formats détaillés, consulter la
 documentation de [lightProcess](../scripts/lightProcess/README.md), de
 [postProcess](../scripts/postProcess/README.md) ou de
 [darkLibUpdate](../scripts/darkLibUpdate/README.md).
+
+La configuration partagée est chargée au démarrage par le programme principal.
+Les classes utilisatrices déclarent leurs options, défauts, enfants et règles de
+persistance ; le programme les transmet à `Config.register`, résout les valeurs
+avec la priorité CLI > JSON > défauts locaux, puis lie les instantanés aux classes.
+`Config` n'importe aucun service ni traitement : il utilise leur contrat
+déclaratif, sans imposer d'héritage. Les préfixes complémentaires sont déclarés
+par les classes concernées, y compris Cosmic Clarity. Le programme principal
+reste responsable de la sauvegarde explicite avec `-S` ; enregistrer, résoudre
+ou lier des paramètres n'écrit pas le fichier.

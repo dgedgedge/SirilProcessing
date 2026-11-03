@@ -2,10 +2,19 @@
 
 [Documentation](../../../README.md) › [lightProcess](../README.md)
 
-Le parcours comporte une boucle de calibration sur les sous-sessions, une
-boucle de stacking sur les sessions d’entrée, puis une mosaïque optionnelle.
+Le CLI parcourt les sessions fournies et délègue chacune à `LightProcessor`.
+Cette classe découvre et calibre ses sous-sessions, rassemble leurs sorties et
+produit un stack unique. Le CLI gère ensuite la mosaïque optionnelle.
 `--postprocess` ajoute le [post-traitement commun](../../postProcess/pipeline.md)
 des stacks finaux ou de la mosaïque assemblée.
+La découverte des sous-sessions appartient également à `LightProcessor` : la
+validation CLI délègue à `discover_subsessions`. L'orchestration complète peut
+être appelée directement par `process_target`, sans passer par le script CLI.
+Son résultat indique l'image unique, les nombres de sous-sessions traitées,
+les échecs et les statistiques WCS. Une sous-session en échec est signalée ;
+les sous-sessions suivantes sont traitées et les calibrations réussies sont
+empilées ensemble.
+
 Chaque calibration comporte elle-même une boucle sur les groupes de lights
 et un sous-traitement des flats. Les schémas ci-dessous détaillent ces niveaux.
 
@@ -28,42 +37,37 @@ aux entrées de la mosaïque.
 
 ## 1. Boucles principales et mosaïque finale
 
-Le script découvre d’abord les sous-sessions de toutes les sessions, puis traite
-leur liste. La boucle de stacking parcourt ensuite à nouveau les sessions.
-Le mode simulation journalise les traitements prévus sans lancer Siril ; le
-schéma montre le parcours d’exécution effectif.
+Pour chaque session fournie, `LightProcessor` calibre les sous-sessions puis
+empile leurs sorties en une image unique. Le CLI conserve la coordination des
+sessions indépendantes, de la mosaïque et du post-traitement. Le mode simulation
+journalise les traitements prévus sans lancer Siril ; le schéma montre le
+parcours d’exécution effectif.
 
 ```mermaid
 flowchart TD
-    START["Sessions fournies à la commande"] --> ROOTS{"Session suivante à découvrir ?"}
-    ROOTS -->|Oui| DISCOVER["Découvrir les sous-sessions<br/>ou la session directement fournie"]
-    DISCOVER --> MAP["Associer chaque sous-session à sa session"]
-    MAP --> ROOTS
-    ROOTS -->|Non| SESSIONS{"Sous-session suivante à calibrer ?"}
-    subgraph CALIBRATION_LOOP["Boucle sur toutes les sous-sessions découvertes"]
-        SESSIONS -->|Oui| CALIBRATE[["Calibrer les groupes de la sous-session<br/>Détail : schéma 2"]]
-        CALIBRATE --> SESSION_RESULT["Conserver les FITS calibrés disponibles<br/>Enregistrer succès, échecs et statistiques"]
+    START["Sessions fournies à la commande"] --> ROOTS{"Session suivante ?"}
+    ROOTS -->|Oui| DISCOVER
+    subgraph LIGHT_PROCESSOR["Traitement d’une session par LightProcessor"]
+        DISCOVER["LightProcessor.process_target<br/>Découvrir les sous-sessions<br/>ou la session directement fournie"]
+        DISCOVER --> SESSIONS{"Sous-session suivante ?"}
+        SESSIONS -->|Oui| CALIBRATE[["Calibrer les groupes<br/>Détail : schéma 2"]]
+        CALIBRATE --> SESSION_RESULT["Enregistrer sorties calibrées,<br/>succès, échecs et statistiques"]
         SESSION_RESULT --> SESSIONS
-    end
-
-    SESSIONS -->|Non| TARGETS{"Session suivante à empiler ?"}
-    subgraph STACKING_LOOP["Boucle de stacking : un résultat par session"]
-        TARGETS -->|Oui| GATHER["Réunir les FITS calibrés de cette session<br/>Une ou plusieurs sous-sessions<br/>Relire le disque avec --force-stacking<br/>Dédupliquer les chemins"]
+        SESSIONS -->|Non| GATHER["Réunir les FITS calibrés<br/>Relire le disque avec --force-stacking<br/>Dédupliquer les chemins"]
         GATHER --> INPUTS{"Des FITS calibrés sont disponibles ?"}
         INPUTS -->|Non| EMPTY["Journaliser l'absence de sortie combinée"]
-        EMPTY --> TARGETS
         INPUTS -->|Oui| CACHE{"Stack à jour, paramètres compatibles<br/>et reconstruction non forcée ?"}
-        CACHE -->|Oui| REUSE["Réutiliser le résultat de cette session"]
-        CACHE -->|Non| STACK[["Sélectionner, aligner et<br/>empiler cette session<br/>Détail : schéma 3"]]
+        CACHE -->|Oui| REUSE["Réutiliser le stack de la session"]
+        CACHE -->|Non| STACK[["Sélectionner, aligner et empiler<br/>Détail : schéma 3"]]
         STACK --> STACK_OK{"Résultat de stacking disponible ?"}
-        STACK_OK -->|Oui| TARGET_RESULT["Conserver le résultat disponible<br/>et le rapport de stacking"]
+        STACK_OK -->|Oui| TARGET_RESULT["Retourner l'image unique de la session"]
         STACK_OK -->|Non| STACK_FAIL["Journaliser l’échec du stacking"]
-        STACK_FAIL --> TARGETS
         REUSE --> TARGET_RESULT
-        TARGET_RESULT --> TARGETS
     end
-
-    TARGETS -->|Non| MOSAIC_REQUEST{"--mosaic demandé ?"}
+    EMPTY --> ROOTS
+    STACK_FAIL --> ROOTS
+    TARGET_RESULT --> ROOTS
+    ROOTS -->|Non| MOSAIC_REQUEST{"--mosaic demandé ?"}
     MOSAIC_REQUEST -->|Non| FINAL_STACKS["Retenir les stacks finaux disponibles"]
     MOSAIC_REQUEST -->|Oui| MOSAIC_COUNT{"Au moins deux résultats<br/>de stacking disponibles ?"}
     MOSAIC_COUNT -->|Non| MOSAIC_FAILURE["Mosaïque indisponible<br/>Aucun panneau post-traité"]

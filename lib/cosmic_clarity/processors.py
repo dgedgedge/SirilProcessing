@@ -24,7 +24,7 @@ from lib.deconvolution_quality import (
 )
 from lib.postprocess_paths import reset_ordered_work_dir
 from lib.processor import processor
-from lib.siril_utils import Siril
+from lib.siril import Siril
 from lib.type_defs import JSONReport
 
 
@@ -326,7 +326,7 @@ class _CosmicClarityProcessor(processor):
                 denoise_mode=getattr(args, 'cosmic_denoise_mode', 'luminance'),
                 color_denoise_amount=getattr(args, 'cosmic_color_denoise_amount', None),
             )
-            lines = ['requires 1.4', f'cd {_quote(work)}', 'setext fit', 'set32bits']
+            lines = [f'cd {_quote(work)}', 'setext fit', 'set32bits']
             for image, catalog in ((source, before), (candidate, after)):
                 lines += [f'load {_quote(image)}', 'setfindstar reset', 'setfindstar -gaussian',
                           f'findstar -layer={layer} -out={catalog.name}', 'close']

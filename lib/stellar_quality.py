@@ -11,7 +11,7 @@ import numpy as np
 from astropy.io import fits
 from scipy.ndimage import gaussian_filter, maximum_filter
 
-from lib.siril_sequence import SequenceImage
+from lib.siril import SequenceImage
 from lib.type_defs import JSONReport
 
 

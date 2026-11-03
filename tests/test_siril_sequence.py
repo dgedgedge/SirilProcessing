@@ -3,7 +3,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from lib.siril_sequence import SirilSequence, SequenceImage
+from lib.siril import SirilSequence, SequenceImage
 
 
 def make_sequence(tmp_path, version=6):

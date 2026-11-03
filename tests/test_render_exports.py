@@ -70,7 +70,7 @@ def test_cli_copies_primary_jpeg_without_running_external_engines(
     import sys
 
     from lib.postprocess import _PostProcessorSequence
-    import lib.postprocessing as postprocessing
+    import lib.postprocess as postprocessing
 
     source, rendered = tmp_path / "source.fits", tmp_path / "rendered.fits"
     data = np.full((3, 16, 20), 0.2, dtype=np.float32)
@@ -100,7 +100,8 @@ def test_cli_copies_primary_jpeg_without_running_external_engines(
     monkeypatch.setattr(postprocessing.QualityMaskPreview, "ensure_for_run", lambda *args: None)
     monkeypatch.setattr(postprocessing.QualityMaskPreview, "write_gradient_points", lambda *args: None)
     monkeypatch.setattr(sys, "argv", [str(entry), str(source), str(tmp_path / "out"),
-                                      "--config", str(tmp_path / "settings.json")])
+                                      "--config", str(tmp_path / "settings.json"),
+                                      "--disable-final-color"])
     assert module.main() == 0
     exported = tmp_path / "out/source_postprocess.jpg"
     assert exported.exists() is with_jpeg

@@ -11,7 +11,7 @@ import pytest
 from lib.auto_ghs import ComputeBackend, luminance
 from lib.config import Config
 from lib.final_color import FinalColorProcessor
-from lib.postprocessing import PostProcessingProcessor
+from lib.postprocess import PostProcessingProcessor
 from lib.postprocess import _PostProcessorSequence
 from lib.postprocess_resume import PostProcessResume
 from lib.type_defs import JSONReport

@@ -202,7 +202,7 @@ class RestorationChainProcessor(processor):
             denoising_criteria,
         )
         from lib.restoration_quality import criterion
-        from lib.siril_utils import Siril
+        from lib.siril import Siril
 
         work.mkdir(parents=True, exist_ok=True)
         before = work.parent / "common_reference.tsv"
@@ -210,7 +210,7 @@ class RestorationChainProcessor(processor):
         layer = getattr(args, "deconvolution_layer", None)
         if layer is None:
             layer = 1 if fits.getdata(source).ndim == 3 else 0
-        lines = ["requires 1.4", f"cd {_quote(work)}", "setext fit", "set32bits"]
+        lines = [f"cd {_quote(work)}", "setext fit", "set32bits"]
         images = [(candidate, after)]
         needs_reference = not before.is_file()
         staged_reference = work / "reference.tsv"

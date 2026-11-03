@@ -6,8 +6,17 @@
 ## Entrées compatibles
 
 Le stack final rassemble les FITS calibrés des sous-sessions d’une même session.
-Le chemin CLI déduplique les chemins recueillis. Les fichiers disparus sont
+`LightProcessor` déduplique les chemins recueillis. Les fichiers disparus sont
 écartés avant la préparation du stack.
+
+L’orchestration est portée par
+[`SessionStackingProcessor`](../../../../lib/light_stacking.py), un traitement
+fondé sur l’interface commune `processor`. `LightProcessor` orchestre la
+session, rassemble les sorties calibrées et appelle ce processeur, qui vérifie
+les layouts FITS, prépare les entrées et délègue les étapes d’alignement, de
+sélection et d’empilement à
+[`run_stack`](../../../../lib/drizzle.py). Une entrée unique est renvoyée sans
+lancer le moteur de stack.
 
 Le groupe majoritaire de même structure FITS est conservé : nombre de canaux,
 largeur, hauteur et `BITPIX`. Les structures différentes et les fichiers
@@ -46,7 +55,10 @@ modèle objet de séquence ; elles ne sont pas recalculées par Python.
 Le début du stacking d’une session et chacune de ses étapes sont annoncés en
 INFO par un titre entre deux lignes de `=`. Le format est commun au
 [post-traitement](../../postProcess/pipeline.md#bandeaux-du-journal). Les messages
-sont enregistrés dans la console et les journaux de stacking.
+sont enregistrés dans la console et dans l’unique journal de stacking de la
+session fournie, `<travail>/<session>/stacking/<session>_stacking.log`. Les
+journaux de ses sous-sessions restent réservés à leur calibration ; les
+événements du stack global ne sont pas recopiés dans ces journaux.
 
 ```text
 ============================================================

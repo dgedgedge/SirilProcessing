@@ -8,7 +8,7 @@ from lib.quality_filter import quality_mask
 
 def test_weights_deferred_until_after_resampling_without_recalculation(tmp_path):
     from astropy.io import fits
-    from lib.siril_sequence import SirilSequence, RegistrationData
+    from lib.siril import SirilSequence, RegistrationData
     from lib.quality_filter import apply_quality_weights, materialize_quality_weights
     files = [tmp_path/f'light_{i:03d}.fits' for i in range(1, 4)]
     for file in files:
@@ -37,7 +37,7 @@ def test_weights_deferred_until_after_resampling_without_recalculation(tmp_path)
 
 def test_final_weighting_rejects_reintroduced_image(tmp_path):
     from astropy.io import fits
-    from lib.siril_sequence import SirilSequence
+    from lib.siril import SirilSequence
     from lib.quality_filter import materialize_quality_weights
     path = tmp_path/'light_001.fit'
     fits.writeto(path, np.ones((8, 8)))
@@ -99,10 +99,12 @@ def test_fwhm_percentage_uses_threshold_survivors_and_logs_each_rejection(caplog
 
 
 def test_only_statistical_fwhm_filter_is_enabled_by_default():
-    from lib.config import Config
-    assert Config.DEFAULTS['fwhm_filter'] == '1.8k'
-    assert Config.DEFAULTS['fwhm_reject_percent'] == 0
-    assert Config.DEFAULTS['max_fwhm'] == 0
+    from lib.light_stacking import SessionStackingProcessor
+
+    defaults = SessionStackingProcessor.CONFIG_DEFAULTS
+    assert defaults['fwhm_filter'] == '1.8k'
+    assert defaults['fwhm_reject_percent'] == 0
+    assert defaults['max_fwhm'] == 0
 
 
 @pytest.mark.parametrize('percent', [-1, 96, float('nan'), float('inf')])
@@ -150,7 +152,7 @@ def test_nbstars_filters_reject_both_tails(value):
 
 def test_nbstars_default_rejects_cloud_and_doubled_counts(tmp_path):
     """Stable night with two exceptional counts; no pixel-level defect detection."""
-    from lib.config import Config
+    from lib.light_stacking import SessionStackingProcessor
 
     # Normal variation around 200 stars; anomalies occur within the sequence.
     counts = [198, 201, 199, 200, 202, 70, 198, 201, 200, 199,
@@ -165,7 +167,7 @@ def test_nbstars_default_rejects_cloud_and_doubled_counts(tmp_path):
                   for count in counts)
     )
     _, _, rows = read_registration(sequence)
-    cfg = dict(Config.DEFAULTS)
+    cfg = dict(SessionStackingProcessor.CONFIG_DEFAULTS)
 
     # All other quality measurements are identical and acceptable.
     without_star_filter = quality_mask(rows, {**cfg, 'nbstars_filter': 'none'})

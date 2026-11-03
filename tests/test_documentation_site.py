@@ -444,8 +444,8 @@ class DocumentationSiteTests(unittest.TestCase):
             self.assertIn('href="#chapter-0-intro"', result)
             self.assertIn('href="#chapter-1-intro"', result)
 
-    def test_sources_are_embedded_but_models_and_external_files_are_not(self) -> None:
-        """Le monofichier inclut ses références textuelles et exclut les poids."""
+    def test_code_links_stay_external_while_data_and_images_can_be_embedded(self) -> None:
+        """Le code pointe vers GitHub ; les poids et liens distants restent externes."""
         with TemporaryDirectory() as directory:
             root = Path(directory)
             document = root / "README.md"
@@ -458,10 +458,13 @@ class DocumentationSiteTests(unittest.TestCase):
                 '<a href="https://example.org/guide">Externe</a>'
             )
             result = "".join(parser.parts)
-            self.assertIn(base64.b64encode(source.read_bytes()).decode("ascii"), result)
+            self.assertIn(
+                'href="https://github.com/dgedgedge/SirilProcessing/blob/main/example.py"',
+                result,
+            )
             self.assertIn('href="weights.onnx"', result)
-            self.assertIn('download="example.py"', result)
             self.assertIn('href="https://example.org/guide"', result)
+            self.assertNotIn(base64.b64encode(source.read_bytes()).decode("ascii"), result)
             self.assertNotIn(base64.b64encode(b"model").decode("ascii"), result)
 
     def test_output_cannot_replace_sources_or_build_cache(self) -> None:

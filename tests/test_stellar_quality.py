@@ -8,7 +8,7 @@ import pytest
 from astropy.io import fits
 
 from lib.quality_filter import classify_stellar_profiles, filter_stellar_profiles
-from lib.siril_sequence import RegistrationData, SequenceImage, SirilSequence
+from lib.siril import RegistrationData, SequenceImage, SirilSequence
 from lib.stellar_quality import measure_stellar_profiles, measure_stamp
 
 
@@ -134,9 +134,11 @@ def test_profiles_read_bound_native_file_and_skip_previous_rejections(tmp_path):
 
 
 def test_stellar_filter_defaults_are_enabled():
-    from lib.config import Config
-    assert Config.DEFAULTS['stellar_profile_filter'] is True
-    assert Config.DEFAULTS['stellar_profile_sigma'] == 3
+    from lib.light_stacking import SessionStackingProcessor
+
+    defaults = SessionStackingProcessor.CONFIG_DEFAULTS
+    assert defaults['stellar_profile_filter'] is True
+    assert defaults['stellar_profile_sigma'] == 3
 
 
 def test_profile_read_errors_preserve_selection_and_are_reported(tmp_path, caplog):

@@ -6,6 +6,7 @@ import sys
 def test_full_regression_suite_summary(tmp_path, project_root, light_process_env):
     """Lance la suite pytest principale et valide le résumé global."""
     env = light_process_env.copy()
+    env.pop("VENV_DIR", None)
     this_file = project_root / "tests" / "test_regression_summary.py"
     test_files = sorted(
         path

@@ -15,7 +15,7 @@ from lib.deconvolution import (
 from lib.processor import processor
 from lib.deconvolution_quality import InsufficientPSFStars
 from lib.postprocess import DeconvolutionProcessor, PhotometricColorCalibrator, _PostProcessorSequence
-from lib.siril_utils import Siril
+from lib.siril import Siril
 
 
 def catalog(path, stars, layer=0, profile="Gaussian"):

@@ -1,232 +1,331 @@
-"""
-Module pour le traitement automatique des images light.
-
-Ce module contient la classe LightProcessor qui gère :
-- La détection des images light dans un répertoire
-- La recherche du master dark correspondant
-- Le prétraitement (soustraction du dark)
-- Le stacking des images prétraitées
-"""
+"""Découverte, groupement et orchestration de la calibration des images light."""
 
 from __future__ import annotations
 
+import argparse
 import glob
 import logging
 import os
-import re
 import shutil
+from dataclasses import dataclass, field
 from pathlib import Path
 
-import numpy as np
 from astropy.io import fits
 
 from lib.fits_info import FitsInfo
-from lib.logging_utils import log_section
-from lib.siril_sequence import SirilSequence
-from lib.siril_utils import Siril
+from lib.light_calibration import SequenceCalibrationProcessor
+from lib.logging_utils import add_session_file_logging, log_section, remove_session_file_logging
+from lib.parameterized_component import ParameterizedComponent
+from lib.siril import Siril
 from lib.type_defs import ConfigValue
 
 
-def save_calibrated_sequence(
-    sequence_name: str, output_dir: Path | str, source_dir: Path | str | None = None
-) -> None:
-    """Preserve Siril's sequence, or describe the exported FITS when none exists."""
-    output_dir = Path(output_dir)
-    names = [f"pp_{sequence_name}_.seq", f"pp_{sequence_name}.seq"]
-    if source_dir is not None:
-        for name in names:
-            source = Path(source_dir) / name
-            if source.is_file():
-                destination = output_dir / name
-                SirilSequence.read(source).write(destination)
-                logging.debug("Séquence calibrée conservée : %s", destination)
-                return destination
-    prefix = f"pp_{sequence_name}_"
-    pattern = re.compile(re.escape(prefix) + r"(\d+)\.(?:fit|fits)$")
-    frames = []
-    for path in output_dir.iterdir():
-        match = pattern.fullmatch(path.name)
-        if match:
-            frames.append((int(match[1]), len(match[1]), path))
-    frames.sort()
-    if not frames:
-        raise ValueError(f"Aucun FITS calibré pour la séquence {sequence_name}")
-    indices = [frame[0] for frame in frames]
-    widths = {frame[1] for frame in frames}
-    if len(set(indices)) != len(indices) or len(widths) != 1:
-        raise ValueError("Numérotation ambiguë des FITS calibrés")
-    layers = int(fits.getheader(frames[0][2]).get("NAXIS3", 1))
-    destination = output_dir / names[0]
-    SirilSequence.from_files(
-        destination, prefix, [frame[2] for frame in frames], layers=layers
-    ).write()
-    logging.debug("Séquence calibrée conservée : %s", destination)
-    return destination
+@dataclass
+class SessionProcessingResult:
+    """Résultat du traitement complet d’une session et de ses sous-sessions."""
+
+    session_dir: Path
+    output_image: Path | None
+    total_subsessions: int
+    successful_subsessions: int
+    failed_subsessions: list[Path] = field(default_factory=list)
+    wcs_stats: dict[str, int] = field(default_factory=dict)
 
 
-def discover_session_roots(root_dir: Path) -> list[Path]:
-    """Retourne les sous-répertoires de session valides pour un répertoire cible.
-
-    Si le répertoire fourni contient directement une entrée `light` ou `Light`,
-    il est traité comme une session unique. Sinon, on cherche les sous-répertoires
-    immédiats qui contiennent au moins un `light` / `Light`.
+class LightProcessor(ParameterizedComponent):
     """
-    root_dir = Path(root_dir)
-    if not root_dir.exists() or not root_dir.is_dir():
-        return []
+    Calibre les sous-sessions d’une session puis produit son image empilée.
 
-    for light_name in ["light", "Light"]:
-        if (root_dir / light_name).exists():
-            return [root_dir]
-
-    candidates: list[Path] = []
-    for child in sorted(root_dir.iterdir(), key=lambda p: p.name.lower()):
-        if not child.is_dir():
-            continue
-        for light_name in ["light", "Light"]:
-            if (child / light_name).exists():
-                candidates.append(child)
-                break
-
-    return candidates
-
-
-class CalibrationProfile:
-    """Représente le profil de calibration du pipeline Siril."""
-
-    def __init__(
-        self,
-        use_dark: bool = True,
-        use_flat: bool = True,
-        equalize_cfa: bool = True,
-        debayer: bool = True,
-    ) -> None:
-        """Mémorise les options CFA et de normalisation pour produire les commandes Siril."""
-        self.use_dark = use_dark
-        self.use_flat = use_flat
-        self.equalize_cfa = equalize_cfa
-        self.debayer = debayer
-
-    def build_command(
-        self,
-        target: str,
-        sequence_name: str,
-        dark_path: str | None = None,
-        flat_path: str | None = None,
-    ) -> str:
-        """Construit la commande Siril correspondante selon la cible."""
-        target_name = target.lower()
-        if target_name not in {"flat", "light"}:
-            raise ValueError(f"Cible de calibration inconnue: {target}")
-
-        if target_name == "flat":
-            if not self.use_dark:
-                return ""
-            if dark_path is None:
-                raise ValueError("dark_path est requis pour la calibration des flats")
-            return f"calibrate {sequence_name} -dark={dark_path} -cc=dark -cfa"
-
-        if (
-            self.use_dark
-            and dark_path is not None
-            and self.use_flat
-            and flat_path is not None
-        ):
-            return (
-                f"calibrate {sequence_name} -dark={dark_path} -flat={flat_path} "
-                "-cc=dark -cfa -equalize_cfa -debayer"
-            )
-
-        if self.use_dark and dark_path is not None:
-            return f"calibrate {sequence_name} -dark={dark_path} -cc=dark -cfa -debayer"
-
-        if self.use_flat and flat_path is not None:
-            return f"calibrate {sequence_name} -flat={flat_path} -cfa -equalize_cfa -debayer"
-
-        return f"calibrate {sequence_name} -cfa -debayer"
-
-    def build_flat_calibration(
-        self, sequence_name: str, dark_path: str | None = None
-    ) -> tuple[str, str]:
-        """Renvoie le titre du log et la commande associated to master flat creation."""
-        if not self.use_dark:
-            return "Mode sans dark: flats non calibrés par dark", ""
-        if dark_path is None:
-            raise ValueError("dark_path est requis quand use_dark est activé")
-
-        command = self.build_command("flat", sequence_name, dark_path=dark_path)
-        return (
-            f"cmd:========> {command}",
-            command,
-        )
-
-    def build_light_preprocess(
-        self,
-        sequence_name: str,
-        dark_path: str | None = None,
-        flat_path: str | None = None,
-    ) -> tuple[str, str, str]:
-        """Renvoie le titre, le message et la commande de calibration d’un light."""
-        if self.use_dark and dark_path is None:
-            raise ValueError("dark_path est requis quand use_dark est activé")
-
-        if (
-            self.use_dark
-            and dark_path is not None
-            and self.use_flat
-            and flat_path is not None
-        ):
-            title = "Pre-process Light Frames (dark + flat calibration)"
-            command = self.build_command(
-                "light", sequence_name, dark_path=dark_path, flat_path=flat_path
-            )
-            message = f"cmd:========> {command}"
-            return title, message, command
-
-        if self.use_dark and dark_path is not None:
-            title = "Pre-process Light Frames (calibration with dark subtraction)"
-            command = self.build_command(
-                "light", sequence_name, dark_path=dark_path, flat_path=None
-            )
-            message = f"cmd:========> {command}"
-            return title, message, command
-
-        if self.use_flat and flat_path is not None:
-            title = "Pre-process Light Frames (flat calibration only)"
-            command = self.build_command(
-                "light", sequence_name, dark_path=None, flat_path=flat_path
-            )
-            message = f"cmd:========> {command}"
-            return title, message, command
-
-        title = "Pre-process Light Frames (calibration without dark subtraction)"
-        command = self.build_command(
-            "light", sequence_name, dark_path=None, flat_path=None
-        )
-        message = f"cmd:========> {command}"
-        return title, message, command
-
-
-class LightProcessor:
-    """
-    Processeur automatique pour les images light.
-
-    Traite un répertoire de session contenant des sous-répertoires 'light' et
-    éventuellement 'flat', trouve les master darks correspondants, et effectue
-    le prétraitement et stacking automatique.
+    ``process_session`` conserve la responsabilité du traitement d’une
+    sous-session. ``process_target`` orchestre leur boucle et transmet l’ensemble
+    des FITS calibrés à ``SessionStackingProcessor`` pour produire une image
+    unique par session fournie en CLI.
     """
 
     parameter_persistence = dict.fromkeys(
         (
             "session_dirs",
             "force_reprocess",
-            "force_stacking",
             "purge_target",
-            "no_fwhm_reject",
         ),
         False,
     )
-    config_path_parameters = {"dark_library_path", "work_dir", "output_dir"}
+    config_path_parameters = {"work_dir", "output_dir"}
+
+    @classmethod
+    def parameter_children(cls) -> tuple[type[ParameterizedComponent], ...]:
+        """Déclare la calibration par groupe et l’empilement de la session."""
+        from lib.light_stacking import SessionStackingProcessor
+
+        return (SequenceCalibrationProcessor, SessionStackingProcessor)
+
+    @staticmethod
+    def discover_subsessions(session_dir: Path | str) -> list[Path]:
+        """Retourne la session directe ou ses sous-répertoires d’acquisition.
+
+        Une session contenant directement ``light`` ou ``Light`` est traitée
+        comme une seule sous-session. Sinon, seuls les enfants immédiats qui
+        contiennent l’un de ces répertoires sont retournés, triés par nom.
+        """
+        root = Path(session_dir)
+        if not root.is_dir():
+            return []
+        if any((root / name).exists() for name in ("light", "Light")):
+            return [root]
+        return [
+            child
+            for child in sorted(root.iterdir(), key=lambda path: path.name.lower())
+            if child.is_dir()
+            and any((child / name).exists() for name in ("light", "Light"))
+        ]
+
+    @staticmethod
+    def _directory_last_modified(path: Path) -> float:
+        """Retourne la date de modification la plus récente sous un dossier."""
+        if not path.exists():
+            return 0.0
+        latest = path.stat().st_mtime
+        if path.is_dir():
+            for child in path.rglob("*"):
+                try:
+                    latest = max(latest, child.stat().st_mtime)
+                except OSError:
+                    continue
+        return latest
+
+    @classmethod
+    def _should_rebuild_stack(
+        cls, combined_output: Path, calibrated_dirs: list[Path]
+    ) -> bool:
+        """Indique si une calibration est plus récente que le stack existant."""
+        if not combined_output.exists():
+            return True
+        latest_input = max(
+            (cls._directory_last_modified(directory) for directory in calibrated_dirs),
+            default=0.0,
+        )
+        return latest_input > combined_output.stat().st_mtime
+
+    @classmethod
+    def process_target(
+        cls,
+        session_dir: Path | str,
+        output_base_dir: Path,
+        work_base_dir: Path,
+        args: argparse.Namespace,
+        stack_params: dict[str, ConfigValue],
+    ) -> SessionProcessingResult:
+        """Calibre toutes les sous-sessions d’une session et empile leurs FITS.
+
+        Les sorties de calibration sont conservées sous
+        ``<sortie>/<session>/sessions/<sous-session>``. Les FITS de toutes les
+        sous-sessions réussies sont empilés ensemble en un unique
+        ``<session>_combined.fits``. En simulation, les étapes sont annoncées
+        sans exécuter le stacking.
+        """
+        from lib.drizzle import cache_matches
+        from lib.light_stacking import SessionStackingProcessor
+
+        root = Path(session_dir)
+        subsessions = cls.discover_subsessions(root)
+        result = SessionProcessingResult(
+            session_dir=root,
+            output_image=None,
+            total_subsessions=len(subsessions),
+            successful_subsessions=0,
+            wcs_stats={
+                "lights_total": 0,
+                "wcs_present": 0,
+                "wcs_missing": 0,
+                "wcs_unreadable": 0,
+            },
+        )
+        if not subsessions:
+            logging.error("Aucune sous-session valide à traiter dans %s", root)
+            return result
+
+        logging.info("Session %s : %d sous-session(s)", root, len(subsessions))
+        successful_processors: list[LightProcessor] = []
+        for index, subsession in enumerate(subsessions, 1):
+            logging.info("%s", "=" * 60)
+            logging.info(
+                "Traitement de la sous-session %d/%d : %s",
+                index,
+                len(subsessions),
+                subsession,
+            )
+            target_output = output_base_dir / root.name
+            child_output_dir = target_output / "sessions" / subsession.name
+            child_work_dir = (
+                work_base_dir / root.name / "sessions" / subsession.name
+            )
+            if args.force_reprocess:
+                for directory in (child_output_dir, child_work_dir):
+                    if directory.exists():
+                        try:
+                            shutil.rmtree(directory)
+                            logging.info("Répertoire supprimé (relance --force): %s", directory)
+                        except OSError as error:
+                            logging.warning("Impossible de supprimer %s: %s", directory, error)
+
+            log_file = child_work_dir / f"{subsession.name}_lightProcess.log"
+            handler = add_session_file_logging(log_file, args.log_level)
+            try:
+                logging.info("Début du traitement de la sous-session : %s", subsession)
+                logging.info("Log de sous-session : %s", log_file)
+                child = cls(
+                    session_dir=subsession,
+                    output_dir=child_output_dir,
+                    work_dir=child_work_dir,
+                    force_reprocess=args.force_reprocess,
+                    dry_run=args.dry_run,
+                    keep_intermediate=args.keep_intermediate,
+                )
+                succeeded = child.process_session(stack_params)
+                stats = child.get_session_stats()
+                for key in result.wcs_stats:
+                    result.wcs_stats[key] += int(stats.get(key, 0) or 0)
+                logging.info(
+                    "Sous-session stats - total lights: %d | WCS: present=%d, missing=%d, unreadable=%d | rejets: invalides=%d, non-light=%d, no-dark=%d, erreurs=%d | conservées=%d",
+                    stats.get("lights_total", 0),
+                    stats.get("wcs_present", 0),
+                    stats.get("wcs_missing", 0),
+                    stats.get("wcs_unreadable", 0),
+                    stats.get("rejected_invalid_metadata", 0),
+                    stats.get("rejected_not_light_type", 0),
+                    stats.get("rejected_no_matching_dark", 0),
+                    stats.get("rejected_processing_failure", 0),
+                    stats.get("kept_for_stacking", 0),
+                )
+                if succeeded:
+                    result.successful_subsessions += 1
+                    successful_processors.append(child)
+                    logging.info("Sous-session %s traitée avec succès", subsession)
+                else:
+                    result.failed_subsessions.append(subsession)
+                    logging.error("Échec du traitement de la sous-session %s", subsession)
+            except KeyboardInterrupt:
+                result.failed_subsessions.append(subsession)
+                logging.warning("Traitement interrompu par l'utilisateur")
+                break
+            except Exception:
+                result.failed_subsessions.append(subsession)
+                logging.exception("Erreur durant le traitement de %s", subsession)
+            finally:
+                remove_session_file_logging(handler)
+
+        if args.dry_run:
+            log_section(f"[DRY-RUN] Stacking prévu : {root.name}")
+            logging.info(
+                "[DRY-RUN] Stacking de la session %s à partir de %d sous-session(s)",
+                root,
+                len(subsessions),
+            )
+            return result
+
+        session_outputs = [
+            output
+            for child in successful_processors
+            for output in child.get_output_files()
+        ]
+        if args.force_stacking:
+            logging.info(
+                "Mode --force-stacking : reconstruction des FITS calibrés depuis le disque pour %s",
+                root,
+            )
+            session_outputs = []
+            session_output_root = output_base_dir / root.name / "sessions"
+            for subsession in subsessions:
+                calibrated_root = session_output_root / subsession.name
+                if calibrated_root.exists():
+                    for directory in sorted(calibrated_root.rglob("*_calibrated")):
+                        if directory.is_dir():
+                            session_outputs.extend(sorted(directory.glob("pp_*.fit")))
+                            session_outputs.extend(sorted(directory.glob("pp_*.fits")))
+
+        unique_outputs: list[Path] = []
+        seen: set[Path] = set()
+        for output in session_outputs:
+            absolute = Path(output).absolute()
+            if absolute not in seen:
+                seen.add(absolute)
+                unique_outputs.append(absolute)
+        session_outputs = unique_outputs
+        logging.info(
+            "Stack final de la session %s : %d FITS calibrés",
+            root.name,
+            len(session_outputs),
+        )
+        if not session_outputs:
+            logging.warning("Aucun FITS calibré disponible pour %s", root)
+            return result
+
+        stack_output_dir = output_base_dir / root.name
+        stack_output_dir.mkdir(parents=True, exist_ok=True)
+        stack_work_dir = work_base_dir / root.name / "stacking"
+        stack_log = stack_work_dir / f"{root.name}_stacking.log"
+        stack_handler = add_session_file_logging(stack_log, args.log_level)
+        try:
+            log_section(f"Début du stacking : {root.name}")
+            logging.info("Log du stacking : %s", stack_log)
+            candidates = [
+                stack_output_dir / f"{root.name}_combined.fits",
+                stack_output_dir / f"{root.name}_combined.fit",
+            ]
+            existing = next((candidate for candidate in candidates if candidate.exists()), None)
+            calibrated_dirs = [
+                directory
+                for subsession in subsessions
+                for directory in (
+                    output_base_dir / root.name / "sessions" / subsession.name
+                ).rglob("*_calibrated")
+                if directory.is_dir()
+            ]
+            if (
+                not args.force_stacking
+                and existing
+                and cache_matches(existing, stack_params)
+                and not cls._should_rebuild_stack(existing, calibrated_dirs)
+            ):
+                log_section(f"Réutilisation du stack existant : {root.name}")
+                logging.info("Stack final déjà à jour pour %s : %s", root.name, existing)
+                result.output_image = existing
+                return result
+
+            stack_report: dict[str, object] = {}
+            report = SessionStackingProcessor().post_process(
+                input_path=session_outputs[0],
+                output_path=stack_output_dir / f"{root.name}_combined.fits",
+                args=argparse.Namespace(
+                    output_files=session_outputs,
+                    work_dir=work_base_dir,
+                    target_name=root.name,
+                    stack_params=stack_params,
+                    force_stacking=args.force_stacking,
+                    stack_report=stack_report,
+                ),
+            )
+            output_image = report.get("output_image")
+            if isinstance(output_image, str):
+                result.output_image = Path(output_image)
+                logging.info("Sortie combinée créée pour la session %s : %s", root, output_image)
+            else:
+                logging.error("Échec de la sortie combinée pour la session %s", root)
+            logging.info(
+                "Stack stats [%s] - total=%d | rejets: layout_incompatible=%d, layout_illisible=%d, alignement_qualité=%d | conservées uniques=%d | entrées effectives=%d",
+                root.name,
+                stack_report.get("total_input", 0),
+                stack_report.get("rejected_incompatible_layout", 0),
+                stack_report.get("rejected_unreadable_layout", 0),
+                stack_report.get("rejected_registration_quality", 0),
+                stack_report.get("kept_unique_for_stack", 0),
+                stack_report.get("kept_effective_for_stack", 0),
+            )
+        except Exception:
+            logging.exception("Échec du stacking de la session %s", root)
+        finally:
+            remove_session_file_logging(stack_handler)
+        return result
 
     @classmethod
     def from_config(
@@ -236,57 +335,90 @@ class LightProcessor:
         from lib.config import Config
 
         config = Config()
+        explicit_overrides = set(overrides)
         options = {
-            "dark_library_path": config.get("dark_library_path"),
-            "output_dir": config.get("output_dir"),
-            "work_dir": config.get("work_dir"),
-            "temp_precision": config.get("temperature_precision"),
+            "output_dir": config.get(
+                "output_dir", cls.CONFIG_DEFAULTS["output_dir"]
+            ),
+            "work_dir": config.get("work_dir", cls.CONFIG_DEFAULTS["work_dir"]),
             "force_reprocess": config.get("force_reprocess", False),
             "dry_run": config.get("dry_run", False),
-            "use_dark": not config.get("no_dark", False),
-            "keep_intermediate": config.get("keep_intermediate"),
+            "keep_intermediate": config.get(
+                "keep_intermediate", cls.CONFIG_DEFAULTS["keep_intermediate"]
+            ),
         }
         options.update(overrides)
+        calibration_processor = options.pop("calibration_processor", None)
+        if calibration_processor is None:
+            dark_library_path = options.pop(
+                "dark_library_path",
+                config.get(
+                    "dark_library_path",
+                    SequenceCalibrationProcessor.CONFIG_DEFAULTS[
+                        "dark_library_path"
+                    ],
+                ),
+            )
+            no_dark = options.pop("no_dark", config.get("no_dark", False))
+            temperature_precision = options.pop(
+                "temperature_precision",
+                config.get(
+                    "temperature_precision",
+                    SequenceCalibrationProcessor.CONFIG_DEFAULTS[
+                        "temperature_precision"
+                    ],
+                ),
+            )
+            siril = options.get("siril") or Siril.create_with_defaults()
+            options["siril"] = siril
+            calibration_processor = SequenceCalibrationProcessor(
+                siril,
+                Path(options["work_dir"]),
+                keep_intermediate=bool(options["keep_intermediate"]),
+                args=argparse.Namespace(
+                    no_dark=no_dark,
+                    temperature_precision=temperature_precision,
+                    dark_library_path=dark_library_path,
+                ),
+            )
+        else:
+            if "dark_library_path" in explicit_overrides:
+                calibration_processor.dark_library_path = str(
+                    options.pop("dark_library_path")
+                )
+            if "temperature_precision" in explicit_overrides:
+                calibration_processor.temp_precision = float(
+                    options.pop("temperature_precision")
+                )
+            if "no_dark" in explicit_overrides:
+                calibration_processor.use_dark = not bool(options.pop("no_dark"))
+                calibration_processor.calibration.use_dark = (
+                    calibration_processor.use_dark
+                )
+        options["calibration_processor"] = calibration_processor
         return cls(session_dir, **options)
 
     CONFIG_DEFAULTS = {
-        "dark_library_path": os.path.abspath(os.path.expanduser("~/darkLib")),
         "work_dir": os.path.abspath(os.path.expanduser("~/tmp/sirilWorkDir")),
         "output_dir": os.path.abspath(os.path.expanduser("~/SirilProcessed")),
-        "rejection_method": "winsorizedsigma",
-        "rejection_param1": 3.0,
-        "rejection_param2": 3.0,
-        "roundness_filter": "1.8k",
-        "nbstars_filter": "1.8k",
-        "roundness_weighted": True,
-        "roundness_weight_max_extra": 1,
-        "fwhm_filter": "1.8k",
-        "max_fwhm": 0.0,
-        "stellar_profile_filter": True,
-        "stellar_profile_sigma": 3.0,
-        "fwhm_reject_percent": 0.0,
-        "fwhm_weighted": True,
-        "fwhm_weight_max_extra": 1,
-        "align_transform": "affine",
-        "enable_stack_platesolve": True,
-        "force_stacking": False,
-        "stack_method": "average",
-        "drizzle": "auto",
-        "drizzle_scale": "auto",
-        "drizzle_pixfrac": "auto",
-        "drizzle_kernel": "auto",
-        "drizzle_min_frames": 30,
-        "drizzle_min_coverage": 0.75,
-        "drizzle_fwhm_limit": 2.5,
-        "drizzle_max_drift": 10.0,
-        "temperature_precision": 0.5,
         "keep_intermediate": False,
+        "enable_postprocess": True,
     }
 
     @classmethod
     def add_arguments(cls, parser: argparse.ArgumentParser) -> None:
         """Déclare les paramètres du traitement avec leurs défauts locaux."""
         config = cls.CONFIG_DEFAULTS
+        parser.add_argument(
+            "--postprocess",
+            action=argparse.BooleanOptionalAction,
+            dest="enable_postprocess",
+            default=config["enable_postprocess"],
+            help=(
+                "Enchaîner le post-traitement du stack ou de la mosaïque finale "
+                "(activé par défaut)"
+            ),
+        )
         # Arguments positionnels
         parser.add_argument(
             "session_dirs",
@@ -294,27 +426,13 @@ class LightProcessor:
             help="Un ou plusieurs répertoires de session contenant les sous-répertoires 'light' (et éventuellement 'flat')",
         )
 
-        # Arguments optionnels pour les chemins
-        parser.add_argument(
-            "-d",
-            "--dark-lib",
-            dest="dark_library_path",
-            default=config.get("dark_library_path"),
-            help=f"Répertoire où sont stockés les master darks. (Défaut: '{config.get('dark_library_path')}')",
-        )
-
-        parser.add_argument(
-            "--no-dark",
-            dest="no_dark",
-            action="store_true",
-            help="Désactive l'utilisation des master darks (calibration sans soustraction de dark)",
-        )
+        SequenceCalibrationProcessor.add_arguments(parser)
 
         parser.add_argument(
             "--output",
             dest="output_dir",
-            default=config.get("output_dir"),
-            help=f"Répertoire de sortie pour les résultats. (défaut: '{config.get('output_dir')}')",
+            default=config["output_dir"],
+            help=f"Répertoire de sortie pour les résultats. (défaut: '{config['output_dir']}')",
         )
 
         parser.add_argument(
@@ -322,18 +440,8 @@ class LightProcessor:
             "--work-dir",
             dest="work_dir",
             type=str,
-            default=config.get("work_dir"),
-            help=f"Répertoire de travail temporaire. (Défaut: '{config.get('work_dir')}')",
-        )
-
-        # Arguments pour le traitement
-        parser.add_argument(
-            "-t",
-            "--temperature-precision",
-            dest="temperature_precision",
-            type=float,
-            default=config.get("temperature_precision"),
-            help=f"Précision d'arrondi pour la température en degrés Celsius. (Défaut: {config.get('temperature_precision')}°C)",
+            default=config["work_dir"],
+            help=f"Répertoire de travail temporaire. (Défaut: '{config['work_dir']}')",
         )
 
         parser.add_argument(
@@ -344,183 +452,9 @@ class LightProcessor:
             help="Force le retraitement même si le fichier de sortie existent",
         )
 
-        parser.add_argument(
-            "--drizzle", choices=["off", "auto", "force"], default=config.get("drizzle")
-        )
-        for option in ("scale", "pixfrac"):
-            parser.add_argument(
-                f"--drizzle-{option}",
-                default=config.get(f"drizzle_{option}"),
-                help="Valeur numérique ou auto",
-            )
-        parser.add_argument(
-            "--drizzle-kernel",
-            choices=["auto", "square", "gaussian", "turbo", "point"],
-            default=config.get("drizzle_kernel"),
-        )
-        for option, kind in [
-            ("min_frames", int),
-            ("min_coverage", float),
-            ("fwhm_limit", float),
-            ("max_drift", float),
-        ]:
-            parser.add_argument(
-                "--drizzle-" + option.replace("_", "-"),
-                type=kind,
-                default=config.get("drizzle_" + option),
-            )
+        from lib.light_stacking import SessionStackingProcessor
 
-        # Arguments pour le stacking
-        parser.add_argument(
-            "--stack-method",
-            dest="stack_method",
-            choices=["average", "median", "sum"],
-            default=config.get("stack_method"),
-            help="Méthode de stacking",
-        )
-
-        parser.add_argument(
-            "-r",
-            "--rejection-method",
-            dest="rejection_method",
-            choices=["none", "sigma", "linear", "winsor", "winsorizedsigma", "percentile"],
-            default=config.get("rejection_method"),
-            help=f"Méthode de rejet pour Siril. (Défaut: '{config.get('rejection_method')}')",
-        )
-
-        parser.add_argument(
-            "--rejection-param1",
-            dest="rejection_param1",
-            type=float,
-            default=config.get("rejection_param1"),
-            help=f"Premier paramètre de rejet pour Siril. (Défaut: {config.get('rejection_param1')})",
-        )
-
-        parser.add_argument(
-            "--rejection-param2",
-            dest="rejection_param2",
-            type=float,
-            default=config.get("rejection_param2"),
-            help=f"Second paramètre de rejet pour Siril. (Défaut: {config.get('rejection_param2')})",
-        )
-
-        parser.add_argument(
-            "--roundness-filter",
-            dest="roundness_filter",
-            type=str,
-            default=config.get("roundness_filter"),
-            help=f"Filtre de rondeur des étoiles appliqué aux mesures natives avant analyse et application du Drizzle (ex: '2k'). Utiliser 'none' pour désactiver. (Défaut: '{config.get('roundness_filter')}')",
-        )
-
-        parser.add_argument(
-            "--fwhm-filter",
-            dest="fwhm_filter",
-            type=str,
-            default=config.get("fwhm_filter"),
-            help=f"Filtre par seuil sur la FWHM pondérée Siril, après alignement (ex: '1.8k'). Utiliser 'none' pour désactiver. (Défaut: '{config.get('fwhm_filter')}')",
-        )
-
-        parser.add_argument(
-            "--max-fwhm",
-            type=float,
-            default=config.get("max_fwhm", 0.0),
-            help="Plafond de FWHM non pondérée Siril en pixels natifs, avant les filtres statistiques. Indépendant du nombre d'étoiles ; 0 désactive (défaut).",
-        )
-        parser.add_argument(
-            "--stellar-profile-filter",
-            dest="stellar_profile_filter",
-            action="store_true",
-            default=config.get("stellar_profile_filter"),
-            help="Filtre des profils stellaires : étalement R80 et allongement cohérent, sur toutes les poses encore retenues (actif par défaut).",
-        )
-        parser.add_argument(
-            "--no-stellar-profile-filter",
-            dest="stellar_profile_filter",
-            action="store_false",
-            help="Désactive la mesure et le filtrage des profils stellaires.",
-        )
-        parser.add_argument(
-            "--stellar-profile-sigma",
-            type=float,
-            default=config.get("stellar_profile_sigma"),
-            help="Coefficient de dispersion robuste pour les profils stellaires (défaut : 3).",
-        )
-
-        parser.add_argument(
-            "--fwhm-reject-percent",
-            dest="fwhm_reject_percent",
-            type=float,
-            default=config.get("fwhm_reject_percent", 0.0),
-            help="Rejet proportionnel FWHM après alignement (0 à 95), cumulable avec --fwhm-filter et appliqué sur ses survivantes. Défaut : 0%%.",
-        )
-
-        parser.add_argument(
-            "--no-fwhm-reject",
-            dest="no_fwhm_reject",
-            action="store_true",
-            default=False,
-            help="Désactive totalement le rejet proportionnel FWHM (force à 0%%).",
-        )
-
-        parser.add_argument(
-            "--nbstars-filter",
-            default=config.get("nbstars_filter"),
-            help="Tolérance bilatérale autour du nombre médian d'étoiles : écart absolu (30), relatif (20%%), ou MAD (1.8k par défaut) ; none désactive",
-        )
-        parser.add_argument(
-            "--no-roundness-weighted",
-            dest="roundness_weighted",
-            action="store_false",
-            default=config.get("roundness_weighted"),
-            help="Désactive la pondération de rondeur avant Drizzle",
-        )
-        parser.add_argument(
-            "--roundness-weight-max-extra",
-            type=int,
-            choices=range(0, 9),
-            default=config.get("roundness_weight_max_extra"),
-            help="Répétitions supplémentaires maximales selon la rondeur",
-        )
-
-        parser.add_argument(
-            "--no-fwhm-weighted",
-            dest="fwhm_weighted",
-            action="store_false",
-            default=config.get("fwhm_weighted", True),
-            help="Désactive la pondération FWHM des meilleures images (safe actif par défaut).",
-        )
-
-        parser.add_argument(
-            "--fwhm-weight-max-extra",
-            dest="fwhm_weight_max_extra",
-            type=int,
-            default=config.get("fwhm_weight_max_extra", 1),
-            help="Nombre max de répétitions supplémentaires pour les meilleures images quand la pondération FWHM est active. Défaut safe: 1.",
-        )
-
-        parser.add_argument(
-            "--align-transform",
-            dest="align_transform",
-            choices=["shift", "similarity", "affine", "homography"],
-            default=config.get("align_transform"),
-            help=f"Transformation d'alignement pour register au stack final. (Défaut: '{config.get('align_transform')}')",
-        )
-
-        parser.add_argument(
-            "--stack-platesolve",
-            dest="enable_stack_platesolve",
-            action="store_true",
-            default=config.get("enable_stack_platesolve", True),
-            help="Active seqplatesolve avant register dans le stack final de chaque session (utile en cas d'alignement difficile). Défaut: activé.",
-        )
-
-        parser.add_argument(
-            "--force-stacking",
-            dest="force_stacking",
-            action="store_true",
-            default=config.get("force_stacking", False),
-            help="Force uniquement la reconstruction du stack final de chaque session (supprime les artefacts de stack existants sans forcer la recalibration)",
-        )
+        SessionStackingProcessor.add_arguments(parser)
 
         parser.add_argument(
             "--purge-target",
@@ -534,49 +468,48 @@ class LightProcessor:
             "--keep-intermediate",
             dest="keep_intermediate",
             action="store_true",
-            default=config.get("keep_intermediate", False),
+            default=config["keep_intermediate"],
             help="Conserve les répertoires/fichiers temporaires de prétraitement pour inspection manuelle.",
         )
 
     def __init__(
         self,
         session_dir: Path,
-        dark_library_path: str,
         output_dir: Path,
         work_dir: Path,
-        temp_precision: float = 0.5,
         force_reprocess: bool = False,
         dry_run: bool = False,
-        use_dark: bool = True,
         keep_intermediate: bool = False,
+        siril: Siril | None = None,
+        calibration_processor: SequenceCalibrationProcessor | None = None,
     ) -> None:
         """
         Initialise le processeur de light.
 
         Args:
             session_dir: Répertoire de la session contenant light/ et flat/
-            dark_library_path: Chemin vers la librairie de master darks
             output_dir: Répertoire de sortie pour les résultats
             work_dir: Répertoire de travail temporaire
-            temp_precision: Pas d'arrondi des températures en °C (défaut : 0.5)
             force_reprocess: Force le retraitement même si les fichiers existent
             dry_run: Simule le traitement sans l'exécuter
-            use_dark: Utilise les master darks pour la calibration si True
             keep_intermediate: Conserve les répertoires/fichiers temporaires de prétraitement
+            siril: Service Siril partagé avec les traitements de calibration.
+            calibration_processor: Traitement de calibration déjà configuré.
         """
         self.session_dir = Path(session_dir)
-        self.dark_library_path = dark_library_path
         self.output_dir = Path(output_dir)
         self.work_dir = Path(work_dir)
-        self.temp_precision = temp_precision
         self.force_reprocess = force_reprocess
         self.dry_run = dry_run
-        self.use_dark = use_dark
         self.keep_intermediate = keep_intermediate
-        self.calibration = CalibrationProfile(use_dark=use_dark)
 
         # Initialisation de l'instance Siril avec la configuration par défaut
-        self.siril = Siril.create_with_defaults()
+        self.siril = siril or Siril.create_with_defaults()
+        self.calibration_processor = calibration_processor or SequenceCalibrationProcessor(
+            self.siril,
+            self.work_dir,
+            keep_intermediate=self.keep_intermediate,
+        )
 
         # Liste des fichiers de sortie créés durant le traitement
         self.output_files = []
@@ -673,20 +606,14 @@ class LightProcessor:
             )
 
         if (
-            self.use_dark
-            and self.dark_library_path
-            and not Path(self.dark_library_path).exists()
+            self.calibration_processor.use_dark
+            and self.calibration_processor.dark_library_path
+            and not Path(self.calibration_processor.dark_library_path).exists()
         ):
             raise ValueError(
-                f"La librairie de darks n'existe pas: {self.dark_library_path}"
+                "La librairie de darks n'existe pas: "
+                f"{self.calibration_processor.dark_library_path}"
             )
-
-    def _list_calibrated_outputs(self, calibrated_output_dir: Path) -> list[Path]:
-        """Liste uniquement les sorties calibrées attendues (préfixe pp_)."""
-        return sorted(
-            list(calibrated_output_dir.glob("pp_*.fits"))
-            + list(calibrated_output_dir.glob("pp_*.fit"))
-        )
 
     def find_light_files(self) -> list[Path]:
         """
@@ -863,7 +790,9 @@ class LightProcessor:
                     continue
 
                 # Grouper par caractéristiques
-                group_key = fits_info.group_key(self.temp_precision)
+                group_key = fits_info.group_key(
+                    self.calibration_processor.temp_precision
+                )
                 if group_key not in groups:
                     groups[group_key] = []
                 groups[group_key].append(fits_info)
@@ -902,15 +831,16 @@ class LightProcessor:
         Returns:
             Chemin vers le master dark correspondant ou None si non trouvé
         """
-        if not self.use_dark:
+        if not self.calibration_processor.use_dark:
             logging.debug("Mode sans dark: recherche de master dark ignorée")
             return None
 
-        if not self.dark_library_path:
+        dark_library_path = self.calibration_processor.dark_library_path
+        if not dark_library_path:
             logging.warning("Aucune librairie de darks spécifiée")
             return None
 
-        dark_lib_path = Path(self.dark_library_path)
+        dark_lib_path = Path(dark_library_path)
         if not dark_lib_path.exists():
             logging.error(f"Librairie de darks introuvable: {dark_lib_path}")
             return None
@@ -936,7 +866,9 @@ class LightProcessor:
                     continue
 
                 # Vérifier la correspondance des caractéristiques
-                if light_info.is_equivalent(dark_info, self.temp_precision):
+                if light_info.is_equivalent(
+                    dark_info, self.calibration_processor.temp_precision
+                ):
                     logging.debug(f"Master dark trouvé: {dark_file}")
                     logging.debug(
                         f"  Light: T={light_info.temperature()}°C, "
@@ -965,212 +897,6 @@ class LightProcessor:
             f"Binning={light_info.binning()}"
         )
         return None
-
-    def _prepare_sequence(self, sequence_name: str, light_files: list[str]) -> bool:
-        """
-        Prépare une séquence en créant les liens symboliques.
-
-        Args:
-            sequence_name: Nom de la séquence
-            light_files: Liste des chemins vers les fichiers light
-
-        Returns:
-            True si la préparation a réussi, False sinon
-        """
-        sequence_dir = self.work_dir / sequence_name
-
-        try:
-            # Créer le répertoire de la séquence
-            sequence_dir.mkdir(parents=True, exist_ok=True)
-
-            # Créer les liens symboliques avec la convention Siril
-            for i, file_path in enumerate(light_files):
-                source_path = Path(file_path).resolve()
-                if not source_path.exists():
-                    logging.error(f"Fichier source inexistant: {source_path}")
-                    return False
-
-                # Nom du lien selon la convention Siril
-                link_name = f"{sequence_name}_{i:04d}.fit"
-                link_path = sequence_dir / link_name
-
-                # Supprimer le lien existant s'il y en a un
-                if link_path.exists():
-                    link_path.unlink()
-
-                # Créer le lien symbolique
-                link_path.symlink_to(source_path)
-                logging.debug(f"Lien créé: {link_path} -> {source_path}")
-
-            logging.debug(
-                f"Séquence préparée: '{sequence_name}' ({len(light_files)} fichiers)"
-            )
-            return True
-
-        except Exception as e:
-            logging.error(
-                f"Erreur lors de la préparation de la séquence {sequence_name}: {e}"
-            )
-            return False
-
-    def _cleanup_sequence(self, sequence_name: str) -> None:
-        """
-        Nettoie les fichiers temporaires de la séquence.
-
-        Args:
-            sequence_name: Nom de la séquence à nettoyer
-        """
-        sequence_dir = self.work_dir / sequence_name
-        if sequence_dir.exists():
-            try:
-                shutil.rmtree(sequence_dir)
-                logging.debug(f"Répertoire de séquence nettoyé: {sequence_dir}")
-            except Exception as e:
-                logging.warning(f"Erreur lors du nettoyage de {sequence_dir}: {e}")
-
-    def _generate_flat_master_script(
-        self,
-        flat_sequence_name: str,
-        master_flat_output_base: str,
-        flat_dark_path: str | None,
-    ) -> str:
-        """
-        Génère le script Siril de création du master flat.
-
-        Args:
-            flat_sequence_name: Nom de la séquence flat
-            master_flat_output_base: Chemin de sortie sans extension du master flat
-            flat_dark_path: Master dark utilisé pour calibrer les flats (None si --no-dark)
-
-        Returns:
-            Contenu du script Siril
-        """
-        flat_process_dir = self.work_dir / "flat_process"
-        flat_sequence_dir = self.work_dir / flat_sequence_name
-
-        script_dir = Path(__file__).parent.parent / "bin"
-        pyecho_path = script_dir / "pyecho.py"
-        pydir_path = script_dir / "pydir.py"
-
-        if self.use_dark:
-            if not flat_dark_path:
-                raise ValueError("flat_dark_path est requis quand use_dark est activé")
-            flat_calibration_msg, flat_calibration_cmd = (
-                self.calibration.build_flat_calibration(
-                    flat_sequence_name,
-                    dark_path=flat_dark_path,
-                )
-            )
-            flat_stack_input = f"pp_{flat_sequence_name}"
-        else:
-            flat_calibration_msg, flat_calibration_cmd = (
-                self.calibration.build_flat_calibration(
-                    flat_sequence_name,
-                    dark_path=None,
-                )
-            )
-            flat_stack_input = flat_sequence_name
-
-        script_content = f"""requires 1.2
-cd {flat_sequence_dir}
-pyscript {pyecho_path} "====================================================================="
-pyscript {pyecho_path} "Convert Flat Frames to .fit files"
-pyscript {pyecho_path} "cmd:========> convert {flat_sequence_name} -out={flat_process_dir}"
-convert {flat_sequence_name} -out={flat_process_dir}
-cd {flat_process_dir}
-pyscript {pydir_path}
-pyscript {pyecho_path} "====================================================================="
-pyscript {pyecho_path} "Prepare master flat"
-pyscript {pyecho_path} "{flat_calibration_msg}"
-{flat_calibration_cmd}
-pyscript {pyecho_path} "cmd:========> stack {flat_stack_input} median -norm=mul -out={master_flat_output_base}"
-stack {flat_stack_input} median -norm=mul -out={master_flat_output_base}
-cd {self.work_dir}
-pyscript {pydir_path}
-pyscript {pyecho_path} "====================================================================="
-
-close"""
-
-        return script_content
-
-    def _generate_siril_script(
-        self,
-        sequence_name: str,
-        group_key: str,
-        dark_path: str | None,
-        flat_path: str | None,
-        stack_params: dict = None,
-    ) -> str:
-        """
-        Génère le script Siril pour le traitement complet.
-
-        Args:
-            sequence_name: Nom de la séquence
-            group_key: Clé du groupe pour le nom de fichier final
-            dark_path: Chemin vers le fichier master dark (None en mode sans dark)
-            flat_path: Chemin vers le fichier master flat (None si pas de flats)
-            stack_params: Paramètres de stacking
-
-        Returns:
-            Contenu du script Siril
-        """
-        # Paramètres par défaut si non spécifiés
-        if stack_params is None:
-            stack_params = {
-                "method": "average",
-                "rejection": "sigma",
-                "rejection_low": 3.0,
-                "rejection_high": 3.0,
-            }
-
-        # Construire la commande stack avec les paramètres de rejection
-        rejection_method = stack_params.get("rejection", "sigma")
-        rejection_low = stack_params.get("rejection_low", 3.0)
-        rejection_high = stack_params.get("rejection_high", 3.0)
-
-        # Créer le répertoire de traitement
-        process_dir = self.work_dir / "process"
-        sequence_dir = self.work_dir / sequence_name
-
-        # Chemin vers les scripts Python
-        script_dir = Path(__file__).parent.parent / "bin"
-        pyecho_path = script_dir / "pyecho.py"
-        pydir_path = script_dir / "pydir.py"
-
-        if self.use_dark and dark_path is None:
-            raise ValueError("dark_path est requis quand use_dark est activé")
-
-        preprocess_title, preprocess_message, preprocess_command = (
-            self.calibration.build_light_preprocess(
-                sequence_name,
-                dark_path=dark_path,
-                flat_path=flat_path,
-            )
-        )
-
-        if stack_params.get("drizzle", "off") != "off":
-            preprocess_command = preprocess_command.replace(" -debayer", "")
-
-        script_content = f"""requires 1.2
-cd {sequence_dir}
-pyscript {pyecho_path} "====================================================================="
-pyscript {pyecho_path} "Convert Light Frames to .fit files"
-pyscript {pyecho_path} "Convert files to sequence."
-pyscript {pyecho_path} "cmd:========> convert {sequence_name} -out={process_dir}"
-convert {sequence_name} -out={process_dir}
-cd {process_dir}
-pyscript {pydir_path}
-pyscript {pyecho_path} "====================================================================="
-pyscript {pyecho_path} "{preprocess_title}"
-pyscript {pyecho_path} "{preprocess_message}"
-{preprocess_command}
-cd {self.work_dir}
-pyscript {pydir_path}
-pyscript {pyecho_path} "====================================================================="
-
-close"""
-
-        return script_content
 
     def process_light_group(
         self, group_key: str, light_infos: list[FitsInfo],
@@ -1208,7 +934,7 @@ close"""
         reference_light = light_infos[0]
 
         master_dark_path = None
-        if self.use_dark:
+        if self.calibration_processor.use_dark:
             # Chercher le master dark correspondant
             master_dark_path = self.find_matching_master_dark(reference_light)
             if not master_dark_path:
@@ -1240,7 +966,6 @@ close"""
                 )
                 selected_flats = best_group
 
-        master_flat_path: Path | None = None
         flat_sequence_name = f"flat_{group_key}"
         master_flat_output_base = str(self.work_dir / f"master_flat_{group_key}")
 
@@ -1258,7 +983,9 @@ close"""
 
         # Les groupes calibrés sont exportés sans stack intermédiaire ;
         # le stacking final se fera sur l'ensemble des FITS calibrés dans ce dossier.
-        existing_outputs = self._list_calibrated_outputs(calibrated_output_dir)
+        existing_outputs = SequenceCalibrationProcessor.list_calibrated_outputs(
+            calibrated_output_dir
+        )
         existing_output = existing_outputs[0] if existing_outputs else None
 
         needs_native_cfa = False
@@ -1290,7 +1017,9 @@ close"""
                 (calibrated_output_dir / name).exists()
                 for name in (f"pp_{sequence_name}_.seq", f"pp_{sequence_name}.seq")
             ):
-                save_calibrated_sequence(sequence_name, calibrated_output_dir)
+                SequenceCalibrationProcessor.save_calibrated_sequence(
+                    sequence_name, calibrated_output_dir
+                )
             logging.info("Résultats calibrés disponibles : %s", calibrated_output_dir)
             # Enregistrer le fichier existant dans la liste des sorties
             self.output_files.append(existing_output)
@@ -1326,233 +1055,67 @@ close"""
             f"{len(light_files)} images — groupe {group_key} ==="
         )
 
-        if self.dry_run:
-            if selected_flats:
+        flat_dark_path = None
+        if selected_flats and self.calibration_processor.use_dark:
+            flat_dark_path = self.find_matching_master_dark(selected_flats[0])
+            if not flat_dark_path and not self.dry_run:
+                self.session_stats["rejected_processing_failure"] += len(light_infos)
                 logging.info(
-                    "[DRY-RUN] === Création du master flat : %d flats — groupe %s ===",
+                    "=== Création du master flat : %d flats — groupe %s ===",
                     len(selected_flats), group_key,
                 )
-                if self.use_dark:
-                    flat_dark_path = self.find_matching_master_dark(selected_flats[0])
-                    logging.info(
-                        f"[DRY-RUN] Dark pour calibrer les flats: {flat_dark_path}"
-                    )
-                logging.info(
-                    f"[DRY-RUN] Master flat attendu: {master_flat_output_base}.fit (ou .fits)"
+                logging.error(
+                    f"Impossible de traiter le groupe '{group_key}': "
+                    "aucun master dark adapté pour calibrer les flats"
                 )
-            else:
-                logging.info("[DRY-RUN] Aucun flat utilisé pour ce groupe")
-
-            logging.info("[DRY-RUN] %s", calibration_stage)
-            if master_dark_path:
-                logging.info("[DRY-RUN] Master dark des lights : %s", master_dark_path)
-            logging.info(
-                f"[DRY-RUN] Dossier de sortie calibrée attendu: {calibrated_output_dir} "
-                "(contiendra des fichiers .fit/.fits)"
-            )
-
-            # Générer et afficher le script Siril en mode dry-run
-            try:
-                flat_path_for_script = (
-                    f"{master_flat_output_base}.fit" if selected_flats else None
-                )
-                script_content = self._generate_siril_script(
-                    sequence_name,
-                    group_key,
-                    str(master_dark_path) if master_dark_path else None,
-                    flat_path_for_script,
-                    stack_params,
-                )
-                logging.debug("[DRY-RUN] Script Siril qui serait généré:")
-                for i, line in enumerate(script_content.split("\n"), 1):
-                    if line.strip():
-                        logging.debug(f"[DRY-RUN]   {i:2d}: {line}")
-            except Exception as e:
-                logging.warning(f"[DRY-RUN] Impossible de générer le script Siril: {e}")
-
-            return True
-
-        try:
-            # Préparer la séquence (créer les liens symboliques)
-            if not self._prepare_sequence(sequence_name, light_files):
-                logging.error(f"Échec de la préparation de la séquence {sequence_name}")
                 return False
 
-            try:
-                # Génération du master flat si des flats sont disponibles pour ce groupe
-                if selected_flats:
-                    logging.info(
-                        "=== Création du master flat : %d flats — groupe %s ===",
-                        len(selected_flats), group_key,
-                    )
-                    flat_dark_path = None
-                    if self.use_dark:
-                        # Les darkflats sont assimilés à des darks de la librairie.
-                        # Le dark doit correspondre aux caractéristiques des flats.
-                        flat_dark_path = self.find_matching_master_dark(
-                            selected_flats[0]
-                        )
-                        if not flat_dark_path:
-                            self.session_stats["rejected_processing_failure"] += len(
-                                light_infos
-                            )
-                            logging.error(
-                                f"Impossible de traiter le groupe '{group_key}': "
-                                "aucun master dark adapté pour calibrer les flats"
-                            )
-                            return False
-                        logging.info("Master dark des flats : %s", flat_dark_path)
-
-                    if not self._prepare_sequence(
-                        flat_sequence_name,
-                        [Path(info.filepath) for info in selected_flats],
-                    ):
-                        self.session_stats["rejected_processing_failure"] += len(
-                            light_infos
-                        )
-                        logging.error(
-                            f"Échec de la préparation de la séquence de flats {flat_sequence_name}"
-                        )
-                        return False
-
-                    flat_process_dir = self.work_dir / "flat_process"
-                    if flat_process_dir.exists():
-                        try:
-                            shutil.rmtree(flat_process_dir)
-                            logging.debug(
-                                f"Répertoire de flat_process nettoyé: {flat_process_dir}"
-                            )
-                        except Exception as e:
-                            logging.warning(
-                                f"Impossible de nettoyer {flat_process_dir}: {e}"
-                            )
-
-                    flat_process_dir.mkdir(parents=True, exist_ok=True)
-
-                    flat_script_content = self._generate_flat_master_script(
-                        flat_sequence_name=flat_sequence_name,
-                        master_flat_output_base=master_flat_output_base,
-                        flat_dark_path=str(flat_dark_path) if flat_dark_path else None,
-                    )
-
-                    flat_success = self.siril.run_siril_script(
-                        flat_script_content,
-                        str(self.work_dir),
-                        script_name=f"master_flat_{group_key}.sps",
-                    )
-                    if not flat_success:
-                        self.session_stats["rejected_processing_failure"] += len(
-                            light_infos
-                        )
-                        logging.error("Échec de la création du master flat")
-                        return False
-
-                    fit_candidate = Path(f"{master_flat_output_base}.fit")
-                    fits_candidate = Path(f"{master_flat_output_base}.fits")
-                    if fit_candidate.exists():
-                        master_flat_path = fit_candidate
-                    elif fits_candidate.exists():
-                        master_flat_path = fits_candidate
-                    else:
-                        self.session_stats["rejected_processing_failure"] += len(
-                            light_infos
-                        )
-                        logging.error(
-                            f"Master flat non trouvé: {fit_candidate} ou {fits_candidate}"
-                        )
-                        return False
-                    logging.info("Master flat créé : %s", master_flat_path)
-                else:
-                    logging.info("Master flat non utilisé : aucun flat compatible")
-
-                # Nettoyer le répertoire de traitement existant pour un démarrage propre
-                process_dir = self.work_dir / "process"
-                if process_dir.exists():
-                    try:
-                        shutil.rmtree(process_dir)
-                        logging.debug(
-                            f"Répertoire de traitement nettoyé: {process_dir}"
-                        )
-                    except Exception as e:
-                        logging.warning(
-                            f"Impossible de nettoyer le répertoire de traitement {process_dir}: {e}"
-                        )
-                        # Continuer quand même, les fichiers seront écrasés si possible
-
-                # Créer le répertoire de traitement
-                process_dir.mkdir(parents=True, exist_ok=True)
-
-                # Générer et exécuter le script Siril
-                script_content = self._generate_siril_script(
-                    sequence_name,
-                    group_key,
-                    str(master_dark_path) if master_dark_path else None,
-                    str(master_flat_path) if master_flat_path else None,
-                    stack_params,
+        calibration_processor = self.calibration_processor
+        try:
+            report = calibration_processor.post_process(
+                light_files[0],
+                calibrated_output_dir,
+                args=argparse.Namespace(
+                    sequence_name=sequence_name,
+                    group_key=group_key,
+                    light_files=light_files,
+                    master_dark_path=(
+                        str(master_dark_path) if master_dark_path else None
+                    ),
+                    flat_sequence_name=flat_sequence_name,
+                    flat_files=[Path(info.filepath) for info in selected_flats],
+                    flat_dark_path=(
+                        str(flat_dark_path) if flat_dark_path else None
+                    ),
+                    master_flat_output_base=master_flat_output_base,
+                    calibration_stage=calibration_stage,
+                    stack_params=stack_params,
+                    dry_run=self.dry_run,
+                ),
+            )
+        except Exception as error:
+            if self.dry_run:
+                logging.warning(
+                    "[DRY-RUN] Impossible de générer le script Siril: %s", error
                 )
-
-                logging.info("%s", calibration_stage)
-                if master_dark_path:
-                    logging.info("Master dark des lights : %s", master_dark_path)
-                if master_flat_path:
-                    logging.info("Master flat des lights : %s", master_flat_path)
-
-                success = self.siril.run_siril_script(
-                    script_content,
-                    str(self.work_dir),
-                    script_name=f"calibrate_light_{group_key}.sps",
-                )
-
-                if success:
-                    self._export_calibrated_outputs_from_process(
-                        sequence_name, calibrated_output_dir
-                    )
-
-                    exported_outputs = self._list_calibrated_outputs(
-                        calibrated_output_dir
-                    )
-
-                    if exported_outputs:
-                        logging.info(
-                            "Calibration terminée : %d FITS calibrés dans %s",
-                            len(exported_outputs), calibrated_output_dir,
-                        )
-                        for exported_file in exported_outputs:
-                            self.output_files.append(exported_file)
-                        self.session_stats["kept_for_stacking"] += len(light_infos)
-                        return True
-                    else:
-                        self.session_stats["rejected_processing_failure"] += len(
-                            light_infos
-                        )
-                        logging.error(
-                            f"Aucune sortie calibrée trouvée dans le dossier: {calibrated_output_dir}"
-                        )
-                        return False
-                else:
-                    self.session_stats["rejected_processing_failure"] += len(
-                        light_infos
-                    )
-                    logging.error(
-                        f"Échec du traitement complet de la séquence {sequence_name}"
-                    )
-                    return False
-
-            finally:
-                # Nettoyer la séquence dans tous les cas, sauf si demandé explicitement.
-                if self.keep_intermediate:
-                    logging.debug(
-                        "Mode conservation activé: répertoires temporaires conservés pour inspection (%s, %s)",
-                        self.work_dir / sequence_name,
-                        self.work_dir / flat_sequence_name,
-                    )
-                else:
-                    self._cleanup_sequence(sequence_name)
-                    self._cleanup_sequence(flat_sequence_name)
-
-        except Exception as e:
-            logging.error(f"Erreur lors du traitement du groupe '{group_key}': {e}")
+                return True
+            self.session_stats["rejected_processing_failure"] += len(light_infos)
+            logging.error("Erreur lors du traitement du groupe '%s': %s", group_key, error)
             return False
+
+        if self.dry_run:
+            return True
+
+        output_paths = report.get("outputs")
+        if not isinstance(output_paths, list) or not all(
+            isinstance(path, str) for path in output_paths
+        ):
+            self.session_stats["rejected_processing_failure"] += len(light_infos)
+            logging.error("Rapport de calibration invalide pour le groupe '%s'", group_key)
+            return False
+        self.output_files.extend(Path(path) for path in output_paths)
+        self.session_stats["kept_for_stacking"] += len(light_infos)
+        return True
 
     def process_session(self, stack_params: dict) -> bool:
         """
@@ -1628,7 +1191,9 @@ close"""
         if not calibrated_output_dir.exists():
             return
 
-        candidates = self._list_calibrated_outputs(calibrated_output_dir)
+        candidates = SequenceCalibrationProcessor.list_calibrated_outputs(
+            calibrated_output_dir
+        )
         converted_count = 0
 
         for output_file in candidates:
@@ -1661,382 +1226,6 @@ close"""
                 calibrated_output_dir,
             )
 
-    def _export_calibrated_outputs_from_process(
-        self, sequence_name: str, calibrated_output_dir: Path
-    ) -> None:
-        """Copie uniquement les vrais résultats pp_<sequence> produits par Siril dans process/."""
-        process_dir = self.work_dir / "process"
-        if not process_dir.exists():
-            logging.warning(
-                "Export calibré impossible: répertoire process introuvable: %s",
-                process_dir,
-            )
-            return
-
-        sources = sorted(
-            list(process_dir.glob(f"pp_{sequence_name}_*.fits"))
-            + list(process_dir.glob(f"pp_{sequence_name}_*.fit"))
-        )
-        if not sources:
-            logging.warning(
-                "Aucun fichier calibré pp_%s trouvé dans %s", sequence_name, process_dir
-            )
-            return
-
-        calibrated_output_dir.mkdir(parents=True, exist_ok=True)
-
-        for stale_file in self._list_calibrated_outputs(calibrated_output_dir):
-            stale_file.unlink()
-
-        for name in (f"pp_{sequence_name}_.seq", f"pp_{sequence_name}.seq"):
-            (calibrated_output_dir / name).unlink(missing_ok=True)
-        copied_count = 0
-        for source_file in sources:
-            if source_file.name.endswith(".seq"):
-                continue
-
-            destination = calibrated_output_dir / source_file.name
-            temp_copy = destination.with_name(f"{destination.name}.tmp_export")
-            if temp_copy.exists():
-                temp_copy.unlink()
-
-            shutil.copy2(source_file, temp_copy)
-            temp_copy.rename(destination)
-            copied_count += 1
-
-        save_calibrated_sequence(sequence_name, calibrated_output_dir, process_dir)
-        logging.debug(
-            "Sorties calibrées exportées depuis process/: %d fichier(s) vers %s",
-            copied_count,
-            calibrated_output_dir,
-        )
-
     def get_session_stats(self) -> dict[str, object]:
         """Retourne une copie des statistiques de session."""
         return dict(self.session_stats)
-
-
-def stack_session_outputs(
-    output_files: list[Path],
-    output_dir: Path,
-    work_dir: Path,
-    target_name: str,
-    stack_params: dict | None = None,
-    force_stacking: bool = False,
-    stack_report: dict | None = None,
-) -> Path | None:
-    """Empile les résultats d’une cible vers <target_name>_combined.fits.
-
-    Le nom complet est transmis à Siril pour fixer l’extension sans changer
-    celle des intermédiaires. Les anciennes sorties .fit restent reconnues,
-    avec priorité à .fits. Une entrée unique est retournée sans nouvel empilement.
-    La préparation des entrées commence par un bandeau INFO, suivi des
-    bandeaux des étapes effectivement exécutées par le moteur de stacking.
-    """
-    valid_files = [
-        Path(file).absolute() for file in output_files if Path(file).exists()
-    ]
-    if not valid_files:
-        return None
-    if len(valid_files) == 1:
-        return valid_files[0]
-
-    log_section("Stacking — Préparation des images calibrées")
-    resolved_targets = set()
-    for file_path in valid_files:
-        try:
-            resolved_targets.add(file_path.resolve(strict=True))
-        except Exception:
-            continue
-
-    if len(resolved_targets) < len(valid_files):
-        logging.warning(
-            "Attention: %d chemins calibrés pointent vers %d fichiers réels seulement. "
-            "Des sorties calibrées en liens symboliques peuvent avoir été écrasées; "
-            "relancer une recalibration complète pour fiabiliser le stack.",
-            len(valid_files),
-            len(resolved_targets),
-        )
-
-    target_name = str(target_name).strip() or "combined_session"
-    target_name = "".join(
-        ch if ch.isalnum() or ch in "_-" else "_" for ch in target_name
-    )
-
-    session_stack_dir = Path(work_dir) / target_name / "stacking"
-    input_dir = session_stack_dir / "input"
-    output_stack_dir = session_stack_dir / "output"
-
-    if force_stacking and session_stack_dir.exists():
-        shutil.rmtree(session_stack_dir)
-
-    output_path = Path(output_dir) / f"{target_name}_combined"
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    if force_stacking:
-        for candidate in [
-            output_path.with_suffix(".fit"),
-            output_path.with_suffix(".fits"),
-        ]:
-            if candidate.exists():
-                candidate.unlink()
-
-    for transient_dir in [input_dir, output_stack_dir]:
-        if transient_dir.exists():
-            shutil.rmtree(transient_dir)
-
-    stack_cfg = dict(stack_params or {})
-    stack_cfg.setdefault("fwhm_filter", "1.8k")
-    stack_cfg.setdefault("roundness_filter", "1.8k")
-    from lib.drizzle import STACK_STAGES, reset_stage
-
-    run_dir = session_stack_dir
-    for stage in STACK_STAGES:
-        reset_stage(run_dir / stage)
-    input_dir = run_dir / "00_inputs"
-    output_stack_dir = run_dir / "01_registration"
-
-    local_report = {
-        "target_name": target_name,
-        "total_input": len(valid_files),
-        "rejected_incompatible_layout": 0,
-        "rejected_unreadable_layout": 0,
-        "rejected_registration_quality": 0,
-        "kept_unique_for_stack": len(valid_files),
-        "kept_effective_for_stack": len(valid_files),
-        "weighted_extra_entries": 0,
-    }
-
-    filtered_files, layout_stats = _filter_compatible_stack_inputs(valid_files)
-    local_report["rejected_incompatible_layout"] = layout_stats.get(
-        "rejected_incompatible_layout", 0
-    )
-    local_report["rejected_unreadable_layout"] = layout_stats.get(
-        "rejected_unreadable_layout", 0
-    )
-
-    if (
-        local_report["rejected_incompatible_layout"] > 0
-        or local_report["rejected_unreadable_layout"] > 0
-    ):
-        logging.warning(
-            "Nettoyage des entrées de stack: %d rejetée(s) (layout incompatible), %d rejetée(s) (layout illisible).",
-            local_report["rejected_incompatible_layout"],
-            local_report["rejected_unreadable_layout"],
-        )
-
-    valid_files = filtered_files
-    local_report["kept_unique_for_stack"] = len(valid_files)
-    local_report["kept_effective_for_stack"] = len(valid_files)
-
-    if not valid_files:
-        logging.error("Aucune image compatible restante pour le stack final")
-        if stack_report is not None:
-            stack_report.clear()
-            stack_report.update(local_report)
-        return None
-
-    if len(valid_files) == 1:
-        if stack_report is not None:
-            stack_report.clear()
-            stack_report.update(local_report)
-        return valid_files[0]
-
-    # All compatible exposures are measured once; selection and weighting follow registration.
-    files_for_stack = valid_files
-
-    if stack_report is not None:
-        stack_report.clear()
-        stack_report.update(local_report)
-
-    sequence_prefix = f"{target_name}_"
-    for index, source_file in enumerate(files_for_stack, start=1):
-        destination = input_dir / f"{sequence_prefix}{index:03d}.fits"
-        if destination.exists():
-            destination.unlink()
-        try:
-            destination.symlink_to(source_file)
-        except OSError:
-            shutil.copy2(source_file, destination)
-
-    method = str(stack_cfg.get("method", "average")).lower()
-    rejection = str(stack_cfg.get("rejection", "sigma")).lower()
-    rejection_low = stack_cfg.get("rejection_low", 3.0)
-    rejection_high = stack_cfg.get("rejection_high", 3.0)
-    align_transform = str(stack_cfg.get("align_transform", "affine")).lower()
-    enable_stack_platesolve = bool(stack_cfg.get("enable_stack_platesolve", True))
-    # Siril crops the selected exposures to their common field before stacking.
-    framing = "min"
-    stack_sequence_prefix = f"r_{sequence_prefix}"
-
-    if method in {"median", "med"}:
-        stack_line = (
-            f"stack {stack_sequence_prefix} median -output_norm -out={output_path}.fits"
-        )
-    elif rejection == "none":
-        stack_line = (
-            f"stack {stack_sequence_prefix} mean -output_norm -out={output_path}.fits"
-        )
-    else:
-        # Siril 1.4: la forme 'rej <low> <high>' réalise une moyenne avec rejet.
-        stack_line = (
-            f"stack {stack_sequence_prefix} rej {rejection_low} {rejection_high} "
-            f"-output_norm -out={output_path}.fits"
-        )
-
-    platesolve_lines = ""
-    if enable_stack_platesolve:
-        platesolve_lines = (
-            f"seqplatesolve {sequence_prefix} -force -nocache -disto=ps_distortion\n"
-        )
-
-    prepare = f"""requires 1.2
-cd {input_dir}
-convert {sequence_prefix} -out={output_stack_dir}
-cd {output_stack_dir}
-seqfindstar {sequence_prefix}
-{platesolve_lines}register {sequence_prefix} -2pass -transf={align_transform}"""
-
-    siril = Siril.create_with_defaults()
-    from lib.drizzle import run_stack
-
-    success = run_stack(
-        siril,
-        files_for_stack,
-        stack_cfg,
-        output_stack_dir,
-        run_dir,
-        sequence_prefix,
-        output_path,
-        prepare,
-        stack_line,
-        framing,
-        stack_report=stack_report,
-    )
-    if not success:
-        return None
-
-    combined_candidates = [
-        output_path.with_suffix(".fits"),
-        output_path.with_suffix(".fit"),
-    ]
-    for candidate in combined_candidates:
-        if candidate.exists():
-            return candidate
-    return None
-
-
-def _read_fits_layout(file_path: Path) -> tuple[int, int, int, int] | None:
-    """Lit la signature de layout d'un FITS: (channels, width, height, bitpix)."""
-    try:
-        with fits.open(file_path, memmap=False) as hdul:
-            header = hdul[0].header
-            data = hdul[0].data
-
-        bitpix = int(header.get("BITPIX", 0) or 0)
-
-        if data is None:
-            return None
-
-        arr = np.asarray(data)
-        if arr.ndim == 2:
-            height, width = arr.shape
-            channels = 1
-            return (channels, int(width), int(height), bitpix)
-
-        if arr.ndim == 3:
-            # Convention FITS habituelle: (channels, height, width)
-            channels = int(arr.shape[0])
-            height = int(arr.shape[1])
-            width = int(arr.shape[2])
-            return (channels, width, height, bitpix)
-
-        return None
-    except Exception:
-        return None
-
-
-def _filter_compatible_stack_inputs(
-    files: list[Path],
-) -> tuple[list[Path], dict[str, int]]:
-    """Conserve un sous-ensemble homogène en layout FITS pour éviter un échec de séquence Siril."""
-    by_layout: dict[tuple[int, int, int, int], list[Path]] = {}
-    unreadable: list[Path] = []
-
-    for file_path in files:
-        layout = _read_fits_layout(file_path)
-        if layout is None:
-            unreadable.append(file_path)
-            continue
-        by_layout.setdefault(layout, []).append(file_path)
-
-    stats = {
-        "rejected_incompatible_layout": 0,
-        "rejected_unreadable_layout": 0,
-    }
-
-    # Si rien n'est lisible (cas tests avec faux FITS), ne filtre pas.
-    if not by_layout:
-        return files, stats
-
-    dominant_layout, dominant_files = max(
-        by_layout.items(), key=lambda item: len(item[1])
-    )
-    kept_files = list(dominant_files)
-
-    rejected_incompatible = 0
-    incompatible_files: list[Path] = []
-    for layout, layout_files in by_layout.items():
-        if layout == dominant_layout:
-            continue
-        rejected_incompatible += len(layout_files)
-        incompatible_files.extend(layout_files)
-
-    stats["rejected_incompatible_layout"] = rejected_incompatible
-    stats["rejected_unreadable_layout"] = len(unreadable)
-
-    if rejected_incompatible > 0:
-        logging.warning(
-            "Layouts FITS mélangés détectés pour le stack final. Layout conservé: %s (%d fichiers).",
-            dominant_layout,
-            len(dominant_files),
-        )
-
-        kept_dirs_summary = _summarize_parent_directories(dominant_files)
-        incompatible_dirs_summary = _summarize_parent_directories(incompatible_files)
-        logging.warning(
-            "Répertoires du layout conservé: %s",
-            kept_dirs_summary,
-        )
-        logging.warning(
-            "Répertoires des fichiers incompatibles: %s",
-            incompatible_dirs_summary,
-        )
-
-    if unreadable:
-        logging.warning(
-            "%d fichier(s) ignoré(s) pour le stack final: layout FITS non lisible.",
-            len(unreadable),
-        )
-
-    return kept_files, stats
-
-
-def _summarize_parent_directories(files: list[Path], max_dirs: int = 8) -> str:
-    """Construit un résumé compact des répertoires parents avec effectifs."""
-    if not files:
-        return "(aucun)"
-
-    by_dir: dict[str, int] = {}
-    for file_path in files:
-        parent = str(file_path.parent)
-        by_dir[parent] = by_dir.get(parent, 0) + 1
-
-    ranked = sorted(by_dir.items(), key=lambda item: item[1], reverse=True)
-    shown = ranked[:max_dirs]
-    parts = [f"{directory} ({count})" for directory, count in shown]
-
-    remaining = len(ranked) - len(shown)
-    if remaining > 0:
-        parts.append(f"... +{remaining} autre(s) répertoire(s)")
-
-    return "; ".join(parts)

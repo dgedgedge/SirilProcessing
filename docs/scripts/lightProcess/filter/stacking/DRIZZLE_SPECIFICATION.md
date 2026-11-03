@@ -335,10 +335,14 @@ Le mode par défaut est `auto`. Paramètres persistants et options CLI :
 | `--drizzle-fwhm-limit` | 2.5 | FWHM limite en pixels natifs |
 | `--drizzle-max-drift` | 10 | Dérive lente maximale estimée en pixels |
 
-Le vrai Drizzle nécessite Siril ≥ 1.4. Une vérification `requires 1.4` précède
-l’activation ; une incompatibilité impose le traitement standard en `auto` et un
-échec explicite en `force`. Les séquences Siril de versions 4 à 7 sont lues.
-Un format inconnu empêche une activation automatique.
+Tous les scripts Siril du projet exigent désormais Siril ≥ 1.4 : le service
+d’exécution insère `requires 1.4` et transforme tout code de sortie non nul en
+erreur fatale avec le chemin du journal. La vérification avant le Drizzle
+confirme donc l’exécution de Siril 1.4 ; une erreur n’est pas convertie en
+repli standard. Le mode `auto` peut toujours choisir la branche standard selon
+les critères de qualité, d’échantillonnage et de ressources décrits ici.
+Les séquences Siril de versions 4 à 7 sont lues. Un format inconnu empêche une
+activation automatique.
 
 La nouvelle calibration en `auto/force` conserve le CFA. Les calibrations RGB déjà
 présentes sont recalculées si les brutes Bayer sont disponibles pendant le traitement

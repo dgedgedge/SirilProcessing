@@ -9,8 +9,8 @@
 
 | Étape | Principales options |
 |---|---|
-| Chemins | `--dark-lib`, `--output`, `--work-dir` |
-| Calibration | `--no-dark`, `--temperature-precision`, `--force` |
+| Chemins | `--output`, `--work-dir` |
+| Calibration | `--dark-lib`, `--no-dark`, `--temperature-precision`, `--force` |
 | Exécution | `--siril-path`, `--siril-mode`, `--dry-run`, `--log-level` |
 | Alignement | `--align-transform`, `--stack-platesolve` |
 | Sélection | `--fwhm-filter`, `--max-fwhm`, `--fwhm-reject-percent`, `--roundness-filter`, `--nbstars-filter` |
@@ -26,6 +26,11 @@ Les défauts d’empilement sont `--rejection-method winsorizedsigma` et
 `--stack-method average`, comme dans `darkLibUpdate`. Le nom court historique
 `winsor` reste accepté par `lightProcess`. Les valeurs JSON explicites restent
 prioritaires sur ces défauts.
+Les options de calibration, dont `--dark-lib` et `--temperature-precision`, sont
+déclarées par [`SequenceCalibrationProcessor`](../../../lib/light_calibration.py).
+Les options de sélection, de Drizzle et de stacking sont déclarées par
+[`SessionStackingProcessor`](../../../lib/light_stacking.py) ; leur présence
+dans la commande commune ne transfère pas leur responsabilité à `LightProcessor`.
 
 `--help` expose toutes les options. Les réglages peuvent provenir du fichier
 persistant de configuration ; `--save-config` enregistre les arguments.

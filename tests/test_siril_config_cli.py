@@ -10,14 +10,14 @@ import numpy as np
 from astropy.io import fits
 
 from lib.config import Config
-from lib.siril_utils import Siril
+from lib.siril import Siril
 
 
 def test_shared_parameters_and_service(tmp_path, monkeypatch):
     config = Config(str(tmp_path / 'config.json'))
     config.update(siril_path='/configured/siril-cli', siril_mode='appimage')
     parser = argparse.ArgumentParser()
-    Siril.add_arguments(parser, config, photometry_aliases=True)
+    config.register(Siril, parser)
     args = parser.parse_args([])
     assert (args.siril_path, args.siril_mode) == ('/configured/siril-cli', 'appimage')
     args = parser.parse_args(['-s', '/override/siril-cli', '-m', 'native'])
@@ -62,7 +62,7 @@ def test_postprocess_save_reload_and_override(tmp_path: Path) -> None:
     assert json.loads(config_path.read_text()) == saved  # Pas d'écriture implicite.
     loaded = Config.from_command_line(['--config', str(config_path)])
     parser = argparse.ArgumentParser()
-    Siril.add_arguments(parser, loaded)
+    loaded.register(Siril, parser)
     assert parser.parse_args([]).siril_path == '/example/siril-cli'
 
 

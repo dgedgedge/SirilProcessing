@@ -19,10 +19,12 @@ Tous les paramètres de chemins de répertoires sont automatiquement convertis e
 
 ### Valeurs par Défaut
 
-Les valeurs par défaut définies dans `DEFAULTS` sont également converties en chemins absolus :
+Les chemins par défaut sont définis par `DarkLib.CONFIG_DEFAULTS` dans
+[lib/darkprocess.py](../../../lib/darkprocess.py) et déjà résolus en chemins
+absolus :
 
 ```python
-DEFAULTS = {
+CONFIG_DEFAULTS = {
     "dark_library_path": "/home/user/darkLib",      # Au lieu de "~/darkLib"
     "bias_library_path": "/home/user/biasLib",      # Au lieu de "~/biasLib"
     "work_dir": "/home/user/tmp/sirilWorkDir",      # Au lieu de "~/tmp/sirilWorkDir"

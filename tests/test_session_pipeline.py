@@ -11,7 +11,7 @@ from typing import Iterator
 
 import pytest
 
-from lib.postprocessing import PostProcessingProcessor
+from lib.postprocess import PostProcessingProcessor
 from lib.type_defs import ConfigValue, JSONReport
 
 PipelineFixture = tuple[
@@ -23,9 +23,10 @@ PostprocessCalls = list[tuple[Path, Path, argparse.Namespace]]
 @pytest.fixture
 def pipeline(tmp_path, monkeypatch):
     import lib.lightprocessor as processing
+    import lib.light_stacking as stacking
     import lib.mosaic as mosaic
     from lib.config import Config
-    from lib.siril_utils import Siril
+    from lib.siril import Siril
 
     spec = importlib.util.spec_from_file_location('light_process_cli', Path(__file__).parents[1] / 'bin/lightProcess.py')
     cli = importlib.util.module_from_spec(spec)
@@ -60,9 +61,10 @@ def pipeline(tmp_path, monkeypatch):
             return self.outputs
 
     def stack(**kwargs):
-        result = kwargs['output_dir'] / (kwargs['target_name'] + '_combined.fits')
+        result = kwargs['output_path']
+        result.parent.mkdir(parents=True, exist_ok=True)
         result.touch()
-        return result
+        return {'status': 'ok', 'output_image': str(result)}
 
     stack_mock = Mock(side_effect=stack)
     mosaic_mock = Mock()
@@ -74,7 +76,7 @@ def pipeline(tmp_path, monkeypatch):
     mosaic_output.touch()
     mosaic_mock.return_value.post_process.return_value = {'output_image': str(mosaic_output)}
     monkeypatch.setattr(processing, 'LightProcessor', Processor)
-    monkeypatch.setattr(processing, 'stack_session_outputs', stack_mock)
+    monkeypatch.setattr(stacking.SessionStackingProcessor, 'post_process', stack_mock)
     class TestMosaic(mosaic.Mosaic):
         """Déclare les options réelles et simule seulement l’exécution."""
 
@@ -109,7 +111,11 @@ def make_session(tmp_path, name, count):
 
 @pytest.mark.parametrize('count', [0, 1, 3])
 @pytest.mark.parametrize('force', [False, True])
-def test_every_session_is_stacked_with_all_its_calibrations(tmp_path, pipeline, count, force):
+def test_every_session_is_stacked_with_all_its_calibrations(
+    tmp_path, pipeline, count, force, caplog: pytest.LogCaptureFixture,
+):
+    """Empile ensemble les sous-sessions et consigne le stack au niveau session."""
+    caplog.set_level('INFO')
     cli, run, stack, mosaic, calibrated = pipeline
     root, children = make_session(tmp_path, 'field', count)
     directories, parents = cli.build_session_target_map([root])
@@ -118,8 +124,20 @@ def test_every_session_is_stacked_with_all_its_calibrations(tmp_path, pipeline, 
     assert run([root], *(['--force-stacking'] if force else [])) == 0
     stack.assert_called_once()
     call = stack.call_args.kwargs
-    assert call['output_dir'] == tmp_path / 'out' / 'field'
-    assert set(call['output_files']) == {path for child in children for path in calibrated[child]}
+    stack_args = call['args']
+    assert call['output_path'] == tmp_path / 'out' / 'field' / 'field_combined.fits'
+    assert set(stack_args.output_files) == {path for child in children for path in calibrated[child]}
+    stack_log = tmp_path / 'work' / 'field' / 'stacking' / 'field_stacking.log'
+    assert 'Début du stacking : field' in stack_log.read_text(encoding='utf-8')
+    for child in children:
+        child_work_dir = tmp_path / 'work' / 'field' / 'sessions' / child.name
+        child_stack_log = child_work_dir / f'{child.name}_stacking.log'
+        child_calibration_log = child_work_dir / f'{child.name}_lightProcess.log'
+        assert not child_stack_log.exists()
+        if child_calibration_log.exists():
+            assert 'Début du stacking : field' not in child_calibration_log.read_text(
+                encoding='utf-8',
+            )
     mosaic.return_value.post_process.assert_not_called()
 
 
@@ -140,7 +158,7 @@ def test_mosaic_uses_only_one_stack_per_input_session(tmp_path, pipeline):
     for files in calibrated.values():
         assert all(path.is_relative_to(tmp_path / 'work/field') for path in files)
     for stack_call in stack.call_args_list:
-        assert stack_call.kwargs['work_dir'] == tmp_path / 'work/field'
+        assert stack_call.kwargs['args'].work_dir == tmp_path / 'work/field'
     assert args.siril_mode == 'flatpak'
     mosaic.return_value.add_arguments.assert_not_called()
     assert inputs == [tmp_path / 'work/field' / root.name / f'{root.name}_combined.fits' for root in roots]
@@ -161,7 +179,12 @@ def test_one_session_with_many_subsessions_is_not_a_mosaic(tmp_path, pipeline):
 def test_failed_stack_is_not_replaced_by_calibrations_in_mosaic(tmp_path, pipeline, failure):
     _, run, stack, mosaic, _ = pipeline
     roots = [make_session(tmp_path, name, 1)[0] for name in ['north', 'south']]
-    stack.side_effect = [failure, tmp_path / 'south_combined.fits']
+    stack.side_effect = [
+        {'status': 'failed', 'output_image': None}
+        if failure is None
+        else failure,
+        {'status': 'ok', 'output_image': str(tmp_path / 'south_combined.fits')},
+    ]
     assert run(roots, '--mosaic', '--mosaic-name', 'field') == 1
     assert stack.call_count == 2
     mosaic.return_value.post_process.assert_not_called()
@@ -183,6 +206,7 @@ def test_mosaic_accepts_cached_session_stacks(
     import lib.drizzle as drizzle
     caplog.set_level("INFO")
     cli, run, stack, mosaic, _ = pipeline
+    import lib.lightprocessor as processing
     roots = [make_session(tmp_path, name, 1)[0] for name in ['north', 'south']]
     expected = []
     for root in roots:
@@ -191,7 +215,11 @@ def test_mosaic_accepts_cached_session_stacks(
         result.touch()
         expected.append(result)
     monkeypatch.setattr(drizzle, 'cache_matches', lambda *args: True)
-    monkeypatch.setattr(cli, 'should_rebuild_stack', lambda *args: False)
+    monkeypatch.setattr(
+        processing.LightProcessor,
+        "_should_rebuild_stack",
+        classmethod(lambda cls, *args: False),
+    )
     assert run(roots, '--mosaic', '--mosaic-name', 'field') == 0
     stack.assert_not_called()
     call = mosaic.return_value.post_process.call_args.kwargs
@@ -334,12 +362,17 @@ def test_postprocess_reused_stack(
 ) -> None:
     """La reprise d’un stack à jour enchaîne quand même le post-traitement demandé."""
     cli, run, stack, _, _ = pipeline
+    import lib.lightprocessor as processing
     root, _ = make_session(tmp_path, "field", 0)
     image = tmp_path / "out/field/field_combined.fits"
     image.parent.mkdir(parents=True)
     image.touch()
     monkeypatch.setattr("lib.drizzle.cache_matches", lambda *args: True)
-    monkeypatch.setattr(cli, "should_rebuild_stack", lambda *args: False)
+    monkeypatch.setattr(
+        processing.LightProcessor,
+        "_should_rebuild_stack",
+        classmethod(lambda cls, *args: False),
+    )
     assert run([root], "--postprocess") == 0
     stack.assert_not_called()
     assert len(postprocess_calls) == 1 and postprocess_calls[0][0] == image
@@ -426,7 +459,6 @@ def test_postprocess_runs_by_default_without_activation_flag(
     assert run(roots, *options, use_postprocess_default=True) == 0
     assert len(postprocess_calls) == 1
     image, _, args = postprocess_calls[0]
-    assert args.enable_postprocess is True
     assert image == (
         tmp_path / "mosaic.fits" if mosaic
         else tmp_path / "out/M_33/M_33_combined.fits"
@@ -447,12 +479,13 @@ def test_lightprocess_executes_common_exports_after_stack(
     _, run, stack, _, _ = pipeline
     root, _ = make_session(tmp_path, "field", 0)
 
-    def stack_rgb(*, output_dir: Path, **kwargs: object) -> Path:
+    def stack_rgb(*, output_path: Path, **kwargs: object) -> dict[str, str]:
         """Simule seulement le stacking, en écrivant un FITS valide et non constant."""
-        destination = output_dir / "field_combined.fits"
+        destination = output_path
+        destination.parent.mkdir(parents=True, exist_ok=True)
         pixels = np.linspace(0.01, 0.1, 3 * 64 * 64, dtype=np.float32)
         fits.writeto(destination, pixels.reshape(3, 64, 64))
-        return destination
+        return {"status": "ok", "output_image": str(destination)}
 
     stack.side_effect = stack_rgb
     caplog.set_level("INFO")
@@ -639,3 +672,134 @@ def test_autoghs_only_missing_history_does_not_start_upstream(
     assert calibrated == {}
     stack.assert_not_called()
     mosaic.return_value.post_process.assert_not_called()
+
+
+@pytest.mark.parametrize('count', [0, 1, 3])
+def test_lightprocessor_produces_one_image_without_cli(
+    tmp_path: Path, pipeline: PipelineFixture, count: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """La classe calibre les sous-sessions, totalise leurs WCS et empile une fois."""
+    from lib.lightprocessor import LightProcessor
+
+    _, _, stack, mosaic, calibrated = pipeline
+    root, children = make_session(tmp_path, 'field', count)
+    monkeypatch.setattr(LightProcessor, 'get_session_stats', Mock(return_value={
+        'lights_total': 2, 'wcs_present': 1, 'wcs_missing': 1,
+        'wcs_unreadable': 0,
+    }))
+    args = argparse.Namespace(
+        force_reprocess=False, force_stacking=False, dry_run=False,
+        keep_intermediate=False, log_level='INFO',
+    )
+    result = LightProcessor.process_target(
+        root, tmp_path / 'out', tmp_path / 'work', args, {},
+    )
+    assert result.session_dir == root
+    assert result.total_subsessions == len(children)
+    assert result.successful_subsessions == len(children)
+    assert result.failed_subsessions == []
+    assert result.wcs_stats == {
+        'lights_total': 2 * len(children), 'wcs_present': len(children),
+        'wcs_missing': len(children), 'wcs_unreadable': 0,
+    }
+    assert result.output_image == tmp_path / 'out/field/field_combined.fits'
+    assert result.output_image.is_file()
+    stack.assert_called_once()
+    assert stack.call_args.kwargs['args'].output_files == [
+        output for child in children for output in calibrated[child]
+    ]
+    mosaic.assert_not_called()
+
+
+@pytest.mark.parametrize('raises', [False, True])
+def test_lightprocessor_continues_after_failed_subsession(
+    tmp_path: Path, pipeline: PipelineFixture,
+    monkeypatch: pytest.MonkeyPatch, raises: bool,
+) -> None:
+    """Un échec reste signalé et seules les calibrations réussies sont empilées."""
+    from lib.lightprocessor import LightProcessor
+
+    _, _, stack, _, calibrated = pipeline
+    root, children = make_session(tmp_path, 'field', 3)
+
+    def calibrate(self: LightProcessor, params: dict[str, ConfigValue]) -> bool:
+        """Simule un échec au milieu de la boucle et laisse finir la session."""
+        if self.session_dir == children[1]:
+            if raises:
+                raise RuntimeError('Calibration indisponible')
+            return False
+        return True
+
+    monkeypatch.setattr(LightProcessor, 'process_session', calibrate)
+    args = argparse.Namespace(
+        force_reprocess=False, force_stacking=False, dry_run=False,
+        keep_intermediate=False, log_level='INFO',
+    )
+    result = LightProcessor.process_target(
+        root, tmp_path / 'out', tmp_path / 'work', args, {},
+    )
+    assert result.total_subsessions == 3
+    assert result.successful_subsessions == 2
+    assert result.failed_subsessions == [children[1]]
+    assert result.output_image is not None
+    stack.assert_called_once()
+    assert stack.call_args.kwargs['args'].output_files == [
+        output for child in (children[0], children[2])
+        for output in calibrated[child]
+    ]
+
+
+def test_lightprocessor_empty_session_does_not_stack(
+    tmp_path: Path, pipeline: PipelineFixture,
+) -> None:
+    """Une session sans sous-session valide ne produit pas d'image factice."""
+    from lib.lightprocessor import LightProcessor
+
+    _, _, stack, _, _ = pipeline
+    root = tmp_path / 'empty'
+    root.mkdir()
+    result = LightProcessor.process_target(
+        root, tmp_path / 'out', tmp_path / 'work', argparse.Namespace(), {},
+    )
+    assert result.total_subsessions == 0
+    assert result.successful_subsessions == 0
+    assert result.output_image is None
+    stack.assert_not_called()
+
+
+def test_cli_discovery_delegates_to_lightprocessor(
+    tmp_path: Path, pipeline: PipelineFixture, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """La validation CLI utilise les mêmes règles que le traitement de session."""
+    from lib.lightprocessor import LightProcessor
+
+    cli, _, _, _, _ = pipeline
+    expected = [tmp_path / 'night']
+    discovery = Mock(return_value=expected)
+    monkeypatch.setattr(LightProcessor, 'discover_subsessions', discovery)
+    assert cli.discover_session_roots(tmp_path) == expected
+    discovery.assert_called_once_with(tmp_path)
+
+
+@pytest.mark.parametrize("session_names, expected", [
+    (["session_M31_nord", "session_M31_sud"], "session_M31"),
+    (["NGC7000_panel1", "NGC7000_panel2", "NGC7000_panel3"], "NGC7000_panel"),
+    (["M42_rouge", "M42_vert", "M42_bleu"], "M42"),
+    (["IC1396_A", "IC1396_B"], "IC1396"),
+    (["session1", "session2"], "session"),
+    (["A", "B"], ""),
+    (["completely_different", "names_here"], ""),
+    (["single_session"], "single_session"),
+    (["M31_mosaic_part_1", "M31_mosaic_part_2"], "M31_mosaic_part"),
+    (["2023_10_15_M31", "2023_10_15_M42"], "2023_10_15_M"),
+    ([], ""),
+    (["north_M31", "south_M31"], "M31"),
+])
+def test_calculate_common_basename(
+    pipeline: PipelineFixture, session_names: list[str], expected: str,
+) -> None:
+    """Le script nomme la mosaïque à partir des noms des sessions fournies."""
+    cli, _, _, _, _ = pipeline
+    session_dirs = [Path(name) for name in session_names]
+    assert cli.calculate_common_basename(session_dirs) == expected

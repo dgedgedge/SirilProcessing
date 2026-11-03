@@ -140,7 +140,7 @@ Both scripts are automatically integrated into the light processing workflow thr
 ## 6. Implementation Details
 
 - Located in: `bin/pyecho.py` and `bin/pydir.py`
-- Used by: `lib/lightprocessor.py` in the `_generate_siril_script()` method
+- Used by: `lib/light_calibration.py` in the sequence and master-flat script builders
 - Path resolution: Dynamically calculated using `Path(__file__).parent.parent / "bin"`
 
 <a id="examples-in-generated-scripts"></a>

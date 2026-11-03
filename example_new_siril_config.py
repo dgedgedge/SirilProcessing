@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from lib.config import Config
 from lib.darkprocess import DarkLib
 from lib.lightprocessor import LightProcessor
-from lib.siril_utils import Siril
+from lib.siril import Siril
 
 
 def main() -> None:
@@ -46,7 +46,6 @@ def main() -> None:
         # Ces chemins sont des exemples - ils peuvent ne pas exister
         processor = LightProcessor(
             session_dir=Path("/tmp/example_session"),
-            dark_library_path="/tmp/dark_lib",
             output_dir=Path("/tmp/output"),
             work_dir=Path("/tmp/work"),
             dry_run=True,  # Mode simulation

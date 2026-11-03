@@ -65,12 +65,80 @@ class HelpFormatter(
     """Formatter d'aide qui conserve les sauts de ligne et affiche les valeurs par défaut."""
 
 
+def calculate_common_basename(session_dirs: list[Path]) -> str:
+    """
+    Calcule le nom de base commun à partir d'une liste de répertoires de session.
+
+    Args:
+        session_dirs: Liste des répertoires de session
+
+    Returns:
+        Préfixe commun nettoyé ou mot commun d’au moins trois caractères.
+        Une liste vide retourne une chaîne vide ; une session conserve son nom.
+
+    Examples:
+        >>> calculate_common_basename([Path("session_M31_nord"), Path("session_M31_sud")])
+        'session_M31'
+        >>> calculate_common_basename([Path("NGC7000_panel1"), Path("NGC7000_panel2")])
+        'NGC7000_panel'
+    """
+    if not session_dirs:
+        return ""
+
+    # Extraire les noms de base (basename) de chaque répertoire
+    basenames = [session_dir.name for session_dir in session_dirs]
+
+    if len(basenames) == 1:
+        return basenames[0]
+
+    # Trouver le préfixe commun
+    common_prefix = ""
+    min_length = min(len(name) for name in basenames)
+
+    for i in range(min_length):
+        char = basenames[0][i]
+        if all(name[i] == char for name in basenames):
+            common_prefix += char
+        else:
+            break
+
+    # Nettoyer le préfixe commun (enlever les caractères de fin non alphanumériques)
+    common_prefix = common_prefix.rstrip("_-. ")
+
+    # Retenir directement un préfixe suffisamment long
+    if len(common_prefix) >= 3:
+        return common_prefix
+
+    # Si le préfixe est trop court, essayer une approche par mots
+    words_sets = [
+        set(name.replace("_", " ").replace("-", " ").split()) for name in basenames
+    ]
+    common_words = set.intersection(*words_sets) if words_sets else set()
+
+    if common_words:
+        # Prendre le mot le plus long
+        longest_word = max(common_words, key=len)
+        if len(longest_word) >= 3:
+            return longest_word
+
+    return common_prefix
+
+
+def discover_session_roots(root_dir: Path) -> list[Path]:
+    """Délègue à LightProcessor la découverte des sous-sessions d'une session.
+
+    Ce point d'entrée est conservé pour les appelants historiques ; les règles
+    de découverte appartiennent à la classe qui orchestre la session.
+    """
+    from lib.lightprocessor import LightProcessor
+
+    return LightProcessor.discover_subsessions(root_dir)
+
+
 def build_session_target_map(
     input_roots: list[Path],
 ) -> tuple[list[Path], dict[Path, Path]]:
     """Associe chaque sous-session à la session fournie en paramètre."""
-    from lib.lightprocessor import discover_session_roots
-
     session_dirs: list[Path] = []
     session_to_target: dict[Path, Path] = {}
 
@@ -223,11 +291,12 @@ Traitement Siril de mosaique (si --mosaic):
     )
 
     from lib.lightprocessor import LightProcessor
-    from lib.postprocessing import PostProcessingProcessor
-    from lib.siril_utils import Siril
+    from lib.light_stacking import SessionStackingProcessor
+    from lib.postprocess import PostProcessingProcessor
+    from lib.siril import Siril
 
     config.register(LightProcessor, parser)
-    config.register(Siril, parser, photometry_aliases=True)
+    config.register(Siril, parser)
 
     # Arguments pour la mosaïque
     parser.add_argument(
@@ -239,9 +308,8 @@ Traitement Siril de mosaique (si --mosaic):
 
     from lib.mosaic import Mosaic
 
-    # Panel inputs are produced by this pipeline, not supplied independently.
-    config.register(Mosaic, parser, include_inputs=False)
-    config.register(PostProcessingProcessor, parser, include_activation=True)
+    config.register(Mosaic, parser)
+    config.register(PostProcessingProcessor, parser)
 
     config.add_arguments(parser)
 
@@ -270,7 +338,7 @@ Traitement Siril de mosaique (si --mosaic):
         validate_settings(
             {
                 key: getattr(args, key)
-                for key in LightProcessor.CONFIG_DEFAULTS
+                for key in SessionStackingProcessor.CONFIG_DEFAULTS
                 if key.startswith("drizzle")
             }
         )
@@ -319,14 +387,10 @@ def _process_sessions(
     Les exceptions non traitées remontent vers main et libèrent son contexte.
     """
     from lib.drizzle import cache_matches
-    from lib.lightprocessor import (
-        LightProcessor,
-        discover_session_roots,
-        stack_session_outputs,
-    )
-    from lib.mosaic import calculate_common_basename
-    from lib.postprocessing import PostProcessingProcessor
-    from lib.siril_utils import Siril
+    from lib.lightprocessor import LightProcessor
+    from lib.light_stacking import SessionStackingProcessor
+    from lib.postprocess import PostProcessingProcessor
+    from lib.siril import Siril
 
     # Définition des répertoires par défaut
     if not args.output_dir:
@@ -455,353 +519,36 @@ def _process_sessions(
         return 1
 
     # Configuration des paramètres de stacking
-    stack_params = {
-        **{
-            key: getattr(args, key)
-            for key in LightProcessor.CONFIG_DEFAULTS
-            if key.startswith("drizzle")
-        },
-        "method": args.stack_method,
-        "rejection": args.rejection_method,
-        "rejection_low": args.rejection_param1,
-        "rejection_high": args.rejection_param2,
-        "roundness_filter": args.roundness_filter,
-        "nbstars_filter": args.nbstars_filter,
-        "roundness_weighted": args.roundness_weighted,
-        "roundness_weight_max_extra": args.roundness_weight_max_extra,
-        "fwhm_filter": args.fwhm_filter,
-        "max_fwhm": args.max_fwhm,
-        "stellar_profile_filter": args.stellar_profile_filter,
-        "stellar_profile_sigma": args.stellar_profile_sigma,
-        "fwhm_reject_percent": args.fwhm_reject_percent,
-        "fwhm_weighted": args.fwhm_weighted,
-        "fwhm_weight_max_extra": args.fwhm_weight_max_extra,
-        "align_transform": args.align_transform,
-        "enable_stack_platesolve": args.enable_stack_platesolve,
-        "force_stacking": args.force_stacking,
-    }
+    stack_params = SessionStackingProcessor.stack_parameters(args)
 
     if args.no_dark:
         logging.warning("Mode sans dark activé: la soustraction de dark sera ignorée")
 
-    # Traitement des images pour chaque répertoire de session
+    # LightProcessor traite chaque session fournie, ses sous-sessions et leur stack.
     total_sessions = len(session_dirs)
     successful_sessions = 0
     failed_sessions = []
-    successful_processors = []  # Garder les références des processors réussis
-    session_stack_outputs = {}  # session fournie -> résultat de stacking
-    target_wcs_totals = {}  # target root -> aggregated WCS stats
-
-    for i, session_dir in enumerate(session_dirs, 1):
-        logging.info(f"{'=' * 60}")
-        logging.info(
-            f"Traitement de la sous-session {i}/{total_sessions}: {session_dir}"
-        )
-        logging.info(f"{'=' * 60}")
-
-        target_root = session_to_target.get(session_dir, session_dir)
-        processor_output_dir = session_output_root(
-            output_base_dir, target_root, session_dir
-        )
-        processor_work_dir = session_work_root(work_base_dir, target_root, session_dir)
-
-        if args.force_reprocess:
-            for directory in [processor_output_dir, processor_work_dir]:
-                if directory.exists():
-                    try:
-                        shutil.rmtree(directory)
-                        logging.info(
-                            f"Répertoire supprimé (relance --force): {directory}"
-                        )
-                    except Exception as exc:
-                        logging.warning(f"Impossible de supprimer {directory}: {exc}")
-
-        session_log_file = processor_work_dir / f"{session_dir.name}_lightProcess.log"
-        session_log_handler = add_session_file_logging(session_log_file, args.log_level)
-
-        try:
-            # Création du processeur pour cette session
-            logging.info("Log de sous-session: %s", session_log_file)
-            processor = LightProcessor(
-                session_dir=session_dir,
-                dark_library_path=args.dark_library_path,
-                output_dir=processor_output_dir,
-                work_dir=processor_work_dir,
-                temp_precision=args.temperature_precision,
-                force_reprocess=args.force_reprocess,
-                dry_run=args.dry_run,
-                use_dark=not args.no_dark,
-                keep_intermediate=args.keep_intermediate,
-            )
-        except Exception as e:
-            logging.error(
-                f"Erreur lors de l'initialisation du processeur pour {session_dir}: {e}"
-            )
-            failed_sessions.append(session_dir)
-            remove_session_file_logging(session_log_handler)
-            continue
-
-        try:
-            logging.info(f"Début du traitement de la sous-session: {session_dir}")
-
-            # Vérifier le répertoire light pour cette session
-            light_dir = None
-            for light_name in ["light", "Light"]:
-                potential_light_dir = session_dir / light_name
-                if potential_light_dir.exists():
-                    light_dir = potential_light_dir
-                    break
-
-            logging.debug(f"Répertoire light: {light_dir}")
-
-            flat_dir = None
-            for flat_name in ["flat", "Flat"]:
-                potential_flat_dir = session_dir / flat_name
-                if potential_flat_dir.exists():
-                    flat_dir = potential_flat_dir
-                    break
-            if flat_dir is not None:
-                logging.debug(
-                    f"Répertoire flat détecté: {flat_dir} (sera utilisé pour le prétraitement)"
-                )
-
-            success = processor.process_session(stack_params)
-            session_stats = processor.get_session_stats()
-
-            target_stats = target_wcs_totals.setdefault(
-                target_root,
-                {
-                    "lights_total": 0,
-                    "wcs_present": 0,
-                    "wcs_missing": 0,
-                    "wcs_unreadable": 0,
-                    "sessions_total": 0,
-                    "sessions_success": 0,
-                },
-            )
-            target_stats["sessions_total"] += 1
-            target_stats["lights_total"] += int(
-                session_stats.get("lights_total", 0) or 0
-            )
-            target_stats["wcs_present"] += int(session_stats.get("wcs_present", 0) or 0)
-            target_stats["wcs_missing"] += int(session_stats.get("wcs_missing", 0) or 0)
-            target_stats["wcs_unreadable"] += int(
-                session_stats.get("wcs_unreadable", 0) or 0
-            )
-
-            logging.info(
-                "Sous-session stats - total lights: %d | WCS: present=%d, missing=%d, unreadable=%d | rejets: invalides=%d, non-light=%d, no-dark=%d, erreurs=%d | conservées=%d",
-                session_stats.get("lights_total", 0),
-                session_stats.get("wcs_present", 0),
-                session_stats.get("wcs_missing", 0),
-                session_stats.get("wcs_unreadable", 0),
-                session_stats.get("rejected_invalid_metadata", 0),
-                session_stats.get("rejected_not_light_type", 0),
-                session_stats.get("rejected_no_matching_dark", 0),
-                session_stats.get("rejected_processing_failure", 0),
-                session_stats.get("kept_for_stacking", 0),
-            )
-
-            if success:
-                logging.info(f"✅ Sous-session {session_dir} traitée avec succès")
-                successful_sessions += 1
-                target_stats["sessions_success"] += 1
-                successful_processors.append(
-                    processor
-                )  # Sauvegarder le processor réussi
-            else:
-                logging.error(
-                    f"❌ Échec du traitement de la sous-session {session_dir}"
-                )
-                failed_sessions.append(session_dir)
-
-        except KeyboardInterrupt:
-            logging.warning("Traitement interrompu par l'utilisateur")
-            failed_sessions.append(session_dir)
-            break
-        except Exception as e:
-            logging.error(f"Erreur durant le traitement de {session_dir}: {e}")
-            if args.log_level == "DEBUG":
-                import traceback
-
-                traceback.print_exc()
-            failed_sessions.append(session_dir)
-            continue
-        finally:
-            remove_session_file_logging(session_log_handler)
-
-    # Un stack par session fournie, quel que soit son nombre de sous-sessions.
+    session_stack_outputs = {}
+    target_wcs_totals = {}
 
     for root_dir in input_roots:
-        discovered = discover_session_roots(root_dir)
-        if args.dry_run:
-            log_section(f"[DRY-RUN] Stacking prévu : {root_dir.name}")
-            logging.info(
-                "[DRY-RUN] Stacking de la session %s à partir de %d sous-session(s)",
-                root_dir,
-                len(discovered),
-            )
-            continue
-
-        session_outputs = []
-        for processor in successful_processors:
-            if processor.session_dir in discovered:
-                session_outputs.extend(processor.get_output_files())
-
-        if args.force_stacking:
-            logging.info(
-                f"Mode --force-stacking: reconstruction des FITS calibrés depuis le disque pour {root_dir}"
-            )
-            output_root = target_output_root(output_base_dir, root_dir) / "sessions"
-            disk_outputs = []
-            per_session_counts = {}
-            for session_dir in discovered:
-                session_count = 0
-                session_root = output_root / session_dir.name
-                if session_root.exists():
-                    for calibrated_dir in sorted(session_root.rglob("*_calibrated")):
-                        if not calibrated_dir.is_dir():
-                            continue
-
-                        fit_files = sorted(calibrated_dir.glob("pp_*.fit"))
-                        fits_files = sorted(calibrated_dir.glob("pp_*.fits"))
-                        session_count += len(fit_files) + len(fits_files)
-                        disk_outputs.extend(fit_files)
-                        disk_outputs.extend(fits_files)
-
-                per_session_counts[session_dir.name] = session_count
-
-            for session_name, count in sorted(per_session_counts.items()):
-                logging.info(
-                    "[force-stacking] Sous-session %s: %d FITS calibrés retrouvés sur disque",
-                    session_name,
-                    count,
-                )
-
-            logging.info(
-                "[force-stacking] Total FITS calibrés retrouvés sur disque pour %s: %d",
-                root_dir.name,
-                len(disk_outputs),
-            )
-
-            session_outputs = disk_outputs
-
-        if session_outputs:
-            # Déduplique les chemins pour éviter de doubler les entrées lors du fallback disque.
-            deduped_outputs = []
-            seen = set()
-            for output_file in session_outputs:
-                absolute_path = Path(output_file).absolute()
-                if absolute_path in seen:
-                    continue
-                seen.add(absolute_path)
-                deduped_outputs.append(absolute_path)
-            session_outputs = deduped_outputs
-
-            logging.info(
-                f"Stack final de la session {root_dir.name}: {len(session_outputs)} FITS calibrés"
-            )
-
-        if session_outputs:
-            target_stack_dir = stack_output_root(output_base_dir, root_dir)
-            target_stack_dir.mkdir(parents=True, exist_ok=True)
-            target_stack_work_dir = (
-                target_work_root(work_base_dir, root_dir) / "stacking"
-            )
-            stack_log_files = [target_stack_work_dir / f"{root_dir.name}_stacking.log"]
-            for session_dir in discovered:
-                stack_log_files.append(
-                    session_work_root(work_base_dir, root_dir, session_dir)
-                    / f"{session_dir.name}_stacking.log"
-                )
-            stack_log_handlers = [
-                add_session_file_logging(stack_log_file, args.log_level)
-                for stack_log_file in stack_log_files
-            ]
-
-            try:
-                log_section(f"Début du stacking : {root_dir.name}")
-                logging.info(
-                    "Logs de stack: %s",
-                    ", ".join(
-                        str(stack_log_file) for stack_log_file in stack_log_files
-                    ),
-                )
-                stack_candidates = [
-                    target_stack_dir / f"{root_dir.name}_combined.fits",
-                    target_stack_dir / f"{root_dir.name}_combined.fit",
-                ]
-                existing_combined = next(
-                    (c for c in stack_candidates if c.exists()), None
-                )
-                calibrated_dirs = []
-                session_outputs_root = (
-                    target_output_root(output_base_dir, root_dir) / "sessions"
-                )
-                for session_dir in discovered:
-                    session_root = session_outputs_root / session_dir.name
-                    if session_root.exists():
-                        calibrated_dirs.extend(
-                            [
-                                d
-                                for d in session_root.rglob("*_calibrated")
-                                if d.is_dir()
-                            ]
-                        )
-
-                if (
-                    not args.force_stacking
-                    and existing_combined
-                    and cache_matches(existing_combined, stack_params)
-                    and not should_rebuild_stack(existing_combined, calibrated_dirs)
-                ):
-                    log_section(f"Réutilisation du stack existant : {root_dir.name}")
-                    logging.info(
-                        "Stack final déjà à jour pour %s (dates répertoires calibrés inchangées): %s",
-                        root_dir.name,
-                        existing_combined,
-                    )
-                    session_stack_outputs[root_dir] = existing_combined
-                    continue
-
-                stack_report = {}
-                combined_output = stack_session_outputs(
-                    output_files=session_outputs,
-                    output_dir=target_stack_dir,
-                    work_dir=work_base_dir,
-                    target_name=root_dir.name,
-                    stack_params=stack_params,
-                    force_stacking=args.force_stacking,
-                    stack_report=stack_report,
-                )
-                logging.info(
-                    "Stack stats [%s] - total=%d | rejets: layout_incompatible=%d, layout_illisible=%d, alignement_qualité=%d | conservées uniques=%d | entrées effectives=%d",
-                    root_dir.name,
-                    stack_report.get("total_input", 0),
-                    stack_report.get("rejected_incompatible_layout", 0),
-                    stack_report.get("rejected_unreadable_layout", 0),
-                    stack_report.get("rejected_registration_quality", 0),
-                    stack_report.get("kept_unique_for_stack", 0),
-                    stack_report.get("kept_effective_for_stack", 0),
-                )
-                if combined_output:
-                    session_stack_outputs[root_dir] = combined_output
-                    logging.info(
-                        f"✅ Sortie combinée créée pour la session {root_dir}: {combined_output}"
-                    )
-                else:
-                    logging.error(
-                        f"❌ Échec de la sortie combinée pour la session {root_dir}"
-                    )
-            except Exception:
-                logging.exception("Échec du stacking de la session %s", root_dir)
-            finally:
-                for stack_log_handler in stack_log_handlers:
-                    remove_session_file_logging(stack_log_handler)
-        else:
-            logging.warning(
-                f"Aucun FITS calibré trouvé pour le stack final de la session {root_dir}"
-            )
+        result = LightProcessor.process_target(
+            session_dir=root_dir,
+            output_base_dir=output_base_dir,
+            work_base_dir=work_base_dir,
+            args=args,
+            stack_params=stack_params,
+        )
+        successful_sessions += result.successful_subsessions
+        failed_sessions.extend(result.failed_subsessions)
+        stats = result.wcs_stats
+        target_wcs_totals[root_dir] = {
+            **stats,
+            "sessions_total": result.total_subsessions,
+            "sessions_success": result.successful_subsessions,
+        }
+        if result.output_image is not None:
+            session_stack_outputs[root_dir] = result.output_image
 
     # Résumé final
     logging.info(f"{'=' * 60}")

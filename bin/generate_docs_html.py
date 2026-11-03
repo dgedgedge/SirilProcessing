@@ -11,7 +11,7 @@ import shutil
 import sys
 from html.parser import HTMLParser
 from pathlib import Path
-from urllib.parse import unquote, urlsplit
+from urllib.parse import quote, unquote, urlsplit
 
 
 def add_project_venv_to_path() -> None:
@@ -40,7 +40,11 @@ except Exception:
 
 DEFAULT_OUTPUT_DIR = "out"
 MARKDOWN_EXTENSIONS = {".md", ".markdown"}
-DOCUMENT_SOURCE_EXTENSIONS = frozenset({".py", ".sh", ".json"})
+DOCUMENT_CODE_EXTENSIONS = frozenset({".py", ".sh"})
+DOCUMENT_DATA_EXTENSIONS = frozenset({".json"})
+SOURCE_REPOSITORY_URL = (
+    "https://github.com/dgedgedge/SirilProcessing/blob/main"
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -266,32 +270,75 @@ def rewrite_markdown_links(rendered: str) -> str:
     return re.sub(r"href=(['\"])([^'\"]+)\1", repl, rendered)
 
 
-def copy_referenced_sources(
+def link_project_sources(
+    source_root: Path, document_rel: Path, rendered: str
+) -> str:
+    """Relie les sources du dépôt à GitHub sans les intégrer à l’export HTML."""
+
+    def replace_source_link(match: re.Match[str]) -> str:
+        """Pointe un lien source local vers sa page dans le dépôt GitHub."""
+        quote_mark = match.group(1)
+        href = html.unescape(match.group(2))
+        link = urlsplit(href)
+        if (
+            link.scheme
+            or link.netloc
+            or not link.path
+            or Path(unquote(link.path)).suffix not in DOCUMENT_CODE_EXTENSIONS
+        ):
+            return match.group(0)
+        relative = Path(unquote(link.path))
+        if relative.is_absolute():
+            return match.group(0)
+        source = (source_root / document_rel.parent / relative).resolve()
+        if not source.is_relative_to(source_root) or not source.is_file():
+            return match.group(0)
+        target = project_source_url(
+            source_root, source, query=link.query, fragment=link.fragment
+        )
+        return f"href={quote_mark}{html.escape(target, quote=True)}{quote_mark}"
+
+    return re.sub(r"href=(['\"])([^'\"]+)\1", replace_source_link, rendered)
+
+
+def project_source_url(
+    source_root: Path,
+    source: Path,
+    *,
+    query: str = "",
+    fragment: str = "",
+) -> str:
+    """Construit l’URL GitHub d’un fichier source situé dans le dépôt."""
+    relative = source.resolve().relative_to(source_root.resolve())
+    target = (
+        f"{SOURCE_REPOSITORY_URL}/"
+        f"{quote(relative.as_posix(), safe='/')}"
+    )
+    if query:
+        target += f"?{query}"
+    if fragment:
+        target += f"#{fragment}"
+    return target
+
+
+def copy_referenced_data(
     source_root: Path, output_dir: Path, document_rel: Path, rendered: str
 ) -> None:
-    """Copie les sources et configurations liées pour un export HTML autonome.
-
-    Seuls les fichiers .py, .sh et .json explicitement liés, situés dans le
-    dépôt après résolution des liens symboliques, sont copiés à leur chemin
-    relatif d’origine. Les liens externes, hors dépôt et vers des poids binaires
-    restent exclus. Les fichiers déjà copiés ne sont pas dupliqués.
-    """
+    """Copie les fichiers JSON liés, sans embarquer le code du dépôt."""
     for _, target in re.findall(r"href=(['\"])([^'\"]+)\1", rendered):
         link = urlsplit(html.unescape(target))
         if link.scheme or link.netloc or not link.path:
             continue
         relative = Path(unquote(link.path))
-        if relative.is_absolute():
+        if relative.is_absolute() or relative.suffix not in DOCUMENT_DATA_EXTENSIONS:
             continue
         source = (source_root / document_rel.parent / relative).resolve()
         if (
             not source.is_relative_to(source_root)
             or source.is_relative_to(output_dir)
-            or source.suffix not in DOCUMENT_SOURCE_EXTENSIONS
             or not source.is_file()
         ):
             continue
-        # Conserver le chemin du lien, même pour un alias symbolique du dépôt.
         destination = (output_dir / document_rel.parent / relative).resolve()
         if not destination.is_relative_to(output_dir) or destination.exists():
             continue
@@ -738,7 +785,8 @@ def main() -> int:
         markdown = source_path.read_text(encoding="utf-8")
         doc_title = title_from_markdown(markdown, rel)
         body, toc = render_markdown_document(markdown, rel)
-        copy_referenced_sources(source_root, output_dir, rel, body)
+        body = link_project_sources(source_root, rel, body)
+        copy_referenced_data(source_root, output_dir, rel, body)
 
         output_rel = markdown_path_to_html(rel)
         output_path = output_dir / output_rel

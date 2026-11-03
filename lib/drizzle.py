@@ -24,8 +24,8 @@ from lib.quality_filter import (
     materialize_quality_weights,
     quality_mask,
 )
-from lib.siril_sequence import SirilSequence
-from lib.siril_utils import Siril
+from lib.siril import SirilSequence
+from lib.siril import Siril
 from lib.type_defs import ConfigMap, JSONReport
 
 QUALITY_PIPELINE_VERSION = 13
@@ -748,25 +748,19 @@ def run_stack(
         log_section("Stacking — Vérification de la compatibilité Drizzle")
         capability_dir = capability_path
         supported = siril.run_siril_script(
-            f"requires 1.4\ncd {capability_dir}\nclose",
+            f"cd {capability_dir}\nclose",
             str(capability_dir),
             script_name="03_capability.sps",
         )
+        if not supported:
+            raise RuntimeError(
+                "La vérification de compatibilité Drizzle a échoué ; "
+                f"consulter {capability_dir / '03_capability.log'}"
+            )
     if capability_dir is None:
         (capability_path / "SKIPPED.txt").write_text(
             "Étape non exécutée : Drizzle non sélectionné après analyse qualité.\n"
         )
-    if supported is False:
-        decision["reasons"].append("Siril 1.4 requis")
-        decision["reason_details"].append(
-            {
-                "criterion": "siril_version",
-                "message": "Vérification Siril échouée : le script requires 1.4 a échoué. Consulter la sortie de 03_capability.sps pour distinguer version incompatible et erreur d’exécution.",
-            }
-        )
-        decision["enabled"] = False
-        decision["decision"] = "Drizzle désactivé"
-        decision["sampling_out"] = sampling
     decision["siril_drizzle_supported"] = supported
     report = dict(
         schema_version=1,
@@ -913,12 +907,10 @@ def run_stack(
     processing_sequence.write()
     input_dir = stacking_dir
     prefix = sequence
-    required = "requires 1.4" if decision["enabled"] else "requires 1.2"
-
     def execute(lines: Sequence[str], script_name: str) -> bool:
         """Exécute une étape Siril nommée et indique son succès."""
         return siril.run_siril_script(
-            "\n".join([required, f"cd {stacking_dir}", *lines, "close"]),
+            "\n".join([f"cd {stacking_dir}", *lines, "close"]),
             str(stacking_dir),
             script_name=script_name,
         )

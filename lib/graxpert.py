@@ -14,7 +14,7 @@ from astropy.io import fits
 
 from lib.processor import processor
 from lib.parameterized_component import ParameterizedComponent
-from lib.siril_utils import Siril
+from lib.siril import Siril
 from lib.postprocess_paths import reset_ordered_work_dir
 from lib.restoration_quality import QualityReference
 from lib.deconvolution_quality import (
@@ -156,7 +156,7 @@ class GraXpertDenoiseProcessor(processor):
             layer = (
                 (1 if fits.getdata(source).ndim == 3 else 0) if layer is None else layer
             )
-            lines = ["requires 1.4", f"cd {_quote(work)}", "setext fit", "set32bits"]
+            lines = [f"cd {_quote(work)}", "setext fit", "set32bits"]
             for image, catalog in ((source, before), (candidate, after)):
                 lines += [
                     f"load {_quote(image)}",

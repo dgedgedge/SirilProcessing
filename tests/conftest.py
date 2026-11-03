@@ -215,7 +215,7 @@ def sample_dark_group(temp_dir):
 @pytest.fixture
 def simulated_registered_sequence():
     """Model Siril's per-file outputs using the sequence object API."""
-    from lib.siril_sequence import SirilSequence
+    from lib.siril import SirilSequence
     def create(directory, source_prefix, output_prefix, overrides=None):
         directory = Path(directory)
         sequence = SirilSequence.read(directory/f'{source_prefix}.seq')

@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 from astropy.io import fits
 from lib.drizzle import QUALITY_PIPELINE_VERSION, analyse, coverage, read_registration, run_stack, validate_settings
-from lib.siril_sequence import SirilSequence
+from lib.siril import SirilSequence
 
 
 def metadata(n, cfa=False):
@@ -89,7 +89,7 @@ def test_pipeline_native_cfa_and_report(
                 overrides = {2: [[.951232,.0476758,114.759],[-.698402,-.0725698,2288.6],[0,0,1]]} if bad_alignment else None
                 simulated_registered_sequence(directory, 'light_', 'debayer_light_', overrides)
             if kwargs.get('script_name') == '04_realign.sps':
-                from lib.siril_sequence import SirilSequence
+                from lib.siril import SirilSequence
                 checked = SirilSequence.read(directory/'debayer_light_.seq')
                 assert checked.images[1].included == (not bad_alignment)
                 assert '-filter-included' in script
@@ -147,7 +147,7 @@ def test_invalid_debayer_alignment_stops_before_any_resampling(
 ) -> None:
     """Un alignement invalide n’annonce pas les étapes suivantes non exécutées."""
     caplog.set_level("INFO")
-    from lib.siril_sequence import SirilSequence, RegistrationData
+    from lib.siril import SirilSequence, RegistrationData
     files = [tmp_path/f'light_{i:03d}.fits' for i in range(1,4)]
     for path in files:
         fits.writeto(path, np.ones((20,20)), fits.Header({'BAYERPAT':'RGGB'}))
