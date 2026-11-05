@@ -18,11 +18,12 @@ from astropy.io import fits
 from lib.compute_config import ComputeConfig
 from lib.cosmic_clarity.models import DEFAULT_MODEL_DIR
 from lib.resource_cache import ResourceCache
-from lib.deconvolution import _quote, compare_star_catalogs, read_star_catalog
+from lib.deconvolution import compare_star_catalogs, read_star_catalog
 from lib.deconvolution_quality import (
     artifact_metrics, assess_denoising, denoising_criteria, assess_quality,
 )
 from lib.postprocess_paths import reset_ordered_work_dir
+from lib.logging_utils import log_duration
 from lib.processor import processor
 from lib.siril import Siril
 from lib.type_defs import JSONReport
@@ -251,6 +252,8 @@ class _CosmicClarityProcessor(processor):
 
         Retourne l’entrée si la qualité est refusée, sans évaluer le moteur
         Siril ni sélectionner un gagnant. L’orchestrateur réalise cette sélection.
+        timings sépare le chargement/inférence du contrôle stellaire et de qualité,
+        en secondes murales, et reste enregistré si une phase échoue.
         """
         args = self._get_args(args)
         source, report = Path(input_path).resolve(), Path(output_path).resolve()
@@ -302,6 +305,7 @@ class _CosmicClarityProcessor(processor):
             """Persiste l'état de l'audit même si l'étape échoue."""
             report.write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding='utf-8')
 
+        result['timings'] = {}
         save()
         try:
             try:
@@ -311,117 +315,127 @@ class _CosmicClarityProcessor(processor):
                     'Dépendances Cosmic Clarity absentes : lancer '
                     'bin/install_dependances.sh'
                 ) from error
-            engine = CosmicClarityEngine(
-                Path(getattr(args, 'cosmic_model_dir', DEFAULT_MODEL_DIR)).expanduser().resolve(),
-                ComputeConfig.requested(args, 'cosmic_device'),
-            )
-            logging.info('%s — début de l’évaluation Cosmic Clarity', treatment)
-            result['inference'] = engine.process(
-                source, candidate, self.operation,
-                stellar_amount=getattr(args, 'cosmic_stellar_amount', 0.5),
-                nonstellar_amount=getattr(args, 'cosmic_nonstellar_amount', 0.5),
-                radius=getattr(args, 'cosmic_nonstellar_radius', 3.0),
-                denoise_amount=getattr(args, 'cosmic_denoise_amount', 0.5),
-                sharpen_mode=getattr(args, 'cosmic_sharpen_mode', 'luminance'),
-                denoise_mode=getattr(args, 'cosmic_denoise_mode', 'luminance'),
-                color_denoise_amount=getattr(args, 'cosmic_color_denoise_amount', None),
-            )
-            lines = [f'cd {_quote(work)}', 'setext fit', 'set32bits']
-            for image, catalog in ((source, before), (candidate, after)):
-                lines += [f'load {_quote(image)}', 'setfindstar reset', 'setfindstar -gaussian',
-                          f'findstar -layer={layer} -out={catalog.name}', 'close']
-            if not Siril(
-                siril_path=getattr(args, "siril_path", None),
-                siril_mode=getattr(args, "siril_mode", None),
-            ).run_siril_script(
-                '\n'.join(lines) + '\n', str(work), script_name='quality.sps',
+            with log_duration(
+                f"{treatment} Cosmic Clarity — chargement et inférence",
+                result["timings"], "inference_seconds",
             ):
-                raise RuntimeError(f'Échec Siril : {work / "quality.log"}')
-            if self.operation == 'sharpen':
-                match_radius, minimum, fraction, matching = self._matching_thresholds(
-                    args, before, layer,
+                engine = CosmicClarityEngine(
+                    Path(getattr(args, 'cosmic_model_dir', DEFAULT_MODEL_DIR)).expanduser().resolve(),
+                    ComputeConfig.requested(args, 'cosmic_device'),
                 )
-            else:
-                match_radius = getattr(args, 'deconvolution_match_radius', 1.0)
-                minimum = getattr(args, 'deconvolution_min_stars', 10)
-                fraction = getattr(args, 'deconvolution_min_match_fraction', .7)
-                matching = {
-                    'mode': 'fixed-default',
-                    'match_radius_px': match_radius,
-                    'min_stars': minimum,
-                    'min_match_fraction': fraction,
-                }
-            if (match_radius <= 0 or minimum < 3 or not 0 < fraction <= 1
-                    or not np.isfinite([match_radius, minimum, fraction]).all()):
-                raise ValueError('Seuils d’appariement invalides')
-            result['matching'] = matching
-            large_auto = (
-                self.operation == 'sharpen' and matching['mode'] == 'auto'
-                and matching['valid_stars_before'] >= LARGE_MATCH_SAMPLE
-            )
-            comparison = compare_star_catalogs(
-                before, after, match_radius, minimum,
-                0.0 if large_auto else fraction, layer,
-                reference_images=(source, candidate)
-                if getattr(args, 'deconvolution_reference_measurements', True) else None,
-                quality_mode=getattr(args, 'quality_mode', 'reliable'),
-            )
-            if large_auto and comparison['valid_before_count'] < LARGE_MATCH_SAMPLE:
-                large_auto = False
-                comparison['min_match_fraction'] = fraction
-                if comparison['matched_fraction_before'] < fraction:
-                    comparison['status'] = 'insufficient_matches'
+                logging.info('%s — début de l’évaluation Cosmic Clarity', treatment)
+                result['inference'] = engine.process(
+                    source, candidate, self.operation,
+                    stellar_amount=getattr(args, 'cosmic_stellar_amount', 0.5),
+                    nonstellar_amount=getattr(args, 'cosmic_nonstellar_amount', 0.5),
+                    radius=getattr(args, 'cosmic_nonstellar_radius', 3.0),
+                    denoise_amount=getattr(args, 'cosmic_denoise_amount', 0.5),
+                    sharpen_mode=getattr(args, 'cosmic_sharpen_mode', 'luminance'),
+                    denoise_mode=getattr(args, 'cosmic_denoise_mode', 'luminance'),
+                    color_denoise_amount=getattr(args, 'cosmic_color_denoise_amount', None),
+                )
+            with log_duration(
+                f"{treatment} Cosmic Clarity — contrôle stellaire et qualité",
+                result["timings"], "quality_seconds",
+            ):
+                from lib.quality_processors import QualityContext
+                from lib.quality_star_processors import SirilStarDetectionProcessor
 
-            if large_auto:
-                matching['fraction_policy'] = 'warning_with_representation_checks'
-                matching['warning_fraction'] = fraction
-                if comparison['matched_fraction_before'] < fraction:
-                    comparison['warnings'] = ['low_matching_fraction']
-                    logging.warning(
-                        'Déconvolution Cosmic Clarity : %d/%d étoiles appariées '
-                        '(%.2f %%), référence %.0f %% ; contrôle de représentativité',
-                        comparison['matched_count'], comparison['valid_before_count'],
-                        100 * comparison['matched_fraction_before'], 100 * fraction,
+                context = QualityContext.for_catalogs(source, candidate)
+                service = Siril(
+                    siril_path=getattr(args, 'siril_path', None),
+                    siril_mode=getattr(args, 'siril_mode', None),
+                )
+                detection = SirilStarDetectionProcessor(
+                    context, [(source, before), (candidate, after)], work, layer,
+                    runner=service,
+                )
+                result['star_detection'] = detection.post_process(candidate, None, args)
+                if self.operation == 'sharpen':
+                    match_radius, minimum, fraction, matching = self._matching_thresholds(
+                        args, before, layer,
                     )
-                if comparison['status'] == 'validated':
-                    representation = assess_matching_representation(before, comparison, layer)
-                    comparison['representation'] = representation
-                    if not representation['accepted']:
-                        comparison['status'] = 'unrepresentative_matches'
-                    logging.info('Représentativité Cosmic Clarity : %s ; motifs=%s',
-                                 representation['accepted'], representation['reasons'])
-            else:
-                matching['fraction_policy'] = 'blocking'
+                else:
+                    match_radius = getattr(args, 'deconvolution_match_radius', 1.0)
+                    minimum = getattr(args, 'deconvolution_min_stars', 10)
+                    fraction = getattr(args, 'deconvolution_min_match_fraction', .7)
+                    matching = {
+                        'mode': 'fixed-default',
+                        'match_radius_px': match_radius,
+                        'min_stars': minimum,
+                        'min_match_fraction': fraction,
+                    }
+                if (match_radius <= 0 or minimum < 3 or not 0 < fraction <= 1
+                        or not np.isfinite([match_radius, minimum, fraction]).all()):
+                    raise ValueError('Seuils d’appariement invalides')
+                result['matching'] = matching
+                large_auto = (
+                    self.operation == 'sharpen' and matching['mode'] == 'auto'
+                    and matching['valid_stars_before'] >= LARGE_MATCH_SAMPLE
+                )
+                comparison = compare_star_catalogs(
+                    before, after, match_radius, minimum,
+                    0.0 if large_auto else fraction, layer,
+                    reference_images=(source, candidate)
+                    if getattr(args, 'deconvolution_reference_measurements', True) else None,
+                    quality_mode=getattr(args, 'quality_mode', 'reliable'),
+                )
+                if large_auto and comparison['valid_before_count'] < LARGE_MATCH_SAMPLE:
+                    large_auto = False
+                    comparison['min_match_fraction'] = fraction
+                    if comparison['matched_fraction_before'] < fraction:
+                        comparison['status'] = 'insufficient_matches'
 
-            artifacts = {}
-            if comparison['status'] == 'validated':
-                artifacts = artifact_metrics(source, candidate, comparison['pairs'], args=args)
-            if self.operation == 'sharpen':
-                verdict = assess_quality(comparison, artifacts, **quality)
-                reasons = verdict['reasons']
-                cosmic_report: JSONReport = dict(
-                    engine='cosmic-clarity',
-                    status='accepted' if not reasons else 'rejected',
-                    output_image=str(candidate if not reasons else source),
-                    matching=matching,
-                    comparison=comparison,
-                    artifacts=artifacts,
-                    quality=verdict,
-                    rejection_reasons=reasons,
-                )
-            else:
-                reasons = assess_denoising(comparison, artifacts, max_blur=maximum_blur)
-                result['criteria'] = denoising_criteria(comparison, artifacts, maximum_blur)
-                cosmic_report = dict(
-                    engine='cosmic-clarity',
-                    status='accepted' if not reasons else 'rejected',
-                    output_image=str(candidate if not reasons else source),
-                    matching=matching,
-                    comparison=comparison,
-                    artifacts=artifacts,
-                    rejection_reasons=reasons,
-                )
-            result.update(cosmic_report)
+                if large_auto:
+                    matching['fraction_policy'] = 'warning_with_representation_checks'
+                    matching['warning_fraction'] = fraction
+                    if comparison['matched_fraction_before'] < fraction:
+                        comparison['warnings'] = ['low_matching_fraction']
+                        logging.warning(
+                            'Déconvolution Cosmic Clarity : %d/%d étoiles appariées '
+                            '(%.2f %%), référence %.0f %% ; contrôle de représentativité',
+                            comparison['matched_count'], comparison['valid_before_count'],
+                            100 * comparison['matched_fraction_before'], 100 * fraction,
+                        )
+                    if comparison['status'] == 'validated':
+                        representation = assess_matching_representation(before, comparison, layer)
+                        comparison['representation'] = representation
+                        if not representation['accepted']:
+                            comparison['status'] = 'unrepresentative_matches'
+                        logging.info('Représentativité Cosmic Clarity : %s ; motifs=%s',
+                                     representation['accepted'], representation['reasons'])
+                else:
+                    matching['fraction_policy'] = 'blocking'
+
+                artifacts = {}
+                if comparison['status'] == 'validated':
+                    artifacts = artifact_metrics(source, candidate, comparison['pairs'], args=args)
+                if self.operation == 'sharpen':
+                    verdict = assess_quality(comparison, artifacts, **quality)
+                    reasons = verdict['reasons']
+                    cosmic_report: JSONReport = dict(
+                        engine='cosmic-clarity',
+                        status='accepted' if not reasons else 'rejected',
+                        output_image=str(candidate if not reasons else source),
+                        matching=matching,
+                        comparison=comparison,
+                        artifacts=artifacts,
+                        quality=verdict,
+                        rejection_reasons=reasons,
+                    )
+                else:
+                    reasons = assess_denoising(comparison, artifacts, max_blur=maximum_blur)
+                    result['criteria'] = denoising_criteria(comparison, artifacts, maximum_blur)
+                    cosmic_report = dict(
+                        engine='cosmic-clarity',
+                        status='accepted' if not reasons else 'rejected',
+                        output_image=str(candidate if not reasons else source),
+                        matching=matching,
+                        comparison=comparison,
+                        artifacts=artifacts,
+                        rejection_reasons=reasons,
+                    )
+                result.update(cosmic_report)
             save()
             return result
         except Exception as error:

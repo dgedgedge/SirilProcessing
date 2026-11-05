@@ -173,7 +173,7 @@ def test_reset_missing_or_empty_target(tmp_path: Path, monkeypatch: pytest.Monke
 @pytest.mark.parametrize('flags', [['--test', '--reset'], ['--check-only', '--reset'],
                                   ['--test', '--install-only'], ['--verify-worker', '--test'],
                                   ['--verify-worker', '--reset'], ['--assets-only', '--reset'],
-                                  ['--test', '--with-gaia'], ['--assets-worker', '--test']])
+                                  ['--assets-worker', '--test']])
 def test_invalid_modes_are_rejected_by_cli(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, flags: list[str],
 ) -> None:
@@ -271,17 +271,17 @@ def test_assets_are_preloaded_between_pip_and_gpu_checks(
     assert events == ['models']
 
 
-def test_no_models_skips_resource_worker_and_preload_uses_venv(
+def test_disabled_resources_skip_worker_and_preload_uses_venv(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Le préchargement utilise le Python du venv et --no-models évite ce processus."""
+    """Le worker utilise le venv ; désactiver toutes les ressources évite ce processus."""
     import argparse
     from lib.installation_assets import InstallationAssets
 
     selected = manager(tmp_path, monkeypatch)
     parser = argparse.ArgumentParser()
     InstallationAssets.add_arguments(parser)
-    args = parser.parse_args(['--no-models'])
+    args = parser.parse_args(['--no-models', '--disable-gaia'])
     monkeypatch.setattr(selected.installer, 'install', Mock())
     monkeypatch.setattr(selected.installer, 'verify', Mock())
     selected.run(assets=args)
@@ -292,3 +292,27 @@ def test_no_models_skips_resource_worker_and_preload_uses_venv(
     command = run.call_args.args[0]
     assert command[0] == str(selected.installer.python)
     assert '--assets-worker' in command and '--no-models' in command
+
+
+def test_cli_test_mode_ignores_default_resource_installation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """--test reste utilisable sans télécharger malgré les catalogues actifs par défaut."""
+    selected = manager(tmp_path, monkeypatch)
+    selected.installer.verify = Mock()
+    selected.installer.install = Mock(side_effect=AssertionError('installation in test mode'))
+    monkeypatch.setattr('lib.dependency_installation.DependencyInstaller', lambda *args: selected)
+    monkeypatch.setattr(sys, 'argv', ['install_dependances', '--test'])
+    assert main() == 0
+    selected.preload_assets.assert_not_called()
+
+
+def test_spectral_only_selection_starts_resource_worker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Désactiver modèles et astrométrie n'empêche pas de préparer SPCC seul."""
+    import argparse
+    from lib.installation_assets import InstallationAssets
+
+    selected = manager(tmp_path, monkeypatch)
+    parser = argparse.ArgumentParser()
+    InstallationAssets.add_arguments(parser)
+    args = parser.parse_args(['--disable-models', '--disable-gaia-astrometry'])
+    selected.run(assets_only=True, assets=args)
+    selected.preload_assets.assert_called_once_with(args)

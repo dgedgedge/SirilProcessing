@@ -12,6 +12,8 @@ import time
 
 from astropy.io import fits
 
+from lib.resource_manager import ResourceManager
+from lib.logging_utils import log_duration
 from lib.processor import processor
 from lib.parameterized_component import ParameterizedComponent
 from lib.siril import Siril
@@ -23,7 +25,6 @@ from lib.deconvolution_quality import (
     denoising_criteria,
 )
 from lib.graxpert_inference import GraXpertEngine, GPU_PROVIDERS
-from lib.graxpert_models import GraXpertModels
 from lib.type_defs import JSONReport
 
 
@@ -71,7 +72,7 @@ class GraXpertDenoiseProcessor(processor):
         if explicit is not None:
             return bool(explicit)
         try:
-            local_model = GraXpertModels(args).find_local_model()
+            local_model = ResourceManager(args).find_graxpert()
         except (OSError, ValueError) as error:
             logging.warning("Activation automatique GraXpert impossible : %s", error)
             return False
@@ -114,8 +115,12 @@ class GraXpertDenoiseProcessor(processor):
         output_path: Path | str,
         args: argparse.Namespace | None = None,
     ) -> JSONReport:
-        """Infère en Python, conserve l’audit et écarte les erreurs de ce moteur."""
-        from lib.deconvolution import compare_star_catalogs, _quote
+        """Infère en Python, audite les durées et écarte les erreurs du moteur.
+
+        timings distingue chargement/inférence et contrôle stellaire, qualité et
+        publication en secondes murales ; les durées restent écrites en échec.
+        """
+        from lib.deconvolution import compare_star_catalogs
 
         args = self._get_args(args)
         source, report = Path(input_path).resolve(), Path(output_path).resolve()
@@ -147,64 +152,69 @@ class GraXpertDenoiseProcessor(processor):
             log_path=str(work / "quality.log"),
         )
         start = time.monotonic()
+        result["timings"] = {}
         try:
-            result["inference"] = GraXpertEngine(args).process(source, candidate)
-            result["cpu_fallback"] = result["inference"]["cpu_fallback"]
-            QualityReference.validate_metadata(source, candidate)
-            before, after = work / "before.tsv", work / "after.tsv"
-            layer = getattr(args, "deconvolution_layer", None)
-            layer = (
-                (1 if fits.getdata(source).ndim == 3 else 0) if layer is None else layer
-            )
-            lines = [f"cd {_quote(work)}", "setext fit", "set32bits"]
-            for image, catalog in ((source, before), (candidate, after)):
-                lines += [
-                    f"load {_quote(image)}",
-                    "setfindstar reset",
-                    "setfindstar -gaussian",
-                    f"findstar -layer={layer} -out={catalog.name}",
-                    "close",
-                ]
-            service = Siril(
-                siril_path=getattr(args, "siril_path", None),
-                siril_mode=getattr(args, "siril_mode", None),
-            )
-            if not service.run_siril_script(
-                "\n".join(lines) + "\n", str(work), "quality.sps"
+            with log_duration(
+                "GraXpert — chargement et inférence",
+                result["timings"], "inference_seconds",
             ):
-                raise RuntimeError("GraXpert : contrôle stellaire Siril impossible")
-            comparison = compare_star_catalogs(
-                before,
-                after,
-                getattr(args, "deconvolution_match_radius", 1),
-                getattr(args, "deconvolution_min_stars", 10),
-                getattr(args, "deconvolution_min_match_fraction", 0.7),
-                layer,
-                reference_images=(source, candidate),
-                quality_mode=getattr(args, "quality_mode", "reliable"),
-            )
-            metrics = (
-                artifact_metrics(source, candidate, comparison["pairs"], args=args)
-                if comparison["status"] == "validated"
-                else {}
-            )
-            reasons = assess_denoising(
-                comparison, metrics, max_blur=getattr(args, "denoise_max_blur", 0.03)
-            )
-            result.update(
-                criteria=denoising_criteria(
-                    comparison, metrics, getattr(args, "denoise_max_blur", 0.03)
-                ),
-                comparison=comparison,
-                artifacts=metrics,
-                rejection_reasons=reasons,
-                candidate_image_path=str(candidate),
-                status="rejected" if reasons else "accepted",
-            )
-            if not reasons:
-                destination = report.with_suffix(".fits")
-                copyfile(candidate, destination)
-                result["output_image"] = str(destination)
+                result["inference"] = GraXpertEngine(args).process(source, candidate)
+            with log_duration(
+                "GraXpert — contrôle stellaire, qualité et publication",
+                result["timings"], "quality_seconds",
+            ):
+                result["cpu_fallback"] = result["inference"]["cpu_fallback"]
+                QualityReference.validate_metadata(source, candidate)
+                before, after = work / "before.tsv", work / "after.tsv"
+                layer = getattr(args, "deconvolution_layer", None)
+                layer = (
+                    (1 if fits.getdata(source).ndim == 3 else 0) if layer is None else layer
+                )
+                from lib.quality_processors import QualityContext
+                from lib.quality_star_processors import SirilStarDetectionProcessor
+
+                context = QualityContext.for_catalogs(source, candidate)
+                service = Siril(
+                    siril_path=getattr(args, 'siril_path', None),
+                    siril_mode=getattr(args, 'siril_mode', None),
+                )
+                detection = SirilStarDetectionProcessor(
+                    context, [(source, before), (candidate, after)], work, layer,
+                    runner=service,
+                )
+                result['star_detection'] = detection.post_process(candidate, None, args)
+                comparison = compare_star_catalogs(
+                    before,
+                    after,
+                    getattr(args, "deconvolution_match_radius", 1),
+                    getattr(args, "deconvolution_min_stars", 10),
+                    getattr(args, "deconvolution_min_match_fraction", 0.7),
+                    layer,
+                    reference_images=(source, candidate),
+                    quality_mode=getattr(args, "quality_mode", "reliable"),
+                )
+                metrics = (
+                    artifact_metrics(source, candidate, comparison["pairs"], args=args)
+                    if comparison["status"] == "validated"
+                    else {}
+                )
+                reasons = assess_denoising(
+                    comparison, metrics, max_blur=getattr(args, "denoise_max_blur", 0.03)
+                )
+                result.update(
+                    criteria=denoising_criteria(
+                        comparison, metrics, getattr(args, "denoise_max_blur", 0.03)
+                    ),
+                    comparison=comparison,
+                    artifacts=metrics,
+                    rejection_reasons=reasons,
+                    candidate_image_path=str(candidate),
+                    status="rejected" if reasons else "accepted",
+                )
+                if not reasons:
+                    destination = report.with_suffix(".fits")
+                    copyfile(candidate, destination)
+                    result["output_image"] = str(destination)
         except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
             result.update(status="failed", error=str(error))
         finally:

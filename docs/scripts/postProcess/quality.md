@@ -11,7 +11,11 @@ netteté → débruitage reste inchangé hors compétition des chaînes.
 
 ## Responsabilités
 
-- `lib/restoration_quality.py` : `RestorationQuality` déclare les paramètres via
+La [structure des processeurs de qualité](quality-processors.md) détaille les
+sous-étapes indépendantes, leur contexte partagé et leur chronométrage récursif.
+Les méthodes et fonctions historiques délèguent maintenant à ces processeurs.
+
+- `lib/restoration_quality.py` : `RestorationQuality` délègue les paramètres aux processeurs via
   `ParameterizedComponent` ; `QualityReference` construit les cartes et mesure
   bruit, signal diffus et flux d’ouverture. Aucun appel à `GradientExtractor`.
 - `lib/deconvolution_quality.py` : conserve les anneaux et les critères
@@ -116,6 +120,11 @@ une image réorientée ou de dimensions différentes.
 
 Une tuile doit fournir au moins 128 pixels de ciel et 50 % de couverture.
 Au moins quatre tuiles réparties sur trois quadrants sont nécessaires par défaut.
+L'évaluation utilise au plus **256 tuiles**, réparties sur le champ de façon
+déterministe ; `--quality-max-noise-tiles 0` évalue toutes les tuiles disponibles.
+Les mêmes positions sont utilisées avant/après et sur les canaux RGB. Le
+[calcul par lots NumPy/PyTorch](noise-tiles.md) détaille le choix spatial, les
+limites de mémoire et les conséquences sur l'incertitude.
 Dans chaque tuile, une tendance plane est retirée pour le diagnostic ; le bruit
 est la MAD multipliée par 1,4826 du résidu. Le ratio après/avant est résumé par
 sa médiane. Un bootstrap déterministe de 256 répétitions, par tuiles et non par
@@ -181,6 +190,10 @@ Les options suivent CLI > JSON sauvegardé > défaut, avec sauvegarde explicite 
 | `--quality-mode` | `reliable` | `legacy` conserve les métriques historiques |
 | `--quality-tile-size` | 64 | Taille des tuiles, pixels ; minimum 16 |
 | `--quality-min-tiles` | 4 | Minimum de tuiles ; minimum configurable 2 |
+| `--quality-diffuse-backend` | politique globale | Filtres diffus : `auto`, `cpu` ou `cuda` forcé |
+| `--quality-max-diffuse-regions` | 256 | Plafond des régions diffuses par tailles et positions ; 0 pour toutes |
+| `--quality-max-noise-tiles` | 256 | Plafond spatial des tuiles évaluées ; 0 pour toutes |
+| `--quality-noise-batch-size` | 32 | Taille maximale des lots CPU/GPU, de 1 à 256 |
 | `--quality-source-sigma` | 4 | Seuil de segmentation, minimum 2 |
 | `--quality-scales` | 2 4 8 16 32 | Échelles de lissage, pixels, entre 1 et 128 |
 | `--quality-mask-growth` | 5 | Marge des objets ; les étoiles ont une marge plus grande |
@@ -339,7 +352,9 @@ sur l’ensemble des objets ni une calibration astrophysique générale du débr
 La segmentation version 3 a aussi été vérifiée sur les images après photométrie
 de M31 et M33 et les candidats de débruitage déjà enregistrés. Elle retient
 4 265 tuiles sur M31 (63,8 % de pixels de ciel) et 1 324 sur M33 (68,1 %),
-dans les quatre quadrants. Sur M31, les baisses de dispersion du pire canal
+dans les quatre quadrants. Ces effectifs décrivent les tuiles disponibles ;
+les mesures qui suivent ont utilisé l'évaluation exhaustive, reproductible avec
+`--quality-max-noise-tiles 0`. Sur M31, les baisses de dispersion du pire canal
 sont d’environ 12,4 % pour Clarity, 21,1 % pour Siril et 41,9 % pour GraXpert.
 Sur M33, elles sont d’environ 10,2 %, 35,3 % et 44,0 %. Les contrôles locaux
 publiés précédemment deviennent admissibles avec ces mesures de bruit.
@@ -348,3 +363,7 @@ de sélection du ciel, avec les cas synthétiques de protection du signal diffus
 La comparaison complète des nouvelles associations reste à exécuter lors du
 prochain traitement des images réelles ; la préservation de tous les halos
 faibles exige une calibration astrophysique plus large.
+
+Le contrôle diffus utilise une [sélection fixe par tailles et positions](diffuse-regions.md)
+de 256 régions au plus par défaut. Les mesures par région restent identiques ;
+`--quality-max-diffuse-regions 0` rétablit l’évaluation exhaustive.

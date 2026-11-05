@@ -13,6 +13,10 @@ séparation StarNet, un étirement dédié aux étoiles, puis une optimisation R
 fond sans étoiles et une recomposition. Les étapes amont gardent leur ordre.
 Chaque fond passe aussi par une recherche finale D/B/SP/HP avec protection des
 hautes lumières, après l’optimisation et la chroma éventuelle, avant la fusion.
+Elle est complétée par des [étirements successifs de la droite logarithmique](ghs-quartiles.md)
+pour allonger la portion continue rectiligne après le pic, jusqu’à 0,875, sans
+privilégier une pente nulle. Le niveau relatif de la queue est également
+recherché, par défaut à 0,25 de la hauteur logarithmique rouge vers 0,875.
 
 La [couleur finale adaptative](final-color.md), activée par défaut, renforce ensuite
 le fond sans étoiles. Sauf `--disable-final-color`, elle remplace la
@@ -156,6 +160,12 @@ astronomique.
 | Option | Défaut | Rôle |
 |---|---|---|
 | `--compute-backend` | `auto` | Politique commune de postProcess ; NumPy/CuPy pour le GHS |
+| `--ghs-tail-height` | `0.25` | Hauteur log cible du canal à 0,875 ; `[0,1]`, zéro désactive le complément |
+| `--ghs-tail-channel` | `red` | Canal de référence `red`, `green` ou `blue`, normalisé par son propre pic |
+| `--ghs-linearity-tolerance` | `0.05` | RMS maximal en dex pour une droite log ; `[0.005,0.5]` |
+| `--ghs-quartile-iterations` | `12` | Passes supplémentaires pour allonger la droite log, de 0 à 64 |
+| `--ghs-quartile-max-strength` | `10` | D maximal par passe supplémentaire, dans ]0,10] |
+| `--ghs-blackpoint-loss` | `0.001` | Fraction cumulée annulable pour un pic sombre isolé, de 0 à 0,01 |
 | `--ghs-max-iterations` | `8` | Limite de 1 à 32 recherches GHS |
 | `--ghs-final-strength` | `1.25` | D maximal en mode auto, force imposée en mode fixed ; 0 désactive |
 | `--ghs-final-mode` | `auto` | Recherche protégée ou courbe comparative `fixed` |

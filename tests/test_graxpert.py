@@ -244,6 +244,8 @@ def test_processor_uses_native_engine_and_common_controls(
     if orchestrated:
         assert result["selected_engine"] == "graxpert"
         result = result["evaluations"]["graxpert"]
+    assert set(result['timings']) == {'inference_seconds', 'quality_seconds'}
+    assert all(value >= 0 for value in result['timings'].values())
     assert result["inference"]["engine"] == "onnxruntime"
     assert "command" not in result
 

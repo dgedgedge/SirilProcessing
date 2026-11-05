@@ -368,3 +368,7 @@ de rétention.
 Les classes Cosmic Clarity produisent uniquement leur candidat neuronal.
 La comparaison avec Siril relève des [orchestrateurs de restauration](restoration.md),
 sans choix de moteur dans la séquence de post-traitement.
+
+L'accès aux poids passe par `ResourceManager`, commun au calcul et à
+l'[installateur de ressources](../install_dependances/resources.md#resource-manager).
+Un fichier local conforme, y compris fourni avec le dépôt, est utilisé sans réseau.

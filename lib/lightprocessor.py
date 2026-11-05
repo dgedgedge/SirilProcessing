@@ -331,7 +331,11 @@ class LightProcessor(ParameterizedComponent):
     def from_config(
         cls, session_dir: Path | str, **overrides: ConfigValue
     ) -> LightProcessor:
-        """Construit un traitement depuis Config ; les valeurs explicites priment."""
+        """Construit un traitement depuis Config ; les valeurs explicites priment.
+
+        ``use_flat`` configure la calibration enfant, y compris lorsqu'elle
+        est fournie dans les surcharges. La valeur par défaut est True.
+        """
         from lib.config import Config
 
         config = Config()
@@ -360,6 +364,7 @@ class LightProcessor(ParameterizedComponent):
                 ),
             )
             no_dark = options.pop("no_dark", config.get("no_dark", False))
+            use_flat = options.pop("use_flat", config.get("use_flat", True))
             temperature_precision = options.pop(
                 "temperature_precision",
                 config.get(
@@ -377,6 +382,7 @@ class LightProcessor(ParameterizedComponent):
                 keep_intermediate=bool(options["keep_intermediate"]),
                 args=argparse.Namespace(
                     no_dark=no_dark,
+                    use_flat=use_flat,
                     temperature_precision=temperature_precision,
                     dark_library_path=dark_library_path,
                 ),
@@ -395,6 +401,9 @@ class LightProcessor(ParameterizedComponent):
                 calibration_processor.calibration.use_dark = (
                     calibration_processor.use_dark
                 )
+            if "use_flat" in explicit_overrides:
+                calibration_processor.use_flat = bool(options.pop("use_flat"))
+                calibration_processor.calibration.use_flat = calibration_processor.use_flat
         options["calibration_processor"] = calibration_processor
         return cls(session_dir, **options)
 
@@ -907,7 +916,8 @@ class LightProcessor(ParameterizedComponent):
         Les étapes master flat et calibration sont annoncées en INFO avec
         des titres ===. La reprise annonce les lights déjà calibrées ; elle
         ne prétend pas réutiliser séparément un master flat. Les détails de
-        préparation et les caractéristiques sont en DEBUG.
+        préparation et les caractéristiques sont en DEBUG. Le mode de flats
+        doit correspondre aux sorties en cache avant leur réutilisation.
 
         Parameters
         ----------
@@ -945,7 +955,12 @@ class LightProcessor(ParameterizedComponent):
                 return False
 
         # Préparation optionnelle des flats pour ce groupe
-        selected_flats = self._select_flats_for_light_group(reference_light)
+        selected_flats = (
+            self._select_flats_for_light_group(reference_light)
+            if self.calibration_processor.use_flat else []
+        )
+        if not self.calibration_processor.use_flat:
+            logging.info("Flats désactivés : aucune recherche ni application pour ce groupe")
         if selected_flats:
             # Pour appliquer un seul dark de calibration flats, on garde un sous-ensemble
             # homogène en temps de pose (groupe majoritaire).
@@ -1008,7 +1023,15 @@ class LightProcessor(ParameterizedComponent):
                 "Recalibration nécessaire pour préserver le CFA natif avant décision Drizzle"
             )
 
-        if existing_output and not self.force_reprocess and not needs_native_cfa:
+        flat_cache_matches = self.calibration_processor.flat_cache_matches(
+            calibrated_output_dir
+        )
+        if existing_output and not flat_cache_matches:
+            logging.info("Recalibration nécessaire : changement du mode d'utilisation des flats")
+        if (
+            existing_output and not self.force_reprocess and not needs_native_cfa
+            and flat_cache_matches
+        ):
             logging.info(
                 "%s=== Réutilisation des lights déjà calibrées : groupe %s ===",
                 "[DRY-RUN] " if self.dry_run else "", group_key,

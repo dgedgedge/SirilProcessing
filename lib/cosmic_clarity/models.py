@@ -8,7 +8,6 @@ versionné fixe les noms, URL et empreintes. Les poids nécessaires sont récup�
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import logging
 import os
@@ -18,6 +17,7 @@ from typing import TypedDict
 from urllib.request import urlopen
 
 from lib.resource_cache import ResourceCache
+from lib.resource_manager import ResourceManager
 
 
 DEFAULT_MODEL_DIR = ResourceCache().model_directory('cosmicclarity')
@@ -46,11 +46,7 @@ def manifest() -> dict[str, ModelEntry]:
 
 def sha256_file(path: Path) -> str:
     """Calcule l'empreinte en blocs pour limiter la mémoire au téléchargement."""
-    digest = hashlib.sha256()
-    with path.open('rb') as stream:
-        for block in iter(lambda: stream.read(1024 * 1024), b''):
-            digest.update(block)
-    return digest.hexdigest()
+    return ResourceManager.file_checksum(path)
 
 
 def verify_model(directory: Path, name: str) -> Path:
@@ -120,7 +116,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--directory', type=Path, default=DEFAULT_MODEL_DIR)
     args = parser.parse_args()
-    install_models(args.directory.expanduser().resolve())
+    ResourceManager().cosmic_models(args.directory.expanduser().resolve())
 
 
 if __name__ == '__main__':

@@ -11,6 +11,7 @@ formats de sortie sont décrites dans
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import re
@@ -303,7 +304,8 @@ class SequenceCalibrationProcessor(processor):
         ``args`` permet une surcharge isolée, notamment pour les fabriques qui
         construisent le traitement hors du parseur CLI. L'option ``--dark-lib``
         fournit la bibliothèque recherchée ; ``--no-dark`` détermine l'usage des
-        masters darks pour les lights et les flats.
+        masters darks pour les lights et les flats. ``--no-flat`` ignore les
+        flats et leur master ; ``--flat`` les réactive (défaut).
         ``dark_library_path`` permet de surcharger directement le chemin résolu.
         ``--temperature-precision`` détermine le pas d'arrondi utilisé pour
         grouper les images et rechercher un master dark compatible.
@@ -312,6 +314,7 @@ class SequenceCalibrationProcessor(processor):
             self.set_from_args(args)
         options = self._get_args()
         self.use_dark = not getattr(options, "no_dark", False)
+        self.use_flat = getattr(options, "use_flat", True)
         self.temp_precision = getattr(
             options,
             "temperature_precision",
@@ -326,7 +329,9 @@ class SequenceCalibrationProcessor(processor):
         self.dark_library_path = str(selected_dark_library) if selected_dark_library else ""
         self.siril = siril
         self.work_dir = Path(work_dir)
-        self.calibration = CalibrationProfile(use_dark=self.use_dark)
+        self.calibration = CalibrationProfile(
+            use_dark=self.use_dark, use_flat=self.use_flat
+        )
         self.keep_intermediate = keep_intermediate
         self.master_flat_processor = MasterFlatProcessor(
             siril, self.work_dir, self.calibration, keep_intermediate
@@ -499,7 +504,7 @@ class SequenceCalibrationProcessor(processor):
 
     @classmethod
     def add_arguments(cls, parser: argparse.ArgumentParser) -> None:
-        """Déclare les options de recherche et d'utilisation des masters dark."""
+        """Déclare la recherche des darks et l'activation des darks et flats."""
         parser.add_argument(
             "-d",
             "--dark-lib",
@@ -521,6 +526,13 @@ class SequenceCalibrationProcessor(processor):
             ),
         )
         parser.add_argument(
+            "--flat",
+            dest="use_flat",
+            action=argparse.BooleanOptionalAction,
+            default=True,
+            help="Utiliser les flats compatibles ; --no-flat désactive leur calibration et application",
+        )
+        parser.add_argument(
             "-t",
             "--temperature-precision",
             dest="temperature_precision",
@@ -537,6 +549,23 @@ class SequenceCalibrationProcessor(processor):
     def parameter_children(cls) -> tuple[type[processor], ...]:
         """Déclare la création récursive du master flat optionnel."""
         return (MasterFlatProcessor,)
+
+    def flat_cache_matches(self, calibrated_dir: Path) -> bool:
+        """Vérifie que les sorties ont été calculées avec le même mode de flats.
+
+        Les sorties historiques sans marqueur restent utilisables en mode
+        normal. Désactiver les flats impose leur recalcul. Un marqueur illisible
+        ou un changement de mode impose également une nouvelle calibration.
+        """
+        marker = calibrated_dir / "calibration_settings.json"
+        try:
+            settings = json.loads(marker.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return self.use_flat
+        except (OSError, ValueError):
+            logging.warning("Réglages de calibration illisibles : %s", marker)
+            return False
+        return isinstance(settings, dict) and settings.get("use_flat") is self.use_flat
 
     def _generate_script(
         self,
@@ -623,7 +652,9 @@ close"""
         group_key = options.group_key
         light_files = [Path(path) for path in options.light_files]
         dark_path = options.master_dark_path
-        flat_files = [Path(path) for path in options.flat_files]
+        flat_files = (
+            [Path(path) for path in options.flat_files] if self.use_flat else []
+        )
         flat_dark_path = options.flat_dark_path
         flat_sequence_name = options.flat_sequence_name
         master_flat_base = Path(options.master_flat_output_base)
@@ -734,6 +765,9 @@ close"""
                 raise RuntimeError(
                     f"Aucune sortie calibrée trouvée dans le dossier: {output_path}"
                 )
+            (output_path / "calibration_settings.json").write_text(
+                json.dumps({"use_flat": self.use_flat}), encoding="utf-8"
+            )
             logging.info(
                 "Calibration terminée : %d FITS calibrés dans %s",
                 len(outputs), output_path,

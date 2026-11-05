@@ -33,12 +33,21 @@ paramètre du calcul. Le module délègue ce calcul à Siril ; il ne fait aucun
 
 `--photometry-catalog localgaia` choisit le catalogue spectral Gaia local de
 Siril ; un catalogue astrométrique local seul ne suffit pas pour SPCC. Le
-catalogue distant et l’installation des données SPCC nécessitent le réseau.
+catalogue distant et la première installation des données SPCC nécessitent le réseau.
+
+L'[installateur de ressources](../install_dependances/resources.md#31-catalogue-spectral-spcc-complet)
+prépare par défaut le catalogue spectral régional, sauf `--disable-gaia` ou
+`--disable-gaia-spcc`. Une fois les fichiers de la couverture choisie vérifiés, le programme sélectionne
+automatiquement `spcc -catalog=localgaia` et fournit son dossier dans des
+préférences temporaires, sans modifier Siril. Un cache d'index HTTP seul ne
+suffit pas. Le rapport indique `local_spcc_catalogue` et la commande réellement
+utilisée. La vérification locale n'effectue aucune demande de mise à jour réseau.
+Le nord céleste est installé par défaut ; pour un champ hors de la couverture
+locale, compléter les régions avec `--gaia-spcc-coverage south` ou `all`.
 L'[installateur commun](../install_dependances/README.md) propose
-`--assets-only --no-models --with-gaia` pour acquérir l'extrait **astrométrique**
-seul (plate solving), avec réutilisation d'un catalogue Siril déjà conforme.
-Il est automatiquement utilisé par les scripts sans modification des
-préférences utilisateur ; cela ne remplace pas le catalogue spectral SPCC.
+`--assets-only --no-models --with-gaia` pour acquérir les deux catalogues,
+avec réutilisation des fichiers Siril conformes et des téléchargements partiels.
+Les catalogues sont utilisés automatiquement sans modification des préférences utilisateur.
 `--photometry-method pcc --photometry-catalog nomad` choisit explicitement PCC
 sur NOMAD ; les paramètres spectraux SPCC sont alors refusés.
 
@@ -119,3 +128,7 @@ Les produits de photométrie sont conservés dans `<rapport>_work/001/`, par exe
 `02_photometry_work/001/`. Ce dossier visible est réinitialisé à chaque lancement,
 sans suffixe aléatoire ni répertoire temporaire. Une entrée située dans le dossier
 réinitialisé est refusée ; les fichiers sources extérieurs sont préservés.
+
+La découverte et l'acquisition des catalogues sont centralisées dans le
+[gestionnaire commun de ressources](../install_dependances/resources.md#resource-manager).
+La photométrie emploie son mode de recherche locale sans téléchargement implicite.

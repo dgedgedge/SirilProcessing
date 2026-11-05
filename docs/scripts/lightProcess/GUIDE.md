@@ -31,6 +31,16 @@ d’acquisition (`light/`, éventuellement `flat/`), ou directement ces dossiers
 Voir [les structures d’entrée](SESSIONS.md).
 
 
+Pour ignorer les flats présents tout en conservant la calibration par dark :
+
+```bash
+./bin/lightProcess.sh /chemin/M33 --no-flat
+```
+
+Ajouter `--no-dark` désactive aussi les darks. Le réglage et les reprises sont
+détaillés dans les [options](OPTIONS.md) et la
+[calibration](treatments/CALIBRATION.md).
+
 <a id="options-par-tape"></a>
 <a id="options-par-étape"></a>
 

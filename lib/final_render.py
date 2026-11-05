@@ -532,7 +532,9 @@ class AutoGHSFinalRenderer(processor):
                     for module in (
                         "auto_ghs.py",
                         "ghs_final_stretch.py",
+                        "ghs_quartiles.py",
                         "ghs_log_histogram.py",
+                        "ghs_linear_histogram.py",
                         "final_render.py",
                         "render_exports.py",
                         "star_rendering.py",

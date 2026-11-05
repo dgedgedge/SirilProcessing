@@ -237,7 +237,7 @@ def main() -> int:
     siril_pipeline_epilog = """
 Flux de traitement attendu:
     1) Pour chaque sous-session, on trouve les lights et les flats disponibles.
-    2) Si des flats existent, on les calibres avec un master dark de la bibliotheque pour creer
+    2) Si des flats existent et sont actifs (sans --no-flat), on les calibre avec un master dark pour creer
        un master flat de cette sous-session.
     3) On calibre ensuite les lights de cette sous-session avec le master dark et le master flat.
     4) On exporte la sequence calibree sous forme de FITS, sans stack intermediaire.

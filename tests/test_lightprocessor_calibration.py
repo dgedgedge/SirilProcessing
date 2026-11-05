@@ -312,15 +312,21 @@ def test_export_calibrated_outputs_from_process_copies_only_pp_sequence(tmp_path
     assert all(fits.getdata(calibrated_output_dir / name).shape == (4,4) for name in exported)
 
 
+@pytest.mark.parametrize('disable_flats', [False, True])
 def test_light_process_wrapper_runs_dry_run_pipeline(
-    tmp_path,
-    light_process_sh,
-    light_process_env,
-):
+    tmp_path: Path,
+    light_process_sh: Path,
+    light_process_env: dict[str, str],
+    disable_flats: bool,
+) -> None:
+    """Le lanceur simule la calibration avec ou sans les flats présents."""
     session_dir = tmp_path / "M_33" / "20260913_e180"
     light_dir = session_dir / "light"
     light_dir.mkdir(parents=True)
     _write_fits_frame(light_dir / "light_001.fit", "Light")
+    flat_dir = session_dir / "Flat"
+    flat_dir.mkdir()
+    _write_fits_frame(flat_dir / "flat_001.fit", "Flat", exptime=0.1)
 
     dark_lib = tmp_path / "dark_lib"
     dark_lib.mkdir()
@@ -340,6 +346,8 @@ def test_light_process_wrapper_runs_dry_run_pipeline(
         "INFO",
     ]
 
+    if disable_flats:
+        command.append('--no-flat')
     result = subprocess.run(
         command,
         cwd=light_process_sh.parent.parent,
@@ -355,6 +363,10 @@ def test_light_process_wrapper_runs_dry_run_pipeline(
     assert "[DRY-RUN]" in output
     assert "Sous-session stats" in output
     assert "Sous-sessions calibrées avec succès: 1/1" in output
+    if disable_flats:
+        assert 'Flats désactivés' in output
+        assert 'Création du master flat' not in output
+    assert not list((tmp_path / 'out').rglob('calibration_settings.json'))
 
     session_log = tmp_path / "work" / "20260913_e180" / "sessions" / "20260913_e180" / "20260913_e180_lightProcess.log"
     assert session_log.exists()
@@ -665,3 +677,79 @@ def test_list_calibrated_outputs_is_owned_by_sequence_processor(tmp_path):
     assert SequenceCalibrationProcessor.list_calibrated_outputs(tmp_path) == [
         expected
     ]
+
+
+def test_flat_option_priorities_persistence_and_snapshots(tmp_path: Path) -> None:
+    """CLI > JSON > défaut et sauvegarde explicite s'appliquent au mode flats."""
+    import argparse
+    import json
+    from lib.config import Config
+
+    path = tmp_path / 'config.json'
+    config = Config(path)
+    parser = argparse.ArgumentParser()
+    config.add_arguments(parser)
+    config.register(LightProcessor, parser)
+    assert config.parse_args(parser, ['session']).use_flat is True
+    config.set('use_flat', False)
+    parser = argparse.ArgumentParser()
+    config.add_arguments(parser)
+    config.register(LightProcessor, parser)
+    assert config.parse_args(parser, ['session']).use_flat is False
+    args = config.parse_args(parser, ['session', '--flat'])
+    config.bind_parameters(args)
+    first = SequenceCalibrationProcessor(Mock(), tmp_path)
+    assert first.use_flat is True
+    args = config.parse_args(parser, ['session', '--no-flat'])
+    config.bind_parameters(args)
+    second = SequenceCalibrationProcessor(Mock(), tmp_path)
+    assert second.use_flat is False
+    assert second.calibration.use_flat is False
+    assert first.use_flat is True
+    assert config.save_requested(args)
+    assert not path.exists()
+    args.save_config = True
+    assert config.save_requested(args)
+    assert json.loads(path.read_text())['use_flat'] is False
+
+
+@pytest.mark.parametrize('supplied', [False, True])
+def test_from_config_applies_flat_override(
+    tmp_path: Path, supplied: bool,
+) -> None:
+    """La fabrique transmet les flats configurés et accepte une surcharge locale."""
+    from lib.config import Config
+
+    session = tmp_path / 'session'
+    (session / 'Light').mkdir(parents=True)
+    config = Config(tmp_path / 'settings.json')
+    config.set('use_flat', False)
+    siril = Mock()
+    options = dict(siril=siril, output_dir=tmp_path / 'out', work_dir=tmp_path / 'work')
+    first = LightProcessor.from_config(session, **options)
+    assert first.calibration_processor.use_flat is False
+    child = SequenceCalibrationProcessor(siril, tmp_path)
+    if supplied:
+        options['calibration_processor'] = child
+    second = LightProcessor.from_config(session, use_flat=True, **options)
+    assert second.calibration_processor.use_flat is True
+    assert second.calibration_processor.calibration.use_flat is True
+    assert first.calibration_processor.use_flat is False
+
+
+@pytest.mark.parametrize('use_flat, marker, expected', [
+    (True, None, True), (False, None, False),
+    (True, '{"use_flat": true}', True), (False, '{"use_flat": false}', True),
+    (True, '{"use_flat": false}', False), (False, '{"use_flat": true}', False),
+    (False, 'invalid', False), (True, '[]', False), (True, '{}', False),
+])
+def test_flat_calibration_cache_requires_compatible_settings(
+    tmp_path: Path, use_flat: bool, marker: str | None, expected: bool,
+) -> None:
+    """Un cache historique, incompatible ou invalide suit les règles de reprise."""
+    processor = SequenceCalibrationProcessor(
+        Mock(), tmp_path, args=Namespace(use_flat=use_flat),
+    )
+    if marker is not None:
+        (tmp_path / 'calibration_settings.json').write_text(marker)
+    assert processor.flat_cache_matches(tmp_path) is expected

@@ -17,14 +17,13 @@ import numpy as np
 from astropy.io import fits
 from scipy.ndimage import (
     binary_dilation,
-    find_objects,
     gaussian_filter,
     label,
     maximum_filter,
 )
 
 from lib.parameterized_component import ParameterizedComponent
-from lib.type_defs import JSONReport
+from lib.type_defs import ConfigValue, JSONReport
 
 MAD_SCALE = 1.4826
 BOOTSTRAP_REPEATS = 256
@@ -90,41 +89,28 @@ def bootstrap_mean_interval(values: np.ndarray) -> tuple[float, float]:
 
 
 class RestorationQuality(ParameterizedComponent):
-    """Déclare les options communes, avec rémanence gérée par Config."""
+    """Façade compatible qui délègue les options aux processeurs propriétaires."""
+
+    @classmethod
+    def parameter_children(cls) -> tuple[type[ParameterizedComponent], ...]:
+        """Déclare les deux branches de préparation et de diagnostic d'image."""
+        from lib.quality_processors import ArtifactQualityProcessor, ReferencePreparationProcessor
+
+        return (ReferencePreparationProcessor, ArtifactQualityProcessor)
 
     @classmethod
     def add_arguments(cls, parser: argparse.ArgumentParser) -> None:
-        """Expose mode historique, segmentation et seuils diagnostiques."""
-        if any(action.dest == "quality_mode" for action in parser._actions):
-            return
-        group = parser
-        group.add_argument(
-            "--quality-mode",
-            choices=("reliable", "legacy"),
-            default="reliable",
-            help="Masques et diagnostics fiables (défaut), ou critères historiques",
-        )
-        group.add_argument("--quality-tile-size", type=int, default=64)
-        group.add_argument("--quality-min-tiles", type=int, default=4)
-        group.add_argument("--quality-source-sigma", type=float, default=4.0)
-        group.add_argument(
-            "--quality-scales", type=float, nargs="+", default=[2, 4, 8, 16, 32]
-        )
-        group.add_argument("--quality-mask-growth", type=int, default=5)
-        group.add_argument("--quality-min-noise-gain", type=float, default=0.05)
-        group.add_argument(
-            "--quality-enforce-significance",
-            action=argparse.BooleanOptionalAction,
-            default=False,
-            help="Exiger un gain utile significatif ; sinon observation",
-        )
-        group.add_argument("--quality-max-flux-loss", type=float, default=0.05)
-        group.add_argument(
-            "--quality-enforce-diffuse",
-            action=argparse.BooleanOptionalAction,
-            default=False,
-            help="Rendre bloquants les contrôles diffus ; défaut observation",
-        )
+        """Expose les options par récursion, sans dictionnaire central de déclarations."""
+        for child in cls.parameter_children():
+            child.add_arguments(parser)
+
+    @classmethod
+    def argument_defaults(cls) -> dict[str, ConfigValue]:
+        """Collecte les défauts déclarés par les propriétaires, pour les API historiques."""
+        defaults = {}
+        for child in cls.parameter_children():
+            defaults.update(child.parameter_defaults())
+        return defaults
 
 
 class QualityReference:
@@ -133,27 +119,52 @@ class QualityReference:
     Les exclusions sont l’union conservative des canaux. Les régions brillantes
     étendues et les tendances ambiguës restent exclues même si le fond local les
     absorbe. Un champ sans ciel identifiable donne UNKNOWN. Toutes les cartes
-    sont calculées avant les moteurs ; deepcopy partage cette référence immuable.
+    sont calculées avant les moteurs par ReferencePreparationProcessor et ses
+    enfants masques/tuiles ; deepcopy partage cette référence immuable.
+    Les méthodes historiques de mesure délèguent aux processeurs indépendants
+    décrits dans docs/scripts/postProcess/quality-processors.md.
     """
 
     def __init__(
         self, path: Path | str, args: argparse.Namespace | None = None
     ) -> None:
-        """Construit les cartes sans extraire ni soustraire de gradient au FITS."""
+        """Prépare les cartes par processeurs, puis scelle les tableaux partagés.
+
+        La préparation est chronométrée par phase, sans extraire ni soustraire
+        de gradient au FITS. Les options scientifiques restent celles de args.
+        """
         self.path = Path(path).resolve()
         self.data = normalized_planes(self.path)
         self.top_down = (
             fits.getheader(self.path).get("ROWORDER", "BOTTOM-UP") == "TOP-DOWN"
         )
-        self.tile_size = getattr(args, "quality_tile_size", 64)
-        self.min_tiles = getattr(args, "quality_min_tiles", 4)
-        self.source_sigma = getattr(args, "quality_source_sigma", 4.0)
-        self.scales = tuple(getattr(args, "quality_scales", [2, 4, 8, 16, 32]))
-        self.growth = getattr(args, "quality_mask_growth", 5)
-        self.min_gain = getattr(args, "quality_min_noise_gain", 0.05)
-        self.flux_loss = getattr(args, "quality_max_flux_loss", 0.05)
-        self.enforce_significance = getattr(args, "quality_enforce_significance", False)
-        self.enforce_diffuse = getattr(args, "quality_enforce_diffuse", False)
+        defaults = RestorationQuality.argument_defaults()
+        self.tile_size = getattr(args, 'quality_tile_size', defaults['quality_tile_size'])
+        self.min_tiles = getattr(args, 'quality_min_tiles', defaults['quality_min_tiles'])
+        self.source_sigma = getattr(args, 'quality_source_sigma', defaults['quality_source_sigma'])
+        self.max_noise_tiles = getattr(args, 'quality_max_noise_tiles', defaults['quality_max_noise_tiles'])
+        self.max_diffuse_regions = getattr(
+            args, 'quality_max_diffuse_regions', defaults['quality_max_diffuse_regions'],
+        )
+        from lib.diffuse_regions import validate_region_limit
+        validate_region_limit(self.max_diffuse_regions)
+        self.noise_batch_size = getattr(args, 'quality_noise_batch_size', defaults['quality_noise_batch_size'])
+        self.noise_compute_backend = getattr(args, 'compute_backend', 'auto')
+        self.noise_backend_override = getattr(args, 'quality_noise_backend', None)
+        if self.noise_backend_override not in (None, 'auto', 'cpu', 'cuda', 'mps'):
+            raise ValueError('quality-noise-backend doit être auto, cpu, cuda ou mps')
+        self.diffuse_compute_backend = getattr(args, 'quality_diffuse_backend', None)
+        if self.diffuse_compute_backend not in (None, 'auto', 'cpu', 'cuda', 'mps'):
+            raise ValueError('quality-diffuse-backend doit être auto, cpu, cuda ou mps')
+        from lib.quality_processors import SkyNoiseProcessor
+
+        SkyNoiseProcessor.validate_settings(self.max_noise_tiles, self.noise_batch_size, self.min_tiles)
+        self.scales = tuple(getattr(args, 'quality_scales', defaults['quality_scales']))
+        self.growth = getattr(args, 'quality_mask_growth', defaults['quality_mask_growth'])
+        self.min_gain = getattr(args, 'quality_min_noise_gain', defaults['quality_min_noise_gain'])
+        self.flux_loss = getattr(args, 'quality_max_flux_loss', defaults['quality_max_flux_loss'])
+        self.enforce_significance = getattr(args, 'quality_enforce_significance', defaults['quality_enforce_significance'])
+        self.enforce_diffuse = getattr(args, 'quality_enforce_diffuse', defaults['quality_enforce_diffuse'])
         if (
             self.tile_size < 16
             or self.min_tiles < 2
@@ -169,68 +180,12 @@ class QualityReference:
         ):
             raise ValueError("Paramètres de qualité invalides")
         self.fingerprint = hashlib.sha256(self.data.tobytes()).hexdigest()
-        shape = self.data.shape[1:]
-        self.invalid_mask = ~np.isfinite(self.data).all(axis=0)
-        self.invalid_mask[:2] = self.invalid_mask[-2:] = True
-        self.invalid_mask[:, :2] = self.invalid_mask[:, -2:] = True
-        self.star_mask = np.zeros(shape, dtype=bool)
-        self.object_mask = np.zeros(shape, dtype=bool)
-        self.uncertain_mask = np.zeros(shape, dtype=bool)
-        self.backgrounds, self.sigmas = [], []
-        self.segmentation_audit = []
-        for plane in self.data:
-            clean = np.where(np.isfinite(plane), plane, np.nanmedian(plane))
-            background, sigma = self._local_maps(clean, self.invalid_mask)
-            self.backgrounds.append(background)
-            self.sigmas.append(sigma)
-            residual = clean - background
-            smooth = gaussian_filter(residual, 1)
-            narrow = smooth - gaussian_filter(residual, 3)
-            compact = (smooth == maximum_filter(smooth, size=7)) & (
-                narrow > 2 * self.source_sigma * sigma
-            )
-            self.star_mask |= binary_dilation(
-                compact, iterations=max(8, 2 * self.growth)
-            )
-        # Toutes les étoiles RGB sont exclues avant toute détection diffuse :
-        # sinon leur lumière lissée devient un faux fond diffus jusque dans le ciel.
-        for plane, background, sigma in zip(self.data, self.backgrounds, self.sigmas):
-            clean = np.where(np.isfinite(plane), plane, np.nanmedian(plane))
-            objects, unsupported, scales_audit = self._diffuse_objects(
-                clean - background, sigma
-            )
-            self.object_mask |= objects
-            self.uncertain_mask |= unsupported
-            self.segmentation_audit.append(scales_audit)
-            # Diagnostic conservateur à grande échelle, indépendant du fond local.
-            floor = (
-                float(np.quantile(clean[~self.invalid_mask], 0.1))
-                if (~self.invalid_mask).any()
-                else 0
-            )
-            broad = (
-                gaussian_filter(
-                    np.where(self.star_mask, background, clean), max(self.scales)
-                )
-                - floor
-            )
-            self.uncertain_mask |= broad > 3 * sigma
-        self.object_mask = binary_dilation(
-            self.object_mask, iterations=max(1, self.growth)
-        )
-        self.object_mask &= ~self.star_mask & ~self.invalid_mask
-        self.uncertain_mask &= ~self.object_mask & ~self.star_mask
-        self.sky_mask = ~(
-            self.invalid_mask | self.star_mask | self.object_mask | self.uncertain_mask
-        )
-        # Réestimation diagnostique limitée, sans réviser les exclusions à la baisse.
-        self.backgrounds, self.sigmas = zip(
-            *[
-                self._local_maps(np.nan_to_num(plane), ~self.sky_mask)
-                for plane in self.data
-            ]
-        )
-        self.tiles = tuple(self._sky_tiles())
+        from lib.quality_processors import QualityContext, ReferencePreparationProcessor
+
+        context = QualityContext(self.path, None, self.data, self.data, self)
+        self.preparation_processing = ReferencePreparationProcessor(context).post_process(
+            self.path, None, args,
+        )['processing']
         self.mask_fingerprint = hashlib.sha256(
             np.packbits(
                 np.stack(
@@ -377,20 +332,6 @@ class QualityReference:
             zoom(sigmas, factors, order=1).astype(np.float32),
         )
 
-    def _sky_tiles(self) -> list[tuple[slice, slice]]:
-        """Retient les tuiles assez couvertes ; ne fabrique pas de ciel manquant."""
-        tiles = []
-        height, width = self.sky_mask.shape
-        for y in range(0, height, self.tile_size):
-            for x in range(0, width, self.tile_size):
-                ys, xs = slice(y, min(y + self.tile_size, height)), slice(
-                    x, min(x + self.tile_size, width)
-                )
-                mask = self.sky_mask[ys, xs]
-                if mask.sum() >= max(128, 0.5 * mask.size):
-                    tiles.append((ys, xs))
-        return tiles
-
     def audit(self) -> JSONReport:
         """Résume provenance, couverture, politique et limites scientifiques."""
         quadrants = {
@@ -400,6 +341,7 @@ class QualityReference:
         }
         return dict(
             metrics_version=3,
+            preparation_processing=self.preparation_processing,
             reference_image=str(self.path),
             reference_sha256=self.fingerprint,
             masks_sha256=self.mask_fingerprint,
@@ -464,352 +406,59 @@ class QualityReference:
         return plane - (coeff[0] + coeff[1] * xx + coeff[2] * yy)
 
     def noise(self, candidate: np.ndarray) -> JSONReport:
-        """Mesure dispersion, corrélation courte et intervalle par blocs communs."""
-        coverage = self.audit()
-        if len(self.tiles) < self.min_tiles or coverage["quadrant_count"] < 3:
-            return dict(
-                criterion("UNKNOWN", "NO_RELIABLE_SKY", sample_count=len(self.tiles)),
-                per_channel=[],
-                reference=coverage,
-                max_noise_ratio=None,
-            )
-        channels = []
-        for before, after in zip(self.data, candidate):
-            ratios, correlations, dispersions = [], [], []
-            for ys, xs in self.tiles:
-                mask = self.sky_mask[ys, xs]
-                b = self._detrend(before[ys, xs], mask)
-                a = self._detrend(after[ys, xs], mask)
-                nb, na = robust_sigma(b[mask]), robust_sigma(a[mask])
-                if nb <= 1e-10:
-                    continue
-                ratios.append(na / nb)
-                dispersions.append([nb, na])
-                correlation = []
-                for residual in (b, a):
-                    adjacent = mask[:, :-1] & mask[:, 1:]
-                    left, right = residual[:, :-1][adjacent], residual[:, 1:][adjacent]
-                    correlation.append(
-                        float(np.corrcoef(left, right)[0, 1])
-                        if len(left) > 3 and left.std() > 0 and right.std() > 0
-                        else None
-                    )
-                correlations.append(correlation)
-            if len(ratios) < self.min_tiles:
-                channels.append(
-                    dict(
-                        criterion("UNKNOWN", "TOO_FEW_TILES", sample_count=len(ratios))
-                    )
-                )
-                continue
-            ratio = float(np.median(ratios))
-            lo, hi = bootstrap_interval(np.array(ratios))
-            gain = 1 - ratio
-            proven = 1 - hi >= self.min_gain
-            channels.append(
-                dict(
-                    criterion(
-                        "PASS" if proven else "UNKNOWN",
-                        "USEFUL_NOISE_REDUCTION" if proven else "GAIN_NOT_DEMONSTRATED",
-                        value=gain,
-                        threshold=self.min_gain,
-                        uncertainty=(hi - lo) / 2,
-                        sample_count=len(ratios),
-                    ),
-                    noise_ratio=ratio,
-                    ratio_interval=[lo, hi],
-                    tile_sigma_before_after=dispersions,
-                    lag1_correlation_before_after=correlations,
-                )
-            )
-        known = all("noise_ratio" in item for item in channels)
-        return dict(
-            status=(
-                "PASS"
-                if known and all(c["status"] == "PASS" for c in channels)
-                else "UNKNOWN"
-            ),
-            reason="MEASURED" if known else "TOO_FEW_TILES",
-            per_channel=channels,
-            reference=coverage,
-            max_noise_ratio=max(c["noise_ratio"] for c in channels) if known else None,
-            proven_gain=(
-                min(1 - c["ratio_interval"][1] for c in channels) if known else None
+        """Délègue au processeur SkyNoiseProcessor, avec chronométrage propre."""
+        from lib.quality_processors import QualityContext, SkyNoiseProcessor
+
+        context = QualityContext(self.path, None, self.data, candidate, self)
+        return SkyNoiseProcessor(context).post_process(
+            self.path, None, argparse.Namespace(
+                quality_max_noise_tiles=self.max_noise_tiles,
+                quality_noise_batch_size=self.noise_batch_size,
+                quality_noise_backend=self.noise_backend_override,
+                compute_backend=self.noise_compute_backend,
             ),
         )
 
     def signal(self, candidate: np.ndarray) -> JSONReport:
-        """Audit de flux diffus et de résidu multiscalaire sur régions fixes.
+        """Délègue au processeur DiffuseSignalProcessor, avec chronométrage propre."""
+        from lib.quality_processors import QualityContext, DiffuseSignalProcessor
 
-        La perte de flux corroborée par un résidu structuré est FAIL ; le mode
-        observation ne la rend pas bloquante. Incertitudes par blocs spatiaux,
-        sans prétendre quantifier les erreurs systématiques du fond local.
-        """
-        regions, count = label(self.object_mask)
-        sizes = np.bincount(regions.ravel())
-        entries = []
-        for index, bounds in enumerate(find_objects(regions), start=1):
-            if bounds is None or sizes[index] < 64:
-                continue
-            margin = int(4 * max(self.scales)) + 2 * self.growth + 8
-            ys, xs = (
-                slice(max(0, axis.start - margin), min(length, axis.stop + margin))
-                for axis, length in zip(bounds, regions.shape)
-            )
-            local_regions = regions[ys, xs]
-            mask = local_regions == index
-            # Inclure une marge de redistribution ; les étoiles restent exclues.
-            aperture = (
-                binary_dilation(mask, iterations=max(8, 2 * self.growth))
-                & ~self.star_mask[ys, xs]
-                & ~self.invalid_mask[ys, xs]
-            )
-            annulus = (
-                binary_dilation(aperture, iterations=self.growth + 4)
-                & self.sky_mask[ys, xs]
-            )
-            for channel, (before_full, after_full) in enumerate(
-                zip(self.data, candidate)
-            ):
-                before, after = before_full[ys, xs], after_full[ys, xs]
-                if annulus.sum() < 64:
-                    entries.append(
-                        dict(
-                            criterion(
-                                "UNKNOWN",
-                                "NO_LOCAL_SKY",
-                                sample_count=int(aperture.sum()),
-                            ),
-                            channel=channel,
-                            region=index,
-                        )
-                    )
-                    continue
-                bg_before, bg_after = np.median(before[annulus]), np.median(
-                    after[annulus]
-                )
-                fb = float(np.sum(before[aperture] - bg_before))
-                fa = float(np.sum(after[aperture] - bg_after))
-                difference = (before - after) - (bg_before - bg_after)
-                blocks = []
-                for y in range(0, mask.shape[0], self.tile_size):
-                    for x in range(0, mask.shape[1], self.tile_size):
-                        tile = aperture[y : y + self.tile_size, x : x + self.tile_size]
-                        if tile.sum() >= 16:
-                            blocks.append(
-                                float(
-                                    np.sum(
-                                        difference[
-                                            y : y + self.tile_size,
-                                            x : x + self.tile_size,
-                                        ][tile]
-                                    )
-                                )
-                            )
-                ci = (
-                    bootstrap_mean_interval(np.array(blocks))
-                    if len(blocks) >= 4
-                    else None
-                )
-                sigma = float(np.median(self.sigmas[channel][ys, xs][annulus]))
-                uncertainty = sigma * np.sqrt(aperture.sum())
-                if fb <= 10 * uncertainty:
-                    entries.append(
-                        dict(
-                            criterion(
-                                "UNKNOWN",
-                                "LOW_DIFFUSE_SNR",
-                                sample_count=int(aperture.sum()),
-                            ),
-                            channel=channel,
-                            region=index,
-                        )
-                    )
-                    continue
-                loss = (fb - fa) / fb
-                scale_results = []
-                corroborated = False
-                for scale in self.scales:
-                    structure = gaussian_filter(before - bg_before, scale)
-                    removed = gaussian_filter(difference, scale)
-                    valid = aperture & (
-                        structure > self.source_sigma * self.sigmas[channel][ys, xs] / 8
-                    )
-                    if valid.sum() >= 32:
-                        amplitude = float(np.median(removed[valid]))
-                        detectable = bool(
-                            abs(amplitude)
-                            > 3 * sigma / max(1, min(2 * np.sqrt(np.pi) * scale, 8))
-                        )
-                        corroborated |= detectable
-                        scale_results.append(
-                            dict(
-                                scale_px=scale,
-                                residual_median=amplitude,
-                                significant=detectable,
-                            )
-                        )
-                significant = (
-                    ci is not None
-                    and (ci[0] > 0 or ci[1] < 0)
-                    and abs(fb - fa) > 3 * uncertainty
-                )
-                lost = abs(loss) > self.flux_loss and significant and corroborated
-                entries.append(
-                    dict(
-                        criterion(
-                            "FAIL" if lost else "PASS" if ci is not None else "UNKNOWN",
-                            (
-                                "CORROBORATED_DIFFUSE_LOSS"
-                                if lost
-                                else "NO_CONFIRMED_DIFFUSE_LOSS"
-                            ),
-                            value=loss,
-                            threshold=self.flux_loss,
-                            uncertainty=float(uncertainty / fb),
-                            sample_count=int(aperture.sum()),
-                        ),
-                        channel=channel,
-                        region=index,
-                        flux_before=fb,
-                        flux_after=fa,
-                        unit="normalized_pixel_sum",
-                        block_interval=ci,
-                        multiscale=scale_results,
-                    )
-                )
-        status = (
-            "FAIL"
-            if any(item["status"] == "FAIL" for item in entries)
-            else (
-                "PASS"
-                if entries and all(item["status"] == "PASS" for item in entries)
-                else "UNKNOWN"
-            )
-        )
-        return dict(
-            status=status,
-            reason="NO_DETECTED_DIFFUSE_OBJECT" if not entries else "DIFFUSE_AUDIT",
-            blocking=self.enforce_diffuse,
-            per_region=entries,
+        context = QualityContext(self.path, None, self.data, candidate, self)
+        return DiffuseSignalProcessor(context).post_process(
+            self.path, None, argparse.Namespace(
+                quality_max_diffuse_regions=self.max_diffuse_regions,
+                quality_diffuse_backend=self.diffuse_compute_backend,
+                quality_noise_backend=self.noise_backend_override,
+                compute_backend=self.noise_compute_backend,
+            ),
         )
 
     def stellar_flux(
         self, candidate: np.ndarray, pairs: list[dict[str, float]]
     ) -> JSONReport:
-        """Photométrie d’ouverture complémentaire à FWHM, avec marges communes.
+        """Délègue au processeur StellarFluxProcessor, avec chronométrage propre."""
+        from lib.quality_processors import QualityContext, StellarFluxProcessor
 
-        Les flux sont soustraits d’un fond local séparé avant/après. Une étoile
-        trop proche du bord ou sans signal suffisant reste UNKNOWN. Le verdict
-        global utilise un bootstrap de médianes par blocs spatiaux.
-        """
-        entries, channels = [], []
-        height, width = self.sky_mask.shape
-        for channel, (before, after) in enumerate(zip(self.data, candidate)):
-            groups = {}
-            for pair in pairs:
-                radius = max(6, int(np.ceil(3 * pair["fwhm_before_px"])))
-                x = int(round(pair["x_before"] - 0.5))
-                y = int(
-                    round(
-                        height - pair["y_before"] - 0.5
-                        if self.top_down
-                        else pair["y_before"] - 0.5
-                    )
-                )
-                outer = 2 * radius
-                if min(x, y) < outer or x + outer >= width or y + outer >= height:
-                    continue
-                yy, xx = np.indices((2 * outer + 1, 2 * outer + 1))
-                rr = np.hypot(xx - outer, yy - outer)
-                aperture, annulus = rr <= radius, (rr > 1.5 * radius) & (rr <= outer)
-                b = before[y - outer : y + outer + 1, x - outer : x + outer + 1]
-                a = after[y - outer : y + outer + 1, x - outer : x + outer + 1]
-                if not np.isfinite(b).all():
-                    continue
-                fb = float(np.sum(b[aperture] - np.median(b[annulus])))
-                fa = float(np.sum(a[aperture] - np.median(a[annulus])))
-                uncertainty = robust_sigma(b[annulus]) * np.sqrt(aperture.sum())
-                if fb <= 10 * uncertainty or fb <= 1e-10:
-                    continue
-                change = (fa - fb) / fb
-                entries.append(
-                    dict(
-                        reference_id=pair["reference_id"],
-                        channel=channel,
-                        flux_before=fb,
-                        flux_after=fa,
-                        relative_change=change,
-                        uncertainty=uncertainty / fb,
-                        unit="normalized_pixel_sum",
-                    )
-                )
-                groups.setdefault((x // 128, y // 128), []).append(change)
-            values = np.array([np.median(group) for group in groups.values()])
-            if len(values) < 4:
-                channels.append(
-                    criterion(
-                        "UNKNOWN", "TOO_FEW_APERTURE_GROUPS", sample_count=len(values)
-                    )
-                )
-            else:
-                lo, hi = bootstrap_interval(values)
-                changed = hi < -self.flux_loss or lo > self.flux_loss
-                channels.append(
-                    dict(
-                        criterion(
-                            "FAIL" if changed else "PASS",
-                            "STELLAR_FLUX_CHANGE",
-                            value=float(np.median(values)),
-                            threshold=self.flux_loss,
-                            uncertainty=(hi - lo) / 2,
-                            sample_count=len(values),
-                        ),
-                        interval=[lo, hi],
-                    )
-                )
-        return dict(
-            status=(
-                "FAIL"
-                if any(c["status"] == "FAIL" for c in channels)
-                else (
-                    "PASS"
-                    if channels and all(c["status"] == "PASS" for c in channels)
-                    else "UNKNOWN"
-                )
-            ),
-            blocking=self.enforce_diffuse,
-            per_channel=channels,
-            apertures=entries,
-        )
+        context = QualityContext(self.path, None, self.data, candidate, self, pairs=tuple(pairs))
+        return StellarFluxProcessor(context).post_process(self.path, None)
 
     def evaluate(
         self, path: Path | str, pairs: list[dict[str, float]] | None = None
     ) -> JSONReport:
-        """Évalue un FITS aux coordonnées fixes ; refuse géométrie et WCS modifiés."""
-        candidate = normalized_planes(path)
-        if candidate.shape != self.data.shape or not np.isfinite(candidate).all():
-            raise ValueError("Géométrie différente ou pixels candidats non finis")
-        self.validate_metadata(self.path, path)
-        clipping = []
-        for before, after in zip(self.data, candidate):
-            added = int(np.count_nonzero((after >= 1) & (before < 1)))
-            clipping.append(
-                dict(
-                    criterion(
-                        "UNKNOWN" if added else "PASS",
-                        "NEW_SATURATION_PIXELS" if added else "NO_NEW_SATURATION",
-                        value=float(added),
-                        sample_count=after.size,
-                    )
-                )
-            )
-        return dict(
-            noise=self.noise(candidate),
-            diffuse=self.signal(candidate),
-            stellar_flux=self.stellar_flux(candidate, pairs or []),
-            clipping=dict(per_channel=clipping, unit="normalized_pixel"),
-            reference=self.audit(),
+        """Délègue récursivement aux contrôles indépendants avec la référence fixe."""
+        from lib.quality_processors import QualityContext, ReferenceEvaluationProcessor
+
+        context = QualityContext(
+            self.path, Path(path), self.data, normalized_planes(path), self,
+            pairs=tuple(pairs or ()),
+        )
+        return ReferenceEvaluationProcessor(context).post_process(
+            Path(path), None, argparse.Namespace(
+                quality_max_diffuse_regions=self.max_diffuse_regions,
+                quality_diffuse_backend=self.diffuse_compute_backend,
+                quality_noise_backend=self.noise_backend_override,
+                compute_backend=self.noise_compute_backend,
+            ),
         )
 
     @staticmethod

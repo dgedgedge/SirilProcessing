@@ -49,20 +49,63 @@ class ResourceCache:
         """Retourne le dossier Gaia commun, hors modèles nettoyés par reset."""
         return self.directory / 'catalogues/gaia'
 
+    @property
+    def gaia_spcc_directory(self) -> Path:
+        """Retourne le cache des régions SPCC, indépendant des modèles."""
+        return self.gaia_directory / 'spcc'
+
+    def register_spcc(self, path: Path, coverage: str = 'all') -> None:
+        """Enregistre atomiquement le dossier et sa couverture installée."""
+        self._register_location(path, 'spcc-location.json', coverage)
+
+    def find_spcc(self) -> Path | None:
+        """Vérifie hors ligne la sélection déclarée avant de proposer SPCC local."""
+        from lib.gaia_spcc import GaiaSPCCInstaller
+
+        candidates = [(self.gaia_spcc_directory, 'all')]
+        metadata = self.gaia_directory / 'spcc-location.json'
+        if metadata.is_file():
+            try:
+                value = json.loads(metadata.read_text())
+                if isinstance(value, dict) and isinstance(value.get('path'), str):
+                    coverage = value.get('coverage', 'all')
+                    if isinstance(coverage, str) and coverage in ('north', 'south', 'remaining', 'all'):
+                        candidates = [(Path(value['path']), coverage)]
+            except (OSError, ValueError):
+                pass
+        if not metadata.is_file():
+            candidates.append((self.gaia_spcc_directory, 'north'))
+        installer = GaiaSPCCInstaller()
+        for candidate, coverage in dict.fromkeys(candidates):
+            installer.coverage = coverage
+            try:
+                if installer.valid_directory(candidate):
+                    return candidate.resolve()
+            except (OSError, ValueError, TypeError):
+                continue
+        return None
+
     def register_gaia(self, path: Path) -> None:
         """Mémorise atomiquement le chemin acquis pour les futures résolutions Siril.
 
         Le fichier a été vérifié par l'installateur Gaia. Le JSON n'est pas une
         attestation : find_gaia vérifie à nouveau taille et SHA avant utilisation.
         """
+        self._register_location(path, 'location.json')
+
+    def _register_location(self, path: Path, filename: str, coverage: str | None = None) -> None:
+        """Publie un pointeur local sans lui attribuer une valeur de certificat."""
         self.gaia_directory.mkdir(parents=True, exist_ok=True)
         temporary = None
         try:
             with NamedTemporaryFile(mode='w', dir=self.gaia_directory, delete=False,
                                     encoding='utf-8', suffix='.tmp') as stream:
                 temporary = Path(stream.name)
-                json.dump({'path': str(path.resolve())}, stream)
-            os.replace(temporary, self.gaia_directory / 'location.json')
+                value = {'path': str(path.resolve())}
+                if coverage is not None:
+                    value['coverage'] = coverage
+                json.dump(value, stream)
+            os.replace(temporary, self.gaia_directory / filename)
         finally:
             if temporary is not None:
                 temporary.unlink(missing_ok=True)

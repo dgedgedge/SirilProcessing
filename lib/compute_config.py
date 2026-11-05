@@ -64,7 +64,8 @@ class ComputeConfig(ParameterizedComponent):
 
         Les anciens réglages spécifiques sauvegardés restent des surcharges
         explicites. La disponibilité réelle dépend du moteur, pas de cette classe.
-        MPS est une surcharge Cosmic Clarity, pas une politique globale.
+        MPS est une surcharge des moteurs compatibles : Cosmic Clarity, bruit,
+        couleur finale et filtres diffus PyTorch ; pas une politique globale.
         """
         value = getattr(args, override, None) if override is not None else None
         if value is None:

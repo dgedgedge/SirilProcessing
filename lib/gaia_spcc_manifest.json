@@ -1,0 +1,346 @@
+{
+  "version": "1.0.1",
+  "source": "https://zenodo.org/records/14738271",
+  "license": "CC-BY-4.0",
+  "files": [
+    {
+      "name": "siril_cat1_healpix8_xpsamp_0.dat",
+      "size": 149132613,
+      "sha256": "c95c09da9f2ba8e2e3a820799832e4c75d21d6c114208e1015b78aa9ca350e9f",
+      "archive_size": 75257161,
+      "archive_md5": "1b74e4777d91cdfc118ea78d6ae4d4a5"
+    },
+    {
+      "name": "siril_cat1_healpix8_xpsamp_1.dat",
+      "size": 583048809,
+      "sha256": "8c276dacfe24667540f56dbddecdc180e0667c5f8e034c9e07c9e9d0bae64fd0",
+      "archive_size": 293708403,
+      "archive_md5": "d079cf047b69779d2ad14a99469e1e48"
+    },
+    {
+      "name": "siril_cat1_healpix8_xpsamp_2.dat",
+      "size": 512952314,
+      "sha256": "eb6205f484be98640a3056f1eacecae790ed4f82977c25d723e8a6125dd1780f",
+      "archive_size": 254519907,
+      "archive_md5": "ff40e849a91a83b785d856d8a6579756"
+    },
+    {
+      "name": "siril_cat1_healpix8_xpsamp_3.dat",
+      "size": 589474876,
+      "sha256": "93753865fc0f7661a4be03dae42456397ef85db93d7b962bdb68e667966fac37",
+      "archive_size": 295456792,
+      "archive_md5": "6eaf782111f373977d834f3f8f777cfe"
+    },
+    {
+      "name": "siril_cat1_healpix8_xpsamp_4.dat",
+      "size": 196342860,
+      "sha256": "0ba8b567883ba360ecf0b263166103ea053090ce5ab559748e65d95945c25574",
+      "archive_size": 97506015,
+      "archive_md5": "a8c485fea0db8fbe11072e69b360ca98"
+    },
+    {
+      "name": "siril_cat1_healpix8_xpsamp_5.dat",
+      "size": 111253377,
+      "sha256": "b5bd5db8abd391707ca15a1709889a5be3b79534c87eab873eaeecbb50f9cdeb",
+      "archive_size": 55143808,
+      "archive_md5": "46f76253487e7a5decb3ef6aa6772e6b"
+    },
+    {
+      "name": "siril_cat1_healpix8_xpsamp_6.dat",
+      "size": 316603616,
+      "sha256": "68570232ee557d9735c7d0412bedf82899d792071c387bf9f9f56f772bc56399",
+      "archive_size": 158762644,
+      "archive_md5": "14c87900bfee56eb7bb1a01e7fc9636c"
+    },
+    {
+      "name": "siril_cat1_healpix8_xpsamp_7.dat",
+      "size": 198172470,
+      "sha256": "4136b7a0dae5881247ae4b2c72a408e6830dc2091a8a83539e2f3881160e0ee4",
+      "archive_size": 96989302,
+      "archive_md5": "a8f2c344e8d4e74d303b58524568af16"
+    },
+    {
+      "name": "siril_cat1_healpix8_xpsamp_8.dat",
+      "size": 120490454,
+      "sha256": "a1c362f5f8712c1b23f18957e2bcb7f8babd22e5028ce7398ee3d852572b1f4f",
+      "archive_size": 60017580,
+      "archive_md5": "b9dea493c95ce7aebdadfc8c298d3b84"
+    },
+    {
+      "name": "siril_cat1_healpix8_xpsamp_9.dat",
+      "size": 205176161,
+      "sha256": "82b49ed275b352f9a84ce4e637725d30ea3bb28b556042428140b17f8bfca033",
+      "archive_size": 101608887,
+      "archive_md5": "1138b1a7231bdfafd7b1f0be0c196bbe"
+    },
+    {
+      "name": "siril_cat1_healpix8_xpsamp_10.dat",
+      "size": 100210524,
+      "sha256": "808b137a0a7dae1c43cf01a381240f138eb033f40606af9252a90b1d1bea2982",
+      "archive_size": 49368101,
+      "archive_md5": "b04708a3125468d1b7d39b015737d3ee"
+    },
+    {
+      "name": "siril_cat1_healpix8_xpsamp_11.dat",
+      "size": 165777157,
+      "sha256": "b70dd3e321f1b6881233ffa2fca1a1d1b6cacd23bc963ed498eaa28e9142cb4b",
+      "archive_size": 82137448,
+      "archive_md5": "91a00280e93713951acbfc434d452937"
+    },
+    {
+      "name": "siril_cat1_healpix8_xpsamp_12.dat",
+      "size": 814433487,
+      "sha256": "0c4c8d5094c485d460aa5cf75768f02e93442e70be25bcec255ad39253805a31",
+      "archive_size": 407495060,
+      "archive_md5": "2ae7c76396bcd1c3d7a7206494b428a6"
+    },
+    {
+      "name": "siril_cat1_healpix8_xpsamp_13.dat",
+      "size": 814499381,
+      "sha256": "4257f580e1483f54f2f2c53258a3b9e3d9d20df63e63c5e02175d191b6a25239",
+      "archive_size": 403759486,
+      "archive_md5": "d99e1289569b2957b5cdc94a1dd68faa"
+    },
+    {
+      "name": "siril_cat1_healpix8_xpsamp_14.dat",
+      "size": 898010212,
+      "sha256": "cf6c92ad249e318b029f3b400c16cfa3034f6767a7e58982e1c3373a1f101e37",
+      "archive_size": 454908169,
+      "archive_md5": "31f8c6cc9e08ef1e974bb39343832a64"
+    },
+    {
+      "name": "siril_cat1_healpix8_xpsamp_15.dat",
+      "size": 596644003,
+      "sha256": "f84c946a61fb6bf60babdd8c40f8a6d73576cdd346a52857ffdc48ad6a7d3f8a",
+      "archive_size": 303038499,
+      "archive_md5": "88c729e534646df8c930f088579dec46"
+    },
+    {
+      "name": "siril_cat1_healpix8_xpsamp_16.dat",
+      "size": 63938681,
+      "sha256": "25f1233193436d64b3c731a85ddbfa6dc8fe35dce2bcce602ec22689e9f2be9c",
+      "archive_size": 32204615,
+      "archive_md5": "bc545480d77bbda3945fef0401c6c058"
+    },
+    {
+      "name": "siril_cat1_healpix8_xpsamp_17.dat",
+      "size": 109785483,
+      "sha256": "caaf7d6fb04e6bedb54e31c17640dc564f9a9a821843cc16ce2f956ef6dc3707",
+      "archive_size": 54711705,
+      "archive_md5": "00e5aac65fe463472aead7383c96fe8f"
+    },
+    {
+      "name": "siril_cat1_healpix8_xpsamp_18.dat",
+      "size": 111172061,
+      "sha256": "2690d55b64980ce177f934de63301bef34562fa21cbdd722515d4a34ec6951b3",
+      "archive_size": 55745828,
+      "archive_md5": "d0e50f4cf73ca7791ca2e88aec9f0241"
+    },
+    {
+      "name": "siril_cat1_healpix8_xpsamp_19.dat",
+      "size": 177812626,
+      "sha256": "7f6f4d94087f78eb74e1cc63f281a0ad12a892e54974d52fd69ad41203df191e",
+      "archive_size": 88044932,
+      "archive_md5": "b1df9f3a7dbb9e0c5adcdc720b347ec4"
+    },
+    {
+      "name": "siril_cat1_healpix8_xpsamp_20.dat",
+      "size": 491772300,
+      "sha256": "ee11defd136482bc0bf1c1a60763223e3c8e6d2b17a855009c5da76fe9dbf514",
+      "archive_size": 243490810,
+      "archive_md5": "284be89bc186f6ff515b19e66ea525f4"
+    },
+    {
+      "name": "siril_cat1_healpix8_xpsamp_21.dat",
+      "size": 700588283,
+      "sha256": "e71c76f458af0f777082c7dd7cd27f88bb835ed74e8c0acf68ee928de4f1c8a1",
+      "archive_size": 356233260,
+      "archive_md5": "5f9636b47c1fbe10935ca4d5c3f39003"
+    },
+    {
+      "name": "siril_cat1_healpix8_xpsamp_22.dat",
+      "size": 217930856,
+      "sha256": "0035f5f31132a82a790c475093ba67533e266e7940297e6dfd9bcb1ad20d3f96",
+      "archive_size": 108051884,
+      "archive_md5": "ba6900f41c5c60148b05e0d9f854c9b7"
+    },
+    {
+      "name": "siril_cat1_healpix8_xpsamp_23.dat",
+      "size": 677296156,
+      "sha256": "7110d355ee3942e6121a083886e0a6bc4d04bf111fddbae600b23d408609a9e2",
+      "archive_size": 344583737,
+      "archive_md5": "61ae80e54c4602dd976d34118bf7261f"
+    },
+    {
+      "name": "siril_cat1_healpix8_xpsamp_24.dat",
+      "size": 180885109,
+      "sha256": "592ddca7592d231d2abcc27d56ea4b05390e14eb0b75afdcfd3d0eb3d9a487d7",
+      "archive_size": 89943661,
+      "archive_md5": "4c45bafaf6450e443285e6999e219dc6"
+    },
+    {
+      "name": "siril_cat1_healpix8_xpsamp_25.dat",
+      "size": 120467321,
+      "sha256": "b00498223eef6b9eee601dd766d17e6a58be7511263ef880e1abb671f5f7983f",
+      "archive_size": 60215101,
+      "archive_md5": "71d6cdef1a7d8e98118dd3bfa4ea764c"
+    },
+    {
+      "name": "siril_cat1_healpix8_xpsamp_26.dat",
+      "size": 86613227,
+      "sha256": "2470c36f4c1c1fb91515bf8e45a3ead82e6c8255d09d38989c1501f770b8d865",
+      "archive_size": 43485332,
+      "archive_md5": "f881fc2a13d96213db099399f65d18d9"
+    },
+    {
+      "name": "siril_cat1_healpix8_xpsamp_27.dat",
+      "size": 53980275,
+      "sha256": "6ee48709e6719ea3c38c70388cb87ffc753ce1fb4f5345f41eea2353474ec9ab",
+      "archive_size": 27230983,
+      "archive_md5": "1e0c2b6b0751b106787ba449b00c5a88"
+    },
+    {
+      "name": "siril_cat1_healpix8_xpsamp_28.dat",
+      "size": 1152099579,
+      "sha256": "d9376e3f130de1367778286965912e0d9ac1b3ab0a2432fe2011679dc0400128",
+      "archive_size": 625818261,
+      "archive_md5": "6e09af70c3bc4a1c1b94e5dc1ad710e9"
+    },
+    {
+      "name": "siril_cat1_healpix8_xpsamp_29.dat",
+      "size": 881034796,
+      "sha256": "4334be1dc6f8fe1e617075bec1c6d76824c7af345c825fd4e29f7f00b736f480",
+      "archive_size": 465700869,
+      "archive_md5": "ec51165ca2e625903578f2b9d7c3dc67"
+    },
+    {
+      "name": "siril_cat1_healpix8_xpsamp_30.dat",
+      "size": 291530949,
+      "sha256": "2bca588d20be27f6f3677c053e7039bcf7be4ae1c4fe58ac55609d78bfcd3c5e",
+      "archive_size": 145392888,
+      "archive_md5": "e228093e66085de4be11deaf0fb2d125"
+    },
+    {
+      "name": "siril_cat1_healpix8_xpsamp_31.dat",
+      "size": 686891444,
+      "sha256": "946880f5793f1a48ebaac8db6990ce96181145da8cd3959316c7d5014833852c",
+      "archive_size": 344520770,
+      "archive_md5": "b8df6bdca22455966eb40d82df96287c"
+    },
+    {
+      "name": "siril_cat1_healpix8_xpsamp_32.dat",
+      "size": 217943474,
+      "sha256": "d4c1ffbff0e4b0b9d4f2e002527fff9f254df968b5c8e5502fe96f96a807af71",
+      "archive_size": 108853840,
+      "archive_md5": "24d268c82aa28f7e5eb79aaec207b4f5"
+    },
+    {
+      "name": "siril_cat1_healpix8_xpsamp_33.dat",
+      "size": 196987079,
+      "sha256": "1064a7432f0bc67c9903e6d50a7b68a3003932ef3b5bc5091433e787fe99df5f",
+      "archive_size": 97441402,
+      "archive_md5": "016c1f424c14929ef69a226c3d1315bb"
+    },
+    {
+      "name": "siril_cat1_healpix8_xpsamp_34.dat",
+      "size": 114984099,
+      "sha256": "fcd894f7b577df7801985b509848fe7beb2729741a4a1c4ba84647000860c8d1",
+      "archive_size": 56500010,
+      "archive_md5": "5d935a005b710587fbb4aab6062f57bc"
+    },
+    {
+      "name": "siril_cat1_healpix8_xpsamp_35.dat",
+      "size": 108143040,
+      "sha256": "2d1752246058d34f6dbb5be8b114fb3277c7151093bd24943da238bb2835d6a0",
+      "archive_size": 53788995,
+      "archive_md5": "44c163b702406defad879f529589ebc5"
+    },
+    {
+      "name": "siril_cat1_healpix8_xpsamp_36.dat",
+      "size": 852582608,
+      "sha256": "34eb1b8c7b0531ec41faf512c08c7aef093a075985104cd29e6fc317aebfcd0a",
+      "archive_size": 428683465,
+      "archive_md5": "6b1af480c056ea229ae6e9c442ccb9f6"
+    },
+    {
+      "name": "siril_cat1_healpix8_xpsamp_37.dat",
+      "size": 808470781,
+      "sha256": "2c4dcf68eda17911f57bfc86e8159819a13f62fdbef977c0875992fcffc0de9a",
+      "archive_size": 403117648,
+      "archive_md5": "4ca89319a4dc1efc1c2133dddc2acb1e"
+    },
+    {
+      "name": "siril_cat1_healpix8_xpsamp_38.dat",
+      "size": 818093408,
+      "sha256": "9d42a859b322e56e58629bd87438e669e4f67c459130038844d0f83a6b9d26a6",
+      "archive_size": 409033857,
+      "archive_md5": "957c353bfc8a83ad3c9b5350a01fc5f5"
+    },
+    {
+      "name": "siril_cat1_healpix8_xpsamp_39.dat",
+      "size": 648875513,
+      "sha256": "798b5a8fb388ae34144ae4f8cdd7f01553853f13cbbc9bf761b27f3c18ae1fe0",
+      "archive_size": 320383501,
+      "archive_md5": "060dfe4c161c38f5d0396be620ce3ef6"
+    },
+    {
+      "name": "siril_cat1_healpix8_xpsamp_40.dat",
+      "size": 1191718697,
+      "sha256": "95d500887b09768348b0745ae03a8506b0f06d1c31d6345612b706dfa5272e88",
+      "archive_size": 605966759,
+      "archive_md5": "f8a922bd307b45ee908706f32473dbc2"
+    },
+    {
+      "name": "siril_cat1_healpix8_xpsamp_41.dat",
+      "size": 1193104574,
+      "sha256": "29156410981cb8008159b8af5250d42e2c7e27f532b5effe25c4b49a9d0550e3",
+      "archive_size": 620679305,
+      "archive_md5": "eb737b438ac77eea1d0d4f97067b374d"
+    },
+    {
+      "name": "siril_cat1_healpix8_xpsamp_42.dat",
+      "size": 668141797,
+      "sha256": "e2404a9eee98351bed734121f034b8f16aece114384bf9b365e222e8f79fa742",
+      "archive_size": 336265568,
+      "archive_md5": "660efaebd38b9072f7551f31f2551a56"
+    },
+    {
+      "name": "siril_cat1_healpix8_xpsamp_43.dat",
+      "size": 237218871,
+      "sha256": "012a915475a9c72774df0ff23f26d1845fe7fa72948497c5dee0ae4d920854fa",
+      "archive_size": 120029876,
+      "archive_md5": "57cbab975405d0d410cdaccced0e7061"
+    },
+    {
+      "name": "siril_cat1_healpix8_xpsamp_44.dat",
+      "size": 306408272,
+      "sha256": "434edd6cbf35fb38d5bc0f6400abcbde94d307e2fb23480d155118f40713555e",
+      "archive_size": 149962072,
+      "archive_md5": "bffd1dea3f6ac48afaec51edb0b85510"
+    },
+    {
+      "name": "siril_cat1_healpix8_xpsamp_45.dat",
+      "size": 159349688,
+      "sha256": "2ddbd58b981e28570827480d3793a61d6e69477663a9fd7743cc461313eed63b",
+      "archive_size": 78769591,
+      "archive_md5": "7bcdeaeacfb7c304adb8c2e41c1385a3"
+    },
+    {
+      "name": "siril_cat1_healpix8_xpsamp_46.dat",
+      "size": 666191615,
+      "sha256": "ee9737199f95aaaf153f85601c9ac5c7e2021f31f0e88b72ad65197c6a738a1f",
+      "archive_size": 336499068,
+      "archive_md5": "cb5b6f619946579f60cd8aae96df9d77"
+    },
+    {
+      "name": "siril_cat1_healpix8_xpsamp_47.dat",
+      "size": 303480896,
+      "sha256": "4cb0c594c01f973c5364fd38b604d6dc1c9628c3e9969e6b35437c65eb6b20b2",
+      "archive_size": 150841716,
+      "archive_md5": "f4cea2fe9b14c8d51603f0250fc197c1"
+    }
+  ],
+  "size_corrections": {
+    "siril_cat1_healpix8_xpsamp_5.dat": "111253377 octets mesurés après décompression de l’archive MD5 vérifiée ; SHA-256 officiel conforme. La taille 28794880 issue des métadonnées ne correspondait pas à cette archive."
+  }
+}

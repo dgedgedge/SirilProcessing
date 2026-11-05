@@ -5,6 +5,13 @@
 `bin/postProcess.py` traite une image FITS dans cet ordre :
 **correction du gradient → étalonnage spectrophotométrique → comparaison des chaînes complètes de restauration**.
 Chaque étape reçoit l’image retenue par la précédente et produit un rapport JSON.
+Les [contrôles de qualité sont des processeurs récursifs](quality-processors.md),
+avec des analyses indépendantes sur étoiles, tuiles et régions diffuses.
+Le [bruit sur tuiles](noise-tiles.md) utilise un échantillon spatial plafonné
+et des lots NumPy/PyTorch, selon la politique CPU/GPU commune. Les filtres et
+statistiques partagent un [moteur PyTorch CUDA/MPS](torch-compute.md).
+Les [temps de traitement](timings.md) sont journalisés en INFO et enregistrés
+dans les rapports pour auditer les préparations, moteurs et contrôles de restauration.
 La [qualité astrophotographique](quality.md) utilise par défaut des masques fixes,
 des mesures de bruit avec incertitude et des diagnostics du signal diffus.
 `--quality-mode legacy --no-restoration-compare-chains` retrouve les métriques
@@ -724,3 +731,9 @@ AutoGHS conserve le numéro `05`, y compris lorsque `03_restoration` regroupe le
 sous-dossiers numérotés pour la séparation, les étoiles, GHS, la recomposition et
 les diagnostics. La photométrie utilise `02_photometry_work/001/`. Ces dossiers
 visibles sont réinitialisés à chaque lancement ; voir [AutoGHS](auto-ghs.md).
+
+La [recherche GHS par quartiles](ghs-quartiles.md) complète le rendu automatique
+par des passes successives, avec budget cumulé du point noir.
+
+La [sélection des régions diffuses](diffuse-regions.md) limite leur nombre
+en conservant une représentation spatiale et par tailles sur la référence.

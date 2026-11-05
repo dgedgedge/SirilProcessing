@@ -224,3 +224,11 @@ compatibilité fondée sur les chemins et dates n'est pas une preuve d'intégrit
 cryptographique. Une chaîne incohérente ou absente reste bloquante. Depuis
 lightProcess, `lightprocess_final_images.json` retrouve les mêmes produits finaux
 avant tout travail de calibration/stacking/mosaïque, même pour un stack à une pose.
+
+## Audit des durées
+
+Les appels des étapes actives sont chronométrés ; leur
+`processing_duration_seconds` est présent dans le rapport enfant et dans le
+rapport global. La restauration détaille ses préparations, calculs distincts,
+contrôles finaux et réutilisations de cache. Les moteurs distinguent aussi le
+calcul et la qualité. Voir les [champs, unités et limites](timings.md).

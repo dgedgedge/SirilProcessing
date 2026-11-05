@@ -49,6 +49,18 @@ son instanciation.
 
 ## Sélection et préparation des flats
 
+Les flats sont activés par défaut (`use_flat: true` en JSON). L'option
+`--no-flat`, déclarée par `SequenceCalibrationProcessor`, désactive leur
+recherche, leur calibration et leur application, même s'ils sont présents.
+`--flat` les réactive et prime sur une configuration qui les désactive.
+Ce réglage est indépendant de `--no-dark` et peut être sauvegardé avec `-S`.
+
+Le mode de flats est enregistré dans `calibration_settings.json` auprès des
+FITS calibrés. Un changement de mode déclenche leur recalcul avant le stacking.
+Les anciennes sorties sans ce marqueur restent réutilisables en mode normal ;
+`--no-flat` impose leur recalibration. Un marqueur invalide impose également
+un recalcul. Le mode simulation annonce les opérations sans écrire ce fichier.
+
 Les flats doivent avoir des métadonnées valides et un type contenant `flat`.
 La compatibilité avec les lights porte sur la caméra, le gain arrondi et le
 binning. Leur température et leur durée d’exposition n’ont pas à être celles

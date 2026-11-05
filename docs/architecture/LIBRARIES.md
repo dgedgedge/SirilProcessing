@@ -16,8 +16,10 @@
 | [gpu_environment.py](../../lib/gpu_environment.py) | Partager la sélection du venv, les appels pip et le graphe de contrôle entre les installateurs GPU |
 | [dependency_installation.py](../../lib/dependency_installation.py) | Détecter la plateforme, orchestrer installation/test et nettoyer explicitement le venv ; [commande commune](../scripts/install_dependances/README.md) |
 | [installation_assets.py](../../lib/installation_assets.py) | Précharger les modèles et résoudre leurs chemins ; [ressources de l'installateur](../scripts/install_dependances/resources.md) |
+| resource_manager.py | Partager les accès aux catalogues et poids, leur découverte et leur acquisition entre installateur et traitements ; [interfaces et politiques](../scripts/install_dependances/resources.md#resource-manager) |
 | [resource_cache.py](../../lib/resource_cache.py) | Centraliser modèles/Gaia, découvrir le catalogue local et nettoyer les modèles ; [cache et nettoyage](../scripts/install_dependances/resources.md) |
 | [gaia_catalogue.py](../../lib/gaia_catalogue.py) | Acquérir et vérifier l'extrait Gaia astrométrique optionnel ; [format et intégrité](../scripts/install_dependances/resources.md) |
+| gaia_spcc.py | Installer et vérifier les 48 régions spectrales SPCC ; [reprise et intégrité](../scripts/install_dependances/resources.md#31-catalogue-spectral-spcc-complet) |
 | [ghs_final_stretch.py](../../lib/ghs_final_stretch.py) | Rechercher le renforcement final D/B/SP/HP sous [contraintes de hautes lumières](../scripts/postProcess/ghs-highlight-protection.md) |
 | [ghs_log_histogram.py](../../lib/ghs_log_histogram.py) | Mesurer la décroissance semi-log robuste pour le [classement des essais GHS](../scripts/postProcess/ghs-highlight-protection.md#31-régression-de-la-décroissance-logarithmique) |
 | [final_render.py](../../lib/final_render.py) | Orchestrer et publier le [rendu final AutoGHS](../scripts/postProcess/auto-ghs.md) après les traitements linéaires |
@@ -28,6 +30,12 @@
 | [compute_config.py](../../lib/compute_config.py) | Partager la [politique CPU/GPU](../scripts/postProcess/compute-backend.md) et les surcharges des moteurs |
 | [config.py](../../lib/config.py) | Charger les réglages JSON, résoudre les déclarations des classes utilisatrices et sauvegarder explicitement |
 | [fits_info.py](../../lib/fits_info.py) | Donner accès aux caractéristiques des FITS et aux informations nécessaires à leur regroupement et à leur validation |
+| [noise_tiles.py](../../lib/noise_tiles.py) | Sélectionner spatialement les tuiles de bruit et calculer leurs statistiques par lots NumPy/PyTorch |
+| [quality_processors.py](../../lib/quality_processors.py) | Séquencer les contrôles de qualité d'image sous forme de processeurs récursifs partageant les données |
+| diffuse_regions.py | Sélectionner les régions de référence par tailles et positions ; [algorithme et audit](../scripts/postProcess/diffuse-regions.md) |
+| torch_backend.py | Sélectionner CUDA/MPS et partager les filtres et statistiques PyTorch ; [contrats numériques](../scripts/postProcess/torch-compute.md) |
+| diffuse_filters.py | Exécuter les convolutions diffuses sur SciPy CPU ou PyTorch CUDA/MPS avec contrôle initial et audit ; [moteur et limites](../scripts/postProcess/diffuse-regions.md#6-filtrages-multiscales-sur-gpu) |
+| [quality_star_processors.py](../../lib/quality_star_processors.py) | Séparer la détection Siril, les mesures locales et la comparaison stellaire |
 | [restoration_quality.py](../../lib/restoration_quality.py) | Évaluer les candidats sur des masques indépendants des moteurs et du gradient |
 | [restoration_chains.py](../../lib/restoration_chains.py) | Organiser la comparaison des chaînes complètes, active par défaut |
 | [restoration_summary.py](../../lib/restoration_summary.py) | Présenter les essais, contrôles et motifs de sélection dans les journaux et rapports |
@@ -65,3 +73,7 @@ déclaratif, sans imposer d'héritage. Les préfixes complémentaires sont décl
 par les classes concernées, y compris Cosmic Clarity. Le programme principal
 reste responsable de la sauvegarde explicite avec `-S` ; enregistrer, résoudre
 ou lier des paramètres n'écrit pas le fichier.
+
+Le module `ghs_linear_histogram.py` mesure la longueur continue semi-log et
+propose les pivots aux ruptures de pente pour les
+[étirements GHS successifs](../scripts/postProcess/ghs-quartiles.md).

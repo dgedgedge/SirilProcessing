@@ -189,3 +189,57 @@ def test_missing_flat_dark_fails_before_light_calibration(
     assert "aucun master dark adapté pour calibrer les flats" in caplog.text
     assert "=== Calibration des lights" not in caplog.text
     run_script.assert_not_called()
+
+
+@pytest.mark.parametrize('no_dark', [False, True])
+def test_no_flat_ignores_existing_flats_and_their_dark(
+    calibration: tuple[LightProcessor, Mock], monkeypatch: pytest.MonkeyPatch,
+    no_dark: bool,
+) -> None:
+    """Le réglage lié par Config saute les flats présents et garde le mode dark."""
+    import argparse
+    from lib.config import Config
+
+    processor, run_script = calibration
+    parser = argparse.ArgumentParser()
+    config = Config()
+    config.register(SequenceCalibrationProcessor, parser)
+    args = config.parse_args(parser, ['--no-flat', *(['--no-dark'] if no_dark else [])])
+    config.bind_parameters(args)
+    processor.calibration_processor = SequenceCalibrationProcessor(
+        processor.siril, processor.work_dir, keep_intermediate=True,
+        dark_library_path=processor.calibration_processor.dark_library_path,
+    )
+    selection = Mock(side_effect=AssertionError('Les flats ne doivent pas être lus'))
+    monkeypatch.setattr(processor, '_select_flats_for_light_group', selection)
+    assert list((processor.session_dir / 'Flat').glob('*.fit'))
+    assert processor.process_session({'drizzle': 'off'})
+    selection.assert_not_called()
+    run_script.assert_called_once()
+    script = run_script.call_args.args[0]
+    assert '-flat=' not in script
+    assert ('-dark=' in script) is not no_dark
+    assert 'dark_flat.fit' not in script
+    assert processor.get_output_files()
+
+
+def test_flat_toggle_invalidates_calibration_cache(
+    calibration: tuple[LightProcessor, Mock],
+) -> None:
+    """Chaque changement de mode recalcule ; le même mode reprend ses sorties."""
+    import argparse
+
+    processor, run_script = calibration
+    dark_library = processor.calibration_processor.dark_library_path
+    for use_flat, expected_calls in [(True, 2), (False, 1), (False, 0), (True, 2)]:
+        processor.calibration_processor = SequenceCalibrationProcessor(
+            processor.siril, processor.work_dir, keep_intermediate=True,
+            dark_library_path=dark_library,
+            args=argparse.Namespace(use_flat=use_flat),
+        )
+        run_script.reset_mock()
+        assert processor.process_session({'drizzle': 'off'})
+        assert run_script.call_count == expected_calls
+        if expected_calls:
+            script = run_script.call_args.args[0]
+            assert ('-flat=' in script) is use_flat

@@ -11,6 +11,7 @@ import pytest
 from lib.auto_ghs import ComputeBackend, luminance
 from lib.config import Config
 from lib.final_color import FinalColorProcessor
+from lib.torch_backend import TorchComputeBackend
 from lib.postprocess import PostProcessingProcessor
 from lib.postprocess import _PostProcessorSequence
 from lib.postprocess_resume import PostProcessResume
@@ -36,6 +37,7 @@ def test_render_preserves_luminance_and_color_direction() -> None:
     np.testing.assert_allclose(luminance(output), y, atol=1e-7)
     np.testing.assert_array_equal(original, data)
     assert report['status'] == 'applied'
+    assert report['gamut_roundoff']['restored_pixels'] == 0
     assert 1 < report['maximum_gain'] <= 2
     assert report['sky_median_gain'] == 1
     sky = y <= np.percentile(y[y > 1e-6], 25)
@@ -332,7 +334,7 @@ def test_fusion_guard_reduces_strength(tmp_path: Path, monkeypatch: pytest.Monke
 def test_cuda_matches_cpu_when_available() -> None:
     """Le backend sélectionné donne les mêmes couleurs sans changer de moteur."""
     try:
-        backend = ComputeBackend('cuda')
+        backend = TorchComputeBackend('cuda')
     except RuntimeError as error:
         pytest.skip(str(error))
     data = color_field()
@@ -381,3 +383,59 @@ def test_no_ghs_omits_default_color_but_rejects_explicit_request(
         result = PostProcessingProcessor().post_process(source, report, args)
         assert 'final_color' not in result['treatments']
         assert result['output_image'].endswith('run.fits')
+
+
+def test_roundoff_restores_complete_ghs_pixel_without_clipping(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Un résidu isolé conserve le RGB original et son Y, pas seulement le canal bas."""
+    image = np.full((3, 128, 160), .1, dtype='f4')
+    image[:, 10, 20] = [.2, .1, 0]
+    original = image.copy()
+    output = image.copy()
+    output[:, 10, 20] = [.25, .12, -2.7939677e-9]
+    gain = np.full(image.shape[1:], 2, dtype='f4')
+    audit = FinalColorProcessor._guard_rendered_gamut(image, output, gain, ComputeBackend('cpu'))
+    assert audit['restored_pixels'] == audit['corrected_rgb_values'] == 1
+    assert audit['maximum_excursion'] == pytest.approx(2.7939677e-9)
+    np.testing.assert_array_equal(image, original)
+    np.testing.assert_array_equal(output, original)
+    assert gain[10, 20] == 1
+    assert gain[0, 0] == 2
+    assert 'pixels GHS originaux conservés' in caplog.text
+
+
+@pytest.mark.parametrize('excess,pixels', [(1e-3, 1), (1e-8, 10)])
+def test_gamut_guard_refuses_significant_or_widespread_excursions(
+    excess: float, pixels: int,
+) -> None:
+    """Un défaut significatif ne peut être masqué par une correction numérique."""
+    image = np.full((3, 128, 160), .1, dtype='f4')
+    output = image.copy()
+    output[0, 0, :pixels] = -excess
+    gain = np.ones(image.shape[1:], dtype='f4')
+    before = output.copy()
+    with pytest.raises(ValueError, match='Couleur finale : sortie hors gamut'):
+        FinalColorProcessor._guard_rendered_gamut(image, output, gain, ComputeBackend('cpu'))
+    np.testing.assert_array_equal(output, before)
+
+
+@pytest.mark.parametrize('value', [-1e-9, 1.000001, float('nan')])
+def test_final_color_still_refuses_invalid_ghs_inputs(value: float) -> None:
+    """La tolérance de calcul ne s'applique jamais aux images entrantes."""
+    image = color_field()
+    image[0, 0, 0] = value
+    with pytest.raises(ValueError):
+        FinalColorProcessor.render(image, 3)
+
+
+def test_upper_roundoff_restores_original_pixel() -> None:
+    """Un dépassement haut d'un ulp suit la même règle que le résidu négatif."""
+    image = np.full((3, 128, 160), .2, dtype='f4')
+    output = image.copy()
+    output[0, 2, 3] = np.nextafter(np.float32(1), np.float32(2))
+    gain = np.full(image.shape[1:], 2, dtype='f4')
+    audit = FinalColorProcessor._guard_rendered_gamut(image, output, gain, ComputeBackend('cpu'))
+    np.testing.assert_array_equal(output, image)
+    assert audit['corrected_rgb_values'] == audit['restored_pixels'] == 1
+    assert gain[2, 3] == 1

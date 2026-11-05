@@ -29,7 +29,7 @@ from lib.final_color import FinalColorProcessor
 from lib.final_render import AutoGHSFinalRenderer
 from lib.compute_config import ComputeConfig
 from lib.logging_utils import (
-    add_session_file_logging, log_section, remove_session_file_logging,
+    add_session_file_logging, log_duration, log_section, remove_session_file_logging,
 )
 from lib.postprocess_resume import PostProcessResume
 from lib.processor import processor
@@ -1062,7 +1062,9 @@ class PhotometricColorCalibrator(processor):
         L’astrométrie est toujours recalculée, même si un WCS existe.
         Gaia local vérifié du cache commun est préféré pour l'astrométrie ;
         ses préférences temporaires ne modifient pas celles de l'utilisateur.
-        Le catalogue SPCC reste indépendant.
+        Les catalogues locaux astrométrique et SPCC sont découverts séparément.
+        Une couverture spectrale vérifiée sélectionne SPCC local sans modifier les
+        préférences utilisateur ; aucune mise à jour réseau n’est exigée.
         Le retournement est autorisé sauf noflip. Le rapport et le journal
         décrivent les commandes exécutées.
 
@@ -1179,11 +1181,16 @@ class PhotometricColorCalibrator(processor):
 
         # Une calibration antérieure ou un WCS présent ne dispensent pas
         # de refaire la résolution avant l’étalonnage des couleurs.
-        from lib.resource_cache import ResourceCache
-        gaia_path = ResourceCache().find_gaia() if solve_catalog in ('gaia', 'localgaia') else None
+        from lib.resource_manager import ResourceManager
+        resources = ResourceManager(args)
+        gaia_path = resources.gaia_astrometry() if solve_catalog in ('gaia', 'localgaia') else None
         if gaia_path is not None:
             solve_catalog = 'localgaia'
             logging.info('Astrométrie : catalogue Gaia local vérifié : %s', gaia_path)
+        spcc_path = resources.gaia_spcc() if method == 'spcc' else None
+        if spcc_path is not None:
+            color_catalog = 'localgaia'
+            logging.info('SPCC : couverture spectrale locale vérifiée : %s', spcc_path)
         solve = ["platesolve", "-force"]
         if coordinates is not None:
             solve.append(f"{coordinates[0]:.10f},{coordinates[1]:.10f}")
@@ -1247,12 +1254,15 @@ class PhotometricColorCalibrator(processor):
         )
         log_path = work_dir / f"{tag[:-1] if tag else 'photometry'}.log"
         init_options = {}
-        if gaia_path is not None:
+        if gaia_path is not None or spcc_path is not None:
             from lib.star_separation import StarNetSeparator
             preferences, _ = StarNetSeparator.preferences(args)
             if not preferences.has_section('core'):
                 preferences.add_section('core')
-            preferences.set('core', 'catalogue_gaia_astro', str(gaia_path))
+            if gaia_path is not None:
+                preferences.set('core', 'catalogue_gaia_astro', str(gaia_path))
+            if spcc_path is not None:
+                preferences.set('core', 'catalogue_gaia_photo', str(spcc_path))
             isolated = work_dir / 'siril-local-gaia.ini'
             with isolated.open('w', encoding='utf-8') as stream:
                 preferences.write(stream, space_around_delimiters=False)
@@ -1285,6 +1295,7 @@ class PhotometricColorCalibrator(processor):
         copyfile(staged_image, output_image)
         results = {
             "local_gaia_catalogue": str(gaia_path) if gaia_path is not None else None,
+            "local_spcc_catalogue": str(spcc_path) if spcc_path is not None else None,
             "image_path": str(input_path),
             "output_image": str(output_image),
             "object": object_name,
@@ -1498,6 +1509,9 @@ class _PostProcessorSequence(processor):
         <nom du rapport>_steps, et le même Namespace d'arguments parsés une fois.
         Les numéros standard restent fixes, notamment 05 pour AutoGHS lorsque
         la restauration regroupe les étapes 03/04.
+        La durée murale de chaque appel est journalisée en INFO et enregistrée
+        sous processing_duration_seconds dans son rapport, sans modifier les
+        mesures internes éventuelles du moteur.
         Chaque étape active est annoncée en INFO par un titre lisible entre
         deux lignes de signes = ; les étapes désactivées n’ont pas de bandeau.
         Avant AutoGHS dans un traitement complet, un rapport partiel et les
@@ -1550,8 +1564,13 @@ class _PostProcessorSequence(processor):
                 }
                 _write_report(output_path, checkpoint)
                 PostProcessResume.save(Path(input_path), output_path, checkpoint)
+            stage_durations: dict[str, float] = {}
             try:
-                result = processor.post_process(current_path, report_path, args=args)
+                with log_duration(
+                    f"Post-traitement — {title}", stage_durations, "processing_seconds",
+                ):
+                    result = processor.post_process(current_path, report_path, args=args)
+                result["processing_duration_seconds"] = stage_durations["processing_seconds"]
                 if result.get("error"):
                     raise RuntimeError(result["error"])
                 if result.get("output_image"):
@@ -1579,6 +1598,7 @@ class _PostProcessorSequence(processor):
                     result = self._deconvolution_no_safe_result(
                         report_path, current_path, error
                     )
+                    result["processing_duration_seconds"] = stage_durations["processing_seconds"]
                     _write_report(report_path, result)
                     all_results[prefix] = result
                     continue

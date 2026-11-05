@@ -88,6 +88,27 @@ def test_all_chains_are_evaluated_and_intermediates_cached(
     assert len(result["variants"]) == variants
     assert result["operation_count"] == operations == len(calls)
     assert len(finals) == variants - 1
+    assert result["duration_seconds"] >= 0
+    durations = result["timings"]
+    assert durations["preparation_seconds"] >= 0
+    assert durations["publication_seconds"] >= 0
+    processing_keys = [key for key in durations if key.endswith("_processing_seconds")]
+    preparation_keys = [key for key in durations if key.endswith("_preparation_seconds")]
+    final_keys = [key for key in durations if key.startswith("final_")]
+    assert len(processing_keys) == operations
+    assert len(preparation_keys) == operations
+    assert len(final_keys) == len(finals)
+    assert all(value >= 0 for value in durations.values())
+    assert result["cache_hits"]["operations"] == sum(
+        step["reused"] for variant in result["variants"] for step in variant["steps"]
+    )
+    assert result["cache_hits"]["operations"] > 0
+    expected_engine_totals = {}
+    for entry in result["operations"]:
+        key = f"{entry['operation']}:{entry['engine_name']}"
+        expected_engine_totals[key] = expected_engine_totals.get(key, 0) + entry["duration_seconds"]
+    assert result["engine_duration_seconds"] == expected_engine_totals
+    assert "Durée cumulée — Restauration" in caplog.text
     assert result["selected_chain"] == ["denoise:1", "sharpen:4"]
     assert len(set(masks)) == 1
     assert fits.getdata(source)[0, 0] == 0
@@ -209,10 +230,10 @@ def test_final_catalogs_use_relative_siril_output_names(tmp_path, monkeypatch):
         after_roundness={"mean": 1},
     )
     monkeypatch.setattr(
-        "lib.deconvolution.compare_star_catalogs", lambda *a, **k: comparison
+        "lib.quality_star_processors.StarComparisonProcessor._process", lambda *a, **k: dict(comparison)
     )
     monkeypatch.setattr(
-        "lib.deconvolution_quality.artifact_metrics",
+        "lib.quality_processors.ArtifactQualityProcessor._process",
         lambda *a, **k: dict(
             max_noise_ratio=0.5, max_ring_fraction=0, noise={"proven_gain": 0.4}
         ),

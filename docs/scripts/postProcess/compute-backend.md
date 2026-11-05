@@ -14,12 +14,13 @@ les parseurs de la séquence et de ses moteurs.
 |---|---|---|
 | Cosmic Clarity | CUDA disponible, puis MPS Apple disponible, CPU sinon | PyTorch CPU |
 | GraXpert | Fournisseur ONNX GPU/CoreML fonctionnel, CPU sinon | ONNX CPU |
-| AutoGHS et couleur finale | CuPy/CUDA après contrôle et budget VRAM ; NumPy sur Mac ou si CUDA inutilisable | NumPy/SciPy |
+| AutoGHS | CuPy/CUDA après contrôle et budget VRAM ; NumPy sur Mac ou si CUDA inutilisable | NumPy/SciPy |
+| Couleur finale, bruit et filtres diffus | PyTorch CUDA puis MPS, CPU sinon ; petits lots de bruit sur CPU | NumPy/SciPy |
 
 En `auto`, chaque moteur qui choisit le CPU faute d'accélérateur utilisable
 émet un **WARNING** avec son nom, l'OS et la cause. Cela couvre un paquet/pilote
 absent, une VRAM insuffisante, un fournisseur ONNX absent ou non initialisable.
-Sur Mac, AutoGHS et la couleur finale précisent que leur moteur n'implémente
+Sur Mac, AutoGHS précise que son moteur n'implémente
 pas Metal : ce n'est pas une invitation à installer CUDA sur Apple Silicon.
 Un choix CPU explicite ne produit pas cet avertissement.
 
@@ -55,6 +56,7 @@ il n'est pas nécessaire d'indiquer le fabricant ou le moteur Apple.
 Les surcharges propres aux moteurs restent prioritaires :
 
 - `--cosmic-device auto|cpu|cuda|mps` ; défaut `null`, donc héritage du choix général ;
+- `--quality-noise-backend`, `--quality-diffuse-backend`, `--final-color-backend` : `auto|cpu|cuda|mps`, défaut `null` ;
 - `--graxpert-gpu` / `--no-graxpert-gpu` ; défaut `null`, donc héritage également.
 
 Les anciennes valeurs JSON `cosmic_device: "cuda"` ou `graxpert_gpu: false`
@@ -102,5 +104,6 @@ même venv. Voir [Installation CUDA](../install_cuda/README.md). L’option
 
 Sur Apple Silicon, utiliser [l'installation Mac](../install_macos/README.md)
 avec `bin/install_dependances.sh`. CoreML peut répartir GraXpert entre CPU, GPU et
-Neural Engine ; AutoGHS et la couleur finale restent sur CPU. Le choix `mps`
-est uniquement une surcharge Cosmic Clarity, pas une valeur de la politique globale.
+Neural Engine ; AutoGHS reste sur CPU. Le choix `mps` est une surcharge
+des moteurs compatibles, pas une valeur de la politique globale. Voir
+[les opérations PyTorch et leurs limites](torch-compute.md).

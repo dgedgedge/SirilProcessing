@@ -145,13 +145,21 @@ def test_process_saves_psf_preview_audit_and_next_input(tmp_path, simulated_siri
     result = sequence.post_process(image, tmp_path/'report.json', arguments(
         '--enable-deconvolution', '--deconvolution-iterations', '15', '-m', 'native', '-s', '/test/siril'))
     deconv = result['deconvolution']
+    assert deconv['timings']['siril_seconds'] >= 0
+    assert deconv['timings']['quality_seconds'] >= 0
+    assert deconv['processing_duration_seconds'] >= 0
     factory.assert_called_once_with(siril_path='/test/siril', siril_mode='native')
     scripts = '\n'.join(call.args[0] for call in runner.run_siril_script.call_args_list)
     assert 'findstar -layer=1 -out=01_deconvolution_siril_before_stars.tsv' in scripts
     assert 'makepsf save 01_deconvolution_siril_blind_psf.fits' in scripts
     assert 'makepsf blind -l0 -ks=15' in scripts
     assert '-iters=15 -gdstep=0.0003000 -tv -alpha=3000' in scripts
-    assert 'save 01_deconvolution_siril_simple_trial.fits\nclose\nload 01_deconvolution_siril_simple_trial.fits' in scripts
+    assert 'save 01_deconvolution_siril_simple_trial.fits\nclose' in scripts
+    detection_script = next(
+        call.args[0] for call in runner.run_siril_script.call_args_list
+        if 'simple_trial_measure.sps' in call.kwargs.get('script_name', call.args[-1])
+    )
+    assert 'findstar' in detection_script and 'rl "-loadpsf=' not in detection_script
     for key in ('psf_path', 'psf_preview_path', 'matched_stars_path', 'output_image'):
         assert Path(deconv[key]).is_file()
     first_script = Path(deconv['scripts'][0]['script_path'])

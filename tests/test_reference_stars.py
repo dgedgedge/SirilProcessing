@@ -51,6 +51,12 @@ def test_measures_star_missing_from_independent_catalog(tmp_path: Path) -> None:
     assert result['status'] == 'validated'
     assert result['matched_count'] == 3
     assert result['independent_after_count'] == 0
+    processing = result['processing']
+    assert processing['processor'] == 'StarComparisonProcessor'
+    assert processing['duration_seconds'] >= 0
+    assert len(processing['children']) == 1
+    assert processing['children'][0]['processor'] == 'ReferenceStarMeasurementProcessor'
+    assert processing['children'][0]['duration_seconds'] >= 0
     assert result['paired_ratio']['median'] == pytest.approx(.8, abs=.04)
     assert all(pair['distance_px'] == pytest.approx(.3, abs=.1) for pair in result['pairs'])
 

@@ -10,7 +10,7 @@
 | Étape | Principales options |
 |---|---|
 | Chemins | `--output`, `--work-dir` |
-| Calibration | `--dark-lib`, `--no-dark`, `--temperature-precision`, `--force` |
+| Calibration | `--dark-lib`, `--no-dark`, `--flat` / `--no-flat`, `--temperature-precision`, `--force` |
 | Exécution | `--siril-path`, `--siril-mode`, `--dry-run`, `--log-level` |
 | Alignement | `--align-transform`, `--stack-platesolve` |
 | Sélection | `--fwhm-filter`, `--max-fwhm`, `--fwhm-reject-percent`, `--roundness-filter`, `--nbstars-filter` |
@@ -39,6 +39,13 @@ persistant de configuration ; `--save-config` enregistre les arguments.
 `darkLibUpdate`. Ce pas d'arrondi sert au regroupement des poses et à la
 recherche des masters darks. Une valeur explicite en configuration ou en ligne
 de commande reste prioritaire.
+
+`--no-flat` désactive la recherche des flats, la création du master flat et son
+application aux lights, même si `flat/` ou `Flat/` contient des acquisitions.
+Les darks restent actifs sauf avec `--no-dark`. `--flat` réactive les flats
+(défaut). Le réglage JSON `use_flat` suit la priorité CLI > JSON > défaut et
+n'est écrit qu'avec `-S` / `--save-config`. Un changement de mode impose une
+nouvelle calibration des sorties en cache.
 
 Pendant la calibration, les titres `=== Création du master flat … ===` puis
 `=== Calibration des lights … ===` mettent les opérations principales en

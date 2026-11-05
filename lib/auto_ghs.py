@@ -21,6 +21,7 @@ import numpy as np
 
 from lib.compute_config import ComputeConfig
 from lib.ghs_final_stretch import ProtectedGHSFinalizer
+from lib.ghs_quartiles import QuartileGHSProcessor
 from lib.ghs_log_histogram import DEFAULT_LOG_RMS_WEIGHT
 from lib.processor import processor
 from lib.restoration_quality import normalized_planes
@@ -402,8 +403,8 @@ class GHSOptimizer(processor):
 
     @classmethod
     def parameter_children(cls) -> tuple[type[processor], ...]:
-        """Déclare le moteur de recherche de présentation finale."""
-        return (ProtectedGHSFinalizer,)
+        """Déclare les moteurs de présentation protégée et de passes par quartiles."""
+        return (ProtectedGHSFinalizer, QuartileGHSProcessor)
 
     @staticmethod
     def range_strategy(value: str) -> str:
@@ -425,7 +426,8 @@ class GHSOptimizer(processor):
         )
         ComputeConfig.add_arguments(parser)
         parser.add_argument("--ghs-max-iterations", type=int, default=8)
-        ProtectedGHSFinalizer.add_arguments(parser)
+        for child in cls.parameter_children():
+            child.add_arguments(parser)
         parser.add_argument(
             "--ghs-dynamic-target", type=float, default=1.0,
             help="Étendue RGB minimale visée sur [0,1] après GHS (ex. 0.8)",
@@ -523,6 +525,7 @@ class GHSOptimizer(processor):
         if (not np.isfinite(options.ghs_log_rms_weight)
                 or not 0 <= options.ghs_log_rms_weight <= 10):
             raise ValueError("ghs-log-rms-weight doit être dans [0,10]")
+        QuartileGHSProcessor.validate_options(options)
         return options
 
     def final_stretch(
@@ -904,6 +907,15 @@ class GHSOptimizer(processor):
         if presentation_stretch["status"] == "applied":
             state = analyzer.analyze(current, backend)
             histograms.append(state.report())
+        quartile_report: JSONReport = {'status': 'disabled', 'iterations': []}
+        # Le mode fixe reste un témoin exact ; force finale nulle désactive les deux recherches.
+        if options.ghs_final_mode == 'auto' and options.ghs_final_strength > 0:
+            current, quartile_report = QuartileGHSProcessor().search(
+                current, analyzer, backend, options, rendered_stars, headroom,
+            )
+            if quartile_report['status'] == 'applied':
+                state = analyzer.analyze(current, backend)
+                histograms.append(state.report())
         output = backend.numpy(current).astype(np.float32)
         validate_rgb(output)
         return output, {
@@ -914,6 +926,7 @@ class GHSOptimizer(processor):
             "histogram_balance": histogram_balance,
             "dynamic_range": dynamic_report,
             "presentation_stretch": presentation_stretch,
+            "quartile_stretch": quartile_report,
             "blackpoint_iterations": blackpoint_records,
             "post_ghs": post_ghs_metrics,
             "histograms": histograms,

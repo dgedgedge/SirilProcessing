@@ -22,7 +22,9 @@ pilote NVIDIA n'est nécessaire. Les téléchargements peuvent être volumineux.
 |---|---|
 | Cosmic Clarity | PyTorch **MPS**, CPU si MPS indisponible avant le traitement |
 | GraXpert | ONNX **CoreML**, CPU si aucun fournisseur utilisable au démarrage |
-| AutoGHS et couleur finale | **CPU** NumPy/SciPy ; leur moteur CuPy/CUDA ne cible pas Metal |
+| AutoGHS | **CPU** NumPy/SciPy ; son moteur CuPy/CUDA ne cible pas Metal |
+| Couleur finale et filtres diffus | PyTorch **MPS**, CPU si indisponible au précontrôle |
+| Bruit sur tuiles | Retrait des plans CPU float64, statistiques des résidus PyTorch **MPS** |
 | Siril et StarNet | Applications externes, paramètres et compatibilité propres |
 
 CoreML choisit la répartition CPU/GPU/Neural Engine selon le modèle. La présence
@@ -101,8 +103,8 @@ se mémorisent avec `-S` et priment sur la politique globale. Utiliser
 `--compute-backend cpu` pour tous les moteurs sans surcharge explicite.
 Les choix globaux sont `auto` et `cpu`, sans distinction de fabricant.
 L'ancien `--compute-backend cuda` est converti en `auto` avec avertissement.
-Un moteur qui choisit le CPU en auto émet un WARNING ; AutoGHS et la saturation
-précisent l'absence de moteur Metal implémenté.
+Un moteur qui choisit le CPU en auto émet un WARNING ; AutoGHS
+précise l'absence de moteur Metal implémenté.
 
 Les réglages NVIDIA/CPU enregistrés sur une autre machine restent prioritaires :
 mettre `cosmic_device` et `graxpert_gpu` à `null` pour retrouver l'héritage de

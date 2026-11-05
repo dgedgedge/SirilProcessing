@@ -13,8 +13,9 @@ d'étoiles au seul rendu RANGE ; aucun paramètre ne dépend du nom de la cible.
 
 Le moteur intervient **après** l'égalisation, l'expansion et la chroma, avant la
 fusion screen. Il ne récupère pas les détails perdus dans une étape antérieure.
-Les paramètres HP des premières itérations restent à 1 ; la recherche conjointe
-D/B/SP/HP décrite ici concerne exclusivement la dernière passe.
+Une [phase par quartiles](ghs-quartiles.md) peut ensuite compléter cette passe.
+Les paramètres HP des premières itérations RANGE restent à 1 ; la recherche conjointe
+D/B/SP/HP décrite ici concerne cette passe de présentation protégée.
 
 | Option | Défaut | Signification |
 |---|---|---|

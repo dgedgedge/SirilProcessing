@@ -62,11 +62,11 @@ de `requirements.txt` sont incluses dans les deux installations.
 # Précharger les modèles dans un venv existant, sans relancer pip ni tester le GPU.
 ./bin/install_dependances.sh --assets-only
 
-# Ajouter le catalogue Gaia astrométrique, optionnel car volumineux.
-./bin/install_dependances.sh --assets-only --with-gaia
+# Préparer toutes les ressources, catalogues Gaia compris.
+./bin/install_dependances.sh --assets-only
 
 # Gaia seul, sans acquisition de modèles.
-./bin/install_dependances.sh --assets-only --no-models --with-gaia
+./bin/install_dependances.sh --assets-only --disable-models
 
 # Installer les dépendances sans précharger les modèles.
 ./bin/install_dependances.sh --no-models
@@ -80,10 +80,17 @@ de `requirements.txt` sont incluses dans les deux installations.
 | `--install-only` | faux | Installer sans contrôle des accélérateurs ; compatible avec `--reset` |
 | `--assets-only` | faux | Précharger les ressources dans un venv existant, sans pip ni test GPU |
 | `--models` / `--no-models` | vrai | Précharger les poids Cosmic Clarity et GraXpert |
-| `--with-gaia` | faux | Acquérir l'extrait Gaia **astrométrique** Siril |
+| `--disable-models` | faux | Alias de `--no-models` |
+| `--disable-gaia` | faux | Ne préparer aucun catalogue Gaia |
+| `--disable-gaia-astrometry` | faux | Désactiver seulement le catalogue astrométrique |
+| `--disable-gaia-spcc` | faux | Désactiver seulement le catalogue spectral |
+| `--with-gaia` | vrai | Activer Gaia astrométrique (compatibilité) |
 | `--config FICHIER` | `~/.siril_darklib_config.json` | Lire les chemins/version des modèles et le mode Siril, sans écrire le JSON |
 | `--cosmic-model-dir`, `--graxpert-model-dir` | JSON, puis `tmp/cache/models/...` | Caches utilisés ensuite par les traitements ; CLI prioritaire |
 | `--graxpert-path` | JSON, puis nom habituel de l'application | Application officielle pour acquérir un modèle absent |
+| `--with-gaia-spcc` | vrai | Activer les régions spectrales SPCC sélectionnées (compatibilité) |
+| `--gaia-spcc-coverage` | `north` | `north`, `south`, `remaining` ou `all` ; les régions équatoriales sont incluses dans les deux hémisphères |
+| `--gaia-spcc-dir DOSSIER` | `tmp/cache/catalogues/gaia/spcc` | Dossier des spectres SPCC |
 | `--gaia-dir DOSSIER` | `tmp/cache/catalogues/gaia` | Dossier d'acquisition Gaia si aucun catalogue Siril conforme n'est trouvé |
 
 `--test` et `--install-only` sont exclusifs. `--reset --test` et
@@ -92,7 +99,7 @@ de `requirements.txt` sont incluses dans les deux installations.
 `VENV_DIR` aux lanceurs de traitement.
 `--assets-only` est également exclusif avec les deux modes précédents et avec
 `--reset`. `--test` reste un contrôle des accélérateurs sans acquisition de
-modèle ni catalogue ; `--test --with-gaia` est refusé. `--install-only` précharge
+modèle ni catalogue, même avec les ressources actives par défaut. `--install-only` précharge
 les modèles sauf avec `--no-models`, mais ne certifie aucun accélérateur.
 
 Le même point d'entrée est utilisé sur les deux plateformes, y compris pour
@@ -133,7 +140,8 @@ des conflits CPU/GPU et des contrôles dans [Installation CUDA](../install_cuda/
 
 Sur Mac, les roues MPS et CoreML viennent du seul PyPI. Aucun paquet CUDA n'est
 installé. CoreML peut répartir les opérations entre CPU, GPU et Neural Engine ;
-AutoGHS et la saturation restent sur CPU. Le contrôle ne garantit pas que tous
+AutoGHS reste sur CPU ; la couleur finale et les diagnostics bruit/diffus
+disposent du moteur PyTorch MPS. Le contrôle ne garantit pas que tous
 les modèles GraXpert s'exécutent intégralement sur GPU. Voir
 [Installation Apple Silicon](../install_macos/README.md).
 
@@ -159,6 +167,8 @@ Les tests des moteurs couvrent séparément leurs commandes pip et leurs calculs
 
 ## 6. Modèles et catalogue Gaia
 
+L’installation et les traitements utilisent le même
+[gestionnaire de ressources](resources.md#resource-manager).
 Le préchargement utilise le Python du venv **après** installation des paquets et
 **avant** les contrôles GPU. Les chemins suivent CLI > configuration JSON >
 défauts du projet. Un dossier personnalisé doit aussi être utilisé lors du
@@ -169,7 +179,8 @@ hors venv, sous la même arborescence :
 tmp/cache/
 ├── models/cosmicclarity/       # six fichiers .pth
 ├── models/graxpert/3.0.2/      # model.onnx
-└── catalogues/gaia/           # catalogue .dat et location.json
+└── catalogues/gaia/           # astrométrie .dat et pointeurs JSON
+    └── spcc/                 # régions spectrales choisies (nord par défaut)
 ```
 
 Les anciens défauts `tmp/models/...` sont redirigés vers les nouveaux chemins
@@ -191,7 +202,8 @@ si son résultat est retenu.
 
 L'extrait Gaia DR3 astrométrique officiel Siril représente **1,142 Go à
 télécharger et 1,521 Go installé** ; environ **2,7 Go libres** sont nécessaires
-pendant l'installation. Il reste donc optionnel avec `--with-gaia`. Un catalogue
+pendant l'installation. Il est actif par défaut ; `--disable-gaia-astrometry`
+le désactive seul et `--disable-gaia` désactive tous les catalogues Gaia. Un catalogue
 déjà référencé dans les préférences Siril du mode choisi est vérifié et réutilisé
 dans le cache commun par lien dur, sans duplication si le disque est le même.
 Sur un autre disque il est copié et vérifié. Sinon l'archive est téléchargée
@@ -205,9 +217,17 @@ personnel Siril n'est modifié et aucune sélection manuelle n'est requise.
 En l'absence de cache conforme, le catalogue Gaia distant reste utilisé.
 Les autres catalogues explicitement demandés restent respectés.
 
-Ce catalogue sert au **plate solving**, pas à SPCC : le catalogue spectral Gaia
-est distinct et n'est pas acquis par cette option. Les autres requêtes distantes
-(résolution de nom, spectres SPCC…) peuvent donc encore nécessiter Internet.
+Le catalogue spectral Gaia est distinct et également installé par défaut
+pour le nord céleste (28 régions, environ 5,28 Go compressés et 10,49 Go installés). Pour compléter
+uniquement ces spectres :
+
+```bash
+./bin/install_dependances.sh --assets-only --disable-models --disable-gaia-astrometry
+```
+
+Les fichiers valides et les téléchargements partiels Siril sont réutilisés.
+Après installation complète, SPCC sélectionne automatiquement le catalogue local.
+Les recherches de noms et l'acquisition des profils Siril peuvent encore nécessiter Internet.
 Voir [le préchargement et ses contrôles](resources.md),
 [la source officielle Gaia](https://zenodo.org/records/14692304) et
 [la documentation Siril](https://siril.readthedocs.io/en/stable/astrometry/platesolving.html#download-astrometric-gaia-dr3).

@@ -16,6 +16,7 @@ from lib.deconvolution import _quote, compare_star_catalogs
 from lib.deconvolution_quality import artifact_metrics, assess_denoising, denoising_criteria
 from lib.postprocess_paths import reset_ordered_work_dir
 from lib.siril import Siril
+from lib.logging_utils import log_duration
 from lib.processor import processor
 from lib.restoration import RestorationComparisonProcessor
 from lib.type_defs import JSONReport
@@ -85,23 +86,15 @@ class _DenoisingExecution:
         )
 
     def _build_script(self) -> str:
-        """Construit les commandes Siril de traitement et de catalogues."""
+        """Construit uniquement le débruitage ; la détection est une étape distincte."""
         return "\n".join(
             [
                 f"cd {_quote(self.work)}",
                 "setext fit",
                 "set32bits",
                 f"load {_quote(self.source)}",
-                "setfindstar reset",
-                "setfindstar -gaussian",
-                f"findstar -layer={self.layer} -out=before.tsv",
                 f"denoise -vst -mod={self.modulation:g}",
                 "save candidate.fits",
-                "close",
-                "load candidate.fits",
-                "setfindstar reset",
-                "setfindstar -gaussian",
-                f"findstar -layer={self.layer} -out=after.tsv",
                 "close",
                 "",
             ]
@@ -118,7 +111,24 @@ class _DenoisingExecution:
             raise RuntimeError(f"Échec Siril : {self.work / 'denoise.log'}")
 
     def _evaluate_candidate(self) -> list[str]:
-        """Mesure les mêmes étoiles et retourne les motifs de rejet."""
+        """Détecte puis mesure les étoiles, avant les contrôles indépendants d'image."""
+        from lib.quality_processors import QualityContext
+        from lib.quality_star_processors import SirilStarDetectionProcessor
+
+        context = QualityContext.for_catalogs(self.source, self.candidate)
+        service = Siril(
+            siril_path=getattr(self.args, 'siril_path', None),
+            siril_mode=getattr(self.args, 'siril_mode', None),
+        )
+        detection = SirilStarDetectionProcessor(
+            context, [(self.source, self.before), (self.candidate, self.after)],
+            self.work, self.layer, runner=service,
+        )
+        try:
+            self.result['star_detection'] = detection.post_process(self.candidate, None, self.args)
+        finally:
+            if detection.last_processing is not None:
+                self.result['star_detection_processing'] = detection.last_processing
         comparison = compare_star_catalogs(
             self.before, self.after,
             getattr(self.args, 'deconvolution_match_radius', 1.0),
@@ -177,18 +187,28 @@ class _DenoisingExecution:
             logging.info("Réduction du bruit acceptée : %s", destination)
 
     def execute(self) -> JSONReport:
-        """Exécute les phases de calcul, évaluation et publication avec audit d’erreur.
+        """Exécute et chronomètre calcul, qualité et publication, même en échec.
 
         Returns
         -------
         dict
             Statut, mesures et image retenue pour cet appel indépendant.
         """
+        self.result["timings"] = {}
         self._save_report()
         try:
-            self._run_siril()
-            reasons = self._evaluate_candidate()
-            self._publish_candidate(reasons)
+            with log_duration(
+                "Débruitage Siril — calcul", self.result["timings"], "siril_seconds",
+            ):
+                self._run_siril()
+            with log_duration(
+                "Débruitage Siril — qualité", self.result["timings"], "quality_seconds",
+            ):
+                reasons = self._evaluate_candidate()
+            with log_duration(
+                "Débruitage Siril — publication", self.result["timings"], "publication_seconds",
+            ):
+                self._publish_candidate(reasons)
             self._save_report()
             return self.result
         except Exception as error:
@@ -208,8 +228,24 @@ class SirilNoiseReductionProcessor(processor):
         return 'denoise'
 
     @classmethod
+    def parameter_children(cls) -> tuple[type[processor], ...]:
+        """Collecte récursivement les paramètres des contrôles de ce moteur."""
+        from lib.quality_processors import (
+            ArtifactQualityProcessor, ReferencePreparationProcessor,
+        )
+        from lib.quality_star_processors import StellarAssessmentProcessor
+
+        return (
+            ReferencePreparationProcessor, StellarAssessmentProcessor, ArtifactQualityProcessor,
+        )
+
+    @classmethod
     def add_arguments(cls, parser: argparse.ArgumentParser) -> None:
         """Expose les paramètres locaux de l’algorithme Siril."""
+        for child in cls.parameter_children():
+            child.add_arguments(parser)
+        if any(action.dest == 'denoise_modulation' for action in parser._actions):
+            return
         parser.add_argument("--denoise-modulation", type=float, default=0.5)
         parser.add_argument(
             "--denoise-max-blur",

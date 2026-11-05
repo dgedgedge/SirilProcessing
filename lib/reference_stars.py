@@ -7,12 +7,10 @@ sans détection globale supplémentaire. Voir le guide postProcess/reference-sta
 from __future__ import annotations
 
 from pathlib import Path
-from collections import Counter
 
 import numpy as np
 from astropy.io import fits
 from scipy.optimize import least_squares
-from scipy.spatial import cKDTree
 
 from lib.type_defs import JSONReport, StarMeasurement
 
@@ -126,44 +124,13 @@ def measure_reference_catalog(
     source: Path | str, candidate: Path | str, stars: list[StarMeasurement],
     layer: int, radius: float,
 ) -> tuple[list[StarMeasurement], list[StarMeasurement], JSONReport]:
-    """Mesure les étoiles fiables avant et après, avec positions initiales communes.
+    """Délègue les mesures locales au processeur dédié et conserve l'API tuple."""
+    from lib.quality_processors import QualityContext
+    from lib.quality_star_processors import ReferenceStarMeasurementProcessor
 
-    L’isolement à trois FWHM est défini sur l’entrée. Le SNR minimal de 10
-    sélectionne les références et valide séparément les mesures candidates.
-    Les étoiles de référence fiables restent dans le dénominateur même si
-    leur mesure candidate échoue. Les deux FITS doivent avoir la même forme.
-    """
-    before_plane, after_plane = image_plane(source, layer), image_plane(candidate, layer)
-    if before_plane.shape != after_plane.shape:
-        raise ValueError('Dimensions différentes pour la mesure aux positions initiales')
-    tree = cKDTree([[star['x'], star['y']] for star in stars]) if stars else None
-    reliable, measured_after, audits = [], [], []
-    for star in stars:
-        neighbors = tree.query_ball_point([star['x'], star['y']], 3*star['fwhm'])
-        if len(neighbors) > 1:
-            audits.append(dict(reference_id=star['id'], stage='before', reason='neighbor_contamination'))
-            continue
-        measured, audit = measure_star(before_plane, star, radius)
-        audit['stage'] = 'before'
-        audits.append(audit)
-        if measured is None:
-            continue
-        if audit['snr'] < MIN_REFERENCE_SNR:
-            audit['reason'] = 'low_reference_snr'
-            continue
-        reliable.append(measured)
-        after, after_audit = measure_star(after_plane, measured, radius)
-        after_audit['stage'] = 'after'
-        audits.append(after_audit)
-        if after is not None and after_audit['snr'] >= MIN_REFERENCE_SNR:
-            measured_after.append(after)
-        elif after is not None:
-            after_audit['reason'] = 'low_candidate_snr'
-    summary = Counter(f"{entry['stage']}:{entry['reason']}" for entry in audits)
-    return reliable, measured_after, dict(
-        failure_summary=dict(summary),
-        method='gaussian_at_reference_positions', initial_count=len(stars),
-        reliable_reference_count=len(reliable), measured_after_count=len(measured_after),
-        eligible_reference_ids=[star['id'] for star in reliable],
-        min_reference_snr=MIN_REFERENCE_SNR, measurements=audits,
+    context = QualityContext.for_catalogs(source, candidate)
+    result = ReferenceStarMeasurementProcessor(context, stars, layer, radius).post_process(
+        Path(candidate), None,
     )
+    result['audit']['processing'] = result['processing']
+    return result['before'], result['after'], result['audit']
