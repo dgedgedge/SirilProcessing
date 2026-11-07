@@ -184,20 +184,19 @@ flowchart TD
     LAYOUT --> COUNT{"Nombre d'entrées compatibles ?"}
     COUNT -->|Aucune| FAIL
     COUNT -->|Une| ONE["Retourner cette image directement<br/>Sans sélection ni empilement"]
-    COUNT -->|Plusieurs| INPUT_LINKS["00_inputs : préparer les liens ou copies"]
-    INPUT_LINKS --> REGISTER["01_registration : convertir,<br/>détecter les étoiles<br/>Astrométrie si activée puis alignement"]
-    REGISTER --> GEOMETRY["02_quality : contrôler les transformations<br/>et lire les mesures des<br/>poses indépendantes"]
+    COUNT -->|Plusieurs| REGISTER["02_registration : liens ou copies et séquence .seq,<br/>détecter les étoiles<br/>Astrométrie si activée puis alignement"]
+    REGISTER --> GEOMETRY["03_quality : contrôler les transformations<br/>et lire les mesures des<br/>poses indépendantes"]
     GEOMETRY --> QUALITY["Appliquer les critères de sélection<br/>FWHM, rondeur, nombre d'étoiles"]
     QUALITY --> PROFILES["Mesurer et filtrer les profils stellaires<br/>R80 et allongement cohérent"]
     PROFILES --> WEIGHTS["Calculer les poids des poses retenues<br/>FWHM et rondeur, sans créer de répétitions"]
     WEIGHTS --> DRIZZLE["Analyser le dithering, l'échantillonnage<br/>la couverture et les ressources"]
     DRIZZLE --> DRIZZLE_CHOICE{"Drizzle sélectionné ?"}
-    DRIZZLE_CHOICE -->|Oui| CAPABILITY["03_capability : vérifier<br/>la compatibilité Siril"]
+    DRIZZLE_CHOICE -->|Oui| CAPABILITY["04_capability : vérifier<br/>la compatibilité Siril"]
     CAPABILITY --> SUPPORTED{"Compatibilité vérifiée ?"}
     SUPPORTED -->|Oui| DIAGNOSTICS
     SUPPORTED -->|Non| DISABLE["Désactiver Drizzle<br/>Consigner la compatibilité échouée"]
     DISABLE --> DIAGNOSTICS
-    DRIZZLE_CHOICE -->|Non| SKIP["03_capability : écrire SKIPPED.txt"]
+    DRIZZLE_CHOICE -->|Non| SKIP["04_capability : écrire SKIPPED.txt"]
     SKIP --> DIAGNOSTICS["Écrire le diagnostic Drizzle"]
     DIAGNOSTICS --> RETAINED{"Analyse valide et poses retenues ?"}
     RETAINED -->|Non| FAIL
@@ -214,7 +213,7 @@ flowchart TD
     REALIGN --> APPLY["04_applyreg : appliquer l'alignement<br/>aux poses indépendantes<br/>Cadrage commun natif Siril : framing=min"]
     DRIZZLE_OPTIONS --> APPLY
     APPLY --> REPEAT["Créer les répétitions par<br/>liens vers les FITS alignés"]
-    REPEAT --> STACK["04_stacking : empiler avec la<br/>méthode et les seuils demandés"]
+    REPEAT --> STACK["05_stacking : empiler avec la<br/>méthode et les seuils demandés"]
     STACK --> RESULT["FITS final et rapport de stacking"]
     RESULT --> RETURN["Retour à la boucle des sessions"]
     ONE --> RETURN

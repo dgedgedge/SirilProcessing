@@ -2,6 +2,12 @@
 
 Le calcul neuronal est optionnel et chargé à la demande ; Siril reste requis
 pour les catalogues stellaires. Voir docs/scripts/postProcess/cosmic-clarity.md.
+
+
+Les fichiers de travail sont directs, sans niveau 001. Dans le plan numéroté,
+le dossier porte le nom du rapport sans suffixe _work ; les sources sont
+protégées avant sa réinitialisation. Le dossier préparé par un orchestrateur
+de chaînes est conservé, avec ses masques et son rapport.
 """
 
 from __future__ import annotations
@@ -22,7 +28,7 @@ from lib.deconvolution import compare_star_catalogs, read_star_catalog
 from lib.deconvolution_quality import (
     artifact_metrics, assess_denoising, denoising_criteria, assess_quality,
 )
-from lib.postprocess_paths import reset_ordered_work_dir
+from lib.postprocess_paths import reset_restoration_work_dir
 from lib.logging_utils import log_duration
 from lib.processor import processor
 from lib.siril import Siril
@@ -286,7 +292,10 @@ class _CosmicClarityProcessor(processor):
         if layer not in ([0, 1, 2] if len(shape) == 3 else [0]):
             raise ValueError('Canal de mesure incompatible avec cette image')
         report.parent.mkdir(parents=True, exist_ok=True)
-        work = reset_ordered_work_dir(report)
+        work = reset_restoration_work_dir(
+            report, source,
+            prepared_directory=getattr(args, "_restoration_work_dir", None),
+        )
         candidate = work / 'candidate.fits'
         before, after = work / 'before.tsv', work / 'after.tsv'
         result = dict(

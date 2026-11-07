@@ -20,7 +20,7 @@ from lib.processor import processor
 from lib.restoration import RestorationComparisonProcessor
 from lib.restoration_quality import QualityReference
 from lib.type_defs import JSONReport
-from lib.postprocess_paths import reset_work_dir
+from lib.postprocess_paths import reset_restoration_work_dir, reset_work_dir
 from lib.restoration_summary import RestorationSummary
 
 
@@ -310,7 +310,22 @@ class RestorationChainProcessor(processor):
         output_path: Path | str,
         args: argparse.Namespace | None = None,
     ) -> JSONReport:
-        """Évalue les variantes et garde les audits directement dans <rapport>_work.
+        """Évalue les variantes et garde les audits dans un dossier direct.
+
+        Le plan numéroté utilise 04_restoration/01_chains ; les appels autonomes
+        conservent <rapport>_work. Chaque opération regroupe son rapport, ses
+        candidats et scripts dans un même dossier numéroté, préparé
+        avant l’appel moteur. Le numéro identifie le calcul ; son nom décrit
+        les traitements successifs depuis la source, séparés par _then_.
+        Un calcul réutilisé conserve le chemin de sa première exécution.
+        Les masques de chaque entrée sont écrits auprès de cette image, une
+        seule fois ; ceux de la source sont sous 00_mask_origine. Les audits
+        des opérations référencent explicitement les FITS et PNG utilisés.
+        Chaque opération terminée conserve son résultat effectif auprès du
+        rapport (.fits), référencé par result_image_path ; result_image_role
+        distingue accepted_output et retained_input en cas de rejet. Les
+        échecs et moteurs indisponibles ne produisent aucun résultat artificiel.
+        Les moteurs n’ajoutent aucun niveau 001.
 
         Les opérations et contrôles finaux y sont numérotés ; aucun niveau de
         répétition artificiel n'est créé. Le dossier est réinitialisé à chaque
@@ -332,14 +347,9 @@ class RestorationChainProcessor(processor):
         source, report = Path(input_path).resolve(), Path(output_path).resolve()
         if source == report or source == report.with_suffix(".fits"):
             raise ValueError("Sorties distinctes de l’entrée requises")
-        parent_work = report.parent / (report.stem + "_work")
-        if source.is_relative_to(parent_work):
-            raise ValueError(
-                "L’entrée ne peut pas se trouver dans le dossier de travail réinitialisé"
-            )
         started = time.monotonic()
         durations: dict[str, float] = {}
-        work = reset_work_dir(report)
+        work = reset_restoration_work_dir(report, source)
         log_section(
             "Restauration — Préparation de la référence et des masques", separator="-",
         )
@@ -347,7 +357,10 @@ class RestorationChainProcessor(processor):
             "Restauration — préparation commune", durations, "preparation_seconds",
         ):
             reference = QualityReference(source, args)
-            preview = reference.save_masks(work / "common_masks.fits")
+            origin_masks = work / "00_mask_origine"
+            origin_masks.mkdir()
+            mask_path = origin_masks / "common_masks.fits"
+            preview = reference.save_masks(mask_path)
             configurations = {
                 key: value for key, value in vars(args).items() if not key.startswith("_")
             }
@@ -359,11 +372,15 @@ class RestorationChainProcessor(processor):
                 json.dumps(dependencies, sort_keys=True).encode()
             ).hexdigest()
         cache, fingerprints, final_cache = {}, {source: self._fingerprint(source)}, {}
+        input_masks = {source: (mask_path, preview)}
+        intermediate_path: Path | None = None
+        intermediate_reference: QualityReference | None = None
         result = dict(
             engine="chains",
             image_path=str(source),
             quality_reference=reference.audit(),
             quality_preview_path=str(preview),
+            quality_mask_path=str(mask_path),
             parameters_sha256=parameter_hash,
             dependencies=dependencies,
             dependencies_sha256=dependencies_hash,
@@ -424,17 +441,30 @@ class RestorationChainProcessor(processor):
                         call_args = copy(args)
                         # Aucun décalage silencieux de la destination finale des variantes.
                         call_args.deconvolution_output = None
-                        call_args._quality_reference = (
-                            reference
-                            if current == source
-                            else QualityReference(current, args)
+                        if current == source:
+                            call_args._quality_reference = reference
+                        else:
+                            # Retenir une seule référence intermédiaire limite la RAM.
+                            if intermediate_path != current:
+                                intermediate_reference = QualityReference(current, args)
+                                intermediate_path = current
+                            call_args._quality_reference = intermediate_reference
+                        if current not in input_masks:
+                            current_mask = current.with_name(current.stem + "_masks.fits")
+                            current_preview = call_args._quality_reference.save_masks(current_mask)
+                            input_masks[current] = (current_mask, current_preview)
+                        input_mask, input_preview = input_masks[current]
+                        treatment_path = [
+                            f"{step['operation']}_{step['engine']}" for step in steps
+                        ] + [f"{operation}_{name}"]
+                        operation_name = (
+                            f"{operation_number:02d}_" + "_then_".join(treatment_path)
                         )
-                        child_report = (
-                            work / f"{len(cache) + 1:02d}_{operation}_{name}.json"
+                        operation_dir = reset_work_dir(
+                            work / f"{operation_name}.json", directory_name=operation_name,
                         )
-                        call_args._quality_reference.save_masks(
-                            child_report.with_name(child_report.stem + "_masks.fits")
-                        )
+                        call_args._restoration_work_dir = operation_dir
+                        child_report = operation_dir / f"{operation_name}.json"
                     start = time.monotonic()
                     try:
                         with log_duration(
@@ -466,6 +496,9 @@ class RestorationChainProcessor(processor):
                         entry,
                         operation_id=len(cache) + 1,
                         report_path=str(child_report),
+                        input_image=str(current),
+                        input_mask_path=str(input_mask),
+                        input_mask_preview_path=str(input_preview),
                         input_sha256=fingerprints[current],
                         operation=operation,
                         engine_name=name,
@@ -475,6 +508,22 @@ class RestorationChainProcessor(processor):
                             f"operation_{operation_number:02d}_preparation_seconds"
                         ],
                         dependencies_sha256=dependencies_hash,
+                    )
+                    entry["result_image_path"] = None
+                    entry["result_image_role"] = None
+                    if entry["status"] in {"accepted", "rejected", "no_safe_improvement"}:
+                        accepted = entry["status"] == "accepted"
+                        result_source = entry.get("output_image") if accepted else str(current)
+                        if isinstance(result_source, str) and Path(result_source).is_file():
+                            result_path = child_report.with_suffix(".fits")
+                            if Path(result_source).resolve() != result_path.resolve():
+                                copyfile(result_source, result_path)
+                            entry["result_image_path"] = str(result_path)
+                            entry["result_image_role"] = (
+                                "accepted_output" if accepted else "retained_input"
+                            )
+                    child_report.write_text(
+                        json.dumps(entry, indent=2, allow_nan=False), encoding="utf-8",
                     )
                     cache[key] = entry
                     result["operations"].append(entry)

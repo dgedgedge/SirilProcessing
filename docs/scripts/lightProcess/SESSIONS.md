@@ -28,13 +28,18 @@ M33/                    ← session fournie en paramètre
 
 Chaque sous-session est calibrée séparément, par groupe de métadonnées.
 Tous les FITS calibrés de M33 sont réunis, sélectionnés puis empilés pour
-produire le résultat de cette session, `M33_combined.fit(s)`.
+produire le résultat de cette session sous
+`M33/01_calibration/stack_combined.fits`. Le relais vers le rendu est une copie
+indépendante sous `M33/02_mosaic/image.fits`.
 
 Fournir directement `/chemin/M33/nuit_1` définit une session nommée `nuit_1`,
 avec une seule sous-session : elle est également calibrée puis empilée.
-Fournir plusieurs chemins définit plusieurs sessions et produit un résultat
-par session. Avec `--mosaic`, seuls ces résultats de stacking sont assemblés.
+Fournir plusieurs chemins exige `--mosaic` et produit un résultat par panneau
+sous `01_calibration/part_XX`. Seuls ces résultats de stacking sont assemblés.
+Sans `--mosaic`, fournir exactement un répertoire de données.
 
-Le dossier de sortie `sessions/` contient les calibrations des **sous-sessions** ;
+Le dossier `01_session/` sous `01_calibration` (ou son panneau) contient les calibrations des **sous-sessions** ;
 son nom sur disque est conservé. Voir [le parcours](treatments/README.md),
 [les sorties et la reprise](treatments/OUTPUTS.md) et [les mosaïques](MOSAIC.md).
+
+Voir [le plan des sorties et les identités de panneaux](output-layout.md).

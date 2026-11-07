@@ -5,7 +5,9 @@
 Le module [lib/siril.py](../../../../lib/siril.py) regroupe l’exécution de Siril
 et la lecture, l’écriture et la modification des fichiers `.seq`. Cette page
 détaille le modèle de séquence ; l’exécution des scripts ajoute aussi
-automatiquement `requires 1.4`, journalise leur sortie et lève une erreur fatale
+automatiquement `requires 1.4`, la limite CPU et `setext fits`. Les nouvelles
+images utilisent ainsi `.fits` indépendamment des préférences Siril ; les
+entrées historiques `.fit` restent acceptées. Le module journalise leur sortie et lève une erreur fatale
 en cas d’échec.
 
 Toute manipulation d’une image appartenant à une séquence passe par un objet
@@ -29,7 +31,7 @@ le module n’en invente pas.
 ```python
 from lib.siril import SirilSequence
 
-sequence = SirilSequence.read('/chemin/01_registration/light_.seq')
+sequence = SirilSequence.read('/chemin/02_registration/light_.seq')
 image = sequence.images[0]
 
 print(image.number)                 # numéro du FITS, distinct de son indice dans la liste

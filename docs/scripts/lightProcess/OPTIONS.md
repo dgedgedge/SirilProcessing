@@ -9,7 +9,7 @@
 
 | Étape | Principales options |
 |---|---|
-| Chemins | `--output`, `--work-dir` |
+| Chemins | `--output`, `--work-dir` ; [sorties numérotées](output-layout.md) |
 | Calibration | `--dark-lib`, `--no-dark`, `--flat` / `--no-flat`, `--temperature-precision`, `--force` |
 | Exécution | `--siril-path`, `--siril-mode`, `--dry-run`, `--log-level` |
 | Alignement | `--align-transform`, `--stack-platesolve` |
@@ -21,6 +21,9 @@
 | Relance et conservation | `--force-stacking`, `--keep-intermediate`, `--purge-target` |
 | Mosaïque | `--mosaic`, `--mosaic-name` |
 | Post-traitement | `--postprocess`, `--no-postprocess`, mêmes options que `postProcess` |
+
+Une seule entrée est obligatoire hors `--mosaic`, même en simulation.
+Au moins deux répertoires distincts sont nécessaires avec `--mosaic`.
 
 Les défauts d’empilement sont `--rejection-method winsorizedsigma` et
 `--stack-method average`, comme dans `darkLibUpdate`. Le nom court historique

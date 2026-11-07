@@ -119,13 +119,13 @@ def test_single_range_contract_and_published_artifacts(
     assert all(Path(path).is_file() for path in result["histogram_paths"].values())
     work = tmp_path / "05_autoghs_work"
     assert sorted(path.name for path in work.iterdir()) == [
-        "001", "002_stars", "003_ghs", "004_recomposition", "005_diagnostics"
+        "01_separation", "02_stars", "03_ghs", "04_recomposition", "05_diagnostics"
     ]
     assert not any(path.name.startswith(".") for path in work.rglob("*"))
-    assert all(Path(path).parent == work / "004_recomposition"
+    assert all(Path(path).parent == work / "04_recomposition"
                for path in result["output_images"].values())
     stars_on_disk = fits.getdata(result["stars"]["output_image"])
-    assert Path(result["stars"]["diagnostic_path"]).parent == work / "002_stars"
+    assert Path(result["stars"]["diagnostic_path"]).parent == work / "02_stars"
     assert Path(result["stars"]["diagnostic_path"]).is_file()
     assert Path(result["stars"]["output_jpeg"]).is_file()
     assert result["parameters"]["star_histogram_strength"] == 0.8
@@ -562,10 +562,13 @@ def test_ordered_autoghs_directory_is_reset_on_rerun(
     stale = tmp_path / "05_autoghs_work/obsolete.fits"
     stale.write_bytes(b"obsolete")
     work = tmp_path / "05_autoghs_work"
-    (work / "003_ghs/linear_starless_ghs_peak.fits").write_bytes(b"obsolete")
-    (work / "003_ghs/linear_ghs_comparison_starless.png").write_bytes(b"obsolete")
-    (work / "004_recomposition/linear_render_peak.fits").write_bytes(b"obsolete")
-    (work / "004_recomposition/linear_render_peak.jpg").write_bytes(b"obsolete")
+    legacy_stage = work / "001"
+    legacy_stage.mkdir()
+    (legacy_stage / "obsolete.fits").write_bytes(b"obsolete")
+    (work / "03_ghs/linear_starless_ghs_peak.fits").write_bytes(b"obsolete")
+    (work / "03_ghs/linear_ghs_comparison_starless.png").write_bytes(b"obsolete")
+    (work / "04_recomposition/linear_render_peak.fits").write_bytes(b"obsolete")
+    (work / "04_recomposition/linear_render_peak.jpg").write_bytes(b"obsolete")
     legacy = json.loads(report.read_text())
     legacy["strategies"]["peak"] = dict(legacy["strategies"]["range"])
     report.write_text(json.dumps(legacy))
@@ -575,6 +578,8 @@ def test_ordered_autoghs_directory_is_reset_on_rerun(
     assert not list((tmp_path / "05_autoghs_work").rglob("*peak*"))
     assert not list((tmp_path / "05_autoghs_work").rglob("*comparison*"))
     assert not stale.exists()
+    assert not legacy_stage.exists()
+    assert not list(work.rglob("001"))
     assert len(fake_separation) == 2
     assert sorted(path.name for path in tmp_path.iterdir()) == [
         "05_autoghs.json", "05_autoghs_work", "linear.fits"

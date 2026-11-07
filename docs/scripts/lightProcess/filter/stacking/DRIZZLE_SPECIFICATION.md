@@ -452,15 +452,15 @@ alignement : le journal ne les attribue pas tous à un mauvais alignement.
 
 ### Répertoires fixes et numéros d’étapes
 
-Le stacking utilise des chemins déterministes dans `work/<cible>/stacking/` :
+Le stacking utilise des chemins déterministes directement sous `01_calibration/` (ou son panneau),
+à côté de `01_session/` ; l’API autonome conserve `work/<cible>/stacking/` :
 
 | Étape | Répertoire | Script / résultat |
 | --- | --- | --- |
-| 00 | `00_inputs/` | Liens vers les entrées calibrées |
-| 01 | `01_registration/` | `01_registration.sps`, FITS natifs et transformations |
-| 02 | `02_quality/` | Copie de la séquence, filtres, pondération et analyse Python |
-| 03 | `03_capability/` | `03_capability.sps` si Drizzle sélectionné, sinon `SKIPPED.txt` |
-| 04 | `04_stacking/` | `04_debayer_registration.sps` et `04_realign.sps` si nécessaires, contrôles géométriques, `04_applyreg.sps`, répétitions par liens, puis `04_stacking.sps` |
+| 02 | `02_registration/` | Liens FITS, `.seq` écrit directement, `01_registration.sps` et transformations |
+| 03 | `03_quality/` | Copie de la séquence, filtres, pondération et analyse Python |
+| 04 | `04_capability/` | `03_capability.sps` si Drizzle sélectionné, sinon `SKIPPED.txt` |
+| 05 | `05_stacking/` | `04_debayer_registration.sps` et `04_realign.sps` si nécessaires, contrôles géométriques, `04_applyreg.sps`, répétitions par liens, puis `04_stacking.sps` |
 
 Chaque script est stocké et exécuté dans le répertoire de son étape. Aucun nom
 aléatoire ni répertoire `run_*` n’est créé. Chaque reconstruction nettoie ces

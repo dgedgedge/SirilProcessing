@@ -77,3 +77,7 @@ ou lier des paramètres n'écrit pas le fichier.
 Le module `ghs_linear_histogram.py` mesure la longueur continue semi-log et
 propose les pivots aux ruptures de pente pour les
 [étirements GHS successifs](../scripts/postProcess/ghs-quartiles.md).
+
+`output_layout.py` centralise les étapes numérotées, l’identité stable des panneaux
+et le relais physique `02_mosaic/image.fits` ; voir
+[le plan des sorties](../scripts/lightProcess/output-layout.md).

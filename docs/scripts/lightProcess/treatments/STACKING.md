@@ -28,19 +28,36 @@ Une seule entrée compatible est retournée directement, sans exécuter les
 
 ## Répertoires et étapes
 
-| Dossier sous `stacking/` | Traitement |
+Les étapes sont directement sous `01_calibration/` ou son panneau, au même
+niveau que `01_session/`. L’API sans racine explicite conserve son dossier
+`<work_dir>/<cible>/stacking/`.
+
+| Dossier de travail | Traitement |
 |---|---|
-| `00_inputs/` | Liens vers les poses calibrées compatibles, copie de secours si le lien échoue |
-| `01_registration/` | Conversion, détection des étoiles, astrométrie et alignement initial |
-| `02_quality/` | Copie indépendante des séquences, sélection, contrôle des profils et pondérations |
-| `03_capability/` | Vérification Siril si Drizzle est choisi, sinon `SKIPPED.txt` |
-| `04_stacking/` | Application des transformations et empilement |
+| `02_registration/` | Liens FITS et séquence `.seq`, détection des étoiles, astrométrie et alignement initial |
+| `03_quality/` | Copie indépendante des séquences, sélection, contrôle des profils et pondérations |
+| `04_capability/` | Vérification Siril si Drizzle est choisi, sinon `SKIPPED.txt` |
+| `05_stacking/` | Application des transformations et empilement |
+
+La séquence `.seq` est écrite avec `SirilSequence.from_files`, directement
+à côté des liens vers les poses calibrées (copies si les liens échouent).
+Aucune commande `convert` n’est exécutée. La préparation ne modifie ni les
+pixels ni les en-têtes sources. Le générateur commun `Siril.run_siril_script` ajoute `setext fits` ;
+les scripts de stack le fixent également explicitement,
+avant la détection et l’astrométrie puis lors de l’empilement. Les images
+astrométriques remplacent ainsi les liens locaux `.fits` sans créer de
+doublons `.fit` : leur coexistence rendrait la séquence ambiguë. Les sources
+calibrées restent intactes. La préparation est testée sur FITS synthétiques ;
+le passage astrométrie → contrôle qualité a aussi été vérifié avec Siril 1.4.4
+sur deux copies de poses M31, sans doublon ni modification des copies sources.
+Voir la [documentation Siril sur les FITS et séquences](https://siril.readthedocs.io/en/stable/preprocessing/conversion.html).
 
 L’alignement initial est calculé sur toutes les entrées compatibles, avant
 rejet de qualité et avant répétitions de pondération :
 
 ```text
-convert <session>_ -out=<01_registration>
+cd <02_registration>
+setext fits
 seqfindstar <session>_
 seqplatesolve <session>_ -force -nocache -disto=ps_distortion
 register <session>_ -2pass -transf=<transformation>
@@ -75,7 +92,7 @@ Les titres suivent l’ordre du calcul :
 | Titre après `Stacking —` | Condition |
 |---|---|
 | Préparation des images calibrées | Préparation d’un nouvel empilement de plusieurs images |
-| Alignement initial des images | Appel du script initial de conversion et d’alignement |
+| Alignement initial des images | Appel du script initial de détection et d’alignement |
 | Contrôle de qualité, sélection et pondération | Après réussite de l’alignement initial |
 | Analyse et choix du Drizzle | Après la sélection des poses |
 | Vérification de la compatibilité Drizzle | Si l’analyse sélectionne Drizzle |
@@ -93,7 +110,7 @@ Une entrée unique retourne directement son image, sans bandeaux de sous-étapes
 
 ## Sélection et pondération
 
-Dans `02_quality`, les contrôles géométriques, la validité des mesures, les
+Dans `03_quality`, les contrôles géométriques, la validité des mesures, les
 filtres FWHM, la rondeur et le nombre d’étoiles précèdent la mesure des profils
 stellaires. Les seuils utilisent les poses indépendantes. Les répétitions
 FWHM/rondeur sont calculées après cette sélection, mais les répétitions sont

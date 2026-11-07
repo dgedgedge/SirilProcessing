@@ -76,7 +76,8 @@ le nombre de tuiles retenues et de quadrants couverts avant l’exécution des m
 
 Les masques `sky`, `star`, `object`, `uncertain`, `invalid` sont figés avant les
 moteurs. Le fichier `<rapport>_masks.fits` encode les bits 1, 2, 4, 8 et 16 ; en
-compétition, `common_masks.fits` appartient au dossier des chaînes. Les rapports
+compétition, `common_masks.fits` est sous `00_mask_origine/` dans le dossier
+des chaînes. Les rapports
 référencent aussi `quality_preview_path` : l’aperçu PNG est produit à côté du
 masque FITS (`common_masks.png` ou `<rapport>_masks.png`). Il affiche les zones
 stellaires en rouge, le signal diffus en orange, les zones incertaines en bleu
@@ -234,7 +235,48 @@ netteté, ainsi que dossiers `final_<numéro>` pour les contrôles finaux. Il n�
 pas de sous-niveau `001` autour de cet ensemble : la comparaison n’est pas une
 boucle de restauration successive. La réinitialisation à chaque lancement
 remplace les produits précédents ; les éventuels essais internes d’un moteur
-restent dans le dossier propre à ce moteur.
+restent dans le dossier propre à ce moteur, sans enveloppe `001`.
+
+Dans le plan numéroté de lightProcess, ce regroupement est
+`04_restoration/01_chains/`. Les opérations ont chacune leur dossier, par
+exemple `01_denoise_siril/`. Ce dossier contient le rapport `.json`, les
+scripts, candidats, résultats FITS et catalogues de cette opération, sans
+suffixe `_work` ni sous-dossier moteur supplémentaire.
+
+Les masques sont rattachés à leur image de référence : les premiers traitements
+partagent `00_mask_origine/common_masks.fits` et son aperçu PNG. Lorsqu’un
+résultat intermédiaire devient l’entrée d’un traitement, ses masques FITS/PNG
+sont enregistrés à côté de cette image, dans le dossier de l’opération qui
+l’a produite. Ils ne sont pas copiés dans chaque dossier consommateur. Une
+image terminale non réutilisée ne génère pas de masque supplémentaire.
+Chaque opération terminée conserve aussi un FITS du même nom que son rapport
+dans son dossier, référencé par `result_image_path`. Pour une sortie acceptée,
+`result_image_role=accepted_output` ; pour un rejet local ou aucune amélioration
+sûre, `result_image_role=retained_input` et le FITS est une copie de l’entrée
+conservée. Les candidats rejetés restent distincts. Un échec technique ou un
+moteur indisponible ne produit pas de résultat artificiel (`result_image_path`
+vaut `null`). La sélection scientifique et les chemins transmis aux traitements
+suivants ne changent pas ; le cache réutilise le même fichier sauvegardé.
+
+Chaque audit d’opération indique `input_image`, `input_mask_path` et
+`input_mask_preview_path` ; le rapport global expose `quality_mask_path` et
+`quality_preview_path` pour les masques d’origine. Les contrôles finaux
+continuent d’employer la référence commune initiale pour comparer les chaînes.
+Le moteur conserve le dossier préparé pour ne pas effacer les produits.
+
+Le numéro du dossier reste celui du calcul distinct. Son nom indique
+l’enchaînement complet dans l’ordre, par exemple
+`09_denoise_graxpert_then_sharpen_siril/` pour une netteté Siril appliquée
+au débruitage GraXpert (le numéro dépend des moteurs actifs). En ordre inverse,
+le nom commence par `sharpen_…_then_denoise_…`.
+Le cache réutilise ces mêmes fichiers lorsqu’une opération est commune à
+plusieurs chaînes, en conservant le nom de leur première exécution ; les erreurs restent auditées dans le rapport de l’opération.
+Les dossiers `final_<numéro>` isolent les évaluations de sorties différentes.
+Sans comparaison des chaînes, les étapes restent `01_deconvolution/` et
+`02_denoise/`, avec un dossier direct par moteur. Les relances réinitialisent
+uniquement le dossier concerné et refusent une source qui s’y trouve.
+Ces chemins sont vérifiés par tests avec moteurs simulés ; aucune nouvelle
+validation scientifique avec Siril ou les moteurs neuronaux n’est annoncée.
 
 Avec trois débruiteurs et deux moteurs de netteté, la liste contient 12 chaînes :
 identité, trois débruitages seuls, deux nettetés seules et six associations.

@@ -1,4 +1,10 @@
-"""Moteur GraXpert ONNX natif, avec acquisition automatique et contrôles communs."""
+"""Moteur GraXpert ONNX natif, avec acquisition automatique et contrôles communs.
+
+Les fichiers de travail sont directs, sans niveau 001. Dans le plan numéroté,
+le dossier porte le nom du rapport sans suffixe _work ; les sources sont
+protégées avant sa réinitialisation. Le dossier préparé par un orchestrateur
+de chaînes est conservé, avec ses masques et son rapport.
+"""
 
 from __future__ import annotations
 
@@ -17,7 +23,7 @@ from lib.logging_utils import log_duration
 from lib.processor import processor
 from lib.parameterized_component import ParameterizedComponent
 from lib.siril import Siril
-from lib.postprocess_paths import reset_ordered_work_dir
+from lib.postprocess_paths import reset_restoration_work_dir
 from lib.restoration_quality import QualityReference
 from lib.deconvolution_quality import (
     artifact_metrics,
@@ -139,12 +145,10 @@ class GraXpertDenoiseProcessor(processor):
         if not availability["available"]:
             report.write_text(json.dumps(result, indent=2), encoding="utf-8")
             return result
-        work_parent = report.parent / (report.stem + "_work")
-        if source.is_relative_to(work_parent):
-            raise ValueError(
-                "L’image source se trouve dans le dossier de travail réinitialisé"
-            )
-        work = reset_ordered_work_dir(report)
+        work = reset_restoration_work_dir(
+            report, source,
+            prepared_directory=getattr(args, "_restoration_work_dir", None),
+        )
         candidate = work / "candidate.fits"
         result.update(
             status="evaluating",

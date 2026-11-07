@@ -175,7 +175,7 @@ def test_pixel_filter_excludes_defects_before_stacking(
             if kwargs.get('script_name') == '04_applyreg.sps':
                 simulated_registered_sequence(directory, 'light_', 'r_light_')
             if '\nstack ' in script:
-                selected = SirilSequence.read(tmp_path/'04_stacking/light_.seq')
+                selected = SirilSequence.read(tmp_path/'05_stacking/light_.seq')
                 assert [i.number for i in selected.images] == list(range(3, 13))
                 assert all(i.included for i in selected.images)
                 (tmp_path/'final.fit').touch()
@@ -186,7 +186,7 @@ def test_pixel_filter_excludes_defects_before_stacking(
                          tmp_path, tmp_path, 'light_', tmp_path/'final', 'requires 1.2',
                          'stack r_light_ rej 3 3 -out=final', 'min')
     assert seq.path.read_bytes() == original
-    report = json.loads((tmp_path/'02_quality/stellar_profiles.json').read_text())
+    report = json.loads((tmp_path/'03_quality/stellar_profiles.json').read_text())
     assert report['rejected'] == 2 and report['remaining'] == 10
     assert report['frames'][1]['reasons'] == ['r80', 'elongation']
     assert 'étalement R80 : 2 image(s) retirée(s)' in caplog.text

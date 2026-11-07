@@ -121,3 +121,34 @@ def test_oversized_report_is_not_loaded(tmp_path: Path, monkeypatch: pytest.Monk
     result = StackingAnnotation.describe(source)
     assert result['status'] == 'INVALID'
     assert 'volumineux' in result['reason']
+
+
+def test_numbered_handoff_preserves_original_stack_counts(tmp_path: Path) -> None:
+    """Le relais physique retrouve les comptes du stack original sans les réécrire."""
+    from lib.output_layout import OutputLayout
+
+    original = stack(tmp_path, 'original')
+    layout = OutputLayout(tmp_path / 'M33')
+    layout.create()
+    layout.handoff(original)
+    layout.write_summary(layout.mosaic / 'mosaic.json', {
+        'assembled': False, 'image_path': str(original), 'output_image': str(layout.image),
+    })
+    result = StackingAnnotation.describe(layout.image)
+    assert result['status'] == 'AVAILABLE' and result['kind'] == 'stack'
+    assert result['lines'] == ['Images empilées (retenues/total) : 12/20']
+
+
+def test_numbered_mosaic_preserves_panel_counts(tmp_path: Path) -> None:
+    """Le rapport générique de l'étape 02 identifie tous les panneaux explicitement."""
+    from lib.output_layout import OutputLayout
+
+    panels = [stack(tmp_path, name) for name in ('north', 'south')]
+    layout = OutputLayout(tmp_path / 'M31')
+    layout.create()
+    layout.image.touch()
+    layout.write_summary(layout.mosaic / 'mosaic.json', {
+        'output_image': str(layout.image), 'input_files': [str(path) for path in panels],
+    })
+    result = StackingAnnotation.describe(layout.image)
+    assert result['status'] == 'AVAILABLE' and result['panel_count'] == 2

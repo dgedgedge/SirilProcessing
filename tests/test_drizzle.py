@@ -245,14 +245,14 @@ def test_all_quality_controls_precede_drizzle(tmp_path, mode, weighted, abnormal
     assert run_stack(FakeSiril(), files, cfg, tmp_path,tmp_path,'light_',tmp_path/'final',
                      'requires 1.2', 'stack r_light_ rej 3 3 -out=final', 'min')
     assert len(calls) == len(set(calls))+1  # applyreg and stack are separate processes
-    assert calls[-1] == tmp_path/'04_stacking'
-    assert (tmp_path/'02_quality'/seq.name).read_bytes() != (tmp_path/'04_stacking'/seq.name).read_bytes()
+    assert calls[-1] == tmp_path/'05_stacking'
+    assert (tmp_path/'03_quality'/seq.name).read_bytes() != (tmp_path/'05_stacking'/seq.name).read_bytes()
     assert not list(tmp_path.glob('run_*'))
     assert not list(tmp_path.glob('03_stacking_*'))
     if mode != 'force':
-        assert 'non exécutée' in (tmp_path/'03_capability'/'SKIPPED.txt').read_text()
+        assert 'non exécutée' in (tmp_path/'04_capability'/'SKIPPED.txt').read_text()
     else:
-        assert tmp_path/'03_capability' in calls
+        assert tmp_path/'04_capability' in calls
     assert seq.read_text() == original_seq
     assert not (tmp_path/'light_007.fits').exists()
 
@@ -322,14 +322,14 @@ def test_stage_transfer_isolates_metadata_and_references_fits(tmp_path):
 
 def test_reset_numbered_stage_cleans_previous_outputs_and_unlinks_alias(tmp_path):
     from lib.drizzle import reset_stage
-    stage=tmp_path/'04_stacking'
+    stage=tmp_path/'05_stacking'
     reset_stage(stage)
     (stage/'stale.fits').write_text('old')
     assert reset_stage(stage)==stage
     assert list(stage.iterdir())==[]
     elsewhere=tmp_path/'saved';elsewhere.mkdir()
     (elsewhere/'keep').write_text('preserve')
-    alias=tmp_path/'03_capability';alias.symlink_to(elsewhere,target_is_directory=True)
+    alias=tmp_path/'04_capability';alias.symlink_to(elsewhere,target_is_directory=True)
     reset_stage(alias)
     assert not alias.is_symlink()
     assert (elsewhere/'keep').read_text()=='preserve'

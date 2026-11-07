@@ -28,7 +28,9 @@ un stack par session fournie, quel que soit son nombre de sous-sessions.
 
 Chaque chemin fourni définit une session contenant une ou plusieurs sous-sessions
 d’acquisition (`light/`, éventuellement `flat/`), ou directement ces dossiers.
-Voir [les structures d’entrée](SESSIONS.md).
+Hors mosaïque, une seule entrée est autorisée ; utiliser `--mosaic` pour au
+moins deux panneaux. Voir [les structures d’entrée](SESSIONS.md) et
+[l’arborescence de sortie numérotée](output-layout.md).
 
 
 Pour ignorer les flats présents tout en conservant la calibration par dark :

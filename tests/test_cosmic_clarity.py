@@ -246,8 +246,8 @@ def test_processor_quality_and_source_preservation(
     assert all(value >= 0 for value in timings.values())
     assert Path(audit['evaluations']['cosmic_clarity']['candidate_image_path']).is_file()
     candidate = Path(audit['evaluations']['cosmic_clarity']['candidate_image_path'])
-    assert candidate.parent.name == '001'
-    assert candidate.parent.parent == tmp_path / 'report_cosmic_clarity_work'
+    assert candidate.parent == tmp_path / 'report_cosmic_clarity_work'
+    assert not (candidate.parent / '001').exists()
     assert not (tmp_path / 'report_cosmic_clarity_work' / 'stale.txt').exists()
     assert source.read_bytes() == original
 

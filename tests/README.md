@@ -607,3 +607,68 @@ Les tenseurs sont volontairement sur CPU pour ces vérifications numériques.
 Les options locales sont résolues récursivement par Config ; les tests des
 moteurs conservent les contrôles d'erreur et les essais matériels conditionnels.
 Les tests MPS ignorés sous Linux restent à exécuter sur un Mac compatible.
+
+
+`test_output_layout.py` vérifie les six étapes numérotées, les copies physiques
+et les en-têtes, l'identité stable des panneaux malgré leur réordonnancement,
+les synthèses JSON/TXT et les reprises d'un historique interrompu ou de la
+couleur seule. Les tests CLI imposent une seule entrée hors mosaïque et
+contrôlent les relais, chemins génériques et étapes communes sans Siril réel.
+Les tests d'annotation retrouvent les comptes du stack initial et des panneaux
+à travers le relais, sans inventer de poses ni modifier les sources.
+
+Les tests de calibration vérifient aussi les étapes `02_registration` à
+`05_stacking` directement sous `01_calibration`, et la conservation de
+`01_session` lors d’un empilement forcé.
+
+La préparation directe de séquence couvre les FITS mono/RGB, les liens et
+leur remplacement par des copies, avec comparaison binaire des sources.
+Ces tests ne valident pas une exécution réelle de Siril.
+
+La photométrie vérifie le dossier direct sans `001`, le nom `02_photometrie`
+dans le plan numéroté, la remise à zéro lors des relances et la protection
+d’une entrée placée dans ce dossier. Les appels Siril sont simulés.
+
+Les dossiers de restauration sont vérifiés dans `test_postprocess_paths.py`
+(noms numérotés, isolation des opérations, nettoyage et sources protégées).
+Les tests des moteurs contrôlent les artefacts directs sans `001` ; ceux des
+chaînes vérifient aussi le regroupement `04_restoration/01_chains`.
+
+Les tests du rendu GHS vérifient les étapes nommées `01_separation` à
+`05_diagnostics`, le nettoyage des anciens niveaux `001` lors des relances
+et la protection des sources. La couleur finale vérifie des produits directs
+dans son dossier de travail, sans niveau `001`, avec des FITS synthétiques.
+
+La régression de transmission du stack (`.fit`/`.fits`) est couverte dans
+`test_lightprocessor_calibration.py` : le faux Siril réécrit les images
+astrométriques selon `setext`, puis les étapes réelles lisent la séquence
+transférée. Tous les scripts de stack fixent `setext fits` et les sources
+sont comparées avant/après. Un essai Siril 1.4.4 sur deux copies M31 a aussi
+vérifié la lecture après transfert et l’absence de doublon, sans relancer
+les traitements complets M31/M33.
+
+Le générateur commun Siril impose `setext fits` dans les scripts sauvegardés
+(native, AppImage et Flatpak). Les tests de validation vérifient cet en-tête ;
+ceux de calibration et des post-traitements couvrent les chemins `.fits`,
+tout en conservant la lecture des entrées historiques `.fit`.
+
+Les essais de restauration regroupent leurs rapports, masques FITS/PNG et
+résultats dans leur dossier. `test_restoration_chains.py` vérifie les chemins
+et la réutilisation du cache ; `test_postprocess_paths.py` vérifie que les
+moteurs Siril préservent les masques du dossier préparé et refusent une
+source qui serait écrasée. Les calculs moteurs de ces scénarios sont simulés.
+
+Les noms des dossiers d’essais décrivent désormais le parcours complet,
+par exemple `denoise_graxpert_then_sharpen_siril`. Les tests de chaînes
+vérifient les noms et numéros selon l’ordre normal ou inverse, ainsi que
+la conservation du chemin de la première exécution lors des réutilisations.
+
+Les tests de chaînes vérifient aussi le rattachement des masques à l’image
+d’entrée : un jeu partagé sous `00_mask_origine`, puis les masques des
+intermédiaires dans le dossier producteur. Les audits référencent FITS et PNG ;
+les scénarios dans les deux ordres vérifient l’absence de copies par consommateur.
+
+Les essais de chaînes conservent un FITS effectif auprès de leur rapport. Les
+tests contrôlent la sortie acceptée, la copie exacte de l’entrée en cas de
+rejet ou sans amélioration sûre, et l’absence de résultat artificiel en échec.
+Les audits distinguent `accepted_output` et `retained_input`.

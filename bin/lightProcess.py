@@ -3,7 +3,7 @@
 Script pour traiter automatiquement les images light avec option de mosaïque.
 
 Ce script :
-1. Analyse un ou plusieurs répertoires contenant des sous-répertoires 'light' et éventuellement 'flat'
+1. Analyse un répertoire (plusieurs uniquement avec --mosaic) contenant des sous-répertoires 'light' et éventuellement 'flat'
 2. Détecte automatiquement les caractéristiques des images light
 3. Trouve le master dark correspondant dans la librairie
 4. Effectue le prétraitement (soustraction du dark) et le stacking
@@ -13,7 +13,7 @@ Ce script :
 
 Usage:
     python lightProcessor.py <répertoire_session> [options]
-    python lightProcessor.py <répertoire1> <répertoire2> [répertoire3...] [options]
+    python lightProcessor.py <répertoire1> <répertoire2> [répertoire3...] --mosaic [options]
 
 Exemples:
     # Traitement d'une seule session
@@ -21,9 +21,6 @@ Exemples:
 
     # Traitement sans utiliser de master dark
     python lightProcessor.py /path/to/session_M31 --no-dark
-
-    # Traitement de plusieurs sessions en séquence
-    python lightProcessor.py /path/to/session_M31 /path/to/session_M42 /path/to/session_NGC7000
 
     # Traitement avec création de mosaïque automatique
     python lightProcessor.py /path/to/session_M31_nord /path/to/session_M31_sud --mosaic
@@ -46,6 +43,7 @@ from typing import TYPE_CHECKING
 # Add the parent directory to the path to import the lib module
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from lib.output_layout import OutputLayout
 from lib.config import Config
 from lib.power_guard import PowerGuard
 from lib.logging_utils import (
@@ -154,37 +152,6 @@ def build_session_target_map(
     return session_dirs, session_to_target
 
 
-def target_output_root(base_output_dir: Path, target_root: Path) -> Path:
-    """Construit le dossier de sortie d’une cible sous la base configurée."""
-    return base_output_dir / target_root.name
-
-
-def session_output_root(
-    base_output_dir: Path, target_root: Path, session_dir: Path
-) -> Path:
-    """Construit le dossier de sortie d’une session de la cible."""
-    return (
-        target_output_root(base_output_dir, target_root) / "sessions" / session_dir.name
-    )
-
-
-def session_work_root(
-    base_work_dir: Path, target_root: Path, session_dir: Path
-) -> Path:
-    """Construit le dossier de travail d’une session sans modifier le disque."""
-    return base_work_dir / target_root.name / "sessions" / session_dir.name
-
-
-def stack_output_root(base_output_dir: Path, target_root: Path) -> Path:
-    """Construit le dossier de sortie du résultat empilé de la cible."""
-    return target_output_root(base_output_dir, target_root)
-
-
-def target_work_root(base_work_dir: Path, target_root: Path) -> Path:
-    """Construit le dossier de travail de la cible sous la base configurée."""
-    return base_work_dir / target_root.name
-
-
 def normalize_work_base(work_dir: Path) -> Path:
     """Homogénéise la racine de travail en supprimant un suffixe 'process'."""
     work_dir = Path(work_dir)
@@ -256,7 +223,7 @@ Exemple de pipeline Siril par sous-session:
     3) calibrate <sequence_name> -dark=<master_dark> -flat=<master_flat> -cc=dark -cfa -equalize_cfa
        Ajouter -debayer en mode drizzle=off ; conserver le CFA en auto/force.
     4) copie Python de process/pp_<sequence_name>_*.fit(s) vers
-       <output_dir>/<session>/sessions/<sous-session>/<sous-session>_<group>_calibrated
+       <output_dir>/<objet>/01_calibration/[part_XX/]sessions/<sous-session>/..._calibrated
 
 Stack final sur l'ensemble des sorties calibrees d'une session:
     1) convert <target>_ -out=<work_dir>/<target>/stacking/01_registration
@@ -273,9 +240,11 @@ Stack final sur l'ensemble des sorties calibrees d'une session:
 
 Sorties:
     - Des FITS calibres par sous-session
-    - Un FITS final empile par cible
-    - Un JSON <target>_combined.drizzle.json contenant analyse, reglages et decision
-    - Avec --postprocess : rapports, FITS et JPEG finaux comme postProcess
+    - 01_calibration : sous-sessions et stacks ; part_XX par panneau en mosaique
+    - 02_mosaic/image.fits : assemblage ou copie du stack si champ simple
+    - 03_photometrie, 04_restoration, 05_autoghs, 06_color : traitements et rapports
+    - Syntheses JSON/TXT dans leurs etapes ; resultat final <objet>.fits a la racine
+    - Hors --mosaic : exactement un repertoire d'entree
 
 Traitement Siril de mosaique (si --mosaic):
     1) convert mosaic_ -out=<mosaic_output_dir>
@@ -331,6 +300,12 @@ Traitement Siril de mosaique (si --mosaic):
     )
 
     args = config.parse_args(parser)
+    if not args.create_mosaic and len(args.session_dirs) != 1:
+        logging.error('Hors mosaïque, fournir exactement un répertoire de données d’entrée')
+        return 1
+    if args.create_mosaic and len(args.session_dirs) < 2:
+        logging.error('Une mosaïque nécessite au moins deux répertoires de données d’entrée')
+        return 1
 
     from lib.drizzle import validate_settings
 
@@ -386,7 +361,6 @@ def _process_sessions(
     Retourne 0 si toutes les opérations requises réussissent, 1 sinon.
     Les exceptions non traitées remontent vers main et libèrent son contexte.
     """
-    from lib.drizzle import cache_matches
     from lib.lightprocessor import LightProcessor
     from lib.light_stacking import SessionStackingProcessor
     from lib.postprocess import PostProcessingProcessor
@@ -409,7 +383,7 @@ def _process_sessions(
     # Validation des répertoires de session
     input_roots: list[Path] = []
     for session_path in args.session_dirs:
-        session_dir = Path(session_path)
+        session_dir = Path(session_path).expanduser().absolute()
         if not session_dir.exists():
             logging.error(f"Le répertoire de session n'existe pas: {session_dir}")
             return 1
@@ -430,28 +404,36 @@ def _process_sessions(
 
         input_roots.append(session_dir)
 
+    if not args.create_mosaic and len(input_roots) != 1:
+        logging.error('Hors mosaïque, fournir exactement un répertoire de données d’entrée')
+        return 1
+    if args.create_mosaic and len(input_roots) < 2:
+        logging.error('Une mosaïque nécessite au moins deux répertoires de données d’entrée')
+        return 1
+    if len({root.resolve() for root in input_roots}) != len(input_roots):
+        logging.error('Chaque répertoire de données d’entrée doit être distinct')
+        return 1
+    object_name = input_roots[0].name
     if args.create_mosaic:
-        mosaic_name = args.mosaic_name or calculate_common_basename(input_roots)
-        if not mosaic_name or (not args.mosaic_name and len(mosaic_name) < 3):
+        object_name = args.mosaic_name or calculate_common_basename(input_roots)
+        if not object_name or (not args.mosaic_name and len(object_name) < 3):
             logging.error("Nom automatique trop court ; fournir --mosaic-name")
             return 1
-        if mosaic_name in (".", "..") or any(c in mosaic_name for c in '/\\\n\r\x00"'):
+        if object_name in (".", "..") or any(c in object_name for c in '/\\\n\r\x00"'):
             logging.error("Nom de mosaïque incompatible avec un nom de répertoire")
             return 1
-        work_base_dir = work_base_dir / mosaic_name
-        output_base_dir = work_base_dir
-        args.mosaic_name = mosaic_name
-        args.mosaic_directory = work_base_dir
-        args.work_dir = work_base_dir
-        args.output_dir = output_base_dir
-        logging.info("Répertoire commun de la mosaïque : %s", work_base_dir)
+        args.mosaic_name = object_name
+    layout = OutputLayout((output_base_dir if output_base_dir.name == object_name else output_base_dir / object_name).resolve())
+    work_layout = OutputLayout((work_base_dir if work_base_dir.name == object_name else work_base_dir / object_name).resolve())
+    args.mosaic_directory = layout.mosaic
+    logging.info('Répertoire de sortie de l’objet : %s', layout.root)
 
     if args.autoghs_only or getattr(args, "color_only", False):
         from lib.postprocess_resume import PostProcessResume
 
         try:
             images = PostProcessResume.final_images(
-                output_base_dir, work_base_dir, input_roots,
+                layout.root, work_layout.root, input_roots,
                 args.mosaic_name if args.create_mosaic else None,
             )
             # Vérifier toutes les reprises avant de modifier un seul résultat.
@@ -484,21 +466,17 @@ def _process_sessions(
     )
 
     if args.purge_target:
-        unique_targets = sorted(
-            {session_to_target[session] for session in session_dirs},
-            key=lambda p: str(p),
-        )
-        for target_root in unique_targets:
-            out_tree = target_output_root(output_base_dir, target_root)
-            work_tree = target_work_root(work_base_dir, target_root)
-
-            for tree in [out_tree, work_tree]:
-                if tree.exists():
-                    try:
-                        shutil.rmtree(tree)
-                        logging.info(f"Arborescence cible purgée: {tree}")
-                    except Exception as exc:
-                        logging.warning(f"Impossible de purger {tree}: {exc}")
+        source_roots = [root.resolve() for root in input_roots]
+        for tree in dict.fromkeys((layout.root, work_layout.root)):
+            if any(root == tree or root.is_relative_to(tree) or tree.is_relative_to(root)
+                   for root in source_roots):
+                logging.error('Refus de purger un répertoire contenant les données d’entrée : %s', tree)
+                return 1
+            if tree.exists() and not args.dry_run:
+                shutil.rmtree(tree)
+                logging.info('Arborescence cible purgée : %s', tree)
+    if not args.dry_run:
+        layout.create()
 
     if args.create_mosaic:
         logging.info(
@@ -531,14 +509,36 @@ def _process_sessions(
     session_stack_outputs = {}
     target_wcs_totals = {}
 
-    for root_dir in input_roots:
+    try:
+        calibration_dirs = layout.calibration_plan(input_roots, args.create_mosaic)
+    except (OSError, ValueError) as error:
+        logging.error('Plan des calibrations invalide : %s', error)
+        return 1
+    calibration_results = []
+    for root_dir, calibration_dir in zip(input_roots, calibration_dirs):
+        panel_args = argparse.Namespace(**vars(args))
+        panel_args.calibration_output_dir = calibration_dir
+        panel_args.calibration_work_dir = work_layout.root / calibration_dir.relative_to(layout.root)
+        if not args.dry_run:
+            layout.write_summary(calibration_dir / 'source.json', {'source': str(root_dir.resolve())})
         result = LightProcessor.process_target(
             session_dir=root_dir,
             output_base_dir=output_base_dir,
             work_base_dir=work_base_dir,
-            args=args,
+            args=panel_args,
             stack_params=stack_params,
         )
+        calibration_results.append(dict(
+            source=str(root_dir.resolve()), directory=str(panel_args.calibration_output_dir),
+            output_image=str(result.output_image) if result.output_image else None,
+            subsessions=result.total_subsessions, successful_subsessions=result.successful_subsessions,
+            failed_subsessions=[str(path) for path in result.failed_subsessions], wcs=result.wcs_stats,
+        ))
+        if not args.dry_run and args.create_mosaic:
+            layout.write_summary(panel_args.calibration_output_dir / 'calibration.json',
+                                 dict(calibration_results[-1], status=(
+                                     'SUCCESS' if result.output_image and not result.failed_subsessions
+                                     else 'INCOMPLETE')))
         successful_sessions += result.successful_subsessions
         failed_sessions.extend(result.failed_subsessions)
         stats = result.wcs_stats
@@ -549,6 +549,14 @@ def _process_sessions(
         }
         if result.output_image is not None:
             session_stack_outputs[root_dir] = result.output_image
+
+    if not args.dry_run:
+        layout.write_summary(layout.calibration / 'calibration.json', dict(
+            status=('SUCCESS' if successful_sessions == total_sessions
+                    and len(session_stack_outputs) == len(input_roots) else 'INCOMPLETE'),
+            panels=calibration_results, calibrated_subsessions=successful_sessions,
+            total_subsessions=total_sessions,
+        ))
 
     # Résumé final
     logging.info(f"{'=' * 60}")
@@ -627,9 +635,9 @@ def _process_sessions(
             mosaic_args = argparse.Namespace(**vars(args))
             mosaic_args.mosaic_name = mosaic_name
             mosaic_args.mosaic_inputs = all_output_files[1:]
-            mosaic_args.output_dir = output_base_dir
-            mosaic_args.work_dir = work_base_dir
-            mosaic_report = work_base_dir / f"{mosaic_name}_mosaic.json"
+            mosaic_args.output_dir = layout.mosaic
+            mosaic_args.work_dir = layout.mosaic
+            mosaic_report = layout.mosaic / 'mosaic.json'
             mosaic_processor.set_from_args(mosaic_args)
             result = mosaic_processor.post_process(
                 input_path=all_output_files[0],
@@ -642,6 +650,9 @@ def _process_sessions(
                 raise RuntimeError(
                     "La mosaïque ne fournit pas de fichier output_image valide"
                 )
+            mosaic_result = layout.handoff(Path(mosaic_result))
+            layout.write_summary(mosaic_report, dict(result, status='SUCCESS', assembled=True,
+                                                     output_image=str(mosaic_result)))
             mosaic_success = True
             logging.info("🌟 Mosaïque créée avec succès: %s", mosaic_result)
             logging.info("Rapport de mosaïque: %s", mosaic_report)
@@ -658,6 +669,13 @@ def _process_sessions(
             "Mosaïque demandée mais moins de 2 résultats de stacking disponibles"
         )
 
+    if not args.create_mosaic and not args.dry_run and session_stack_outputs:
+        mosaic_result = layout.handoff(next(iter(session_stack_outputs.values())))
+        layout.write_summary(layout.mosaic / 'mosaic.json', dict(
+            status='COPIED', assembled=False,
+            image_path=str(next(iter(session_stack_outputs.values()))), output_image=str(mosaic_result),
+        ))
+
     postprocess_success = True
     if args.enable_postprocess:
         if args.dry_run:
@@ -673,7 +691,7 @@ def _process_sessions(
                     [Path(mosaic_result)] if mosaic_success and mosaic_result else []
                 )
             else:
-                final_images = list(session_stack_outputs.values())
+                final_images = [Path(mosaic_result)] if mosaic_result else []
             postprocess_success = bool(final_images)
             for image in final_images:
                 try:
@@ -702,7 +720,7 @@ def _process_sessions(
         from lib.postprocess_resume import PostProcessResume
 
         PostProcessResume.save_final_images(
-            output_base_dir, input_roots, args.create_mosaic, final_images,
+            layout.root, input_roots, args.create_mosaic, final_images,
         )
 
     # Retour final

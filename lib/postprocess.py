@@ -21,7 +21,8 @@ from astropy.io import fits
 from astropy.wcs import WCS
 from PIL import Image, ImageDraw
 
-from lib.postprocess_paths import reset_ordered_work_dir, treatment_file_prefix
+from lib.output_layout import OutputLayout
+from lib.postprocess_paths import reset_work_dir, treatment_file_prefix
 from lib.denoising import NoiseReductionProcessor
 from lib.deconvolution import DeconvolutionProcessor
 from lib.final_annotation import FinalImageAnnotator
@@ -1068,8 +1069,10 @@ class PhotometricColorCalibrator(processor):
         Le retournement est autorisé sauf noflip. Le rapport et le journal
         décrivent les commandes exécutées.
 
-        Conserve scripts et journaux dans <rapport>_work/001, réinitialisé à
-        chaque lancement ; écrit le FITS de sortie et le rapport JSON.
+        Conserve scripts et journaux directement dans <rapport>_work, ou
+        02_photometrie pour le rapport du plan numéroté. Ce dossier est
+        réinitialisé à chaque lancement, sans sous-niveau 001 ; écrit le
+        FITS de sortie et le rapport JSON.
         Lève ValueError pour une entrée ou des paramètres incompatibles et
         RuntimeError si Siril échoue. Voir docs/scripts/postProcess/photometry.md."""
         args = self._get_args(args)
@@ -1232,17 +1235,21 @@ class PhotometricColorCalibrator(processor):
 
         # Réinitialiser les produits de cette étape évite les sorties périmées.
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        parent_work = output_path.parent / f"{output_path.stem}_work"
+        layout = OutputLayout(output_path.parent.parent)
+        numbered = (output_path == layout.stage_report("photometry")
+                    and layout.calibration.is_dir())
+        work_name = "02_photometrie" if numbered else f"{output_path.stem}_work"
+        parent_work = output_path.parent / work_name
         if Path(input_path).resolve().is_relative_to(parent_work.resolve()):
             raise ValueError("L’entrée se trouve dans le dossier de travail réinitialisé")
-        work_dir = reset_ordered_work_dir(output_path)
+        work_dir = reset_work_dir(output_path, directory_name=work_name)
         staged_image = work_dir / f"{tag}calibrated.fits"
         script = "\n".join(
             [
 
                 f"cd {self._quote_path(work_dir)}",
                 "online",
-                "setext fit",
+                "setext fits",
                 "set32bits",
                 f"load {self._quote_path(input_path)}",
                 " ".join(solve),
@@ -1505,10 +1512,11 @@ class _PostProcessorSequence(processor):
     ) -> JSONReport:
         """Écrit le rapport global ; seule output_image change l'entrée suivante.
 
-        Chaque traitement reçoit son propre chemin de rapport dans un sous-dossier
-        <nom du rapport>_steps, et le même Namespace d'arguments parsés une fois.
-        Les numéros standard restent fixes, notamment 05 pour AutoGHS lorsque
-        la restauration regroupe les étapes 03/04.
+        Chaque traitement reçoit son rapport dans l'étape numérotée lorsqu'une
+        arborescence commune est reconnue, sinon sous <rapport>_steps. Le même
+        Namespace d'arguments est transmis sans nouveau parsing.
+        Les nouveaux dossiers fixent 03 pour la photométrie, 04 pour la
+        restauration et 05 pour AutoGHS. Les appels historiques gardent leurs indices.
         La durée murale de chaque appel est journalisée en INFO et enregistrée
         sous processing_duration_seconds dans son rapport, sans modifier les
         mesures internes éventuelles du moteur.
@@ -1550,7 +1558,12 @@ class _PostProcessorSequence(processor):
                     treatment.get_prefix(): position
                     for position, treatment in enumerate(self.processors, start=1)
                 }.get(prefix, index)
-            report_path = steps_dir / f"{index:02d}_{prefix}.json"
+            layout = OutputLayout.for_report(output_path) if not self._custom_processors else None
+            report_path = (layout.stage_report(prefix) if layout
+                           else steps_dir / f"{index:02d}_{prefix}.json")
+            report_path.parent.mkdir(parents=True, exist_ok=True)
+            if layout:
+                index = int(report_path.relative_to(layout.root).parts[0][:2])
             title = stage_titles.get(prefix, prefix)
             log_section(f"Post-traitement — étape {index:02d} : {title}")
             logging.info("Image d’entrée : %s", current_path)
@@ -1562,7 +1575,10 @@ class _PostProcessorSequence(processor):
                     **all_results,
                     "autoghs": {"status": "PENDING", "image_path": str(current_path)},
                 }
-                _write_report(output_path, checkpoint)
+                if layout:
+                    layout.write_summary(output_path, checkpoint)
+                else:
+                    _write_report(output_path, checkpoint)
                 PostProcessResume.save(Path(input_path), output_path, checkpoint)
             stage_durations: dict[str, float] = {}
             try:
@@ -1583,7 +1599,10 @@ class _PostProcessorSequence(processor):
                         )
                     current_path = next_path.resolve()
                     result["output_image"] = str(current_path)
-                _write_report(report_path, result)
+                if layout:
+                    layout.write_summary(report_path, result)
+                else:
+                    _write_report(report_path, result)
                 all_results[prefix] = result
             except Exception as error:
                 if (
@@ -1599,11 +1618,17 @@ class _PostProcessorSequence(processor):
                         report_path, current_path, error
                     )
                     result["processing_duration_seconds"] = stage_durations["processing_seconds"]
-                    _write_report(report_path, result)
+                    if layout:
+                        layout.write_summary(report_path, result)
+                    else:
+                        _write_report(report_path, result)
                     all_results[prefix] = result
                     continue
                 raise RuntimeError(f"Échec du traitement {prefix}: {error}") from error
-        _write_report(output_path, all_results)
+        if OutputLayout.for_report(output_path) and not self._custom_processors:
+            OutputLayout.write_summary(output_path, all_results)
+        else:
+            _write_report(output_path, all_results)
         return all_results
 
 
@@ -1677,18 +1702,24 @@ class PostProcessingProcessor(processor):
     def report_path_for(
         input_path: Path, output_arg: str | Path | None = None,
     ) -> Path:
-        """Construit <image>_postprocess.json avec la convention du CLI autonome.
+        """Résout le rapport global numéroté ou le rapport autonome historique.
 
-        output_arg est un répertoire ou un ancien chemin de rapport, dont seul
-        le parent est utilisé. Sans argument, les produits côtoient la source.
-        Cette méthode ne crée aucun fichier.
+        Un relais 02_mosaic/image.fits ou une sortie marquée par 01_calibration
+        utilise 06_color/postprocess.json. Les autres appels conservent le nom
+        historique : output_arg est un répertoire ou un ancien rapport dont
+        seul le parent est utilisé. Cette méthode ne crée aucun fichier.
         """
         source = Path(input_path).resolve()
+        layout = OutputLayout.for_source(source)
+        if output_arg is None and layout:
+            return layout.report
         if output_arg is None:
             directory = source.parent
         else:
             provided = Path(output_arg)
             directory = provided if provided.suffix == "" else provided.parent
+        if (directory / '01_calibration').is_dir():
+            return OutputLayout(directory.resolve()).report
         return directory.resolve() / f"{source.stem}_postprocess.json"
 
     @staticmethod
@@ -1732,15 +1763,20 @@ class PostProcessingProcessor(processor):
     ) -> JSONReport:
         """Copie les exports finaux et retourne leurs chemins avec les rapports.
 
-        Si la passe couleur a été exécutée, son export porte le suffixe
-        ``_saturated`` et le rendu AutoGHS est conservé sous ``_ghs`` (FITS et
-        JPEG disponible). Sans couleur, le nom historique est conservé.
+        Dans l'arborescence numérotée, l'export est <objet>.fits et le GHS
+        conservé est sous 05_autoghs/render. Les appels autonomes historiques
+        gardent _saturated pour la couleur et _ghs pour le rendu préalable.
         Toute erreur est propagée ; la source n’est jamais modifiée et le rapport
         historique garde ses clés par étape.
         """
         has_color = isinstance(results.get("final_color"), dict)
-        final_path = (report.with_name(report.stem + "_saturated.fits")
-                      if has_color else report.with_suffix(".fits"))
+        layout = OutputLayout.for_report(report)
+        if layout:
+            final_path = layout.root / f'{layout.root.name}.fits'
+        elif has_color:
+            final_path = report.with_name(report.stem + '_saturated.fits')
+        else:
+            final_path = report.with_suffix('.fits')
         final_image = self._final_image(results, source)
         if not final_image.is_file():
             raise FileNotFoundError(f"Image finale introuvable: {final_image}")
@@ -1750,7 +1786,7 @@ class PostProcessingProcessor(processor):
         summary: JSONReport = {
             "status": "SUCCESS", "image_path": str(source),
             "output_image": str(final_path), "report_path": str(report),
-            "steps_dir": str(report.parent / report.stem), "treatments": results,
+            "steps_dir": str(layout.root if layout else report.parent / report.stem), "treatments": results,
             "quality_preview_path": str(quality_preview) if quality_preview else None,
         }
         if has_color:
@@ -1762,7 +1798,8 @@ class PostProcessingProcessor(processor):
                 ):
                     if ghs.get(key):
                         original = Path(str(ghs[key])).resolve()
-                        preserved = report.with_name(report.stem + "_ghs" + suffix)
+                        preserved = (layout.root / '05_autoghs' / f'render{suffix}' if layout
+                                     else report.with_name(report.stem + "_ghs" + suffix))
                         if original != preserved:
                             copyfile(original, preserved)
                         summary[summary_key] = str(preserved)
@@ -1849,14 +1886,19 @@ class PostProcessingProcessor(processor):
             raise ValueError(
                 "Le chemin de sortie du post-traitement doit être un rapport JSON"
             )
-        steps_dir = report.parent / report.stem
+        layout = OutputLayout.for_report(report)
+        if layout:
+            layout.create()
+        steps_dir = layout.root if layout else report.parent / report.stem
         saturated_path = report.with_name(report.stem + "_saturated.fits")
         ghs_path = report.with_name(report.stem + "_ghs.fits")
         final_path = (saturated_path if color_options.enable_final_color
                       else report.with_suffix(".fits"))
-        log_file = steps_dir / f"00_{source.stem}_postProcess.log"
+        if layout:
+            final_path = layout.root / f'{layout.root.name}.fits'
+        log_file = layout.root / '06_color' / 'postprocess.log' if layout else steps_dir / f"00_{source.stem}_postProcess.log"
         if source in (
-            report, report.with_suffix(".fits"), saturated_path, ghs_path, log_file,
+            report, report.with_suffix(".fits"), saturated_path, ghs_path, log_file, final_path,
         ):
             raise ValueError(
                 "Les produits du post-traitement ne peuvent pas remplacer la source"
@@ -1918,7 +1960,8 @@ class PostProcessingProcessor(processor):
                         ),
                     )
                 results['final_color'] = FinalColorProcessor().post_process(
-                    Path(branch['starless_image']), steps_dir / '06_final_color.json',
+                    Path(branch['starless_image']),
+                    layout.stage_report('final_color') if layout else steps_dir / '06_final_color.json',
                     runtime, stars_path=Path(stars['output_image']),
                     headroom=autoghs.get('parameters', {}).get(
                         'ghs_headroom', .95,
@@ -1927,25 +1970,30 @@ class PostProcessingProcessor(processor):
                         'ghs_color_mode', 'human',
                     ),
                 )
+                if layout:
+                    layout.write_summary(layout.stage_report('final_color'), results['final_color'])
                 results['final_color']['upstream_chroma'] = autoghs.get(
                     'parameters', {},
                 ).get('ghs_chroma')
             quality_preview, gradient_preview = None, None
             if not (getattr(runtime, "autoghs_only", False) or color_only):
+                preview_dir = layout.root / '04_restoration' / 'diagnostics' if layout else steps_dir
+                preview_dir.mkdir(parents=True, exist_ok=True)
                 quality_preview = QualityMaskPreview.ensure_for_run(
-                    results, source, steps_dir, runtime,
+                    results, source, preview_dir, runtime,
                 )
-                gradient_preview = QualityMaskPreview.write_gradient_points(
-                    results, steps_dir,
-                )
+                gradient_preview = QualityMaskPreview.write_gradient_points(results, preview_dir)
             summary = self._export_results(results, source, report, quality_preview)
             log_section("Annotation finale : informations de prise de vue")
             annotation = FinalImageAnnotator().post_process(
                 Path(summary["output_image"]),
-                report.with_name(report.stem + "_annotation.json"), args=runtime,
+                layout.root / '06_color' / 'annotation.json' if layout else report.with_name(report.stem + "_annotation.json"),
+                args=runtime,
                 acquisition_source=source,
             )
             results["annotation"] = annotation
+            if layout:
+                layout.write_summary(layout.root / '06_color/annotation.json', annotation)
             if annotation.get("output_annotated_image"):
                 summary["output_annotated_image"] = annotation["output_annotated_image"]
             logging.debug("Rapport détaillé d’annotation finale : %s", annotation)
@@ -1956,9 +2004,12 @@ class PostProcessingProcessor(processor):
                 )
             else:
                 logging.info("Annotation finale : %s", annotation.get("status"))
-            report.write_text(
-                json.dumps(results, indent=2, ensure_ascii=False), encoding="utf-8",
-            )
+            if layout:
+                layout.write_summary(report, results)
+            else:
+                report.write_text(
+                    json.dumps(results, indent=2, ensure_ascii=False), encoding="utf-8",
+                )
             logging.info("Image des zones de qualité : %s", quality_preview)
             if gradient_preview:
                 logging.info("Points du gradient original : %s", gradient_preview)

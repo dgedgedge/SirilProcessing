@@ -13,32 +13,63 @@ def treatment_file_prefix(report_path: Path | str) -> str:
     return f"{stem}_" if re.match(r"^\d{2,}_", stem) else ""
 
 
-def reset_work_dir(report_path: Path | str) -> Path:
+def reset_work_dir(
+    report_path: Path | str, *, directory_name: str | None = None,
+) -> Path:
     """Réinitialise et retourne le dossier visible `<rapport>_work/`.
 
     Les anciens produits, y compris un éventuel sous-dossier historique 001,
     sont supprimés avant de recréer le dossier. L'appelant doit vérifier que
     son entrée n'est pas située dans ce dossier avant de demander sa remise à
-    zéro. Les erreurs du système de fichiers sont propagées.
+    zéro. ``directory_name`` remplace le nom du dossier, dans le même parent
+    que le rapport ; il doit être un nom simple, hors « . » et « .. ». Une
+    valeur invalide lève ValueError avant toute suppression. Les erreurs du
+    système de fichiers sont propagées.
     """
     report = Path(report_path).resolve()
-    work = report.parent / f"{report.stem}_work"
+    name = directory_name if directory_name is not None else f"{report.stem}_work"
+    if not name or name in (".", "..") or Path(name).name != name:
+        raise ValueError("Un nom simple de répertoire de travail est requis")
+    work = report.parent / name
     if work.exists():
         shutil.rmtree(work)
     work.mkdir(parents=True, exist_ok=False)
     return work
 
 
-def reset_ordered_work_dir(report_path: Path | str, order: int = 1) -> Path:
-    """Réinitialise le dossier d'une étape puis crée un sous-dossier ordonné.
+def reset_restoration_work_dir(
+    report_path: Path | str, input_path: Path | str, *,
+    prepared_directory: Path | str | None = None,
+) -> Path:
+    """Prépare un dossier direct et protège l'entrée avant toute suppression.
 
-    Réserve le niveau `<ordre>` aux traitements qui rangent leurs produits dans
-    une sous-étape explicite. L'ordre doit être positif ; une valeur invalide est
-    refusée avant toute suppression. L'appelant protège son entrée comme pour
-    `reset_work_dir`.
+    Dans un objet numéroté (04_restoration et marqueur 01_calibration), les
+    chaînes utilisent 01_chains et les moteurs le nom de leur rapport, sans
+    suffixe _work. Les appels autonomes conservent <rapport>_work, sans 001.
+    ``prepared_directory`` désigne un dossier déjà nettoyé par l’orchestrateur,
+    contenant les masques et le rapport : il est conservé pour éviter de les
+    supprimer à l’initialisation du moteur. Il doit être le parent du rapport
+    et ne pas contenir la source, sinon ValueError est levée.
+    Les opérations et leurs essais restent isolés. Une source dans le dossier
+    réinitialisé est refusée avec ValueError ; les erreurs d'accès sont propagées.
     """
-    if order < 1:
-        raise ValueError("order doit être >= 1")
-    work = reset_work_dir(report_path) / f"{order:03d}"
-    work.mkdir(exist_ok=False)
-    return work
+    report, source = Path(report_path).resolve(), Path(input_path).resolve()
+    if prepared_directory is not None:
+        work = Path(prepared_directory).resolve()
+        if work != report.parent or source.is_relative_to(work):
+            raise ValueError("Dossier préparé incompatible avec le rapport ou la source")
+        work.mkdir(parents=True, exist_ok=True)
+        return work
+    numbered = any(
+        parent.name == "04_restoration"
+        and (parent.parent / "01_calibration").is_dir()
+        for parent in report.parents
+    )
+    name = f"{report.stem}_work"
+    if numbered:
+        name = ("01_chains" if report.parent.name == "04_restoration"
+                and report.stem == "restoration" else report.stem)
+    work = report.parent / name
+    if source.is_relative_to(work.resolve()):
+        raise ValueError("L’entrée se trouve dans le dossier de travail réinitialisé")
+    return reset_work_dir(report, directory_name=name)

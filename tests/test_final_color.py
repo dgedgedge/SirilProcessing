@@ -439,3 +439,30 @@ def test_upper_roundoff_restores_original_pixel() -> None:
     np.testing.assert_array_equal(output, image)
     assert audit['corrected_rgb_values'] == audit['restored_pixels'] == 1
     assert gain[2, 3] == 1
+
+
+def test_final_color_work_is_flat_and_preserves_sources(tmp_path: Path) -> None:
+    """Une relance nettoie l'ancien niveau 001 sans modifier les couches GHS."""
+    _, background, stars, _ = prepared_layers(tmp_path)
+    original = {path: path.read_bytes() for path in (background, stars)}
+    report = tmp_path / 'color.json'
+    work = tmp_path / 'color_work'
+    legacy = work / '001/obsolete.fits'
+    legacy.parent.mkdir(parents=True)
+    legacy.write_bytes(b'obsolete')
+    processor = FinalColorProcessor()
+    args = argparse.Namespace(compute_backend='cpu')
+    first = processor.post_process(background, report, args, stars_path=stars)
+    assert not legacy.parent.exists()
+    assert Path(first['output_image']).parent == work
+    assert Path(first['output_starless_image']).parent == work
+    assert Path(first['output_jpeg']).parent == work
+    second = processor.post_process(background, report, args, stars_path=stars)
+    assert first['output_image'] == second['output_image']
+    assert not list(work.rglob('001'))
+    assert {path: path.read_bytes() for path in original} == original
+    protected = work / 'source.fits'
+    protected.write_bytes(background.read_bytes())
+    with pytest.raises(ValueError, match='réinitialisé'):
+        processor.post_process(protected, report, args, stars_path=stars)
+    assert protected.read_bytes() == original[background]

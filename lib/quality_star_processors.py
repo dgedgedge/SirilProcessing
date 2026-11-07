@@ -321,7 +321,7 @@ class SirilStarDetectionProcessor(QualityProcessor):
         """Exécute setfindstar/findstar sans modifier les FITS ni leurs métadonnées."""
         from lib.deconvolution import _quote
 
-        lines = [f'cd {_quote(self.work_dir)}', 'setext fit', 'set32bits']
+        lines = [f'cd {_quote(self.work_dir)}', 'setext fits', 'set32bits']
         for image, catalog in self.images:
             lines += [
                 f'load {_quote(image)}', 'setfindstar reset',

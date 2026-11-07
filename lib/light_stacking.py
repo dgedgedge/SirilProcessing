@@ -12,7 +12,7 @@ from astropy.io import fits
 
 from lib.logging_utils import log_section
 from lib.processor import processor
-from lib.siril import Siril
+from lib.siril import Siril, SirilSequence
 from lib.type_defs import ConfigValue, JSONReport
 
 
@@ -357,6 +357,7 @@ class SessionStackingProcessor(processor):
             options.stack_params,
             bool(options.force_stacking),
             options.stack_report,
+            stack_work_dir=getattr(options, "stack_work_dir", None),
         )
         return {
             "status": "ok" if output is not None else "failed",
@@ -373,13 +374,21 @@ class SessionStackingProcessor(processor):
         stack_params: dict[str, ConfigValue] | None = None,
         force_stacking: bool = False,
         stack_report: dict[str, object] | None = None,
+        stack_work_dir: Path | None = None,
     ) -> Path | None:
         """Empile les images calibrées dans ``<target>_combined.fits``.
 
         Les entrées incompatibles en structure FITS sont exclues avant les
         traitements Siril. Une entrée unique est renvoyée sans nouvel
         empilement. Les étapes de préparation et d'empilement consignent leurs
-        bandeaux de progression dans les journaux.
+        bandeaux de progression dans les journaux. La séquence est écrite
+        directement à côté des liens FITS, sans conversion ni modification
+        des sources ; le nombre de couches vient du premier FITS compatible.
+        L’extension Siril est fixée à fits pour que la résolution astrométrique
+        remplace les liens locaux sans créer un doublon .fit ambigu.
+        ``stack_work_dir`` fournit
+        une racine explicite pour les étapes 02 à 05 ; sinon le répertoire
+        historique <work_dir>/<target_name>/stacking est utilisé.
         """
         valid_files = [
             Path(file).absolute() for file in output_files if Path(file).exists()
@@ -411,8 +420,9 @@ class SessionStackingProcessor(processor):
             ch if ch.isalnum() or ch in "_-" else "_" for ch in target_name
         )
 
-        session_stack_dir = Path(work_dir) / target_name / "stacking"
-        if force_stacking and session_stack_dir.exists():
+        session_stack_dir = (Path(stack_work_dir) if stack_work_dir is not None
+                             else Path(work_dir) / target_name / "stacking")
+        if force_stacking and stack_work_dir is None and session_stack_dir.exists():
             shutil.rmtree(session_stack_dir)
 
         output_path = Path(output_dir) / f"{target_name}_combined"
@@ -440,8 +450,7 @@ class SessionStackingProcessor(processor):
         run_dir = session_stack_dir
         for stage in STACK_STAGES:
             reset_stage(run_dir / stage)
-        input_dir = run_dir / "00_inputs"
-        output_stack_dir = run_dir / "01_registration"
+        output_stack_dir = run_dir / "02_registration"
 
         local_report: dict[str, object] = {
             "target_name": target_name,
@@ -498,14 +507,22 @@ class SessionStackingProcessor(processor):
             stack_report.update(local_report)
 
         sequence_prefix = f"{target_name}_"
+        sequence_files: list[Path] = []
         for index, source_file in enumerate(files_for_stack, start=1):
-            destination = input_dir / f"{sequence_prefix}{index:03d}.fits"
+            destination = output_stack_dir / f"{sequence_prefix}{index:03d}.fits"
             if destination.exists():
                 destination.unlink()
             try:
                 destination.symlink_to(source_file)
             except OSError:
                 shutil.copy2(source_file, destination)
+            sequence_files.append(destination)
+
+        layers = int(fits.getheader(files_for_stack[0]).get("NAXIS3", 1))
+        SirilSequence.from_files(
+            output_stack_dir / f"{sequence_prefix}.seq",
+            sequence_prefix, sequence_files, layers=layers,
+        ).write()
 
         method = str(stack_cfg.get("method", "average")).lower()
         rejection = str(stack_cfg.get("rejection", "sigma")).lower()
@@ -541,9 +558,8 @@ class SessionStackingProcessor(processor):
                 "-disto=ps_distortion\n"
             )
 
-        prepare = f"""cd {input_dir}
-convert {sequence_prefix} -out={output_stack_dir}
-cd {output_stack_dir}
+        prepare = f"""cd {output_stack_dir}
+setext fits
 seqfindstar {sequence_prefix}
 {platesolve_lines}register {sequence_prefix} -2pass -transf={align_transform}"""
 

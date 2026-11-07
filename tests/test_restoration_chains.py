@@ -14,16 +14,23 @@ from lib.postprocess import _PostProcessorSequence
 from lib.type_defs import JSONReport
 
 
+@pytest.mark.parametrize("numbered", [False, True])
 @pytest.mark.parametrize(
     "reverse,variants,operations", [(False, 12, 11), (True, 18, 17)]
 )
 def test_all_chains_are_evaluated_and_intermediates_cached(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reverse: bool,
     variants: int, operations: int,
-    caplog: pytest.LogCaptureFixture,
+    caplog: pytest.LogCaptureFixture, numbered: bool,
 ) -> None:
     """Vérifie calculs mutualisés, scores finaux et bandeaux des opérations réelles."""
     caplog.set_level("DEBUG")
+    report = tmp_path / "report.json"
+    work = tmp_path / "report_work"
+    if numbered:
+        (tmp_path / "01_calibration").mkdir()
+        report = tmp_path / "04_restoration/restoration.json"
+        work = report.parent / "01_chains"
     source = tmp_path / "source.fits"
     data = np.random.default_rng(1).normal(0.1, 0.001, (128, 128)).astype("float32")
     data[0, 0] = 0
@@ -45,7 +52,9 @@ def test_all_chains_are_evaluated_and_intermediates_cached(
                 args: argparse.Namespace | None = None,
             ) -> JSONReport:
                 """Encode l’entrée effective et l’opération dans un vrai FITS."""
-                assert Path(output_path).parent == tmp_path / "report_work"
+                assert Path(output_path).parent.parent == work
+                assert args._restoration_work_dir == Path(output_path).parent
+                assert args._quality_reference.path == Path(input_path)
                 calls.append((code, Path(input_path)))
                 changed = fits.getdata(input_path).copy()
                 changed[0, 0] = changed[0, 0] * 10 + code
@@ -83,7 +92,7 @@ def test_all_chains_are_evaluated_and_intermediates_cached(
     monkeypatch.setattr(RestorationChainProcessor, "_final_evaluation", final)
     args = argparse.Namespace(restoration_reverse_order=reverse)
     result = RestorationChainProcessor().post_process(
-        source, tmp_path / "report.json", args
+        source, report, args
     )
     assert len(result["variants"]) == variants
     assert result["operation_count"] == operations == len(calls)
@@ -122,10 +131,39 @@ def test_all_chains_are_evaluated_and_intermediates_cached(
     assert "CHAÎNES COMPLÈTES" in Path(result["summary_path"]).read_text()
     assert Path(result["quality_preview_path"]).is_file()
     assert Path(result["quality_preview_path"]).name == "common_masks.png"
-    work = tmp_path / "report_work"
-    assert Path(result["quality_preview_path"]).parent == work
+    assert Path(result["quality_preview_path"]).parent == work / "00_mask_origine"
     assert not (work / "001").exists()
-    assert any(work.glob("*_denoise_*.fits"))
+    assert any(work.glob("*_denoise_*/*.fits"))
+    assert not list(work.glob("[0-9][0-9]_*.fits"))
+    assert not list(work.glob("[0-9][0-9]_*.json"))
+    expected_names = {}
+    for variant in result["variants"]:
+        treatment_path = []
+        for step in variant["steps"]:
+            treatment_path.append(f"{step['operation']}_{step['engine']}")
+            expected_names.setdefault(
+                step["operation_id"],
+                f"{step['operation_id']:02d}_" + "_then_".join(treatment_path),
+            )
+    for operation in result["operations"]:
+        operation_report = Path(operation["report_path"])
+        assert operation_report.is_file()
+        assert Path(operation["result_image_path"]) == operation_report.with_suffix(".fits")
+        assert operation["result_image_role"] == "accepted_output"
+        assert Path(operation["result_image_path"]).is_file()
+        assert operation_report.parent.name == operation_report.stem
+        assert operation_report.parent.name == expected_names[operation["operation_id"]]
+        assert Path(operation["output_image"]).parent == operation_report.parent
+        input_image = Path(operation["input_image"])
+        expected_parent = (work / "00_mask_origine" if input_image == source
+                           else input_image.parent)
+        assert Path(operation["input_mask_path"]).parent == expected_parent
+        assert Path(operation["input_mask_path"]).is_file()
+        assert Path(operation["input_mask_preview_path"]).is_file()
+    used_masks = {entry["input_mask_path"] for entry in result["operations"]}
+    written_masks = {str(path) for path in work.rglob("*masks.fits")}
+    assert used_masks == written_masks
+    assert len(written_masks) < len(result["operations"])
     messages = [record.getMessage() for record in caplog.records]
     titles = [message for message in messages if message.startswith((
         "Restauration — Préparation", "Restauration — Calcul ",
@@ -186,7 +224,7 @@ def test_identity_remains_selectable(
     (legacy / "obsolete.fits").write_bytes(b"obsolete")
     result = RestorationChainProcessor().post_process(source, tmp_path / "report.json")
     assert not legacy.exists()
-    assert Path(result["quality_preview_path"]).parent == work
+    assert Path(result["quality_preview_path"]).parent == work / "00_mask_origine"
     assert source.is_file()
     protected = work / "source.fits"
     protected.write_bytes(source.read_bytes())
@@ -356,6 +394,18 @@ def test_local_and_global_exclusions_keep_child_audit_and_summary(
     assert len(result["variants"]) == 6 and result["operation_count"] == len(calls) == 3
     assert result["selected_chain"] == []
     assert result["operations"][1]["criteria"]["roundness"]["value"] == 0.03
+    for operation in result["operations"]:
+        saved = json.loads(Path(operation["report_path"]).read_text())
+        if operation["status"] == "failed":
+            assert saved["result_image_path"] is None
+            assert not Path(operation["report_path"]).with_suffix(".fits").exists()
+        else:
+            path = Path(saved["result_image_path"])
+            assert path == Path(operation["report_path"]).with_suffix(".fits")
+            assert path.is_file()
+            if operation["status"] != "accepted":
+                assert saved["result_image_role"] == "retained_input"
+                assert path.read_bytes() == source.read_bytes()
     rows = result["summary"]["rows"]
     assert [row["decision"] for row in rows] == [
         "selected",

@@ -165,7 +165,7 @@ class MasterFlatProcessor(processor):
         stack_input = f"pp_{sequence_name}" if self.calibration.use_dark else sequence_name
         return f"""cd {sequence_dir}
 pyscript {pyecho_path} "====================================================================="
-pyscript {pyecho_path} "Convert Flat Frames to .fit files"
+pyscript {pyecho_path} "Prepare Flat Frames as .fits files"
 pyscript {pyecho_path} "cmd:========> convert {sequence_name} -out={flat_process_dir}"
 convert {sequence_name} -out={flat_process_dir}
 cd {flat_process_dir}
@@ -228,7 +228,7 @@ close"""
         dry_run = options.dry_run
         if not flat_files:
             raise ValueError("La séquence flat ne contient aucune image")
-        expected = Path(f"{output_path}.fit")
+        expected = Path(f"{output_path}.fits")
         if dry_run:
             return {
                 "status": "dry_run",
@@ -258,7 +258,7 @@ close"""
                 script_name=f"master_flat_{group_key}.sps",
             ):
                 raise RuntimeError("Échec de la création du master flat")
-            candidates = [expected, Path(f"{output_path}.fits")]
+            candidates = [expected, Path(f"{output_path}.fit")]
             master_flat = next((path for path in candidates if path.exists()), None)
             if master_flat is None:
                 raise RuntimeError(
@@ -353,14 +353,14 @@ class SequenceCalibrationProcessor(processor):
     def _prepare_sequence(
         work_dir: Path, sequence_name: str, source_files: list[Path]
     ) -> None:
-        """Prépare une séquence Siril temporaire par liens symboliques."""
+        """Prépare les liens .fits d’une séquence, sans modifier les sources .fit/.fits."""
         sequence_dir = work_dir / sequence_name
         sequence_dir.mkdir(parents=True, exist_ok=True)
         for index, file_path in enumerate(source_files):
             source_path = file_path.resolve()
             if not source_path.is_file():
                 raise FileNotFoundError(f"Fichier source inexistant: {source_path}")
-            link_path = sequence_dir / f"{sequence_name}_{index:04d}.fit"
+            link_path = sequence_dir / f"{sequence_name}_{index:04d}.fits"
             link_path.unlink(missing_ok=True)
             link_path.symlink_to(source_path)
             logging.debug("Lien créé: %s -> %s", link_path, source_path)
@@ -587,7 +587,7 @@ class SequenceCalibrationProcessor(processor):
             command = command.replace(" -debayer", "")
         return f"""cd {sequence_dir}
 pyscript {pyecho_path} "====================================================================="
-pyscript {pyecho_path} "Convert Light Frames to .fit files"
+pyscript {pyecho_path} "Prepare Light Frames as .fits files"
 pyscript {pyecho_path} "Convert files to sequence."
 pyscript {pyecho_path} "cmd:========> convert {sequence_name} -out={process_dir}"
 convert {sequence_name} -out={process_dir}
@@ -674,10 +674,10 @@ close"""
                 if self.calibration.use_dark:
                     logging.info("[DRY-RUN] Dark pour calibrer les flats: %s", flat_dark_path)
                 logging.info(
-                    "[DRY-RUN] Master flat attendu: %s.fit (ou .fits)",
+                    "[DRY-RUN] Master flat attendu: %s.fits (ou .fit)",
                     master_flat_base,
                 )
-                flat_path = Path(f"{master_flat_base}.fit")
+                flat_path = Path(f"{master_flat_base}.fits")
             else:
                 logging.info("[DRY-RUN] Aucun flat utilisé pour ce groupe")
             logging.info("[DRY-RUN] %s", calibration_stage)

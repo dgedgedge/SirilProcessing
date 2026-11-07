@@ -163,8 +163,8 @@ def test_process_saves_psf_preview_audit_and_next_input(tmp_path, simulated_siri
     for key in ('psf_path', 'psf_preview_path', 'matched_stars_path', 'output_image'):
         assert Path(deconv[key]).is_file()
     first_script = Path(deconv['scripts'][0]['script_path'])
-    assert first_script.parent.name == '001'
-    assert first_script.parent.parent.name == '01_deconvolution_siril_work'
+    assert first_script.parent.name == '01_deconvolution_siril_work'
+    assert not (first_script.parent / '001').exists()
     assert deconv['comparison']['matched_count'] == 10
     assert result['next']['seen'] == deconv['output_image']
     assert image.read_bytes() == source_bytes
@@ -287,8 +287,8 @@ def test_default_enables_adaptive_search(tmp_path, simulated_siril, monkeypatch)
     assert result['selected_step'] == .0004
     assert result['search_stopped_at_step'] == .0005
     work_dir = Path(result['attempts'][0]['candidate_image_path']).parent
-    assert work_dir.name == '001'
-    assert work_dir.parent.name == 'report_work'
+    assert work_dir.name == 'report_work'
+    assert not (work_dir / '001').exists()
 
 
 def test_moffat_failure_keeps_numbered_audit(

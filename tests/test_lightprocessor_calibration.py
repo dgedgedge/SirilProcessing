@@ -368,7 +368,7 @@ def test_light_process_wrapper_runs_dry_run_pipeline(
         assert 'Création du master flat' not in output
     assert not list((tmp_path / 'out').rglob('calibration_settings.json'))
 
-    session_log = tmp_path / "work" / "20260913_e180" / "sessions" / "20260913_e180" / "20260913_e180_lightProcess.log"
+    session_log = tmp_path / "work" / "20260913_e180" / "01_calibration" / "01_session" / "20260913_e180" / "20260913_e180_lightProcess.log"
     assert session_log.exists()
     assert "Début du traitement de la sous-session" in session_log.read_text(encoding="utf-8")
 
@@ -377,9 +377,11 @@ def test_light_process_wrapper_runs_dry_run_pipeline(
 @pytest.mark.parametrize('method,roundness,platesolve', [
     ('average', '1.8k', None), ('average', 'none', True), ('median', '1.8k', False),
 ])
-def test_stack_selection_only_after_registration(tmp_path, monkeypatch, method, roundness, platesolve, reject_percent, retained, effective, simulated_registered_sequence):
+@pytest.mark.parametrize("flat_layout", [False, True])
+def test_stack_selection_only_after_registration(tmp_path, monkeypatch, method, roundness, platesolve, reject_percent, retained, effective, simulated_registered_sequence, flat_layout):
     import json
     import lib.drizzle as drizzle
+    from lib.siril import SirilSequence
     from lib.quality_filter import quality_mask
 
     sources = [tmp_path / f'source_{i}.fits' for i in range(4)]
@@ -400,19 +402,27 @@ def test_stack_selection_only_after_registration(tmp_path, monkeypatch, method, 
         def run_siril_script(self, script_content, working_dir, script_name=None):
             directory = Path(working_dir)
             calls.append(script_name)
+            assert 'setext fits' in script_content
             assert '-filter-wfwhm' not in script_content
             assert '-filter-round' not in script_content
             if script_name == '01_registration.sps':
                 assert not selections
-                inputs = sorted((directory.parent/'00_inputs').glob('target_name_*.fits'))
+                inputs = sorted(directory.glob('target_name_*.fits'))
+                initial = SirilSequence.read(directory / 'target_name_.seq')
+                assert len(initial.images) == 4
                 assert len(inputs) == 4  # No rejection or duplication before registration.
-                assert 'convert target_name_ -out=' in script_content
+                assert 'convert ' not in script_content
+                assert script_content.index('setext fits') < script_content.index('seqfindstar target_name_')
+                # Simulate Siril saving astrometry under its configured extension.
+                for source in inputs:
+                    pixels = source.read_bytes()
+                    destination = source.with_suffix('.fits' if 'setext fits' in script_content else '.fit')
+                    destination.unlink(missing_ok=True)
+                    destination.write_bytes(pixels)
                 assert 'seqfindstar target_name_' in script_content
                 assert 'register target_name_ -2pass -transf=affine' in script_content
                 assert ('seqplatesolve target_name_' in script_content) == (platesolve is not False)
                 assert 'seqapplyreg' not in script_content and '\nstack ' not in script_content
-                for source in inputs:
-                    (directory/source.name).symlink_to(source.resolve())
                 (directory/'target_name_.seq').write_text(
                     "S 'target_name_' 1 4 4 3 0 6 0 0 0\n"
                     + ''.join(f'I {i+1} 1\n' for i in range(4))
@@ -450,7 +460,12 @@ def test_stack_selection_only_after_registration(tmp_path, monkeypatch, method, 
                drizzle='off')
     if platesolve is not None:
         cfg['enable_stack_platesolve'] = platesolve
+    before = {source: source.read_bytes() for source in sources}
     report = {}
+    calibration = tmp_path / "work/01_calibration"
+    marker = calibration / "01_session/calibrated.fits"
+    marker.parent.mkdir(parents=True)
+    marker.write_bytes(b"preserved")
     result = stacker.stack_outputs(
         sources,
         tmp_path / "out",
@@ -458,7 +473,15 @@ def test_stack_selection_only_after_registration(tmp_path, monkeypatch, method, 
         "target_name",
         cfg,
         stack_report=report,
+        force_stacking=flat_layout,
+        stack_work_dir=calibration if flat_layout else None,
     )
+    assert {source: source.read_bytes() for source in sources} == before
+    assert not list((tmp_path / "work").rglob("02_inputs"))
+    assert marker.read_bytes() == b"preserved"
+    if flat_layout:
+        assert (calibration / "05_stacking").is_dir()
+        assert not (calibration / "stack").exists()
     assert result == tmp_path/'out/target_name_combined.fits'
     assert calls == ['01_registration.sps', '04_realign.sps', '04_applyreg.sps', '04_stacking.sps']
     assert selections == [4]
@@ -470,8 +493,8 @@ def test_stack_selection_only_after_registration(tmp_path, monkeypatch, method, 
 def test_stacking_processor_force_cleans_previous_artifacts(tmp_path):
     source_a = tmp_path / "source_a.fits"
     source_b = tmp_path / "source_b.fits"
-    source_a.write_bytes(b"dummy-a")
-    source_b.write_bytes(b"dummy-b")
+    _write_fits_frame(source_a, "Light")
+    _write_fits_frame(source_b, "Light")
 
     output_dir = tmp_path / "out"
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -515,8 +538,8 @@ def test_stacking_processor_force_cleans_previous_artifacts(tmp_path):
 def test_stacking_processor_rebuilds_transient_stack_dirs(tmp_path):
     source_a = tmp_path / "source_a.fits"
     source_b = tmp_path / "source_b.fits"
-    source_a.write_bytes(b"dummy-a")
-    source_b.write_bytes(b"dummy-b")
+    _write_fits_frame(source_a, "Light")
+    _write_fits_frame(source_b, "Light")
 
     output_dir = tmp_path / "out"
     work_dir = tmp_path / "work"
@@ -544,7 +567,7 @@ def test_stacking_processor_rebuilds_transient_stack_dirs(tmp_path):
             assert not (output_stack_dir / "M33_999.fits").exists()
             assert not (output_stack_dir / "r_M33_999.fits").exists()
             assert (session_stack_dir / "M33_stacking.log").exists()
-            prepared_inputs = sorted(path.name for path in (session_stack_dir / "00_inputs").glob("M33_*.fits"))
+            prepared_inputs = sorted(path.name for path in (session_stack_dir / "02_registration").glob("M33_*.fits"))
             assert prepared_inputs == ["M33_001.fits", "M33_002.fits"]
             return False
 
@@ -753,3 +776,48 @@ def test_flat_calibration_cache_requires_compatible_settings(
     if marker is not None:
         (tmp_path / 'calibration_settings.json').write_text(marker)
     assert processor.flat_cache_matches(tmp_path) is expected
+
+
+@pytest.mark.parametrize('layers', [1, 3])
+@pytest.mark.parametrize('copy_fallback', [False, True])
+def test_direct_stack_sequence_preserves_sources(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    layers: int, copy_fallback: bool,
+) -> None:
+    """Prépare mono/RGB sans conversion, par liens ou copies, sans toucher aux FITS."""
+    from lib.siril import SirilSequence
+
+    sources = [tmp_path / f'frame_{index}.fits' for index in range(2)]
+    shape = (8, 8) if layers == 1 else (layers, 8, 8)
+    for index, source in enumerate(sources):
+        fits.writeto(source, np.full(shape, index, dtype=np.float32))
+    before = {source: source.read_bytes() for source in sources}
+    if copy_fallback:
+        def fail_symlink(self: Path, target: Path) -> None:
+            """Simule un système de fichiers sans liens symboliques."""
+            raise OSError('symlinks unavailable')
+        monkeypatch.setattr(Path, 'symlink_to', fail_symlink)
+
+    def inspect_preparation(
+        script: str, working_dir: str, script_name: str | None = None,
+    ) -> bool:
+        """Contrôle la séquence effectivement préparée avant tout appel Siril."""
+        directory = Path(working_dir)
+        assert directory.name == '02_registration'
+        assert 'convert ' not in script
+        sequence = SirilSequence.read(directory / 'target_.seq')
+        assert len(sequence.images) == 2
+        assert f'L {layers}' in (directory / 'target_.seq').read_text()
+        for image, source in zip(sequence.images, sources):
+            assert image.filename.read_bytes() == before[source]
+            assert image.filename.is_symlink() is not copy_fallback
+        return False
+
+    siril = Mock()
+    siril.run_siril_script.side_effect = inspect_preparation
+    result = SessionStackingProcessor(siril=siril).stack_outputs(
+        sources, tmp_path / 'out', tmp_path / 'work', 'target',
+    )
+    assert result is None
+    siril.run_siril_script.assert_called_once()
+    assert {source: source.read_bytes() for source in sources} == before

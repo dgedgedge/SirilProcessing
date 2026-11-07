@@ -117,9 +117,11 @@ avant réinitialisation du dossier couleur. Les anciens rapports contenant les
 couches explicites restent utilisables, sans pouvoir certifier rétroactivement
 leur provenance avant la première passe couleur.
 
-Le rapport `06_final_color.json` et `06_final_color_work/001/` contiennent le fond
+Le rapport `06_final_color.json` et `06_final_color_work/` contiennent le fond
 coloré, le FITS recomposé et son JPEG. Les sources GHS et stellaires ne sont pas
-modifiées. Lorsque la passe couleur est exécutée, les exports sont distincts :
+modifiées. Les fichiers sont directement dans le dossier de travail, sans
+sous-dossier `001`. Le dossier est réinitialisé lors des relances, après
+validation des sources. Lorsque la passe couleur est exécutée, les exports sont distincts :
 
 - `<image>_postprocess_ghs.fits/.jpg` : rendu GHS avant saturation ;
 - `<image>_postprocess_saturated.fits/.jpg` : résultat de la passe couleur ;

@@ -20,7 +20,7 @@ import numpy as np
 from astropy.io import fits
 
 from lib.auto_ghs import ComputeBackend, GHSOptimizer, HistogramAnalyzer
-from lib.postprocess_paths import reset_ordered_work_dir
+from lib.postprocess_paths import reset_work_dir
 from lib.render_exports import write_render_jpeg
 from lib.processor import processor
 from lib.restoration_quality import normalized_planes
@@ -336,6 +336,9 @@ class AutoGHSFinalRenderer(processor):
     ) -> JSONReport:
         """Publie un rendu RANGE étoilé, ses couches et ses diagnostics.
 
+        Le dossier <rapport>_work est réinitialisé et contient les étapes
+        nommées 01_separation à 05_diagnostics, sans répertoire nommé 001.
+
         Parameters
         ----------
         input_path : Path
@@ -391,13 +394,14 @@ class AutoGHSFinalRenderer(processor):
                 raise ValueError(
                     "L’entrée ne peut pas se trouver dans le dossier réinitialisé"
                 )
-            separation_dir = reset_ordered_work_dir(report_path)
-            work_root = separation_dir.parent
-            stars_dir = work_root / "002_stars"
-            ghs_dir = work_root / "003_ghs"
-            recomposition_dir = work_root / "004_recomposition"
-            diagnostics_dir = work_root / "005_diagnostics"
-            for directory in (stars_dir, ghs_dir, recomposition_dir, diagnostics_dir):
+            work_root = reset_work_dir(report_path)
+            separation_dir = work_root / "01_separation"
+            stars_dir = work_root / "02_stars"
+            ghs_dir = work_root / "03_ghs"
+            recomposition_dir = work_root / "04_recomposition"
+            diagnostics_dir = work_root / "05_diagnostics"
+            for directory in (separation_dir, stars_dir, ghs_dir,
+                              recomposition_dir, diagnostics_dir):
                 directory.mkdir()
             separation = StarNetSeparator().post_process(
                 source, separation_dir / "separation.json", args

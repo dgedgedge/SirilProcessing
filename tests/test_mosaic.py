@@ -403,3 +403,43 @@ def test_mosaic_registration_binds_gradient_and_preserves_instances(
     assert second.gradient_processor._get_args().gradient_smoothing == 0.8
     assert first._get_args().mosaic_crop is False
     assert first.gradient_processor._get_args().gradient_smoothing == 0.4
+
+
+def test_numbered_mosaic_uses_generic_image_and_keeps_sources(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """L'assemblage réel du processeur écrit sous 02, sans préfixe d'objet répété."""
+    import argparse
+    from unittest.mock import Mock
+    import numpy as np
+    from astropy.io import fits
+    import lib.mosaic as module
+    from lib.output_layout import OutputLayout
+
+    layout = OutputLayout(tmp_path / 'M31')
+    layout.create()
+    panels = [tmp_path / f'panel_{index}.fits' for index in (1, 2)]
+    for panel in panels:
+        fits.writeto(panel, np.ones((8, 10), dtype='f4'))
+    originals = [panel.read_bytes() for panel in panels]
+
+    def execute(script: str, directory: str) -> bool:
+        """Simule uniquement Siril ; les copies et noms de sortie sont réels."""
+        assert Path(directory) == layout.mosaic
+        assert '-out=image' in script
+        assert '-out=M31_mosaic' not in script
+        fits.writeto(layout.mosaic / 'output/image.fit', np.ones((8, 20), dtype='f4'))
+        return True
+
+    service = Mock()
+    service.run_siril_script.side_effect = execute
+    monkeypatch.setattr(module, 'Siril', lambda **kwargs: service)
+    result = Mosaic().post_process(panels[0], layout.mosaic / 'mosaic.json', argparse.Namespace(
+        mosaic_inputs=[panels[1]], mosaic_name='M31', mosaic_directory=layout.mosaic,
+        mosaic_gradient=False, mosaic_crop=False, keep_intermediate=True,
+    ))
+    assert result['output_image'] == str(layout.mosaic / 'image_uncropped.fits')
+    assert layout.handoff(Path(result['output_image'])) == layout.image
+    assert layout.image.is_file()
+    assert Path(result['uncropped_image']) == layout.mosaic / 'image_uncropped.fits'
+    assert [panel.read_bytes() for panel in panels] == originals

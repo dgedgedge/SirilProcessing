@@ -54,8 +54,8 @@ def test_denoise_validation_and_handoff(
     assert json.loads((tmp_path / '03_denoise.json').read_text())['timings'] == result['timings']
     assert not (stale_parent / 'stale.txt').exists()
     candidate = Path(result['candidate_image_path'])
-    assert candidate.parent.name == '001'
-    assert candidate.parent.parent == stale_parent
+    assert candidate.parent == stale_parent
+    assert not (candidate.parent / '001').exists()
     assert source.read_bytes() == original
     assert Path(result['output_image']) == (tmp_path/'03_denoise.fits' if status == 'accepted' else source)
     assert (tmp_path/'03_denoise.fits').exists() == (status == 'accepted')

@@ -1,4 +1,10 @@
-"""Déconvolution Siril et comparaison FWHM sur des étoiles appariées univoques."""
+"""Déconvolution Siril et comparaison FWHM sur des étoiles appariées univoques.
+
+Les fichiers de travail sont directs, sans niveau 001. Dans le plan numéroté,
+le dossier porte le nom du rapport sans suffixe _work ; les sources sont
+protégées avant sa réinitialisation. Le dossier préparé par un orchestrateur
+de chaînes est conservé, avec ses masques et son rapport.
+"""
 
 from __future__ import annotations
 
@@ -19,7 +25,7 @@ from lib.deconvolution_quality import (
     InsufficientPSFStars, artifact_metrics, assess_quality, select_psf_stars,
     log_quality_diagnostics,
 )
-from lib.postprocess_paths import reset_ordered_work_dir, treatment_file_prefix
+from lib.postprocess_paths import reset_restoration_work_dir, treatment_file_prefix
 from lib.siril import Siril
 from lib.logging_utils import log_duration
 from lib.processor import processor
@@ -254,7 +260,10 @@ class _DeconvolutionExecution:
             raise ValueError("Choisir une sortie FITS différente de l’entrée et du rapport")
         _quote(self.input_path)
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
-        self.work = reset_ordered_work_dir(self.output_path)
+        self.work = reset_restoration_work_dir(
+            self.output_path, self.input_path,
+            prepared_directory=getattr(self.args, "_restoration_work_dir", None),
+        )
         self.runner = Siril(
             siril_path=getattr(self.args, "siril_path", None),
             siril_mode=getattr(self.args, "siril_mode", None),
@@ -298,7 +307,7 @@ class _DeconvolutionExecution:
         script = "\n".join(
             [
                 f"cd {_quote(self.work)}",
-                "setext fit",
+                "setext fits",
                 "set32bits",
                 *lines,
                 "close",

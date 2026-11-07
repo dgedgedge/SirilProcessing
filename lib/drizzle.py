@@ -519,11 +519,10 @@ def analyse(
 
 
 STACK_STAGES = (
-    "00_inputs",
-    "01_registration",
-    "02_quality",
-    "03_capability",
-    "04_stacking",
+    "02_registration",
+    "03_quality",
+    "04_capability",
+    "05_stacking",
 )
 
 
@@ -589,9 +588,9 @@ def run_stack(
         return False
     log_section("Stacking — Contrôle de qualité, sélection et pondération")
     registration_dir = Path(input_dir)
-    quality_dir = reset_stage(Path(work_dir) / "02_quality")
-    stacking_dir = reset_stage(Path(work_dir) / "04_stacking")
-    capability_path = reset_stage(Path(work_dir) / "03_capability")
+    quality_dir = reset_stage(Path(work_dir) / "03_quality")
+    stacking_dir = reset_stage(Path(work_dir) / "05_stacking")
+    capability_path = reset_stage(Path(work_dir) / "04_capability")
     copy_stage_inputs(registration_dir, quality_dir)
     input_dir = quality_dir
     try:
@@ -910,7 +909,7 @@ def run_stack(
     def execute(lines: Sequence[str], script_name: str) -> bool:
         """Exécute une étape Siril nommée et indique son succès."""
         return siril.run_siril_script(
-            "\n".join([f"cd {stacking_dir}", *lines, "close"]),
+            "\n".join([f"cd {stacking_dir}", "setext fits", *lines, "close"]),
             str(stacking_dir),
             script_name=script_name,
         )

@@ -20,7 +20,7 @@ from astropy.wcs import WCS
 from lib.auto_ghs import ComputeBackend, luminance
 from lib.torch_backend import TorchComputeBackend
 from lib.compute_config import ComputeConfig
-from lib.postprocess_paths import reset_ordered_work_dir
+from lib.postprocess_paths import reset_work_dir
 from lib.processor import processor
 from lib.render_exports import write_render_jpeg
 from lib.restoration_quality import normalized_planes
@@ -293,6 +293,8 @@ class FinalColorProcessor(processor):
         -----
         Les gardes sont vérifiées après fusion pour les forces S, S/2, S/4,
         puis zéro. La première admissible est publiée sans modifier les sources.
+        Les fichiers sont directs dans <rapport>_work, sans sous-niveau 001 ;
+        ce dossier est réinitialisé après validation des entrées.
         """
         runtime = self._get_args(args)
         options = self.options(runtime)
@@ -350,7 +352,7 @@ class FinalColorProcessor(processor):
             raise ValueError('La fusion du rendu couleur et de sa référence échoue '
                              'aux gardes stellaires')
         colored, final, fusion, metrics = chosen
-        destination = reset_ordered_work_dir(report)
+        destination = reset_work_dir(report)
         starless_output = destination / f'{source.stem}_color.fits'
         output = destination / f'{source.stem}_color_final.fits'
         write_rgb(source, starless_output, colored, nonlinear=True, role='STARLESS')

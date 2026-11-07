@@ -11,6 +11,7 @@ from pathlib import Path
 
 from astropy.io import fits
 
+from lib.output_layout import OutputLayout
 from lib.star_separation import validate_linear_header
 from lib.type_defs import JSONReport
 
@@ -70,7 +71,8 @@ class PostProcessResume:
         Aucun fichier n'est créé ou réinitialisé pendant cette lecture.
         """
         directory = report.parent / report.stem
-        autoghs_path = directory / '05_autoghs.json'
+        layout = OutputLayout.for_report(report)
+        autoghs_path = layout.stage_report('autoghs') if layout else directory / '05_autoghs.json'
         if not autoghs_path.is_file():
             raise FileNotFoundError(
                 f'Aucun rapport AutoGHS permettant de reprendre le traitement : {report}'
@@ -87,7 +89,7 @@ class PostProcessResume:
 
         for name in ('01_gradient', '02_photometry', '03_restoration',
                      '03_deconvolution', '04_denoise', '05_autoghs'):
-            stage_path = directory / f'{name}.json'
+            stage_path = layout.stage_report(name[3:]) if layout else directory / f'{name}.json'
             if not stage_path.is_file():
                 continue
             stage = cls.read_object(stage_path)
@@ -211,7 +213,9 @@ class PostProcessResume:
         directory.mkdir(parents=True, exist_ok=True)
         payload = {'roots': [str(root.resolve()) for root in roots], 'mosaic': mosaic,
                    'images': [str(image.resolve()) for image in images]}
-        (directory / 'lightprocess_final_images.json').write_text(
+        manifest_dir = directory / '02_mosaic' if (directory / '01_calibration').is_dir() else directory
+        manifest_dir.mkdir(parents=True, exist_ok=True)
+        (manifest_dir / 'lightprocess_final_images.json').write_text(
             json.dumps(payload, indent=2), encoding='utf-8',
         )
 
@@ -221,10 +225,22 @@ class PostProcessResume:
     ) -> list[Path]:
         """Retrouve les mêmes produits lightProcess sans calibration, stacking ni mosaïque.
 
-        Pour les anciens traitements, le rapport de mosaïque ou le nom standard
-        d'un stack est accepté. Une ambiguïté ou un produit absent reste une erreur.
+        Les sorties numérotées utilisent le manifeste sous 02_mosaic. Les
+        anciens manifestes, rapports de mosaïque et noms standards de stack
+        restent reconnus sans déplacer leurs fichiers. Aucun FITS récent n'est
+        deviné par glob : une référence explicite ou un nom standard est requis.
         """
-        manifest = directory / 'lightprocess_final_images.json'
+        manifests = [directory / '02_mosaic/lightprocess_final_images.json',
+                     directory / 'lightprocess_final_images.json',
+                     work / 'lightprocess_final_images.json',
+                     directory.parent / 'lightprocess_final_images.json']
+        manifest = next((path for path in manifests if path.is_file()), manifests[0])
+        calibration = directory / '01_calibration/calibration.json'
+        if not manifest.is_file() and calibration.is_file():
+            stored = PostProcessResume.read_object(calibration).get('panels')
+            if (not isinstance(stored, list) or not all(isinstance(item, dict) for item in stored)
+                    or [item.get('source') for item in stored] != [str(root.resolve()) for root in roots]):
+                raise ValueError('Les sessions diffèrent de la calibration précédente')
         if manifest.is_file():
             payload = PostProcessResume.read_object(manifest)
             if (payload.get('roots') != [str(root.resolve()) for root in roots]
@@ -238,7 +254,8 @@ class PostProcessResume:
                 raise ValueError('Liste de produits finaux de reprise invalide')
             images = [Path(path) for path in paths]
         elif mosaic_name:
-            report = work / f'{mosaic_name}_mosaic.json'
+            current = directory / '02_mosaic/mosaic.json'
+            report = current if current.is_file() else work / f'{mosaic_name}_mosaic.json'
             payload = PostProcessResume.read_object(report)
             if not isinstance(payload.get('output_image'), str):
                 raise ValueError('Le rapport de mosaïque ne référence pas son image finale')
@@ -247,8 +264,9 @@ class PostProcessResume:
         else:
             images = []
             for root in roots:
-                candidates = [directory / root.name / f'{root.name}_combined{suffix}'
-                              for suffix in ('.fits', '.fit')]
+                candidates = [directory / '02_mosaic/image.fits'] + [
+                    base / f'{root.name}_combined{suffix}'
+                    for base in (directory, directory / root.name) for suffix in ('.fits', '.fit')]
                 images.append(next(
                     (path for path in candidates if path.is_file()), candidates[0],
                 ))

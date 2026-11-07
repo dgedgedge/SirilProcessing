@@ -120,7 +120,10 @@ class LightProcessor(ParameterizedComponent):
         Les sorties de calibration sont conservées sous
         ``<sortie>/<session>/sessions/<sous-session>``. Les FITS de toutes les
         sous-sessions réussies sont empilés ensemble en un unique
-        ``<session>_combined.fits``. En simulation, les étapes sont annoncées
+        ``<session>_combined.fits``. Le CLI numéroté fournit explicitement
+        calibration_output_dir/calibration_work_dir : le stack s'appelle alors
+        stack_combined.fits, sous 01_calibration ou son panneau. Les acquisitions
+        sont sous 01_session et les étapes 02_registration à 05_stacking sont directes. En simulation, les étapes sont annoncées
         sans exécuter le stacking.
         """
         from lib.drizzle import cache_matches
@@ -145,6 +148,12 @@ class LightProcessor(ParameterizedComponent):
             return result
 
         logging.info("Session %s : %d sous-session(s)", root, len(subsessions))
+        calibration_output = getattr(args, 'calibration_output_dir', None)
+        target_output = Path(calibration_output) if calibration_output else output_base_dir / root.name
+        calibration_work = getattr(args, 'calibration_work_dir', None)
+        target_work = Path(calibration_work) if calibration_work else work_base_dir / root.name
+        stack_name = 'stack' if calibration_output else root.name
+        sessions_name = '01_session' if calibration_output else 'sessions'
         successful_processors: list[LightProcessor] = []
         for index, subsession in enumerate(subsessions, 1):
             logging.info("%s", "=" * 60)
@@ -154,11 +163,8 @@ class LightProcessor(ParameterizedComponent):
                 len(subsessions),
                 subsession,
             )
-            target_output = output_base_dir / root.name
-            child_output_dir = target_output / "sessions" / subsession.name
-            child_work_dir = (
-                work_base_dir / root.name / "sessions" / subsession.name
-            )
+            child_output_dir = target_output / sessions_name / subsession.name
+            child_work_dir = target_work / sessions_name / subsession.name
             if args.force_reprocess:
                 for directory in (child_output_dir, child_work_dir):
                     if directory.exists():
@@ -234,7 +240,7 @@ class LightProcessor(ParameterizedComponent):
                 root,
             )
             session_outputs = []
-            session_output_root = output_base_dir / root.name / "sessions"
+            session_output_root = target_output / sessions_name
             for subsession in subsessions:
                 calibrated_root = session_output_root / subsession.name
                 if calibrated_root.exists():
@@ -260,24 +266,26 @@ class LightProcessor(ParameterizedComponent):
             logging.warning("Aucun FITS calibré disponible pour %s", root)
             return result
 
-        stack_output_dir = output_base_dir / root.name
+        stack_output_dir = target_output
         stack_output_dir.mkdir(parents=True, exist_ok=True)
-        stack_work_dir = work_base_dir / root.name / "stacking"
-        stack_log = stack_work_dir / f"{root.name}_stacking.log"
+        stack_work_base = target_work if calibration_output else work_base_dir
+        stack_work_dir = (target_work if calibration_output
+                          else stack_work_base / stack_name / "stacking")
+        stack_log = stack_work_dir / "stacking.log" if calibration_output else stack_work_dir / f"{root.name}_stacking.log"
         stack_handler = add_session_file_logging(stack_log, args.log_level)
         try:
             log_section(f"Début du stacking : {root.name}")
             logging.info("Log du stacking : %s", stack_log)
             candidates = [
-                stack_output_dir / f"{root.name}_combined.fits",
-                stack_output_dir / f"{root.name}_combined.fit",
+                stack_output_dir / f"{stack_name}_combined.fits",
+                stack_output_dir / f"{stack_name}_combined.fit",
             ]
             existing = next((candidate for candidate in candidates if candidate.exists()), None)
             calibrated_dirs = [
                 directory
                 for subsession in subsessions
                 for directory in (
-                    output_base_dir / root.name / "sessions" / subsession.name
+                    target_output / sessions_name / subsession.name
                 ).rglob("*_calibrated")
                 if directory.is_dir()
             ]
@@ -295,18 +303,19 @@ class LightProcessor(ParameterizedComponent):
             stack_report: dict[str, object] = {}
             report = SessionStackingProcessor().post_process(
                 input_path=session_outputs[0],
-                output_path=stack_output_dir / f"{root.name}_combined.fits",
+                output_path=stack_output_dir / f"{stack_name}_combined.fits",
                 args=argparse.Namespace(
                     output_files=session_outputs,
-                    work_dir=work_base_dir,
-                    target_name=root.name,
+                    work_dir=stack_work_base,
+                    target_name=stack_name,
                     stack_params=stack_params,
                     force_stacking=args.force_stacking,
                     stack_report=stack_report,
+                    stack_work_dir=stack_work_dir if calibration_output else None,
                 ),
             )
             output_image = report.get("output_image")
-            if isinstance(output_image, str):
+            if isinstance(output_image, str) and Path(output_image).is_file():
                 result.output_image = Path(output_image)
                 logging.info("Sortie combinée créée pour la session %s : %s", root, output_image)
             else:
@@ -432,7 +441,7 @@ class LightProcessor(ParameterizedComponent):
         parser.add_argument(
             "session_dirs",
             nargs="+",
-            help="Un ou plusieurs répertoires de session contenant les sous-répertoires 'light' (et éventuellement 'flat')",
+            help="Un répertoire de données ; plusieurs uniquement avec --mosaic (light/ et éventuellement flat/)",
         )
 
         SequenceCalibrationProcessor.add_arguments(parser)

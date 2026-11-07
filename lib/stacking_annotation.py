@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from lib.output_layout import OutputLayout
 from lib.type_defs import JSONReport
 
 MAX_REPORT_BYTES = 32 * 1024 * 1024  # Éviter les volumineux audits de restauration.
@@ -82,7 +83,8 @@ class StackingAnnotation:
                     'lines': [
                         f"Images empilées (retenues/total) : {stack['retained']}/{stack['total']}"
                     ]}
-        report = source.with_suffix('.json')
+        layout = OutputLayout.for_source(source)
+        report = layout.mosaic / 'mosaic.json' if layout else source.with_suffix('.json')
         result: JSONReport = {'status': stack['status'], 'kind': 'unknown',
                               'lines': [], 'panels': [], 'source': str(source)}
         if not report.is_file():
@@ -91,6 +93,19 @@ class StackingAnnotation:
             return result
         try:
             data = cls._read(report, source, 'output_image')
+            if data.get('assembled') is False:
+                original = data.get('image_path')
+                if not isinstance(original, str):
+                    raise ValueError('Référence du stack calibré absente du relais')
+                path = Path(original)
+                path = (path if path.is_absolute() else report.parent / path).resolve()
+                if path == source:
+                    raise ValueError('Relais de stacking cyclique')
+                count = cls._stack(path)
+                lines = ([f"Images empilées (retenues/total) : {count['retained']}/{count['total']}"]
+                         if count['status'] == 'AVAILABLE' else [])
+                return dict(status=count['status'], kind='stack', panels=[count], lines=lines,
+                            relay_source=str(source), relay_report=str(report))
             paths = data.get('input_files')
             if (not isinstance(paths, list) or len(paths) < 2
                     or not all(isinstance(p, str) and p for p in paths)):

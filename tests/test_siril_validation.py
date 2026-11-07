@@ -75,7 +75,7 @@ def test_run_siril_script_keeps_command_file(tmp_path):
     assert success is True
     assert script_path.exists()
     assert script_path.read_text() == (
-        f"requires 1.4\nsetcpu {CpuConfig.get_limit()}\nclose\n"
+        f"requires 1.4\nsetcpu {CpuConfig.get_limit()}\nsetext fits\nclose\n"
     )
 
 
@@ -119,3 +119,30 @@ def test_script_output_saved_to_log_and_logged_only_on_failure(tmp_path, caplog,
         assert 'diagnostic erreur' in output_records[0].getMessage()
     else:
         assert not output_records
+
+
+@pytest.mark.parametrize('mode', ['native', 'appimage', 'flatpak'])
+def test_all_siril_modes_set_fits_before_image_commands(tmp_path, monkeypatch, mode):
+    """L'en-tête commun impose .fits pour chaque mode d'exécution Siril."""
+    import subprocess
+
+    executable = _fake_executable(tmp_path)
+    calls = []
+
+    def run(command, **kwargs):
+        """Simule la validation de Flatpak et capture la commande exécutée."""
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout='org.siril.Siril', stderr='')
+
+    monkeypatch.setattr(subprocess, 'run', run)
+    siril = Siril(siril_path=str(executable), siril_mode=mode)
+    assert siril.run_siril_script(
+        '# Test\nrequires 1.2\nload image\nsave result\nclose\n',
+        str(tmp_path / 'work'), 'default_extension.sps',
+    )
+    script = (tmp_path / 'work/default_extension.sps').read_text()
+    assert script.count('setext fits') == 1
+    assert script.index('requires 1.4') < script.index('setext fits')
+    assert script.index('setext fits') < script.index('load image')
+    assert script.index('setext fits') < script.index('save result')
+    assert calls[-1][0] == ('flatpak' if mode == 'flatpak' else str(executable))

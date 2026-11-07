@@ -5,7 +5,7 @@
 
 Le traitement mesure l’étalement et la forme des étoiles dans les pixels des
 poses encore retenues. Il complète les mesures Siril sans exiger un nombre
-d’étoiles élevé. Il s’applique dans `02_quality`, avant pondération et
+d’étoiles élevé. Il s’applique dans `03_quality`, avant pondération et
 rééchantillonnage, avec ou sans Drizzle.
 
 ## Choix de la méthode et littérature
@@ -126,7 +126,7 @@ dans le rapport.
 
 ## Rapports et validation
 
-`02_quality/stellar_profiles.json` conserve les réglages de fenêtre, les
+`03_quality/stellar_profiles.json` conserve les réglages de fenêtre, les
 références, les mesures par étoile, les seuils par pose, les fractions concordantes,
 les statuts et les motifs. Le champ `stellar_profiles` du rapport général
 `<sortie>.drizzle.json` pointe vers ce fichier et fournit les comptes.

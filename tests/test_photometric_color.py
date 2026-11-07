@@ -451,15 +451,24 @@ def test_filter_metadata_does_not_override_pcc_or_mono_profiles(
     assert 'oscfilter' not in result['spectral_profiles']
 
 
-def test_photometry_reuses_ordered_directory(
-    rgb: Path, tmp_path: Path, fake_siril: tuple[Mock, Mock]
+@pytest.mark.parametrize("numbered", [False, True])
+def test_photometry_reuses_flat_directory(
+    rgb: Path, tmp_path: Path, fake_siril: tuple[Mock, Mock], numbered: bool,
 ) -> None:
     """Les relances réinitialisent le même dossier visible sans sortie périmée."""
     calibrator = PhotometricColorCalibrator()
     report = tmp_path / "02_photometry.json"
+    if numbered:
+        (tmp_path / "01_calibration").mkdir()
+        report = tmp_path / "03_photometrie/photometry.json"
+    original = rgb.read_bytes()
     calibrator.post_process(rgb, report)
     work = Path(fake_siril[1].run_siril_script.call_args.args[1])
-    assert work == tmp_path / "02_photometry_work/001"
+    expected = (tmp_path / "03_photometrie/02_photometrie" if numbered
+                else tmp_path / "02_photometry_work")
+    assert work == expected
+    assert not (work / "001").exists()
+    assert rgb.read_bytes() == original
     stale = work / "obsolete.fits"
     stale.write_bytes(b"obsolete")
     calibrator.post_process(rgb, report)
@@ -496,3 +505,19 @@ def test_complete_spcc_cache_selects_local_without_altering_user_preferences(
     assert saved['core']['catalogue_gaia_photo'] == str(cached)
     assert saved['core']['other_setting'] == 'kept'
     assert original.read_text() == 'untouched'
+
+
+@pytest.mark.parametrize('directory_name', ['', '.', '..', '../source', '/tmp/source', 'nested/work'])
+def test_invalid_work_directory_name_preserves_existing_files(
+    tmp_path: Path, directory_name: str,
+) -> None:
+    """Refuse un chemin de travail non local avant toute suppression."""
+    from lib.postprocess_paths import reset_work_dir
+
+    existing = tmp_path / 'result_work'
+    existing.mkdir()
+    protected = existing / 'source.fits'
+    protected.write_bytes(b'preserved')
+    with pytest.raises(ValueError, match='nom simple'):
+        reset_work_dir(tmp_path / 'result.json', directory_name=directory_name)
+    assert protected.read_bytes() == b'preserved'

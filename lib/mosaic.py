@@ -190,9 +190,11 @@ class Mosaic(processor):
         ).resolve()
         operation.mosaic_input_dir = operation.mosaic_work_dir / "input"
         operation.mosaic_output_dir = operation.mosaic_work_dir / "output"
-        final_image = operation.mosaic_work_dir / f"{operation.mosaic_name}_mosaic.fits"
+        operation.image_stem = ('image' if operation.mosaic_work_dir.name == '02_mosaic'
+                                else f'{operation.mosaic_name}_mosaic')
+        final_image = operation.mosaic_work_dir / f"{operation.image_stem}.fits"
         uncropped_image = (
-            operation.mosaic_work_dir / f"{operation.mosaic_name}_mosaic_uncropped.fits"
+            operation.mosaic_work_dir / f"{operation.image_stem}_uncropped.fits"
         )
         if (
             output_path in input_files
@@ -281,7 +283,7 @@ class Mosaic(processor):
             session_name = source_file.stem.split("_")[
                 0
             ]  # Extraire le nom de session du fichier
-            dest_filename = f"panel_{i + 1:02d}_{session_name}.fit"
+            dest_filename = f"panel_{i + 1:02d}_{session_name}.fits"
             dest_path = self.mosaic_input_dir / dest_filename
 
             # Créer un lien symbolique vers le fichier source
@@ -316,6 +318,7 @@ class Mosaic(processor):
         Returns:
             Contenu du script Siril pour la mosaïque
         """
+        image_stem = getattr(self, 'image_stem', f'{self.mosaic_name}_mosaic')
         input_dir = str(self.mosaic_input_dir)
 
         # Chemin vers les scripts Python
@@ -344,8 +347,8 @@ pyscript {pydir_path}
 
 pyscript {pyecho_path} "====================================================================="
 pyscript {pyecho_path} "============Empilement (mosaïque finale)..."
-pyscript {pyecho_path} "cmd:========> stack r_mosaic_ rej 3 3 -norm=addscale -output_norm -rgb_equal -maximize -overlap_norm -feather=5 -out={self.mosaic_name}_mosaic "
-stack r_mosaic_ rej 3 3 -norm=addscale -output_norm -rgb_equal -maximize -overlap_norm -feather=5 -out={self.mosaic_name}_mosaic 
+pyscript {pyecho_path} "cmd:========> stack r_mosaic_ rej 3 3 -norm=addscale -output_norm -rgb_equal -maximize -overlap_norm -feather=5 -out={image_stem} "
+stack r_mosaic_ rej 3 3 -norm=addscale -output_norm -rgb_equal -maximize -overlap_norm -feather=5 -out={image_stem}
 
 pyscript {pyecho_path} "====================================================================="
 
@@ -395,9 +398,10 @@ close"""
             return None
 
         # Chercher le fichier de sortie de la mosaïque
+        image_stem = getattr(self, 'image_stem', f'{self.mosaic_name}_mosaic')
         potential_outputs = [
-            self.mosaic_output_dir / f"{self.mosaic_name}_mosaic.fit",
-            self.mosaic_output_dir / f"{self.mosaic_name}_mosaic.fits",
+            self.mosaic_output_dir / f"{image_stem}.fit",
+            self.mosaic_output_dir / f"{image_stem}.fits",
         ]
 
         output_file = None
@@ -417,8 +421,8 @@ close"""
 
         # Preserve the full mosaic outside the directories removed by cleanup,
         # before attempting any crop. A failed crop leaves this file available.
-        uncropped = self.mosaic_work_dir / f"{self.mosaic_name}_mosaic_uncropped.fits"
-        final_output = self.mosaic_work_dir / f"{self.mosaic_name}_mosaic.fits"
+        uncropped = self.mosaic_work_dir / f"{image_stem}_uncropped.fits"
+        final_output = self.mosaic_work_dir / f"{image_stem}.fits"
         protected = {Path(path).resolve() for path in self.input_files}
         if uncropped.resolve() in protected or final_output.resolve() in protected:
             raise ValueError("La mosaïque ne peut pas remplacer un panneau source")

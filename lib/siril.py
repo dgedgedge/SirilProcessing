@@ -283,7 +283,9 @@ class Siril(ParameterizedComponent):
 
         La première commande du script sauvegardé est ``requires 1.4`` ; toute
         exigence de version fournie dans son en-tête est remplacée. ``setcpu``
-        est ajouté juste après cette directive. La sortie standard et les erreurs
+        est ajouté juste après cette directive, suivi de ``setext fits`` pour
+        fixer l’extension des images indépendamment des préférences Siril.
+        La sortie standard et les erreurs
         sont conservées dans le fichier journal associé.
 
         Parameters
@@ -352,7 +354,7 @@ class Siril(ParameterizedComponent):
             header[-1] += "\n"
         script_lines = (
             header
-            + ["requires 1.4\n", f"setcpu {CpuConfig.get_limit()}\n"]
+            + ["requires 1.4\n", f"setcpu {CpuConfig.get_limit()}\n", "setext fits\n"]
             + lines
         )
         siril_script_content = "".join(script_lines)

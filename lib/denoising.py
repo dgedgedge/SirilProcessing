@@ -1,4 +1,10 @@
-"""Débruitage Siril conservateur, avec comparaison sur les mêmes étoiles."""
+"""Débruitage Siril conservateur, avec comparaison sur les mêmes étoiles.
+
+Les fichiers de travail sont directs, sans niveau 001. Dans le plan numéroté,
+le dossier porte le nom du rapport sans suffixe _work ; les sources sont
+protégées avant sa réinitialisation. Le dossier préparé par un orchestrateur
+de chaînes est conservé, avec ses masques et son rapport.
+"""
 
 from __future__ import annotations
 
@@ -14,7 +20,7 @@ from astropy.io import fits
 
 from lib.deconvolution import _quote, compare_star_catalogs
 from lib.deconvolution_quality import artifact_metrics, assess_denoising, denoising_criteria
-from lib.postprocess_paths import reset_ordered_work_dir
+from lib.postprocess_paths import reset_restoration_work_dir
 from lib.siril import Siril
 from lib.logging_utils import log_duration
 from lib.processor import processor
@@ -63,7 +69,10 @@ class _DenoisingExecution:
         if self.layer not in ([0, 1, 2] if len(self.shape) == 3 else [0]):
             raise ValueError('Canal de mesure incompatible avec l’image')
         self.report.parent.mkdir(parents=True, exist_ok=True)
-        self.work = reset_ordered_work_dir(self.report)
+        self.work = reset_restoration_work_dir(
+            self.report, self.source,
+            prepared_directory=getattr(self.args, "_restoration_work_dir", None),
+        )
         self.candidate = self.work / "candidate.fits"
         self.before, self.after = self.work / "before.tsv", self.work / "after.tsv"
         self.result: JSONReport = dict(
@@ -90,7 +99,7 @@ class _DenoisingExecution:
         return "\n".join(
             [
                 f"cd {_quote(self.work)}",
-                "setext fit",
+                "setext fits",
                 "set32bits",
                 f"load {_quote(self.source)}",
                 f"denoise -vst -mod={self.modulation:g}",

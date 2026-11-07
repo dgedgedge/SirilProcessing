@@ -18,7 +18,7 @@ pondération ou de valeurs par défaut. Les limites des contrôles existants son
    directement, sans passer par les étapes suivantes.
 2. Détection des étoiles et alignement avec Siril sur toutes les entrées compatibles,
    sans rejet de qualité ni pondération préalable.
-3. Dans `02_quality`, exclusion des entrées non incluses par Siril, des mesures
+3. Dans `03_quality`, exclusion des entrées non incluses par Siril, des mesures
    invalides et des transformations géométriquement incohérentes, puis filtres successifs :
    plafond FWHM non pondérée, FWHM pondérée par seuil, rejet proportionnel FWHM,
    rondeur, nombre d’étoiles, puis profils stellaires (R80 et allongement cohérent).
@@ -61,7 +61,7 @@ Le script `04_debayer_registration.sps` se termine après ce calcul. Python
 contrôle alors la séquence `debayer_*.seq` et écrit les exclusions avant de
 permettre son rééchantillonnage. Le réalignement robuste utilise de même
 `04_realign.sps`, puis un contrôle avant `04_stacking.sps`. Ces scripts restent
-dans `04_stacking/`. Les alignements supplémentaires sont inutilisés en mode
+dans `05_stacking/`. Les alignements supplémentaires sont inutilisés en mode
 Drizzle actif, où les transformations initiales contrôlées sont appliquées.
 
 Une nouvelle séquence ne peut pas réinclure une entrée rejetée précédemment.
@@ -71,7 +71,7 @@ contrôle, le stack s’arrête avant d’appliquer cette transformation.
 
 Le rapport JSON conserve les contrôles dans `geometry_checks` et les comptes
 finaux dans `final_selection` (poses indépendantes et entrées pondérées).
-`quality_selection` décrit la sélection initiale dans `02_quality`, qui peut
+`quality_selection` décrit la sélection initiale dans `03_quality`, qui peut
 être réduite par les contrôles d’alignement ultérieurs.
 
 ## Réglages par défaut
@@ -101,7 +101,7 @@ Le contrôle complémentaire des profils mesure directement les pixels des FITS
 natifs via les objets `SequenceImage`. Voir [sa méthode et ses sources](STELLAR_PROFILE_FILTER.md).
 
 Pour `quality_mask()` dans [lib/quality_filter.py](../../../../../lib/quality_filter.py), les mesures proviennent du fichier `<séquence>.seq` produit
-par Siril à l’étape `01_registration`, puis copié dans `02_quality`.
+par Siril à l’étape `02_registration`, puis copié dans `03_quality`.
 `SirilSequence.read()` dans [lib/siril.py](../../../../../lib/siril.py)
 lit les entrées et expose les mesures via les objets `SequenceImage` et
 `RegistrationData`. Voir [le module de séquences](../../reference/SIRIL_SEQUENCE.md) pour la
@@ -203,7 +203,7 @@ le R80 et l’allongement directement dans les pixels.
 
 Les deux options utilisent **la même mesure par image : la FWHM pondérée fournie
 par Siril**. Une valeur plus faible est mieux classée. Elles interviennent au
-même endroit, dans `02_quality`, après la validité et le plafond non pondéré, avant les
+même endroit, dans `03_quality`, après la validité et le plafond non pondéré, avant les
 filtres de rondeur et du nombre d’étoiles. Elles diffèrent par la règle qui
 décide combien d’images garder.
 
@@ -357,12 +357,12 @@ Le fichier `<sortie>.drizzle.json` contient notamment :
   `quality_multiplicity` (produit des deux) ;
 - `analysis` : décision Drizzle et ses raisons.
 - `stellar_profiles` : bilan du filtre de profils et chemin vers les mesures
-  détaillées dans `02_quality/stellar_profiles.json`.
+  détaillées dans `03_quality/stellar_profiles.json`.
 
 Pour les critères Siril, le rapport ne fournit pas les seuils effectifs de chaque filtre, ni les mesures
 et le motif individuel de rejet pour toutes les poses exclues. La FWHM pondérée
 utilisée pour sélectionner n’est pas enregistrée dans `frames`. Pour examiner
-ces valeurs, consulter la séquence de `01_registration`. Le journal indique
+ces valeurs, consulter la séquence de `02_registration`. Le journal indique
 la médiane, la tolérance et les bornes effectives du filtre du nombre d’étoiles.
 
 La limite FWHM du diagnostic Drizzle décide de l’activation de Drizzle ; elle
