@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 
 from lib.final_render import AutoGHSFinalRenderer
-from lib.postprocessing import PostProcessingProcessor
+from lib.postprocess import PostProcessingProcessor
 from lib.postprocess_resume import PostProcessResume
 
 

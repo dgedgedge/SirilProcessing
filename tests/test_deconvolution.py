@@ -15,7 +15,7 @@ from lib.deconvolution import (
 from lib.processor import processor
 from lib.deconvolution_quality import InsufficientPSFStars
 from lib.postprocess import DeconvolutionProcessor, PhotometricColorCalibrator, _PostProcessorSequence
-from lib.siril_utils import Siril
+from lib.siril import Siril
 
 
 def catalog(path, stars, layer=0, profile="Gaussian"):
@@ -145,18 +145,26 @@ def test_process_saves_psf_preview_audit_and_next_input(tmp_path, simulated_siri
     result = sequence.post_process(image, tmp_path/'report.json', arguments(
         '--enable-deconvolution', '--deconvolution-iterations', '15', '-m', 'native', '-s', '/test/siril'))
     deconv = result['deconvolution']
+    assert deconv['timings']['siril_seconds'] >= 0
+    assert deconv['timings']['quality_seconds'] >= 0
+    assert deconv['processing_duration_seconds'] >= 0
     factory.assert_called_once_with(siril_path='/test/siril', siril_mode='native')
     scripts = '\n'.join(call.args[0] for call in runner.run_siril_script.call_args_list)
     assert 'findstar -layer=1 -out=01_deconvolution_siril_before_stars.tsv' in scripts
     assert 'makepsf save 01_deconvolution_siril_blind_psf.fits' in scripts
     assert 'makepsf blind -l0 -ks=15' in scripts
     assert '-iters=15 -gdstep=0.0003000 -tv -alpha=3000' in scripts
-    assert 'save 01_deconvolution_siril_simple_trial.fits\nclose\nload 01_deconvolution_siril_simple_trial.fits' in scripts
+    assert 'save 01_deconvolution_siril_simple_trial.fits\nclose' in scripts
+    detection_script = next(
+        call.args[0] for call in runner.run_siril_script.call_args_list
+        if 'simple_trial_measure.sps' in call.kwargs.get('script_name', call.args[-1])
+    )
+    assert 'findstar' in detection_script and 'rl "-loadpsf=' not in detection_script
     for key in ('psf_path', 'psf_preview_path', 'matched_stars_path', 'output_image'):
         assert Path(deconv[key]).is_file()
     first_script = Path(deconv['scripts'][0]['script_path'])
-    assert first_script.parent.name == '001'
-    assert first_script.parent.parent.name == '01_deconvolution_siril_work'
+    assert first_script.parent.name == '01_deconvolution_siril_work'
+    assert not (first_script.parent / '001').exists()
     assert deconv['comparison']['matched_count'] == 10
     assert result['next']['seen'] == deconv['output_image']
     assert image.read_bytes() == source_bytes
@@ -279,8 +287,8 @@ def test_default_enables_adaptive_search(tmp_path, simulated_siril, monkeypatch)
     assert result['selected_step'] == .0004
     assert result['search_stopped_at_step'] == .0005
     work_dir = Path(result['attempts'][0]['candidate_image_path']).parent
-    assert work_dir.name == '001'
-    assert work_dir.parent.name == 'report_work'
+    assert work_dir.name == 'report_work'
+    assert not (work_dir / '001').exists()
 
 
 def test_moffat_failure_keeps_numbered_audit(

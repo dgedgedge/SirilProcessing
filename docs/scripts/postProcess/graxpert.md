@@ -174,3 +174,7 @@ non initialisable (pilote absent, par exemple) permet encore le choix CPU à ce
 stade. `cuda` exige `CUDAExecutionProvider` ; les surcharges historiques GPU/CPU
 restent prioritaires. Une erreur pendant l'inférence ne relance pas l'image sur
 CPU, sauf activation explicite de `--graxpert-cpu-fallback`.
+
+L'accès aux poids passe par `ResourceManager`, commun au calcul et à
+l'[installateur de ressources](../install_dependances/resources.md#resource-manager).
+Un fichier local conforme, y compris fourni avec le dépôt, est utilisé sans réseau.

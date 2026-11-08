@@ -6,8 +6,17 @@
 ## Entrées compatibles
 
 Le stack final rassemble les FITS calibrés des sous-sessions d’une même session.
-Le chemin CLI déduplique les chemins recueillis. Les fichiers disparus sont
+`LightProcessor` déduplique les chemins recueillis. Les fichiers disparus sont
 écartés avant la préparation du stack.
+
+L’orchestration est portée par
+[`SessionStackingProcessor`](../../../../lib/light_stacking.py), un traitement
+fondé sur l’interface commune `processor`. `LightProcessor` orchestre la
+session, rassemble les sorties calibrées et appelle ce processeur, qui vérifie
+les layouts FITS, prépare les entrées et délègue les étapes d’alignement, de
+sélection et d’empilement à
+[`run_stack`](../../../../lib/drizzle.py). Une entrée unique est renvoyée sans
+lancer le moteur de stack.
 
 Le groupe majoritaire de même structure FITS est conservé : nombre de canaux,
 largeur, hauteur et `BITPIX`. Les structures différentes et les fichiers
@@ -19,19 +28,46 @@ Une seule entrée compatible est retournée directement, sans exécuter les
 
 ## Répertoires et étapes
 
-| Dossier sous `stacking/` | Traitement |
+Les étapes sont directement sous `01_calibration/` ou son panneau, au même
+niveau que `01_session/`. L’API sans racine explicite conserve son dossier
+`<work_dir>/<cible>/stacking/`.
+
+| Dossier de travail | Traitement |
 |---|---|
-| `00_inputs/` | Liens vers les poses calibrées compatibles, copie de secours si le lien échoue |
-| `01_registration/` | Conversion, détection des étoiles, astrométrie et alignement initial |
-| `02_quality/` | Copie indépendante des séquences, sélection, contrôle des profils et pondérations |
-| `03_capability/` | Vérification Siril si Drizzle est choisi, sinon `SKIPPED.txt` |
-| `04_stacking/` | Application des transformations et empilement |
+| `02_registration/` | Liens FITS et séquence `.seq`, détection des étoiles, astrométrie et alignement initial |
+| `03_quality/` | Copie indépendante des séquences, sélection, contrôle des profils et pondérations |
+| `04_drizzle/` | Contrôle préalable de démarrage/version Siril si Drizzle est choisi, sinon `SKIPPED.txt` |
+| `05_stacking/` | Application des transformations et empilement |
+
+Le dossier `04_drizzle/` contient `04_drizzle.sps` et son journal lorsque
+Drizzle est retenu. Ce contrôle préalable ne teste pas les commandes de
+rééchantillonnage ; leur exécution a lieu dans `05_stacking/`.
+Si Drizzle n’est pas sélectionné, `04_drizzle/SKIPPED.txt` indique le mode
+demandé, le résultat de chaque critère, puis les motifs détaillés avec les
+mesures et seuils ayant conduit au refus. Il distingue `off` (désactivation
+explicite) et le refus automatique. Les valeurs absentes sont signalées comme
+indisponibles ; une erreur d’analyse est également inscrite. Ce texte reprend
+le diagnostic du rapport `.drizzle.json`, sans recalculer les critères.
+
+La séquence `.seq` est écrite avec `SirilSequence.from_files`, directement
+à côté des liens vers les poses calibrées (copies si les liens échouent).
+Aucune commande `convert` n’est exécutée. La préparation ne modifie ni les
+pixels ni les en-têtes sources. Le générateur commun `Siril.prepare_script`,
+appelé par `run_siril_script`, ajoute `setext fits` à chaque en-tête ;
+les corps de commandes n’ont plus à répéter ce réglage. Les images
+astrométriques remplacent ainsi les liens locaux `.fits` sans créer de
+doublons `.fit` : leur coexistence rendrait la séquence ambiguë. Les sources
+calibrées restent intactes. La préparation est testée sur FITS synthétiques ;
+le passage astrométrie → contrôle qualité a aussi été vérifié avec Siril 1.4.4
+sur deux copies de poses M31, sans doublon ni modification des copies sources.
+Voir la [documentation Siril sur les FITS et séquences](https://siril.readthedocs.io/en/stable/preprocessing/conversion.html).
 
 L’alignement initial est calculé sur toutes les entrées compatibles, avant
 rejet de qualité et avant répétitions de pondération :
 
 ```text
-convert <session>_ -out=<01_registration>
+setext fits
+cd <02_registration>
 seqfindstar <session>_
 seqplatesolve <session>_ -force -nocache -disto=ps_distortion
 register <session>_ -2pass -transf=<transformation>
@@ -46,7 +82,10 @@ modèle objet de séquence ; elles ne sont pas recalculées par Python.
 Le début du stacking d’une session et chacune de ses étapes sont annoncés en
 INFO par un titre entre deux lignes de `=`. Le format est commun au
 [post-traitement](../../postProcess/pipeline.md#bandeaux-du-journal). Les messages
-sont enregistrés dans la console et les journaux de stacking.
+sont enregistrés dans la console et dans l’unique journal de stacking de la
+session fournie, `<travail>/<session>/stacking/<session>_stacking.log`. Les
+journaux de ses sous-sessions restent réservés à leur calibration ; les
+événements du stack global ne sont pas recopiés dans ces journaux.
 
 ```text
 ============================================================
@@ -63,7 +102,7 @@ Les titres suivent l’ordre du calcul :
 | Titre après `Stacking —` | Condition |
 |---|---|
 | Préparation des images calibrées | Préparation d’un nouvel empilement de plusieurs images |
-| Alignement initial des images | Appel du script initial de conversion et d’alignement |
+| Alignement initial des images | Appel du script initial de détection et d’alignement |
 | Contrôle de qualité, sélection et pondération | Après réussite de l’alignement initial |
 | Analyse et choix du Drizzle | Après la sélection des poses |
 | Vérification de la compatibilité Drizzle | Si l’analyse sélectionne Drizzle |
@@ -81,7 +120,7 @@ Une entrée unique retourne directement son image, sans bandeaux de sous-étapes
 
 ## Sélection et pondération
 
-Dans `02_quality`, les contrôles géométriques, la validité des mesures, les
+Dans `03_quality`, les contrôles géométriques, la validité des mesures, les
 filtres FWHM, la rondeur et le nombre d’étoiles précèdent la mesure des profils
 stellaires. Les seuils utilisent les poses indépendantes. Les répétitions
 FWHM/rondeur sont calculées après cette sélection, mais les répétitions sont
@@ -150,3 +189,10 @@ que le code n’effectue pas.
 Le succès demande que Siril termine correctement et que le FITS final existe.
 Le rapport est alors marqué `completed` ; les échecs conservent leurs raisons.
 Voir [les sorties et la reprise](OUTPUTS.md).
+
+Les transferts entre étapes copient les métadonnées scientifiques et
+référencent les FITS ; ils omettent les pages HTML, également dans les
+sous-dossiers. Les index sont régénérés à partir des résultats propres à
+chaque étape. Les nettoyages des anciens dossiers `input/output` restent
+réservés à l’API historique : une racine explicite n’est pas traitée comme
+l’ancienne enveloppe `stacking/`.

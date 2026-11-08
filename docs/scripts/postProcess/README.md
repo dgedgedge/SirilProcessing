@@ -5,6 +5,13 @@
 `bin/postProcess.py` traite une image FITS dans cet ordre :
 **correction du gradient → étalonnage spectrophotométrique → comparaison des chaînes complètes de restauration**.
 Chaque étape reçoit l’image retenue par la précédente et produit un rapport JSON.
+Les [contrôles de qualité sont des processeurs récursifs](quality-processors.md),
+avec des analyses indépendantes sur étoiles, tuiles et régions diffuses.
+Le [bruit sur tuiles](noise-tiles.md) utilise un échantillon spatial plafonné
+et des lots NumPy/PyTorch, selon la politique CPU/GPU commune. Les filtres et
+statistiques partagent un [moteur PyTorch CUDA/MPS](torch-compute.md).
+Les [temps de traitement](timings.md) sont journalisés en INFO et enregistrés
+dans les rapports pour auditer les préparations, moteurs et contrôles de restauration.
 La [qualité astrophotographique](quality.md) utilise par défaut des masques fixes,
 des mesures de bruit avec incertitude et des diagnostics du signal diffus.
 `--quality-mode legacy --no-restoration-compare-chains` retrouve les métriques
@@ -453,9 +460,9 @@ les évaluations actives, leurs mesures et verdicts, les scores des candidats
 acceptés puis le choix final. Voir le [détail du journal comparatif](cosmic-clarity.md#déroulé-comparatif-des-étapes-03-et-04).
 
 Chaque moteur recrée son dossier de travail :
-`03_deconvolution_siril_work/001/` ou
-`03_deconvolution_cosmic_clarity_work/001/`. Le nom sans suffixe de moteur
-(`03_deconvolution_work/001/`) concerne l’appel direct Siril historique en
+`03_deconvolution_siril_work/` ou
+`03_deconvolution_cosmic_clarity_work/`. Le nom sans suffixe de moteur
+(`03_deconvolution_work/`) concerne l’appel direct Siril historique en
 mode `legacy`, sans Clarity. Cela évite les reliquats d’un lancement précédent.
 
 | Option | Défaut local | Rôle |
@@ -524,8 +531,8 @@ stellaires Siril et contrôles d’artefacts que pour Siril.
 [GraXpert natif](graxpert.md) produit un troisième candidat lorsque ses poids
 locaux sont valides ou que son activation est forcée, sauf désactivation explicite.
 Chaque moteur recrée son
-propre dossier `04_denoise_<moteur>_work/001/`. Le dossier sans suffixe
-`04_denoise_work/001/` concerne le mode direct Siril historique, sans Clarity
+propre dossier `04_denoise_<moteur>_work/`. Le dossier sans suffixe
+`04_denoise_work/` concerne le mode direct Siril historique, sans Clarity
 ni GraXpert, avec `--quality-mode legacy`.
 
 La sélection suit la même logique que pour la déconvolution :
@@ -652,21 +659,21 @@ rapports/
     ├── 01_gradient_image_RGB_measurement_points.png
     ├── 02_photometry.json
     ├── 02_photometry.fits
-    ├── 02_photometry_work/001/
+    ├── 02_photometry_work/
     ├── 03_restoration.json
     ├── 03_restoration.fits
     ├── 03_restoration_summary.txt
     ├── 03_restoration_work/
     ├── 05_autoghs.json
     └── 05_autoghs_work/
-        ├── 001/separation_work/
-        ├── 002_stars/
-        ├── 003_ghs/
+        ├── 01_separation/separation_work/
+        ├── 02_stars/
+        ├── 03_ghs/
         │   └── 03_restoration_starless_ghs_range.fits
-        ├── 004_recomposition/
+        ├── 04_recomposition/
         │   ├── 03_restoration_render_range.fits
         │   └── 03_restoration_render_range.jpg
-        └── 005_diagnostics/
+        └── 05_diagnostics/
 ```
 
 Cet arbre omet les copies FITS et audits propres à chaque moteur de restauration.
@@ -722,5 +729,20 @@ argparse retourne `2` pour une ligne de commande invalide.
 AutoGHS conserve le numéro `05`, y compris lorsque `03_restoration` regroupe les
 étapes 03/04. Ses produits sont écrits dans `05_autoghs_work/`, avec des
 sous-dossiers numérotés pour la séparation, les étoiles, GHS, la recomposition et
-les diagnostics. La photométrie utilise `02_photometry_work/001/`. Ces dossiers
+les diagnostics. La photométrie utilise `02_photometry_work/`. Ces dossiers
 visibles sont réinitialisés à chaque lancement ; voir [AutoGHS](auto-ghs.md).
+
+La [recherche GHS par quartiles](ghs-quartiles.md) complète le rendu automatique
+par des passes successives, avec budget cumulé du point noir.
+
+La [sélection des régions diffuses](diffuse-regions.md) limite leur nombre
+en conservant une représentation spatiale et par tailles sur la référence.
+
+Dans l’arborescence numérotée de lightProcess, les scripts et journaux
+photométriques sont directement sous `03_photometrie/02_photometrie/`,
+sans sous-dossier `001`. Le rapport reste `03_photometrie/photometry.json`.
+
+Les résultats sont également consultables dans les
+[index HTML hiérarchiques](../lightProcess/html-reports.md), avec aperçus
+JPEG/PNG, rapports et liens FITS. Le parent du rapport global porte l’accueil
+en mode autonome ; le plan numéroté conserve l’accueil à la racine de l’objet.

@@ -8,7 +8,7 @@ import pytest
 from astropy.io import fits
 
 from lib.quality_filter import classify_stellar_profiles, filter_stellar_profiles
-from lib.siril_sequence import RegistrationData, SequenceImage, SirilSequence
+from lib.siril import RegistrationData, SequenceImage, SirilSequence
 from lib.stellar_quality import measure_stellar_profiles, measure_stamp
 
 
@@ -134,9 +134,11 @@ def test_profiles_read_bound_native_file_and_skip_previous_rejections(tmp_path):
 
 
 def test_stellar_filter_defaults_are_enabled():
-    from lib.config import Config
-    assert Config.DEFAULTS['stellar_profile_filter'] is True
-    assert Config.DEFAULTS['stellar_profile_sigma'] == 3
+    from lib.light_stacking import SessionStackingProcessor
+
+    defaults = SessionStackingProcessor.CONFIG_DEFAULTS
+    assert defaults['stellar_profile_filter'] is True
+    assert defaults['stellar_profile_sigma'] == 3
 
 
 def test_profile_read_errors_preserve_selection_and_are_reported(tmp_path, caplog):
@@ -173,7 +175,7 @@ def test_pixel_filter_excludes_defects_before_stacking(
             if kwargs.get('script_name') == '04_applyreg.sps':
                 simulated_registered_sequence(directory, 'light_', 'r_light_')
             if '\nstack ' in script:
-                selected = SirilSequence.read(tmp_path/'04_stacking/light_.seq')
+                selected = SirilSequence.read(tmp_path/'05_stacking/light_.seq')
                 assert [i.number for i in selected.images] == list(range(3, 13))
                 assert all(i.included for i in selected.images)
                 (tmp_path/'final.fit').touch()
@@ -184,7 +186,7 @@ def test_pixel_filter_excludes_defects_before_stacking(
                          tmp_path, tmp_path, 'light_', tmp_path/'final', 'requires 1.2',
                          'stack r_light_ rej 3 3 -out=final', 'min')
     assert seq.path.read_bytes() == original
-    report = json.loads((tmp_path/'02_quality/stellar_profiles.json').read_text())
+    report = json.loads((tmp_path/'03_quality/stellar_profiles.json').read_text())
     assert report['rejected'] == 2 and report['remaining'] == 10
     assert report['frames'][1]['reasons'] == ['r80', 'elongation']
     assert 'étalement R80 : 2 image(s) retirée(s)' in caplog.text
@@ -199,3 +201,22 @@ def test_pixel_filter_excludes_defects_before_stacking(
     final = json.loads((tmp_path/'final.drizzle.json').read_text())
     assert final['stellar_profiles']['rejected'] == 2
     assert final['quality_selection']['independent_retained'] == 10
+
+
+def test_profile_thresholds_are_stored_once_per_comparable_group() -> None:
+    """Les poses référencent des seuils communs, différents selon le groupe."""
+    first = [measured_frame(r80=4) for _ in range(8)]
+    second = [measured_frame(r80=8) for _ in range(8)]
+    for frame in second:
+        frame['group'][7] = 1100
+    unmatched = measured_frame()
+    unmatched['group'][7] = 1600
+    references = classify_stellar_profiles(first + second + [unmatched], {})
+    assert [reference['reference_id'] for reference in references] == [1, 2]
+    assert references[0]['r80']['limit'] == 5
+    assert references[1]['r80']['limit'] == 10
+    assert all(frame['reference_id'] == 1 for frame in first)
+    assert all(frame['reference_id'] == 2 for frame in second)
+    assert all('limits' not in frame for frame in first + second + [unmatched])
+    assert unmatched['status'] == 'insufficient_reference'
+    assert 'reference_id' not in unmatched

@@ -64,7 +64,8 @@ des surcharges explicites, y compris dans les anciens JSON. Voir la
 [politique commune, ses priorités et ses limites](compute-backend.md).
 Sur Apple Silicon, `auto` sélectionne MPS pour Cosmic Clarity et CoreML pour
 GraXpert lorsqu'ils sont utilisables. `--cosmic-device mps` force ce seul moteur ;
-AutoGHS et la saturation restent sur CPU. Voir [le guide Mac](../install_macos/README.md).
+La couleur finale et les diagnostics bruit/diffus utilisent aussi PyTorch MPS ;
+AutoGHS reste sur CPU. Voir [le guide Mac](../install_macos/README.md).
 
 <a id="options-des-traitements"></a>
 
@@ -95,6 +96,7 @@ avec `-S` ; les détails figurent dans [Annotation finale](annotations.md).
 | `--autoghs-only` | désactivé | Reprendre à StarNet/AutoGHS, puis saturation, exports et annotation ; saturation activée pour cet appel sauf `--disable-final-color` explicite ; non mémorisable |
 | `--color-only` | désactivé | Reprendre seulement la couleur, la fusion et les exports sur les couches GHS existantes ; non mémorisable |
 | `--enable-final-color` / `--disable-final-color` | activé | Activer/désactiver la [couleur finale adaptative](final-color.md) après GHS ; mémorisable avec `-S` |
+| `--final-color-backend` | non définie | Surcharge PyTorch `auto`, `cpu`, `cuda` ou `mps` ; sinon politique commune |
 | `--final-color-strength` | `3.0` | Excès de gain chromatique maximal, dans `[0,3]` ; 0 redonne le rendu GHS sans renforcement ; mémorisable |
 | `--ghs-final-mode` | `auto` | Recherche D/B/SP/HP protégée ; `fixed` pour comparer l'ancienne courbe |
 | `--ghs-highlight-retention` | `0.9` | Conservation minimale des indicateurs de contraste brillant, dans `]0,1]` |
@@ -102,3 +104,29 @@ avec `-S` ; les détails figurent dans [Annotation finale](annotations.md).
 
 Voir [le mode de relance](README.md#relance-autoghs-seul) et
 [la méthode de protection](ghs-highlight-protection.md).
+
+### Étirements GHS successifs
+
+`--ghs-quartile-iterations` (12, entre 0 et 64),
+`--ghs-quartile-max-strength` (10, dans ]0,10]),
+`--ghs-linearity-tolerance` (0,05 dex, entre 0,005 et 0,5) et
+`--ghs-blackpoint-loss` (0,001, entre 0 et 0,01) contrôlent la
+[recherche de la droite logarithmique la plus longue](ghs-quartiles.md), après la passe finale protégée.
+`--ghs-tail-height` (0,25, de 0 à 1) ajoute une cible de hauteur logarithmique
+vers 0,875, par rapport au pic de `--ghs-tail-channel` (`red` par défaut,
+`green` ou `blue` possibles). Zéro conserve le seul objectif de longueur.
+Le mode fixe et `--ghs-final-strength 0` désactivent cette recherche.
+
+### Régions de qualité diffuse
+
+`--quality-max-diffuse-regions` limite à 256 régions par défaut, avec
+répartition spatiale et classes de tailles ; 0 conserve toutes les régions.
+Voir [la sélection et son audit](diffuse-regions.md).
+
+`--quality-noise-backend auto|cpu|cuda|mps` surcharge la politique commune
+pour le [bruit sur tuiles](noise-tiles.md), sans changer les autres diagnostics.
+
+`--quality-diffuse-backend cuda` impose PyTorch CUDA aux filtrages multiscales diffus ;
+`mps` impose PyTorch Metal sur Mac et `auto` choisit CUDA, MPS ou CPU ;
+sans surcharge, ils suivent `--compute-backend auto` ou `cpu`. Les fenêtres
+retenues, mesures de flux et seuils gardent les mêmes définitions.

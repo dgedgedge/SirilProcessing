@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 from astropy.io import fits
 
-from lib.siril_sequence import SirilSequence, RegistrationData
+from lib.siril import SirilSequence, RegistrationData
 from lib.quality_filter import filter_registration_geometry
 
 

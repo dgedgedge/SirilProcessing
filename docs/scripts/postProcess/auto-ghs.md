@@ -13,6 +13,10 @@ séparation StarNet, un étirement dédié aux étoiles, puis une optimisation R
 fond sans étoiles et une recomposition. Les étapes amont gardent leur ordre.
 Chaque fond passe aussi par une recherche finale D/B/SP/HP avec protection des
 hautes lumières, après l’optimisation et la chroma éventuelle, avant la fusion.
+Elle est complétée par des [étirements successifs de la droite logarithmique](ghs-quartiles.md)
+pour allonger la portion continue rectiligne après le pic, jusqu’à 0,875, sans
+privilégier une pente nulle. Le niveau relatif de la queue est également
+recherché, par défaut à 0,25 de la hauteur logarithmique rouge vers 0,875.
 
 La [couleur finale adaptative](final-color.md), activée par défaut, renforce ensuite
 le fond sans étoiles. Sauf `--disable-final-color`, elle remplace la
@@ -92,12 +96,15 @@ sont ordonnées dans les sous-dossiers suivants :
 
 ```text
 05_autoghs_work/
-  001/separation_work/  # entrée, fond et étoiles linéaires, script et journal Siril
-  002_stars/           # couche d’étoiles rendue commune
-  003_ghs/             # fond étiré RANGE
-  004_recomposition/   # résultat final avec étoiles, FITS et JPEG
-  005_diagnostics/     # graphiques et rapport détaillé
+  01_separation/separation_work/  # entrée, fond et étoiles linéaires, script et journal Siril
+  02_stars/           # couche d’étoiles rendue commune
+  03_ghs/             # fond étiré RANGE
+  04_recomposition/   # résultat final avec étoiles, FITS et JPEG
+  05_diagnostics/     # graphiques et rapport détaillé
 ```
+
+La séparation est une étape nommée `01_separation`, au même niveau que
+les autres traitements ; aucun répertoire nommé `001` n’est créé.
 
 Les fichiers sont répartis dans ces sous-dossiers :
 
@@ -107,8 +114,8 @@ Les fichiers sont répartis dans ces sous-dossiers :
 | `<image>_render_range.jpg` | Export JPEG RGB pleine résolution du résultat final |
 | `<image>_starless_ghs_range.fits` | Fond étiré RANGE utilisé pour la recomposition |
 | `<image>_stars_render.fits` | Couche d'étoiles étirée |
-| `<image>_stars_render.jpg` | Couche d'étoiles entière en JPEG, dans `002_stars/` |
-| `<image>_stars_diagnostic.png` | Étoiles seules : extraits avant/après, histogrammes log et bilan d'adaptation dans `002_stars/` |
+| `<image>_stars_render.jpg` | Couche d'étoiles entière en JPEG, dans `02_stars/` |
+| `<image>_stars_diagnostic.png` | Étoiles seules : extraits avant/après, histogrammes log et bilan d'adaptation dans `02_stars/` |
 | `<image>_ghs_report.json` | Rapport complet, paramètres, histogrammes et métriques |
 | `<image>_ghs_histograms.png` | Sans étoiles : entrée, étape intermédiaire et rendu final ; axes Y linéaire et logarithmique |
 | `<image>_ghs_histograms_with_stars.png` | Avec étoiles : rendu final recomposé seul ; axes Y linéaire et logarithmique |
@@ -156,6 +163,12 @@ astronomique.
 | Option | Défaut | Rôle |
 |---|---|---|
 | `--compute-backend` | `auto` | Politique commune de postProcess ; NumPy/CuPy pour le GHS |
+| `--ghs-tail-height` | `0.25` | Hauteur log cible du canal à 0,875 ; `[0,1]`, zéro désactive le complément |
+| `--ghs-tail-channel` | `red` | Canal de référence `red`, `green` ou `blue`, normalisé par son propre pic |
+| `--ghs-linearity-tolerance` | `0.05` | RMS maximal en dex pour une droite log ; `[0.005,0.5]` |
+| `--ghs-quartile-iterations` | `12` | Passes supplémentaires pour allonger la droite log, de 0 à 64 |
+| `--ghs-quartile-max-strength` | `10` | D maximal par passe supplémentaire, dans ]0,10] |
+| `--ghs-blackpoint-loss` | `0.001` | Fraction cumulée annulable pour un pic sombre isolé, de 0 à 0,01 |
 | `--ghs-max-iterations` | `8` | Limite de 1 à 32 recherches GHS |
 | `--ghs-final-strength` | `1.25` | D maximal en mode auto, force imposée en mode fixed ; 0 désactive |
 | `--ghs-final-mode` | `auto` | Recherche protégée ou courbe comparative `fixed` |
@@ -296,7 +309,7 @@ partiellement les intensités du fond, sous plafond de contraste ; le second
 renforce uniquement la couche stellaire extraite. Les valeurs 0 et 1,
 respectivement, désactivent ces deux ajouts. L'adaptation stellaire est pilotée
 séparément par `--star-histogram-strength` (défaut 0,8 ; 0 la désactive).
-Le diagnostic dédié et les exports des étoiles se trouvent dans `002_stars/`.
+Le diagnostic dédié et les exports des étoiles se trouvent dans `02_stars/`.
 Voir les pages
 [algorithme](auto-ghs-algorithm.md) et [étoiles](star-rendering.md).
 

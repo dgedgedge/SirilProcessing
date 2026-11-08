@@ -45,9 +45,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from lib.config import Config
 from lib.logging_utils import setup_logging
-from lib.postprocessing import PostProcessingProcessor
+from lib.postprocess import PostProcessingProcessor
 from lib.power_guard import PowerGuard
-from lib.siril_utils import Siril
+from lib.siril import Siril
 
 
 def main() -> int:
@@ -85,7 +85,7 @@ def main() -> int:
         default="INFO",
     )
 
-    config.register(Siril, parser, photometry_aliases=True)
+    config.register(Siril, parser)
     config.add_arguments(parser)
 
     config.register(PostProcessingProcessor, parser)

@@ -11,7 +11,7 @@ import pytest
 
 from lib.config import Config
 from lib.final_annotation import FinalImageAnnotator
-from lib.postprocessing import PostProcessingProcessor
+from lib.postprocess import PostProcessingProcessor
 from lib.render_exports import read_render_image
 from lib.type_defs import JSONReport
 

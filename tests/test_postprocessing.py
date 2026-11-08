@@ -18,13 +18,14 @@ import pytest
 from astropy.io import fits
 
 from lib.config import Config
+from lib.lightprocessor import LightProcessor
 from lib.mosaic import Mosaic
 from lib.postprocess import GradientExtractor, _PostProcessorSequence
-from lib.postprocessing import PostProcessingProcessor
+from lib.postprocess import PostProcessingProcessor
 from lib.power_guard import PowerGuard
 from lib.processor import processor
 from lib.render_exports import write_render_jpeg
-from lib.siril_utils import Siril
+from lib.siril import Siril
 from lib.star_separation import StarNetSeparator
 from lib.type_defs import JSONReport
 
@@ -33,10 +34,11 @@ def configured_args(config: Config, *options: str) -> argparse.Namespace:
     """Résout un parseur commun avec les mêmes déclarations qu’en CLI."""
     parser = argparse.ArgumentParser()
     config.add_arguments(parser)
-    config.register(Siril, parser, photometry_aliases=True)
-    config.register(PostProcessingProcessor, parser, include_activation=True)
+    config.register(LightProcessor, parser)
+    config.register(Siril, parser)
+    config.register(PostProcessingProcessor, parser)
     parser.add_argument("--log-level", default="INFO")
-    return config.parse_args(parser, list(options))
+    return config.parse_args(parser, ["session-placeholder", *options])
 
 
 @pytest.mark.parametrize("mosaic_first", [False, True])
@@ -160,7 +162,7 @@ def test_direct_and_cli_share_calculation_and_exports(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Même configuration sans couleur : exports et bandeau initial communs."""
-    import lib.postprocessing as processing
+    import lib.postprocess as processing
 
     source = tmp_path / "source.fits"
     rendered = tmp_path / "rendered.fits"

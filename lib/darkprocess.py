@@ -14,7 +14,7 @@ import shutil
 
 from lib.config import Config
 from lib.fits_info import FitsInfo
-from lib.siril_utils import Siril
+from lib.siril import Siril
 
 
 class DarkLib:
@@ -40,19 +40,23 @@ class DarkLib:
         "report": False,
         "max_hot_pixels_percent": 1.0,
         "input_dirs": None,
+        "min_median_for_tests": 10.0,
+        "max_median_adu": 200.0,
+        "max_mad_factor": 0.15,
+        "max_central_dispersion": 0.4,
     }
 
     @classmethod
     def add_arguments(cls, parser: argparse.ArgumentParser) -> None:
         """Déclare les paramètres du traitement avec leurs défauts locaux."""
-        config = cls.CONFIG_DEFAULTS
+        defaults = cls.CONFIG_DEFAULTS
         # Configuration des arguments
         parser.add_argument(
             "-i",
             "--input-dirs",
             dest="input_dirs",
             nargs="+",
-            default=config.get("input_dirs"),
+            default=defaults["input_dirs"],
             help="Liste des répertoires contenant les fichiers dark à traiter",
         )
         parser.add_argument(
@@ -60,16 +64,16 @@ class DarkLib:
             "--dark-library-path",
             dest="dark_library_path",
             type=str,
-            default=config.get("dark_library_path"),
-            help=f"Répertoire où sont stockés les master darks. (Défaut: '{config.get('dark_library_path')}')",
+            default=defaults["dark_library_path"],
+            help=f"Répertoire où sont stockés les master darks. (Défaut: '{defaults['dark_library_path']}')",
         )
         parser.add_argument(
             "-w",
             "--work-dir",
             dest="work_dir",
             type=str,
-            default=config.get("work_dir"),
-            help=f"Répertoire de travail temporaire. (Défaut: '{config.get('work_dir')}')",
+            default=defaults["work_dir"],
+            help=f"Répertoire de travail temporaire. (Défaut: '{defaults['work_dir']}')",
         )
         parser.add_argument(
             "-D",
@@ -106,15 +110,15 @@ class DarkLib:
             "--max-age",
             dest="max_age",
             type=int,
-            default=config.get("max_age_days"),
-            help=f"Nombre maximum de jours d'écart entre le dark le plus récent et le plus ancien d'un groupe. (Défaut: {config.get('max_age_days')} jours)",
+            default=defaults["max_age_days"],
+            help=f"Nombre maximum de jours d'écart entre le dark le plus récent et le plus ancien d'un groupe. (Défaut: {defaults['max_age_days']} jours)",
         )
         parser.add_argument(
             "-c",
             "--cfa",
             dest="cfa",
             action="store_true",
-            default=config.get("cfa", False),
+            default=defaults["cfa"],
             help="Indique que les images sont en couleur (CFA). Par défaut, les images sont considérées monochromes.",
         )
         parser.add_argument(
@@ -122,53 +126,53 @@ class DarkLib:
             "--output-norm",
             dest="output_norm",
             choices=["addscale", "noscale", "rejection"],
-            default=config.get("output_norm"),
-            help=f"Méthode de normalisation pour Siril. (Défaut: '{config.get('output_norm')}')",
+            default=defaults["output_norm"],
+            help=f"Méthode de normalisation pour Siril. (Défaut: '{defaults['output_norm']}')",
         )
         parser.add_argument(
             "-r",
             "--rejection-method",
             dest="rejection_method",
             choices=["winsorizedsigma", "sigma", "minmax", "percentile", "none"],
-            default=config.get("rejection_method"),
-            help=f"Méthode de rejet pour Siril. (Défaut: '{config.get('rejection_method')}')",
+            default=defaults["rejection_method"],
+            help=f"Méthode de rejet pour Siril. (Défaut: '{defaults['rejection_method']}')",
         )
         parser.add_argument(
             "--rejection-param1",
             dest="rejection_param1",
             type=float,
-            default=config.get("rejection_param1"),
-            help=f"Premier paramètre de rejet pour Siril. (Défaut: {config.get('rejection_param1')})",
+            default=defaults["rejection_param1"],
+            help=f"Premier paramètre de rejet pour Siril. (Défaut: {defaults['rejection_param1']})",
         )
         parser.add_argument(
             "--rejection-param2",
             dest="rejection_param2",
             type=float,
-            default=config.get("rejection_param2"),
-            help=f"Second paramètre de rejet pour Siril. (Défaut: {config.get('rejection_param2')})",
+            default=defaults["rejection_param2"],
+            help=f"Second paramètre de rejet pour Siril. (Défaut: {defaults['rejection_param2']})",
         )
         parser.add_argument(
             "--stack-method",
             dest="stack_method",
             choices=["average", "median"],
-            default=config.get("stack_method"),
-            help=f"Méthode d'empilement: 'average' (Empilement par moyenne avec rejet) ou 'median' (Empilement médian). (Défaut: '{config.get('stack_method')}')",
+            default=defaults["stack_method"],
+            help=f"Méthode d'empilement: 'average' (Empilement par moyenne avec rejet) ou 'median' (Empilement médian). (Défaut: '{defaults['stack_method']}')",
         )
         parser.add_argument(
             "-t",
             "--temperature-precision",
             dest="temperature_precision",
             type=float,
-            default=config.get("temperature_precision"),
-            help=f"Précision d'arrondi pour la température en degrés Celsius. (Défaut: {config.get('temperature_precision')}°C)",
+            default=defaults["temperature_precision"],
+            help=f"Précision d'arrondi pour la température en degrés Celsius. (Défaut: {defaults['temperature_precision']}°C)",
         )
         parser.add_argument(
             "-n",
             "--min-darks-threshold",
             dest="min_darks_threshold",
             type=int,
-            default=config.get("min_darks_threshold", 10),
-            help=f"Seuil minimum de darks pour mettre à jour un master dark existant. Un master dark sera remplacé si le nombre de darks disponibles dépasse ce seuil OU s'il dépasse le nombre de darks utilisés dans le master dark précédent. (Défaut: {config.get('min_darks_threshold', 0)})",
+            default=defaults["min_darks_threshold"],
+            help=f"Seuil minimum de darks pour mettre à jour un master dark existant. Un master dark sera remplacé si le nombre de darks disponibles dépasse ce seuil OU s'il dépasse le nombre de darks utilisés dans le master dark précédent. (Défaut: {defaults['min_darks_threshold']})",
         )
         parser.add_argument(
             "-f",
@@ -182,7 +186,7 @@ class DarkLib:
             "--validate-darks",
             dest="validate_darks",
             action="store_true",
-            default=config["validate_darks"],
+            default=defaults["validate_darks"],
             help="Valide les fichiers darks par analyse statistique avant empilement (activé par défaut).",
         )
         parser.add_argument(
@@ -196,7 +200,7 @@ class DarkLib:
             "--report",
             dest="report",
             action="store_true",
-            default=config.get("report", False),
+            default=defaults["report"],
             help="Génère un rapport détaillé du traitement et de la validation effectués.",
         )
         parser.add_argument(
@@ -209,35 +213,35 @@ class DarkLib:
             "--min-median-for-tests",
             dest="min_median_for_tests",
             type=float,
-            default=10.0,
+            default=defaults["min_median_for_tests"],
             help="Seuil minimal de médiane (en ADU) au-dessus duquel les tests de robustesse (MAD/median et dispersion centrale) sont effectués lors de la validation des darks. (Défaut: 10.0 ADU)",
         )
         parser.add_argument(
             "--max-median-adu",
             dest="max_median_adu",
             type=float,
-            default=200.0,
+            default=defaults["max_median_adu"],
             help="TEST 1: Médiane maximale acceptable (en ADU) pour un dark valide. Au-delà de ce seuil, le dark est rejeté car il contient probablement de la lumière parasite (capot mal fermé, pollution lumineuse). (Défaut: 200.0 ADU)",
         )
         parser.add_argument(
             "--max-hot-pixels-percent",
             dest="max_hot_pixels_percent",
             type=float,
-            default=1.0,
+            default=defaults["max_hot_pixels_percent"],
             help="TEST 2: Pourcentage maximal acceptable de pixels chauds (définis comme mean + 3×std). Au-delà de ce seuil, le dark est rejeté car il contient probablement des étoiles ou de la lumière. (Défaut: 1.0%%)",
         )
         parser.add_argument(
             "--max-mad-factor",
             dest="max_mad_factor",
             type=float,
-            default=0.15,
+            default=defaults["max_mad_factor"],
             help="TEST 3: Facteur maximal acceptable pour le ratio MAD/médiane (bruit relatif robuste). Ce test n'est effectué que si médiane > min_median_for_tests. Un ratio élevé indique une illumination non uniforme ou un gradient. (Défaut: 0.15)",
         )
         parser.add_argument(
             "--max-central-dispersion",
             dest="max_central_dispersion",
             type=float,
-            default=0.4,
+            default=defaults["max_central_dispersion"],
             help="TEST 4: Dispersion centrale maximale acceptable, calculée comme (p90-p10)/médiane. Ce test n'est effectué que si médiane > min_median_for_tests. Une dispersion élevée indique une illumination variable. (Défaut: 0.4)",
         )
 
@@ -279,27 +283,48 @@ class DarkLib:
             force_recalc = config.get("force_recalc", False)
 
         # Configuration
-        self.dark_library_path = config.get("dark_library_path")
-        self.work_dir = config.get("work_dir")
-        self.siril_cfa = config.get("cfa", False)
-        self.siril_output_norm = config.get("output_norm", "noscale")
-        self.siril_rejection_method = config.get("rejection_method", "winsorizedsigma")
-        self.siril_rejection_param1 = config.get("rejection_param1", 3.0)
-        self.siril_rejection_param2 = config.get("rejection_param2", 3.0)
-        self.siril_stack_method = config.get("stack_method", "average")
-        self.max_age_days = config.get("max_age_days", 182)
+        defaults = self.CONFIG_DEFAULTS
+        self.dark_library_path = config.get(
+            "dark_library_path", defaults["dark_library_path"]
+        )
+        self.work_dir = config.get("work_dir", defaults["work_dir"])
+        self.siril_cfa = config.get("cfa", defaults["cfa"])
+        self.siril_output_norm = config.get("output_norm", defaults["output_norm"])
+        self.siril_rejection_method = config.get(
+            "rejection_method", defaults["rejection_method"]
+        )
+        self.siril_rejection_param1 = config.get(
+            "rejection_param1", defaults["rejection_param1"]
+        )
+        self.siril_rejection_param2 = config.get(
+            "rejection_param2", defaults["rejection_param2"]
+        )
+        self.siril_stack_method = config.get("stack_method", defaults["stack_method"])
+        self.max_age_days = config.get("max_age_days", defaults["max_age_days"])
 
         # Initialisation de l'instance Siril avec la configuration par défaut
         self.siril = Siril.create_with_defaults()
-        self.temperature_precision = config.get("temperature_precision", 0.5)
-        self.min_darks_threshold = config.get("min_darks_threshold", 0)
+        self.temperature_precision = config.get(
+            "temperature_precision", defaults["temperature_precision"]
+        )
+        self.min_darks_threshold = config.get(
+            "min_darks_threshold", defaults["min_darks_threshold"]
+        )
 
         # Paramètres de validation des darks
-        self.min_median_for_tests = config.get("min_median_for_tests", 10.0)
-        self.max_median_adu = config.get("max_median_adu", 200.0)
-        self.max_hot_pixels_percent = config.get("max_hot_pixels_percent", 1.0)
-        self.max_mad_factor = config.get("max_mad_factor", 0.15)
-        self.max_central_dispersion = config.get("max_central_dispersion", 0.4)
+        self.min_median_for_tests = config.get(
+            "min_median_for_tests", defaults["min_median_for_tests"]
+        )
+        self.max_median_adu = config.get(
+            "max_median_adu", defaults["max_median_adu"]
+        )
+        self.max_hot_pixels_percent = config.get(
+            "max_hot_pixels_percent", defaults["max_hot_pixels_percent"]
+        )
+        self.max_mad_factor = config.get("max_mad_factor", defaults["max_mad_factor"])
+        self.max_central_dispersion = config.get(
+            "max_central_dispersion", defaults["max_central_dispersion"]
+        )
 
         self.force_recalc = force_recalc
 
@@ -649,8 +674,7 @@ class DarkLib:
             logging.warning(f"No dark files to stack for group {group_key}. Ignored.")
             return
 
-        siril_script_content = f"""requires 1.2
-# Siril script generated by Python to stack darks
+        siril_script_content = f"""# Siril script generated by Python to stack darks
 cd "{link_dir}"
 convert dark -out={process_dir}
 cd {process_dir}

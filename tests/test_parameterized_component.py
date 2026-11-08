@@ -7,7 +7,7 @@ import pytest
 from lib.config import Config
 from lib.parameterized_component import ParameterizedComponent
 from lib.processor import processor
-from lib.siril_utils import Siril
+from lib.siril import Siril
 
 
 class ExampleService(ParameterizedComponent):

@@ -5,7 +5,7 @@
 
 Le traitement mesure l’étalement et la forme des étoiles dans les pixels des
 poses encore retenues. Il complète les mesures Siril sans exiger un nombre
-d’étoiles élevé. Il s’applique dans `02_quality`, avant pondération et
+d’étoiles élevé. Il s’applique dans `03_quality`, avant pondération et
 rééchantillonnage, avec ou sans Drizzle.
 
 ## Choix de la méthode et littérature
@@ -126,7 +126,7 @@ dans le rapport.
 
 ## Rapports et validation
 
-`02_quality/stellar_profiles.json` conserve les réglages de fenêtre, les
+`03_quality/stellar_profiles.json` conserve les réglages de fenêtre, les
 références, les mesures par étoile, les seuils par pose, les fractions concordantes,
 les statuts et les motifs. Le champ `stellar_profiles` du rapport général
 `<sortie>.drizzle.json` pointe vers ce fichier et fournit les comptes.
@@ -161,3 +161,14 @@ peuvent être affectés par des aberrations optiques cohérentes. La réduction 
 limite la sensibilité aux déplacements inférieurs à quelques pixels natifs.
 La validation synthétique et l’essai M33 ne constituent pas un banc d’essai
 représentatif de tous les instruments et types de bougé.
+
+### Stockage des seuils communs
+
+Le schéma 2 des rapports stocke les seuils une seule fois par groupe, dans
+`references` ; chaque pose désigne son groupe par `reference_id`. Les copies
+`limits` par pose sont supprimées, sans modifier le calcul ni les décisions.
+Le rapport de stacking conserve ces références dans `stellar_profiles.references`
+et l’audit de sélection dans `profile_references`. Un seuil est commun à un
+groupe comparable, pas nécessairement à toutes les images de plusieurs groupes.
+Les index affichent ces seuils avant les tableaux, puis le groupe de chaque pose.
+La lecture des anciens rapports avec `limits` reste prise en charge.

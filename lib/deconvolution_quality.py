@@ -14,7 +14,7 @@ from pathlib import Path
 
 import numpy as np
 from astropy.io import fits
-from scipy.ndimage import gaussian_filter, label, maximum_filter, median_filter
+from scipy.ndimage import gaussian_filter, label, maximum_filter
 from scipy.spatial import cKDTree
 
 from lib.type_defs import JSONReport, StarMeasurement
@@ -250,11 +250,13 @@ def artifact_metrics(
     before_path: Path | str, after_path: Path | str, pairs: Sequence[dict[str, float]],
     *, args: argparse.Namespace | None = None,
 ) -> JSONReport:
-    """Bruit sur masques fixes, audit historique et anneaux sur tous les canaux.
+    """Délègue l'audit aux processeurs indépendants, avec temps récursifs séparés.
 
-    Le mode reliable utilise une segmentation indépendante du gradient. Le ratio
-    historique reste dans legacy_noise_ratio ; un ciel insuffisant produit None.
+    Les champs scientifiques historiques sont conservés. Le champ processing
+    décrit les processeurs réellement exécutés, leurs enfants et durées murales.
     """
+    from lib.quality_processors import ArtifactQualityProcessor, QualityContext
+
     original = _normalized_data(fits.getdata(before_path))
     changed = _normalized_data(fits.getdata(after_path))
     if original.shape != changed.shape or not np.isfinite(changed).all():
@@ -263,103 +265,12 @@ def artifact_metrics(
         original, changed = original[None], changed[None]
     top_down = (getattr(args, 'quality_mode', 'reliable') == 'legacy'
                 or fits.getheader(before_path).get('ROWORDER', 'BOTTOM-UP') == 'TOP-DOWN')
-    channels = []
-    for before, after in zip(original, changed):
-        finite = np.isfinite(before)
-        if not finite.any():
-            raise ValueError("Image originale sans pixels finis")
-        # Masque fixe : pixels faibles, déterminés exclusivement sur l'original.
-        mask = finite & (before <= np.percentile(before[finite], 40))
-        mask[:2] = mask[-2:] = False
-        mask[:, :2] = mask[:, -2:] = False
 
-        def noise(plane: np.ndarray) -> float:
-            """Estime le bruit par MAD du résidu au filtre médian sur le masque de ciel fixe."""
-            high = plane - median_filter(plane, size=3)
-            values = high[mask]
-            return float(1.4826 * np.median(abs(values - np.median(values))))
-
-        nb, na = noise(before), noise(after)
-        ratio = na / max(nb, np.finfo(np.float32).eps)
-        scores = []
-        for pair in pairs:
-            radius = max(8, int(np.ceil(3 * pair["fwhm_before_px"])))
-            x = int(round(pair["x_before"] - 0.5))
-            y = int(round(before.shape[0] - pair["y_before"] - .5 if top_down else pair["y_before"] - .5))
-            if (
-                min(x, y) < radius
-                or x + radius >= before.shape[1]
-                or y + radius >= before.shape[0]
-            ):
-                continue
-            b = before[y - radius : y + radius + 1, x - radius : x + radius + 1]
-            a = after[y - radius : y + radius + 1, x - radius : x + radius + 1]
-            yy, xx = np.indices(b.shape)
-            rr = np.hypot(xx - radius, yy - radius)
-            outer = rr >= 2.5 * pair["fwhm_before_px"]
-            bins = np.arange(max(1, 0.8 * pair["fwhm_before_px"]), radius - 1, 1)
-
-            def rings(stamp: np.ndarray) -> float:
-                """Mesure le creux ou rebond maximal du profil radial normalisé autour de l’étoile."""
-                bg = float(np.median(stamp[outer]))
-                peak = max(
-                    float(
-                        stamp[radius - 1 : radius + 2, radius - 1 : radius + 2].max()
-                        - bg
-                    ),
-                    1e-8,
-                )
-                profile = (
-                    np.array(
-                        [np.median(stamp[(rr >= r) & (rr < r + 1)]) - bg for r in bins]
-                    )
-                    / peak
-                )
-                dark = max(0.0, -float(profile.min()))
-                bump = max(0.0, float(np.max(profile - np.minimum.accumulate(profile))))
-                return max(dark, bump)
-
-            if np.isfinite(b).all() and outer.sum() >= 12 and len(bins) >= 3:
-                rb, ra = rings(b), rings(a)
-                scores.append(
-                    dict(
-                        reference_id=pair["reference_id"],
-                        before=rb,
-                        after=ra,
-                        added=max(0, ra - rb),
-                    )
-                )
-        if (not scores or mask.sum() < 100) and getattr(args, 'quality_mode', 'reliable') == 'legacy':
-            raise ValueError(
-                "Pas assez de ciel ou d’étoiles intérieures pour contrôler les artefacts"
-            )
-        channels.append(
-            dict(
-                noise_before=nb,
-                noise_after=na,
-                noise_ratio=ratio,
-                background_pixels=int(mask.sum()),
-                rings=scores,
-                ring_fraction=float(np.mean([s["added"] > 0.02 for s in scores])) if scores else None,
-            )
-        )
-    result = dict(
-        channels=channels,
-        max_noise_ratio=max(c["noise_ratio"] for c in channels),
-        max_ring_fraction=max(c["ring_fraction"] for c in channels) if all(c["ring_fraction"] is not None for c in channels) else None,
-        legacy_noise_ratio=max(c["noise_ratio"] for c in channels),
-        high_frequency_residual=channels,
-        quality_mode=getattr(args, 'quality_mode', 'reliable'),
+    context = QualityContext(
+        Path(before_path), Path(after_path), original, changed,
+        pairs=tuple(pairs), top_down=top_down,
     )
-    if result['quality_mode'] != 'legacy':
-        from lib.restoration_quality import reference_for
-
-        reference = reference_for(before_path, args)
-        diagnostics = reference.evaluate(after_path, list(pairs))
-        result.update(diagnostics)
-        result['max_noise_ratio'] = diagnostics['noise']['max_noise_ratio']
-        result['enforce_significance'] = reference.enforce_significance
-    return result
+    return ArtifactQualityProcessor(context).post_process(Path(after_path), None, args)
 
 
 def log_quality_diagnostics(

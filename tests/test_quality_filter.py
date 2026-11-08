@@ -8,7 +8,7 @@ from lib.quality_filter import quality_mask
 
 def test_weights_deferred_until_after_resampling_without_recalculation(tmp_path):
     from astropy.io import fits
-    from lib.siril_sequence import SirilSequence, RegistrationData
+    from lib.siril import SirilSequence, RegistrationData
     from lib.quality_filter import apply_quality_weights, materialize_quality_weights
     files = [tmp_path/f'light_{i:03d}.fits' for i in range(1, 4)]
     for file in files:
@@ -37,7 +37,7 @@ def test_weights_deferred_until_after_resampling_without_recalculation(tmp_path)
 
 def test_final_weighting_rejects_reintroduced_image(tmp_path):
     from astropy.io import fits
-    from lib.siril_sequence import SirilSequence
+    from lib.siril import SirilSequence
     from lib.quality_filter import materialize_quality_weights
     path = tmp_path/'light_001.fit'
     fits.writeto(path, np.ones((8, 8)))
@@ -99,10 +99,12 @@ def test_fwhm_percentage_uses_threshold_survivors_and_logs_each_rejection(caplog
 
 
 def test_only_statistical_fwhm_filter_is_enabled_by_default():
-    from lib.config import Config
-    assert Config.DEFAULTS['fwhm_filter'] == '1.8k'
-    assert Config.DEFAULTS['fwhm_reject_percent'] == 0
-    assert Config.DEFAULTS['max_fwhm'] == 0
+    from lib.light_stacking import SessionStackingProcessor
+
+    defaults = SessionStackingProcessor.CONFIG_DEFAULTS
+    assert defaults['fwhm_filter'] == '1.8k'
+    assert defaults['fwhm_reject_percent'] == 0
+    assert defaults['max_fwhm'] == 0
 
 
 @pytest.mark.parametrize('percent', [-1, 96, float('nan'), float('inf')])
@@ -150,7 +152,7 @@ def test_nbstars_filters_reject_both_tails(value):
 
 def test_nbstars_default_rejects_cloud_and_doubled_counts(tmp_path):
     """Stable night with two exceptional counts; no pixel-level defect detection."""
-    from lib.config import Config
+    from lib.light_stacking import SessionStackingProcessor
 
     # Normal variation around 200 stars; anomalies occur within the sequence.
     counts = [198, 201, 199, 200, 202, 70, 198, 201, 200, 199,
@@ -165,7 +167,7 @@ def test_nbstars_default_rejects_cloud_and_doubled_counts(tmp_path):
                   for count in counts)
     )
     _, _, rows = read_registration(sequence)
-    cfg = dict(Config.DEFAULTS)
+    cfg = dict(SessionStackingProcessor.CONFIG_DEFAULTS)
 
     # All other quality measurements are identical and acceptable.
     without_star_filter = quality_mask(rows, {**cfg, 'nbstars_filter': 'none'})
@@ -196,3 +198,57 @@ def test_nbstars_boundaries_and_constant_samples(counts, value, expected):
 def test_nbstars_invalid_tolerance(value):
     with pytest.raises(ValueError):
         quality_mask([([1.7,1.8,.9,1,0,30],np.eye(3))], {'nbstars_filter':value})
+
+
+def test_quality_audit_records_effective_thresholds_and_skipped_checks() -> None:
+    """L'audit suit les exclusions successives sans changer la sélection."""
+    import json
+
+    rows = [(np.array([width, width, roundness, 0, .01, 100.]), np.eye(3))
+            for width, roundness in [(1, .9), (2, .8), (3, .9), (4, .9),
+                                     (float('nan'), .9), (8, .9)]]
+    cfg = {'max_fwhm': 5, 'fwhm_filter': '2', 'roundness_filter': '.85',
+           'nbstars_filter': 'none'}
+    included = [True, True, True, False, True, True]
+    audit = []
+    selected = quality_mask(rows, cfg, included, audit=audit)
+    assert selected.tolist() == quality_mask(rows, cfg, included).tolist()
+    assert selected.tolist() == [True, False, False, False, False, False]
+    assert len(audit) == len(rows)
+    checks = [{check['criterion']: check for check in frame['checks']} for frame in audit]
+    assert audit[1]['reasons'] == ['roundness_filter']
+    assert checks[1]['roundness_filter']['threshold'] == .85
+    assert checks[1]['roundness_filter']['value'] == .8
+    assert checks[2]['fwhm_filter']['status'] == 'FAIL'
+    assert checks[2]['roundness_filter']['status'] == 'SKIPPED'
+    assert checks[3]['registration_validity']['inputs']['included'] is False
+    assert audit[4]['measurements']['fwhm'] is None
+    assert checks[5]['max_fwhm']['threshold'] == 5
+    assert checks[0]['nbstars_filter']['status'] == 'DISABLED'
+    json.dumps(audit, allow_nan=False)
+
+
+def test_quality_audit_records_stable_percent_ranks_and_star_count_bounds() -> None:
+    """Les égalités gardent l'ordre et les bornes étoilées sont celles utilisées."""
+    rows = [([2, 2, .9, 0, .01, 100], np.eye(3)) for _ in range(5)]
+    audit = []
+    result = quality_mask(rows, {'fwhm_reject_percent': 50}, audit=audit)
+    assert result.tolist() == [True, True, True, False, False]
+    percent = [next(c for c in frame['checks'] if c['criterion'] == 'fwhm_reject_percent')
+               for frame in audit]
+    assert [check['rank'] for check in percent] == [1, 2, 3, 4, 5]
+    assert percent[0]['threshold'] == {'percent': 50, 'retained_count': 3}
+    rows = [([2, 2, .9, 0, .01, count], np.eye(3)) for count in [70, 95, 100, 105, 130]]
+    quality_mask(rows, {'nbstars_filter': '10'}, audit=audit)
+    check = audit[0]['checks'][-1]
+    assert check['threshold'] == {'median': 100, 'tolerance': 10, 'lower': 90, 'upper': 110}
+    assert check['status'] == 'FAIL'
+
+
+def test_quality_audit_keeps_all_excluded_frames_without_secondary_failures() -> None:
+    """L'absence de survivantes ne fabrique aucun rejet supplémentaire."""
+    audit = []
+    quality_mask([([3, 3, .9, 0, .01, 100], np.eye(3))],
+                 {'fwhm_filter': '1', 'roundness_filter': '.5'}, audit=audit)
+    assert audit[0]['reasons'] == ['fwhm_filter']
+    assert next(c for c in audit[0]['checks'] if c['criterion'] == 'roundness_filter')['status'] == 'SKIPPED'

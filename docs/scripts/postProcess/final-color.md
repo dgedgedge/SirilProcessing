@@ -16,18 +16,21 @@ déjà présente, les hautes lumières et la marge disponible dans le gamut RGB.
 
 La reprise seule utilise les dépendances Python communes (NumPy, SciPy,
 Astropy, Pillow et Matplotlib pour l'annotation), sans lancer Siril ni StarNet.
-CuPy est facultatif pour CUDA. Voir l'[installation commune](../../INSTALLATION.md)
-et l'[installation du venv CUDA](../install_cuda/README.md).
-Sur Apple Silicon, cette passe reste sur CPU NumPy/SciPy ; voir
-[l'installation Mac](../install_macos/README.md) pour MPS/CoreML des autres moteurs.
-En mode auto, son WARNING précise l'absence de moteur Metal ; un CPU demandé
-explicitement ne déclenche pas ce message. Sous NVIDIA, un précontrôle CUDA
-échoué ou une mémoire insuffisante est également signalé avant le choix CPU.
+PyTorch, déjà présent pour les moteurs de restauration, permet CUDA sur NVIDIA
+et MPS sur Mac compatible. En `auto`, le moteur sélectionne CUDA puis MPS,
+sinon NumPy/SciPy CPU, avant le traitement. Les calculs couleur sont en float32.
+Voir le [moteur commun](torch-compute.md) et l'[installation Mac](../install_macos/README.md).
+Les filtres reproduisent les bords SciPy et les médianes paires moyennent les
+deux valeurs centrales, contrairement à la médiane native PyTorch.
+Une panne après initialisation se propage sans reprise CPU implicite.
+Le contrôle mémoire estime les temporaires à 16 fois la taille du RGB float32.
+Le rapport `metrics.compute` donne la sélection et sa raison.
 
 | Option | Défaut | Rôle |
 |---|---|---|
 | `--enable-final-color` | activé | Activer la passe dans le traitement complet ou la reprise AutoGHS |
 | `--disable-final-color` | — | Désactiver explicitement la passe |
+| `--final-color-backend` | non définie | Surcharge locale `auto`, `cpu`, `cuda` ou `mps` ; sinon suit `compute-backend` |
 | `--final-color-strength` | `3.0` | Excès de gain maximal dans `[0,3]` ; 1 autorise au plus ×2, 3 au plus ×4 ; zéro donne l'identité |
 | `--color-only` | désactivé | Activer la couleur pour cet appel et reprendre directement les couches GHS existantes |
 
@@ -82,6 +85,26 @@ Les mêmes options sont disponibles depuis `lightProcess.sh`. Ajouter
 mosaïque : les stacks finaux sont retrouvés dans leur manifeste, sans relancer
 calibration, stacking ou mosaïque.
 
+### Arrondis aux limites du gamut
+
+Les entrées GHS et stellaires restent strictement finies et dans `[0,1]`.
+Le calcul float32 de la couleur peut cependant produire un résidu infime juste
+sous zéro ou au-dessus de un. Pour un écart maximal de huit epsilon float32
+(environ `9,54 × 10⁻⁷`) et au plus **0,01 % des pixels spatiaux** (minimum un),
+la passe conserve le **pixel RGB GHS original** à ces positions et fixe son
+gain couleur à un. Les trois canaux sont repris ensemble : aucun canal n'est
+écrêté, la luminosité et les rapports RGB de ce pixel restent ceux du fond GHS.
+Les sources ne sont pas modifiées.
+
+Un WARNING indique le nombre de valeurs RGB et de pixels concernés ainsi que
+l'amplitude du résidu. `metrics.gamut_roundoff` et les métriques de chaque essai
+auditent `corrected_rgb_values`, `restored_pixels`, `pixel_fraction`,
+`maximum_excursion`, `tolerance`, `maximum_pixels` et la politique
+`restore_original_ghs_pixel`. Les statistiques de gain tiennent compte des
+pixels ainsi conservés. Les dépassements plus importants ou plus étendus
+restent des erreurs explicites : ce mécanisme ne normalise pas une image hors
+domaine et ne valide pas un mauvais choix de couche amont.
+
 ## 3. Entrées, provenance et sorties
 
 La reprise utilise `autoghs.strategies.range.starless_image` et
@@ -94,9 +117,11 @@ avant réinitialisation du dossier couleur. Les anciens rapports contenant les
 couches explicites restent utilisables, sans pouvoir certifier rétroactivement
 leur provenance avant la première passe couleur.
 
-Le rapport `06_final_color.json` et `06_final_color_work/001/` contiennent le fond
+Le rapport `06_final_color.json` et `06_final_color_work/` contiennent le fond
 coloré, le FITS recomposé et son JPEG. Les sources GHS et stellaires ne sont pas
-modifiées. Lorsque la passe couleur est exécutée, les exports sont distincts :
+modifiées. Les fichiers sont directement dans le dossier de travail, sans
+sous-dossier `001`. Le dossier est réinitialisé lors des relances, après
+validation des sources. Lorsque la passe couleur est exécutée, les exports sont distincts :
 
 - `<image>_postprocess_ghs.fits/.jpg` : rendu GHS avant saturation ;
 - `<image>_postprocess_saturated.fits/.jpg` : résultat de la passe couleur ;
@@ -167,8 +192,8 @@ Pour le remplacer, relancer une fois `--autoghs-only`.
 `render(data, strength, color_mode, backend)` expose le calcul sans fichiers.
 `post_process(fond, rapport, args, stars_path=..., headroom=..., color_mode=...)`
 expose le moteur autonome ; sans étoiles, il produit un fond coloré seulement.
-Le backend commun NumPy/CuPy est sélectionné avant calcul, avec un budget estimé
-à douze fois la taille RGB pour les temporaires et sans bascule après démarrage.
+Le backend commun PyTorch est sélectionné avant calcul, avec un budget estimé
+à seize fois la taille RGB float32 pour les temporaires et sans bascule après démarrage.
 La fusion et ses diagnostics utilisent les fonctions communes sur CPU.
 
 `tests/test_final_color.py` couvre luminosité, direction RGB, gamut, ciel,
@@ -178,3 +203,12 @@ lorsque le matériel est disponible. Les tests de sessions vérifient la reprise
 depuis lightProcess, y compris en mosaïque. Les essais M31/M33 réutilisent les
 couches réelles existantes, avec sorties distinctes ; ils ne relancent pas Siril
 et ne constituent pas une qualification sur tous les types de champs.
+
+## 6. Vérification PyTorch
+
+Les calculs tensoriels sont comparés à NumPy/SciPy sur CPU pour les deux
+modèles de luminosité, les forces 0/1/3, le ciel, le cœur et les limites du
+gamut. L'écart d'image admis est `3e-6 + 3e-5 × abs(référence)` ; les gardes
+scientifiques et la limite d'erreur de luminosité de `5e-7` restent inchangées.
+Les tests CUDA/MPS matériels sont conditionnels. Sous Linux sans Mac disponible,
+MPS reste à valider sur matériel réel ; aucun gain de vitesse Mac n'est garanti.

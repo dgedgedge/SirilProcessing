@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 from astropy.io import fits
 from lib.drizzle import QUALITY_PIPELINE_VERSION, analyse, coverage, read_registration, run_stack, validate_settings
-from lib.siril_sequence import SirilSequence
+from lib.siril import SirilSequence
 
 
 def metadata(n, cfa=False):
@@ -89,7 +89,7 @@ def test_pipeline_native_cfa_and_report(
                 overrides = {2: [[.951232,.0476758,114.759],[-.698402,-.0725698,2288.6],[0,0,1]]} if bad_alignment else None
                 simulated_registered_sequence(directory, 'light_', 'debayer_light_', overrides)
             if kwargs.get('script_name') == '04_realign.sps':
-                from lib.siril_sequence import SirilSequence
+                from lib.siril import SirilSequence
                 checked = SirilSequence.read(directory/'debayer_light_.seq')
                 assert checked.images[1].included == (not bad_alignment)
                 assert '-filter-included' in script
@@ -107,6 +107,36 @@ def test_pipeline_native_cfa_and_report(
     assert '-maximize' not in script
     report=json.loads((tmp_path/'final.drizzle.json').read_text())
     assert report['status']=='completed'
+    registration = json.loads((tmp_path / 'registration.json').read_text())
+    assert registration['input_count'] == registration['aligned_count'] == len(files)
+    assert registration['rejected_count'] == 0
+    assert len(registration['frames']) == len(files)
+    flow = report['selection_flow']
+    assert [step['stage'] for step in flow[:4]] == [
+        'registration', 'registration_geometry', 'quality_filters', 'stellar_profiles']
+    assert flow[0]['input_count'] == len(files)
+    for previous, following in zip(flow, flow[1:]):
+        assert following['input_count'] == previous['remaining_count']
+    assert all(step['input_count'] == step['rejected_count'] + step['remaining_count'] for step in flow)
+
+    decisions = report['selection_decisions']
+    assert len(decisions) == len(files)
+    assert {frame['source'] for frame in decisions} == {str(path.resolve()) for path in files}
+    persisted = json.loads((tmp_path / '03_quality/selection_decisions.json').read_text())
+    assert persisted['complete'] is True
+    assert persisted['schema_version'] == 2
+    assert persisted['input_count'] == len(files)
+    assert persisted['profile_references'] == report['stellar_profiles']['references']
+    assert persisted['selection_flow'] == report['selection_flow']
+    assert all('limits' not in frame.get('profile', {}) for frame in decisions)
+    assert persisted['frames'] == decisions
+    final_sources = set(report['final_selection']['sources'])
+    for frame in decisions:
+        assert frame['checks'][0]['criterion'] == 'registration_validity'
+        assert frame['final_status'] == ('retained' if frame['source'] in final_sources else 'excluded')
+        if frame['source'] in final_sources:
+            assert 'weighting' in frame
+
     assert len(report['frames'])==4
     if mode=='force':
         assert '-drizzle -scale=2.0' in script
@@ -116,6 +146,12 @@ def test_pipeline_native_cfa_and_report(
         assert any('calibrate light_ -debayer -prefix=debayer_' in part for part in siril.scripts)
         assert report['final_selection']['independent_retained'] == (3 if bad_alignment else 4)
         assert any(check['rejected'] for check in report['geometry_checks']) == bad_alignment
+        if bad_alignment:
+            removed = [frame for frame in decisions if frame['final_status'] == 'excluded']
+            assert removed
+            assert any(check['criterion'] == 'registration_geometry' and check['status'] == 'FAIL'
+                       for frame in removed for check in frame['checks'])
+            assert all(frame['reasons'] for frame in removed)
         assert '-drizzle' not in script
     expected = [
         "Stacking — Alignement initial des images",
@@ -147,7 +183,7 @@ def test_invalid_debayer_alignment_stops_before_any_resampling(
 ) -> None:
     """Un alignement invalide n’annonce pas les étapes suivantes non exécutées."""
     caplog.set_level("INFO")
-    from lib.siril_sequence import SirilSequence, RegistrationData
+    from lib.siril import SirilSequence, RegistrationData
     files = [tmp_path/f'light_{i:03d}.fits' for i in range(1,4)]
     for path in files:
         fits.writeto(path, np.ones((20,20)), fits.Header({'BAYERPAT':'RGGB'}))
@@ -245,14 +281,21 @@ def test_all_quality_controls_precede_drizzle(tmp_path, mode, weighted, abnormal
     assert run_stack(FakeSiril(), files, cfg, tmp_path,tmp_path,'light_',tmp_path/'final',
                      'requires 1.2', 'stack r_light_ rej 3 3 -out=final', 'min')
     assert len(calls) == len(set(calls))+1  # applyreg and stack are separate processes
-    assert calls[-1] == tmp_path/'04_stacking'
-    assert (tmp_path/'02_quality'/seq.name).read_bytes() != (tmp_path/'04_stacking'/seq.name).read_bytes()
+    assert calls[-1] == tmp_path/'05_stacking'
+    assert (tmp_path/'03_quality'/seq.name).read_bytes() != (tmp_path/'05_stacking'/seq.name).read_bytes()
     assert not list(tmp_path.glob('run_*'))
     assert not list(tmp_path.glob('03_stacking_*'))
     if mode != 'force':
-        assert 'non exécutée' in (tmp_path/'03_capability'/'SKIPPED.txt').read_text()
+        skipped = (tmp_path/'04_drizzle'/'SKIPPED.txt').read_text()
+        assert 'non exécutée' in skipped
+        analysis = json.loads((tmp_path/'final.drizzle.json').read_text())['analysis']
+        assert f'Mode demandé : {mode}' in skipped
+        for item in analysis['reason_details']:
+            assert item['message'] in skipped
+        for criterion, passed in analysis['gates'].items():
+            assert f"{criterion} : {'SATISFAIT' if passed else 'NON SATISFAIT'}" in skipped
     else:
-        assert tmp_path/'03_capability' in calls
+        assert tmp_path/'04_drizzle' in calls
     assert seq.read_text() == original_seq
     assert not (tmp_path/'light_007.fits').exists()
 
@@ -309,27 +352,31 @@ def test_stage_transfer_isolates_metadata_and_references_fits(tmp_path):
     (source/'light_.seq').write_text('original')
     fits.writeto(source/'light_001.fits',np.ones((4,4)))
     (source/'registration.sps').write_text('close')
+    (source/'index.html').write_text('registration report')
     (source/'distortion').mkdir()
     (source/'distortion'/'map.txt').write_text('calibration')
+    (source/'distortion'/'index.html').write_text('distortion report')
     copy_stage_inputs(source,dest)
     assert (dest/'light_001.fits').is_symlink()
     assert (dest/'light_001.fits').resolve()==source/'light_001.fits'
     (dest/'light_.seq').write_text('selection changed')
     assert (source/'light_.seq').read_text()=='original'
     assert not (dest/'registration.sps').exists()
+    assert not list(dest.rglob('*.html'))
+    assert (source/'index.html').read_text() == 'registration report'
     assert (dest/'distortion'/'map.txt').read_text()=='calibration'
 
 
 def test_reset_numbered_stage_cleans_previous_outputs_and_unlinks_alias(tmp_path):
     from lib.drizzle import reset_stage
-    stage=tmp_path/'04_stacking'
+    stage=tmp_path/'05_stacking'
     reset_stage(stage)
     (stage/'stale.fits').write_text('old')
     assert reset_stage(stage)==stage
     assert list(stage.iterdir())==[]
     elsewhere=tmp_path/'saved';elsewhere.mkdir()
     (elsewhere/'keep').write_text('preserve')
-    alias=tmp_path/'03_capability';alias.symlink_to(elsewhere,target_is_directory=True)
+    alias=tmp_path/'04_drizzle';alias.symlink_to(elsewhere,target_is_directory=True)
     reset_stage(alias)
     assert not alias.is_symlink()
     assert (elsewhere/'keep').read_text()=='preserve'
@@ -371,3 +418,129 @@ def test_memory_budget_macos_vm_stat(tmp_path, monkeypatch):
     result = memory_resources(tmp_path / 'missing')
     assert result['available_memory_bytes'] == 16 * 16384
     assert result['memory_available_source'].startswith('vm_stat')
+
+
+@pytest.mark.parametrize('mode', ['auto', 'off'])
+def test_skipped_drizzle_explains_measurements_and_unavailable_checks(
+    tmp_path: Path, mode: str,
+) -> None:
+    """Les motifs viennent du même diagnostic, avec seuils et mesures absentes."""
+    from lib.drizzle import write_skipped_drizzle
+
+    decision = analyse(
+        records(np.zeros((2, 2))),
+        {'drizzle': mode, 'drizzle_min_frames': 42},
+        metadata(2), {'sufficient': True},
+    )
+    path = tmp_path / 'SKIPPED.txt'
+    write_skipped_drizzle(path, decision, analysis_error='catalogue indisponible')
+    text = path.read_text()
+    assert f'Mode demandé : {mode}' in text
+    assert ('désactivation explicite' in text) is (mode == 'off')
+    assert 'Poses retenues : 2' in text
+    assert 'FWHM médiane (px) : indisponible' in text
+    assert 'catalogue indisponible' in text
+    assert '42' in text
+    for detail in decision['reason_details']:
+        assert detail['message'] in text
+    assert 'resources : SATISFAIT' in text
+    assert 'sampling : NON SATISFAIT' in text
+
+
+def test_explicitly_disabled_drizzle_does_not_claim_quality_failure(tmp_path: Path) -> None:
+    """Une désactivation volontaire est expliquée même si tous les contrôles passent."""
+    from lib.drizzle import write_skipped_drizzle
+
+    path = tmp_path / 'SKIPPED.txt'
+    write_skipped_drizzle(path, dict(
+        mode='off', gates={'sampling': True, 'coverage': True}, reason_details=[],
+        images_analysed=100, images_retained=100, fwhm_pixels=1.7,
+    ))
+    text = path.read_text()
+    assert 'désactivation explicite' in text
+    assert 'Tous les critères qualité sont satisfaits' in text
+    assert 'NON SATISFAIT\n' not in text
+    assert 'FWHM médiane (px) : 1.7' in text
+
+
+def test_registration_snapshot_and_quality_counts_are_separate(
+    tmp_path: Path, simulated_registered_sequence: Callable[..., None],
+) -> None:
+    """L'état Siril initial précède les filtres Python et leurs retraits distincts."""
+    files = []
+    for index in range(6):
+        source = tmp_path / f'input-{index}.fits'
+        fits.writeto(source, np.ones((12, 12)), fits.Header({'DATE-OBS': f'2026-09-15T00:00:0{index}'}))
+        files.append(source)
+        (tmp_path / f'light_{index + 1:03d}.fits').symlink_to(source)
+    widths = [2, 2, 3, 4, 8, 2]
+    roundness = [.9, .9, .7, .9, .9, .9]
+    sequence = tmp_path / 'light_.seq'
+    sequence.write_text(
+        "S 'light_' 1 6 5 3 0 6 0 0 0\n"
+        + ''.join(f'I {index + 1} {int(index != 5)}\n' for index in range(6))
+        + ''.join(f'R0 {width} {width} {shape} 1 0 30 H 1 0 0 0 1 0 0 0 1\n'
+                  for width, shape in zip(widths, roundness)))
+    original = sequence.read_text()
+
+    class FakeSiril:
+        """Simule seulement les sorties de rééchantillonnage et d'empilement."""
+
+        def run_siril_script(self, script, directory, script_name=None):
+            """Préserve la sélection produite par le code Python testé."""
+            directory = Path(directory)
+            if script_name == '04_applyreg.sps':
+                simulated_registered_sequence(directory, 'light_', 'r_light_')
+            if script_name == '04_stacking.sps':
+                (tmp_path / 'final.fit').touch()
+            return True
+
+    assert run_stack(
+        FakeSiril(), files, {'drizzle': 'off', 'robust_realign': False,
+                            'max_fwhm': 5, 'roundness_filter': '.85',
+                            'stellar_profile_filter': False},
+        tmp_path, tmp_path, 'light_', tmp_path / 'final', 'requires 1.2',
+        'stack r_light_ rej 3 3 -out=final', 'min')
+    snapshot = json.loads((tmp_path / 'registration.json').read_text())
+    assert snapshot['input_count'] == 6
+    assert snapshot['aligned_count'] == 5
+    assert snapshot['rejected_count'] == 1
+    assert snapshot['frames'][-1]['status'] == 'excluded'
+    assert snapshot['frames'][-1]['reasons'] == ['excluded_by_siril']
+    assert snapshot['frames'][4]['status'] == 'aligned'
+    assert snapshot['frames'][4]['measurements']['fwhm'] == 8
+    assert sequence.read_text() == original
+    report = json.loads((tmp_path / 'final.drizzle.json').read_text())
+    flow = report['selection_flow']
+    assert [(step['input_count'], step['rejected_count'], step['remaining_count'])
+            for step in flow] == [(6, 1, 5), (5, 0, 5), (5, 2, 3), (3, 0, 3)]
+    children = {step['stage']: step for step in flow[2]['children']}
+    assert children['max_fwhm']['rejected_count'] == 1
+    assert children['roundness_filter']['rejected_count'] == 1
+    assert children['nbstars_filter']['enabled'] is False
+    audit = json.loads((tmp_path / '03_quality/selection_decisions.json').read_text())
+    assert audit['inventory_count'] == 6
+    assert audit['input_count'] == 5
+    assert len(audit['frames']) == 6
+    assert audit['selection_flow'] == flow
+
+
+def test_initial_registration_snapshot_keeps_missing_measurements_unknown(tmp_path: Path) -> None:
+    """Un échec conserve ses drapeaux sans sérialiser de NaN ni inventer sa cause."""
+    from lib.drizzle import _registration_snapshot
+    from lib.siril import RegistrationData, SirilSequence
+
+    sources = [tmp_path / f'light_{index + 1:03d}.fits' for index in range(2)]
+    for source in sources:
+        fits.writeto(source, np.ones((8, 8)))
+    sequence = SirilSequence.from_files(tmp_path / 'light_.seq', 'light_', sources)
+    sequence.images[0].registrations['R0'] = RegistrationData(2, 2, .9, 1, 0, 30, np.eye(3))
+    sequence.images[1].registrations['R0'] = RegistrationData(float('nan'), 2, .9, 1, 0, 30, np.eye(3))
+    sequence.images[1].included = False
+    snapshot = _registration_snapshot(sequence.images)
+    assert snapshot['input_count'] == 2 and snapshot['aligned_count'] == 1
+    failed = snapshot['frames'][1]
+    assert failed['included'] is False and failed['registration_valid'] is False
+    assert failed['measurements']['fwhm'] is None
+    assert failed['reasons'] == ['excluded_by_siril', 'invalid_registration']
+    json.dumps(snapshot, allow_nan=False)

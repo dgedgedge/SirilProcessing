@@ -6,6 +6,7 @@ import argparse
 from copy import copy
 import hashlib
 from importlib.metadata import PackageNotFoundError, version
+from importlib.util import find_spec
 import json
 import logging
 import os
@@ -14,12 +15,12 @@ from shutil import copyfile, which
 import sys
 import time
 
-from lib.logging_utils import log_section
+from lib.logging_utils import log_duration, log_section
 from lib.processor import processor
 from lib.restoration import RestorationComparisonProcessor
 from lib.restoration_quality import QualityReference
 from lib.type_defs import JSONReport
-from lib.postprocess_paths import reset_work_dir
+from lib.postprocess_paths import reset_restoration_work_dir, reset_work_dir
 from lib.restoration_summary import RestorationSummary
 
 
@@ -42,7 +43,10 @@ class RestorationChainProcessor(processor):
         from lib.denoising import NoiseReductionProcessor
         from lib.deconvolution import DeconvolutionProcessor
 
-        return (NoiseReductionProcessor, DeconvolutionProcessor)
+        from lib.quality_processors import ReferencePreparationProcessor, RestorationEvaluationProcessor
+
+        return (NoiseReductionProcessor, DeconvolutionProcessor,
+                ReferencePreparationProcessor, RestorationEvaluationProcessor)
 
     @classmethod
     def get_prefix(cls) -> str:
@@ -150,6 +154,13 @@ class RestorationChainProcessor(processor):
         for module in (
             "lib.restoration_chains",
             "lib.restoration_quality",
+            "lib.quality_processors",
+            "lib.noise_tiles",
+            "lib.diffuse_regions",
+            "lib.diffuse_filters",
+            "lib.torch_backend",
+            "lib.quality_star_processors",
+            "lib.reference_stars",
             "lib.restoration_summary",
             "lib.deconvolution",
             "lib.denoising",
@@ -160,6 +171,9 @@ class RestorationChainProcessor(processor):
         ):
             loaded = sys.modules.get(module)
             filename = getattr(loaded, "__file__", None)
+            if loaded is None:
+                spec = find_spec(module)
+                filename = spec.origin if spec is not None else None
             if filename:
                 files[filename] = self._fingerprint(Path(filename))
         packages = {}
@@ -179,6 +193,43 @@ class RestorationChainProcessor(processor):
             },
         )
 
+    @staticmethod
+    def score_details(
+        comparison: JSONReport, artifacts: JSONReport, operations: tuple[str, ...],
+    ) -> JSONReport:
+        """Décompose le score existant, après validation des critères finaux.
+
+        Les FWHM sont des ratios après/avant positifs et les gains/fractions sans
+        unité. Les termes FWHM ne comptent que pour une chaîne de netteté. La
+        mesure de gain utile absente contribue zéro sans être présentée comme
+        une mesure nulle. L’ordre des opérations arithmétiques reste inchangé.
+        """
+        mean = comparison["after_fwhm_px"]["mean"] / comparison["before_fwhm_px"]["mean"]
+        median = comparison["paired_ratio"]["median"]
+        gain = artifacts.get("noise", {}).get("proven_gain")
+        rings = artifacts["max_ring_fraction"]
+        noise = artifacts["max_noise_ratio"]
+        sharpen = "sharpen" in operations
+        score = 2 * (1 - mean) + 2 * (1 - median) if sharpen else 0
+        score += max(0, gain) if gain is not None else 0
+        score -= 0.2 * rings
+        score -= 0.2 * max(0, noise - 1) if noise is not None else 0
+        return dict(
+            formula="2*(1-ratio_FWHM_moyenne) + 2*(1-ratio_FWHM_mediane) "
+                    "+ max(0,gain_bruit_utile) - 0.2*anneaux "
+                    "- 0.2*max(0,ratio_bruit-1) ; termes FWHM seulement avec netteté",
+            fwhm_mean_ratio=mean, fwhm_median_ratio=median,
+            useful_noise_gain=gain, max_ring_fraction=rings, max_noise_ratio=noise,
+            contributions=dict(
+                fwhm_mean=2 * (1 - mean) if sharpen else 0,
+                fwhm_median=2 * (1 - median) if sharpen else 0,
+                useful_noise_gain=max(0, gain) if gain is not None else 0,
+                rings=-0.2 * rings,
+                excess_noise=-0.2 * max(0, noise - 1) if noise is not None else 0,
+            ),
+            total=float(score),
+        )
+
     def _final_evaluation(
         self,
         source: Path,
@@ -190,80 +241,41 @@ class RestorationChainProcessor(processor):
     ) -> JSONReport:
         """Contrôle final vs référence : étoiles, bruit, photométrie et structures.
 
-        Le bandeau de contrôle final de l’appelant couvre les mesures stellaires.
-        Un sous-titre INFO annonce ensuite les mesures de bruit, flux et artefacts.
+        RestorationEvaluationProcessor séquence récursivement la détection,
+        les mesures stellaires et les contrôles indépendants sur pixels. Le
+        présent orchestrateur applique ensuite les critères et le score final,
+        sans connaître les calculs internes des feuilles.
         """
-        from astropy.io import fits
-        from lib.deconvolution import compare_star_catalogs, _quote
         from lib.deconvolution_quality import (
-            artifact_metrics,
             assess_quality,
             assess_denoising,
             denoising_criteria,
         )
         from lib.restoration_quality import criterion
-        from lib.siril_utils import Siril
 
-        work.mkdir(parents=True, exist_ok=True)
-        before = work.parent / "common_reference.tsv"
-        after = work / "final.tsv"
-        layer = getattr(args, "deconvolution_layer", None)
-        if layer is None:
-            layer = 1 if fits.getdata(source).ndim == 3 else 0
-        lines = ["requires 1.4", f"cd {_quote(work)}", "setext fit", "set32bits"]
-        images = [(candidate, after)]
-        needs_reference = not before.is_file()
-        staged_reference = work / "reference.tsv"
-        if needs_reference:
-            images.insert(0, (source, staged_reference))
-        for image, catalog in images:
-            lines += [
-                f"load {_quote(image)}",
-                "setfindstar reset",
-                "setfindstar -gaussian",
-                f"findstar -layer={layer} -out={catalog.name}",
-                "close",
-            ]
-        service = Siril(
-            siril_path=getattr(args, "siril_path", None),
-            siril_mode=getattr(args, "siril_mode", None),
+        from lib.quality_processors import QualityContext, RestorationEvaluationProcessor
+        from lib.restoration_quality import normalized_planes
+
+        context = QualityContext(
+            source, candidate, reference.data, normalized_planes(candidate), reference,
+            top_down=reference.top_down,
         )
-        if not service.run_siril_script(
-            "\n".join(lines) + "\n", str(work), "final_quality.sps"
-        ):
-            raise RuntimeError("Contrôle final Siril impossible")
-        if needs_reference:
-            copyfile(staged_reference, before)
-        comparison = compare_star_catalogs(
-            before,
-            after,
-            getattr(args, "deconvolution_match_radius", 1),
-            getattr(args, "deconvolution_min_stars", 10),
-            getattr(args, "deconvolution_min_match_fraction", 0.7),
-            layer,
-            reference_images=(source, candidate),
-            quality_mode="reliable",
-        )
+        evaluation = RestorationEvaluationProcessor(context, work).post_process(candidate, None, args)
+        comparison = evaluation['comparison']
         if comparison["status"] != "validated":
             return dict(
                 status="rejected",
                 rejection_reasons=[comparison["status"]],
                 comparison=comparison,
+                processing=evaluation['processing'],
+                artifacts=evaluation['artifacts'],
                 criteria=dict(
                     stars=comparison.get(
                         "criterion", criterion("UNKNOWN", comparison["status"])
                     )
                 ),
             )
-        log_section(
-            "Restauration — Contrôle final : bruit, flux et artefacts",
-            separator="-",
-        )
-        final_args = copy(args)
-        final_args._quality_reference = reference
-        artifacts = artifact_metrics(
-            source, candidate, comparison["pairs"], args=final_args
-        )
+        artifacts = evaluation['artifacts']
         if "sharpen" in operations:
             verdict = assess_quality(
                 comparison,
@@ -302,28 +314,18 @@ class RestorationChainProcessor(processor):
             artifacts["max_noise_ratio"] is None or artifacts["max_noise_ratio"] >= 1
         ):
             reasons = [*reasons, "global_noise_reduction_not_demonstrated"]
-        # Un score final unique : un gain n’est compté qu’une seule fois.
+        score_details = None
         score = 0.0
         if not reasons:
-            mean = (
-                comparison["after_fwhm_px"]["mean"]
-                / comparison["before_fwhm_px"]["mean"]
-            )
-            median = comparison["paired_ratio"]["median"]
-            gain = artifacts.get("noise", {}).get("proven_gain")
-            score = 2 * (1 - mean) + 2 * (1 - median) if "sharpen" in operations else 0
-            score += max(0, gain) if gain is not None else 0
-            score -= 0.2 * artifacts["max_ring_fraction"]
-            score -= (
-                0.2 * max(0, artifacts["max_noise_ratio"] - 1)
-                if artifacts["max_noise_ratio"] is not None
-                else 0
-            )
+            score_details = self.score_details(comparison, artifacts, operations)
+            score = score_details["total"]
         return dict(
             status="rejected" if reasons else "accepted",
+            processing=evaluation['processing'],
             comparison=comparison,
             artifacts=artifacts,
             selection_score=float(score),
+            score_details=score_details,
             rejection_reasons=reasons,
             criteria=criteria,
         )
@@ -334,14 +336,37 @@ class RestorationChainProcessor(processor):
         output_path: Path | str,
         args: argparse.Namespace | None = None,
     ) -> JSONReport:
-        """Évalue les variantes et garde les audits directement dans <rapport>_work.
+        """Évalue les variantes et garde les audits dans un dossier direct.
 
-        Les opérations et contrôles finaux y sont numérotés ; aucun niveau de
+        Le plan numéroté utilise directement 04_restoration ; les appels autonomes
+        conservent <rapport>_work. Chaque opération regroupe son rapport, ses
+        candidats et scripts dans un même dossier numéroté, préparé
+        avant l’appel moteur. Le numéro identifie le calcul ; son nom décrit
+        les traitements successifs depuis la source, séparés par _then_.
+        Un calcul réutilisé conserve le chemin de sa première exécution.
+        Les masques de chaque entrée sont écrits auprès de cette image, une
+        seule fois ; ceux de la source sont sous 00_mask_origine. Les audits
+        des opérations référencent explicitement les FITS et PNG utilisés.
+        Chaque opération terminée conserve son résultat effectif auprès du
+        rapport (.fits), référencé par result_image_path ; result_image_role
+        distingue accepted_output et retained_input en cas de rejet. Les
+        échecs et moteurs indisponibles ne produisent aucun résultat artificiel.
+        Les moteurs n’ajoutent aucun niveau 001.
+
+        Les contrôles finaux sont sous verification_finale dans le dossier
+        producteur, avec comptes rendus texte locaux et finaux. La synthèse
+        globale au niveau du rapport rassemble leurs résultats et leurs liens.
+        Les index HTML locaux documentent ensuite les audits et images présents.
+        Les opérations y sont numérotées ; aucun niveau de
         répétition artificiel n'est créé. Le dossier est réinitialisé à chaque
         appel et une entrée qui s'y trouve est refusée avant suppression.
         Les préparations, calculs distincts, contrôles finaux et classement sont
         annoncés en INFO par des titres encadrés de tirets. Les réutilisations
         de cache sont détaillées en DEBUG, sans annoncer de nouveau calcul.
+        Les durées murales des préparations, appels moteurs et contrôles finaux
+        distincts sont journalisées en INFO et persistées dans timings (secondes).
+        duration_seconds mesure le total jusqu'à la publication, hors dernière
+        écriture JSON ; cache_hits distingue les réutilisations sans nouveau coût.
         """
         args = copy(self._get_args(args))
         if getattr(args, "quality_mode", "reliable") == "legacy":
@@ -352,38 +377,47 @@ class RestorationChainProcessor(processor):
         source, report = Path(input_path).resolve(), Path(output_path).resolve()
         if source == report or source == report.with_suffix(".fits"):
             raise ValueError("Sorties distinctes de l’entrée requises")
-        parent_work = report.parent / (report.stem + "_work")
-        if source.is_relative_to(parent_work):
-            raise ValueError(
-                "L’entrée ne peut pas se trouver dans le dossier de travail réinitialisé"
-            )
-        work = reset_work_dir(report)
+        started = time.monotonic()
+        durations: dict[str, float] = {}
+        work = reset_restoration_work_dir(report, source)
         log_section(
             "Restauration — Préparation de la référence et des masques", separator="-",
         )
-        reference = QualityReference(source, args)
-        preview = reference.save_masks(work / "common_masks.fits")
-        configurations = {
-            key: value for key, value in vars(args).items() if not key.startswith("_")
-        }
-        parameter_hash = hashlib.sha256(
-            json.dumps(configurations, sort_keys=True, default=str).encode()
-        ).hexdigest()
-        dependencies = self._dependency_manifest(args)
-        dependencies_hash = hashlib.sha256(
-            json.dumps(dependencies, sort_keys=True).encode()
-        ).hexdigest()
+        with log_duration(
+            "Restauration — préparation commune", durations, "preparation_seconds",
+        ):
+            reference = QualityReference(source, args)
+            origin_masks = work / "00_mask_origine"
+            origin_masks.mkdir()
+            mask_path = origin_masks / "common_masks.fits"
+            preview = reference.save_masks(mask_path)
+            configurations = {
+                key: value for key, value in vars(args).items() if not key.startswith("_")
+            }
+            parameter_hash = hashlib.sha256(
+                json.dumps(configurations, sort_keys=True, default=str).encode()
+            ).hexdigest()
+            dependencies = self._dependency_manifest(args)
+            dependencies_hash = hashlib.sha256(
+                json.dumps(dependencies, sort_keys=True).encode()
+            ).hexdigest()
         cache, fingerprints, final_cache = {}, {source: self._fingerprint(source)}, {}
+        input_masks = {source: (mask_path, preview)}
+        intermediate_path: Path | None = None
+        intermediate_reference: QualityReference | None = None
         result = dict(
             engine="chains",
             image_path=str(source),
             quality_reference=reference.audit(),
             quality_preview_path=str(preview),
+            quality_mask_path=str(mask_path),
             parameters_sha256=parameter_hash,
             dependencies=dependencies,
             dependencies_sha256=dependencies_hash,
             variants=[],
             operations=[],
+            timings=durations,
+            cache_hits=dict(operations=0, final_evaluations=0),
             selected_chain=[],
             output_image=str(source),
             status="no_safe_improvement",
@@ -429,23 +463,45 @@ class RestorationChainProcessor(processor):
                         f"{operation_labels[operation]} avec {engine_labels.get(name, name)}",
                         separator="-",
                     )
-                    call_args = copy(args)
-                    # Aucun décalage silencieux de la destination finale des variantes.
-                    call_args.deconvolution_output = None
-                    call_args._quality_reference = (
-                        reference
-                        if current == source
-                        else QualityReference(current, args)
-                    )
-                    child_report = (
-                        work / f"{len(cache) + 1:02d}_{operation}_{name}.json"
-                    )
-                    call_args._quality_reference.save_masks(
-                        child_report.with_name(child_report.stem + "_masks.fits")
-                    )
+                    operation_number = len(cache) + 1
+                    with log_duration(
+                        f"Restauration — préparation du calcul #{operation_number:02d} {operation}/{name}",
+                        durations, f"operation_{operation_number:02d}_preparation_seconds",
+                    ):
+                        call_args = copy(args)
+                        # Aucun décalage silencieux de la destination finale des variantes.
+                        call_args.deconvolution_output = None
+                        if current == source:
+                            call_args._quality_reference = reference
+                        else:
+                            # Retenir une seule référence intermédiaire limite la RAM.
+                            if intermediate_path != current:
+                                intermediate_reference = QualityReference(current, args)
+                                intermediate_path = current
+                            call_args._quality_reference = intermediate_reference
+                        if current not in input_masks:
+                            current_mask = current.with_name(current.stem + "_masks.fits")
+                            current_preview = call_args._quality_reference.save_masks(current_mask)
+                            input_masks[current] = (current_mask, current_preview)
+                        input_mask, input_preview = input_masks[current]
+                        treatment_path = [
+                            f"{step['operation']}_{step['engine']}" for step in steps
+                        ] + [f"{operation}_{name}"]
+                        operation_name = (
+                            f"{operation_number:02d}_" + "_then_".join(treatment_path)
+                        )
+                        operation_dir = reset_work_dir(
+                            work / f"{operation_name}.json", directory_name=operation_name,
+                        )
+                        call_args._restoration_work_dir = operation_dir
+                        child_report = operation_dir / f"{operation_name}.json"
                     start = time.monotonic()
                     try:
-                        entry = cls().post_process(current, child_report, call_args)
+                        with log_duration(
+                            f"Restauration — calcul #{operation_number:02d} {operation}/{name}",
+                            durations, f"operation_{operation_number:02d}_processing_seconds",
+                        ):
+                            entry = cls().post_process(current, child_report, call_args)
                     except (OSError, RuntimeError, ValueError, ImportError) as error:
                         entry = {}
                         if child_report.is_file():
@@ -470,17 +526,47 @@ class RestorationChainProcessor(processor):
                         entry,
                         operation_id=len(cache) + 1,
                         report_path=str(child_report),
+                        input_image=str(current),
+                        input_mask_path=str(input_mask),
+                        input_mask_preview_path=str(input_preview),
                         input_sha256=fingerprints[current],
                         operation=operation,
                         engine_name=name,
                         parameters_sha256=parameter_hash,
                         duration_seconds=time.monotonic() - start,
+                        preparation_duration_seconds=durations[
+                            f"operation_{operation_number:02d}_preparation_seconds"
+                        ],
                         dependencies_sha256=dependencies_hash,
+                    )
+                    entry["result_image_path"] = None
+                    entry["result_image_role"] = None
+                    if entry["status"] in {"accepted", "rejected", "no_safe_improvement"}:
+                        accepted = entry["status"] == "accepted"
+                        result_source = entry.get("output_image") if accepted else str(current)
+                        if isinstance(result_source, str) and Path(result_source).is_file():
+                            result_path = child_report.with_suffix(".fits")
+                            if Path(result_source).resolve() != result_path.resolve():
+                                copyfile(result_source, result_path)
+                            entry["result_image_path"] = str(result_path)
+                            entry["result_image_role"] = (
+                                "accepted_output" if accepted else "retained_input"
+                            )
+                    local_checks = operation_dir / "verifications_locales.txt"
+                    entry["verification_path"] = str(local_checks)
+                    RestorationSummary.write_checks(
+                        entry, local_checks, source=current,
+                        candidate=Path(entry.get("candidate_image_path") or entry.get("output_image") or current),
+                        label="VÉRIFICATIONS LOCALES DU TRAITEMENT",
+                    )
+                    child_report.write_text(
+                        json.dumps(entry, indent=2, allow_nan=False), encoding="utf-8",
                     )
                     cache[key] = entry
                     result["operations"].append(entry)
                 entry = cache[key]
                 if reused:
+                    result["cache_hits"]["operations"] += 1
                     logging.debug(
                         "Restauration — calcul #%d réutilisé pour la variante %d/%d",
                         entry["operation_id"], index + 1, len(variants),
@@ -527,19 +613,44 @@ class RestorationChainProcessor(processor):
                         f"{index + 1}/{len(variants)} : "
                         f"{description}", separator="-",
                     )
+                    verification_dir = Path(entry["report_path"]).parent / "verification_finale"
+                    verification_dir.mkdir(parents=True, exist_ok=True)
+                    final_args = copy(args)
+                    final_args._restoration_reference_catalog = (
+                        work / "00_mask_origine/common_reference.tsv"
+                    )
                     try:
-                        final_cache[final_key] = self._final_evaluation(
-                            source,
-                            current,
-                            reference,
-                            work / f"final_{index:02d}",
-                            args,
-                            final_key[1],
-                        )
+                        with log_duration(
+                            f"Restauration — contrôle final de la variante {index + 1:02d}",
+                            durations, f"final_{index + 1:02d}_seconds",
+                        ):
+                            final_cache[final_key] = self._final_evaluation(
+                                source,
+                                current,
+                                reference,
+                                verification_dir,
+                                final_args,
+                                final_key[1],
+                            )
                     except (OSError, ValueError, RuntimeError) as error:
                         final_cache[final_key] = dict(
                             status="unknown", error=str(error)
                         )
+                    final_audit = final_cache[final_key]
+                    final_text = verification_dir / "verifications.txt"
+                    final_audit["verification_path"] = str(final_text)
+                    RestorationSummary.write_checks(
+                        final_audit, final_text, source=source, candidate=current,
+                        label="VÉRIFICATIONS FINALES CONTRE L’IMAGE D’ORIGINE",
+                    )
+                    final_audit["duration_seconds"] = durations[
+                        f"final_{index + 1:02d}_seconds"
+                    ]
+                    (verification_dir / "verification.json").write_text(
+                        json.dumps(final_audit, indent=2, allow_nan=False), encoding="utf-8",
+                    )
+                else:
+                    result["cache_hits"]["final_evaluations"] += 1
                 final = final_cache[final_key]
                 variant.update(final)
                 if final["status"] != "accepted":
@@ -556,25 +667,42 @@ class RestorationChainProcessor(processor):
                         selection_score=best,
                     )
             result["variants"].append(variant)
+            result["duration_seconds"] = time.monotonic() - started
             report.write_text(
                 json.dumps(result, indent=2, allow_nan=False), encoding="utf-8"
             )
         log_section(
             "Restauration — Classement et publication du résultat", separator="-",
         )
-        result["operation_count"] = len(cache)
-        if result["status"] == "accepted":
-            destination = report.with_suffix(".fits")
-            copyfile(result["output_image"], destination)
-            result["output_image"] = str(destination)
-        logging.info(
-            "Restauration : %d chaînes, %d calculs distincts ; choix=%s",
-            len(result["variants"]),
-            len(cache),
-            result["selected_chain"] or "image inchangée",
-        )
-        RestorationSummary.write(result, report, mode="chains", args=args)
+        engine_totals: dict[str, float] = {}
+        for operation_result in result["operations"]:
+            label = f"{operation_result['operation']}:{operation_result['engine_name']}"
+            engine_totals[label] = (
+                engine_totals.get(label, 0.0) + operation_result["duration_seconds"]
+            )
+        result["engine_duration_seconds"] = engine_totals
+        for label, elapsed in sorted(engine_totals.items(), key=lambda item: -item[1]):
+            logging.info("Durée cumulée — Restauration %s : %.3f s", label, elapsed)
+        with log_duration(
+            "Restauration — publication", durations, "publication_seconds",
+        ):
+            result["operation_count"] = len(cache)
+            if result["status"] == "accepted":
+                destination = report.with_suffix(".fits")
+                copyfile(result["output_image"], destination)
+                result["output_image"] = str(destination)
+            logging.info(
+                "Restauration : %d chaînes, %d calculs distincts ; choix=%s",
+                len(result["variants"]),
+                len(cache),
+                result["selected_chain"] or "image inchangée",
+            )
+            RestorationSummary.write(result, report, mode="chains", args=args)
+        result["duration_seconds"] = time.monotonic() - started
+        logging.info("Durée — Restauration totale : %.3f s", result["duration_seconds"])
         report.write_text(
             json.dumps(result, indent=2, allow_nan=False), encoding="utf-8"
         )
+        from lib.processing_html import ProcessingHtmlReport
+        ProcessingHtmlReport.publish(report.parent)
         return result

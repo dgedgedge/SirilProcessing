@@ -59,6 +59,7 @@ def fit_log_tail(light: np.ndarray) -> JSONReport:
 
 def fit_log_tail_counts(
     counts: np.ndarray, window_end: float | None = None,
+    window_start: float | None = None,
 ) -> JSONReport:
     """Ajuste la queue depuis 128 effectifs, transférables seuls depuis CUDA.
 
@@ -71,6 +72,10 @@ def fit_log_tail_counts(
         Borne commune imposée, 0,75 ou 0,875. Sinon, 0,875 est retenu lorsque
         huit classes de ]0,75;0,875] contiennent chacune au moins trois pixels ;
         à défaut, 0,75. L'appelant fixe cette borne avant de comparer les essais.
+
+    window_start : float, optional
+        Début fixe dans [0,window_end[ ; sinon la fenêtre commence après le pic.
+        Permet de comparer les mêmes quartiles malgré le déplacement du pic.
 
     Returns
     -------
@@ -95,6 +100,10 @@ def fit_log_tail_counts(
                       else FALLBACK_TAIL_ENDPOINT)
     if window_end not in (FALLBACK_TAIL_ENDPOINT, TAIL_ENDPOINT):
         raise ValueError('La borne de régression GHS doit valoir 0,75 ou 0,875')
+    if window_start is not None and (
+        not np.isfinite(window_start) or not 0 <= window_start < window_end
+    ):
+        raise ValueError('Début de fenêtre GHS invalide')
     smooth = np.convolve(counts, np.array([1, 2, 1]) / 4, mode='same')
     peak_index = int(np.argmax(smooth))
     peak = float(centers[peak_index]) if support else None
@@ -106,7 +115,8 @@ def fit_log_tail_counts(
     }
     if peak is None:
         return report
-    selected = ((centers > peak) & (centers <= window_end)
+    start = peak if window_start is None else window_start
+    selected = ((centers > start) & (centers <= window_end)
                 & (counts >= MIN_BIN_COUNT))
     x = centers[selected]
     report['fit_bins'] = int(x.size)

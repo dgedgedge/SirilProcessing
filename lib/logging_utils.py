@@ -1,6 +1,9 @@
 """Configuration commune des logs console et fichiers de traitement."""
 
 import logging
+from collections.abc import Iterator
+from contextlib import contextmanager
+from time import perf_counter
 from pathlib import Path
 from typing import Literal
 
@@ -16,6 +19,40 @@ def log_section(title: str, *, separator: Literal["=", "-"] = "=") -> None:
     logging.info("%s", line)
     logging.info("%s", title)
     logging.info("%s", line)
+
+
+@contextmanager
+def log_duration(label: str, durations: dict[str, float], key: str) -> Iterator[None]:
+    """Mesure le temps écoulé d'une phase, le cumule et le journalise en INFO.
+
+    Parameters
+    ----------
+    label : str
+        Nom lisible du traitement et de la phase dans le journal.
+    durations : dict[str, float]
+        Audit modifié à la sortie du contexte, y compris en cas d'exception.
+    key : str
+        Clé du cumul en secondes pour cette phase. Les appels répétés s'ajoutent.
+
+    Notes
+    -----
+    L'horloge monotone haute résolution mesure une durée murale, incluant les
+    attentes des sous-processus et les entrées/sorties. Aucune synchronisation
+    GPU supplémentaire n'est imposée. Les exceptions sont propagées intactes.
+    Des mesures imbriquées se recouvrent et ne doivent pas être additionnées.
+    """
+    started = perf_counter()
+    failed = True
+    try:
+        yield
+        failed = False
+    finally:
+        elapsed = perf_counter() - started
+        durations[key] = durations.get(key, 0.0) + elapsed
+        logging.info(
+            "Durée — %s : %.3f s%s", label, elapsed,
+            " (interrompu ou en échec)" if failed else "",
+        )
 
 
 def setup_logging(log_level: str) -> None:

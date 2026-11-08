@@ -269,7 +269,8 @@ le périphérique, la version de PyTorch, les empreintes des poids utilisés,
 les réglages, les mesures et les motifs de rejet. Chaque dossier de travail
 conserve le candidat, le script et les catalogues de contrôle. Les rapports enfants ont un suffixe de moteur (`_cosmic_clarity`, `_siril`,
 `_graxpert`) ; leur dossier `<rapport enfant>_work/` est recréé avant chaque
-calcul avec un sous-dossier ordonné `001/`.
+calcul, sans sous-dossier `001`. Dans le plan numéroté, le dossier du moteur
+porte directement le nom du rapport enfant, sans suffixe `_work`.
 Une ancienne sortie acceptée n'est pas remplacée par un candidat rejeté.
 
 Ces contrôles ne prouvent pas la conservation de structures diffuses ou des flux
@@ -368,3 +369,7 @@ de rétention.
 Les classes Cosmic Clarity produisent uniquement leur candidat neuronal.
 La comparaison avec Siril relève des [orchestrateurs de restauration](restoration.md),
 sans choix de moteur dans la séquence de post-traitement.
+
+L'accès aux poids passe par `ResourceManager`, commun au calcul et à
+l'[installateur de ressources](../install_dependances/resources.md#resource-manager).
+Un fichier local conforme, y compris fourni avec le dépôt, est utilisé sans réseau.

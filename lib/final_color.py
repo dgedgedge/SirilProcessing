@@ -11,14 +11,16 @@ import json
 import logging
 import math
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 from astropy.io import fits
 from astropy.wcs import WCS
 
 from lib.auto_ghs import ComputeBackend, luminance
+from lib.torch_backend import TorchComputeBackend
 from lib.compute_config import ComputeConfig
-from lib.postprocess_paths import reset_ordered_work_dir
+from lib.postprocess_paths import reset_work_dir
 from lib.processor import processor
 from lib.render_exports import write_render_jpeg
 from lib.restoration_quality import normalized_planes
@@ -26,9 +28,16 @@ from lib.star_rendering import recompose
 from lib.star_separation import validate_rgb, write_rgb
 from lib.type_defs import JSONReport
 
+if TYPE_CHECKING:
+    import torch
+
 CHROMA_PROTECTION = 0.025
 MIN_SUPPORT = 32
 MAX_RECOMPOSED_LIGHT_CHANGE = 0.01
+# Huit epsilon float32 couvrent l'arrondi de la construction RGB' = RGB+(g-1)Δ.
+GAMUT_ROUNDOFF_TOLERANCE = 8 * np.finfo(np.float32).eps
+# Ne neutraliser que des pixels isolés : au plus 0,01 %, avec un minimum de un.
+MAX_GAMUT_ROUNDOFF_FRACTION = 1e-4
 LOGGER = logging.getLogger(__name__)
 
 
@@ -68,6 +77,8 @@ class FinalColorProcessor(processor):
         group.add_argument('--disable-final-color', dest='enable_final_color',
                            action=_ColorActivation, nargs=0, const=False,
                            help='Désactiver la passe couleur finale')
+        parser.add_argument('--final-color-backend', choices=('auto', 'cpu', 'cuda', 'mps'), default=None,
+                            help='Moteur couleur PyTorch ; sinon compute-backend')
         parser.add_argument('--final-color-strength', type=float, default=3.0,
                             help='Renforcement maximal [0,3] (défaut : 3) ; '
                                  '1 donne un gain au plus 2 ; '
@@ -86,9 +97,55 @@ class FinalColorProcessor(processor):
         return options
 
     @staticmethod
+    def _guard_rendered_gamut(
+        image: np.ndarray | torch.Tensor, output: np.ndarray | torch.Tensor,
+        gain: np.ndarray | torch.Tensor,
+        backend: TorchComputeBackend | ComputeBackend,
+    ) -> JSONReport:
+        """Neutralise l'augmentation sur de rares pixels affectés par l'arrondi.
+
+        Les tableaux output et gain sont modifiés en place sur le backend actif.
+        Un pixel RGB hors [0,1] est remplacé entièrement par son entrée GHS,
+        avec gain ramené à un : aucun canal n'est écrêté et sa luminosité est
+        conservée. L'entrée reste intacte. La correction n'est admise que pour
+        des écarts <= huit epsilon float32 et <= 0,01 % des pixels (au moins un).
+        Un écart plus ample ou étendu lève ValueError avec ses mesures.
+        Le retour décrit les corrections en valeurs RGB et en pixels spatiaux.
+        """
+        xp = backend.xp
+        outside = (output < 0) | (output > 1)
+        values = int(xp.count_nonzero(outside).item())
+        affected = xp.any(outside, axis=0)
+        pixels = int(xp.count_nonzero(affected).item())
+        maximum = max(0.0, -float(output.min().item()), float(output.max().item()) - 1)
+        pixel_limit = max(1, int(math.prod(gain.shape) * MAX_GAMUT_ROUNDOFF_FRACTION))
+        audit: JSONReport = {
+            'corrected_rgb_values': values, 'restored_pixels': pixels,
+            'pixel_fraction': pixels / math.prod(gain.shape), 'maximum_excursion': maximum,
+            'tolerance': float(GAMUT_ROUNDOFF_TOLERANCE),
+            'maximum_pixels': pixel_limit,
+            'policy': 'restore_original_ghs_pixel',
+        }
+        if pixels:
+            if maximum > GAMUT_ROUNDOFF_TOLERANCE or pixels > pixel_limit:
+                raise ValueError(
+                    f'Couleur finale : sortie hors gamut sur {pixels}/{math.prod(gain.shape)} pixels, '
+                    f'écart maximal={maximum:.9g} ; limite numérique='
+                    f'{GAMUT_ROUNDOFF_TOLERANCE:.9g}, limite de pixels={pixel_limit}'
+                )
+            output[:, affected] = image[:, affected]
+            gain[affected] = 1
+            LOGGER.warning(
+                'Couleur finale : arrondi hors gamut sur %d valeurs RGB, %d/%d pixels '
+                '(%.6f %%), écart maximal=%.9g ; pixels GHS originaux conservés',
+                values, pixels, math.prod(gain.shape), 100 * pixels / math.prod(gain.shape), maximum,
+            )
+        return audit
+
+    @staticmethod
     def render(
         data: np.ndarray, strength: float, color_mode: str = 'human',
-        backend: ComputeBackend | None = None,
+        backend: TorchComputeBackend | ComputeBackend | None = None,
     ) -> tuple[np.ndarray, JSONReport]:
         """Applique un gain de chroma local en préservant Y et la direction RGB.
 
@@ -100,7 +157,7 @@ class FinalColorProcessor(processor):
             Excès de gain maximal dans [0,3]. Zéro conserve l'identité.
         color_mode : str
             human ou even, identique à celui du GHS.
-        backend : ComputeBackend, optional
+        backend : TorchComputeBackend, optional
             Backend préinitialisé, sans bascule en cours de calcul. CPU sinon.
 
         Returns
@@ -114,26 +171,29 @@ class FinalColorProcessor(processor):
         RGB' = Y + g(RGB-Y), g>=1. Le gain est limité analytiquement au gamut,
         sans écrêtage. Le ciel, les couleurs indistinguables du fond et P99,9
         sont protégés. Les couleurs déjà fortes reçoivent un gain plus faible.
+        De rares résidus d'arrondi float32 sont audités et le pixel GHS original
+        est conservé à ces positions, sans écrêtage. Les dépassements significatifs
+        restent des erreurs ; les entrées sont toujours strictement validées.
         """
         FinalColorProcessor.options(argparse.Namespace(final_color_strength=strength))
         validate_rgb(data)
-        backend = backend or ComputeBackend('cpu')
+        backend = backend or TorchComputeBackend('cpu')
         xp = backend.xp
         image = xp.asarray(data, dtype=xp.float32)
         light = luminance(image, color_mode, xp=xp)
         active = light > 1e-6
         audit: JSONReport = {'status': 'unchanged', 'requested_strength': strength,
-                             'color_mode': color_mode, 'backend': backend.name}
+                             'color_mode': color_mode, 'backend': backend.name,
+                             'compute': backend.report() if isinstance(backend, TorchComputeBackend)
+                             else {'name': backend.name}}
         if strength == 0 or int(xp.count_nonzero(active).item()) < MIN_SUPPORT:
             return data.copy(), audit
         if float(xp.ptp(light[active]).item()) < 1e-7:
             return data.copy(), audit
-        if backend.name == 'cuda':
-            from cupyx.scipy.ndimage import gaussian_filter
-        else:
-            from scipy.ndimage import gaussian_filter
+        from scipy.ndimage import gaussian_filter
         sigma = max(1.0, min(6.0, min(data.shape[1:]) / 768))
-        smooth = gaussian_filter(image, sigma=(0, sigma, sigma))
+        smooth = (gaussian_filter(image, sigma=(0, sigma, sigma)) if backend.name == 'cpu'
+                  else backend.gaussian(image, sigma))
         smooth_y = luminance(smooth, color_mode, xp=xp)
         q25, q75, q95, q98, core = [float(v) for v in
             backend.numpy(xp.percentile(light[active], [25, 75, 95, 98, 99.9]))]
@@ -152,7 +212,7 @@ class FinalColorProcessor(processor):
         color_noise = max(float((1.4826 * xp.median(abs(sky_residual))).item()), 1e-5)
         coherent = xp.sqrt(xp.mean((normalized - sky_color[:, None, None]) ** 2, axis=0))
 
-        def ramp(values: np.ndarray) -> np.ndarray:
+        def ramp(values: np.ndarray | torch.Tensor) -> np.ndarray | torch.Tensor:
             """Raccord C1 de zéro à un sur [0,1], constant à l'extérieur."""
             values = xp.clip(values, 0, 1)
             return values * values * (3 - 2 * values)
@@ -168,11 +228,13 @@ class FinalColorProcessor(processor):
         delta = image - light[None]
         upper = xp.where(delta > 0, (1 - light)[None] / xp.maximum(delta, 1e-30), xp.inf)
         lower = xp.where(delta < 0, light[None] / xp.maximum(-delta, 1e-30), xp.inf)
-        limit = xp.maximum(1, xp.minimum(upper.min(axis=0), lower.min(axis=0)))
+        limit = xp.maximum(xp.minimum(xp.min(upper, axis=0), xp.min(lower, axis=0)), 1)
         gain = 1 + xp.minimum(gain - 1, (limit - 1) * (1 - 4 * np.finfo('f4').eps))
         # La multiplication par (g-1) garde les pixels protégés exactement identiques.
         output = image + (gain - 1)[None] * delta
-        validate_rgb(output)
+        audit['gamut_roundoff'] = FinalColorProcessor._guard_rendered_gamut(
+            image, output, gain, backend,
+        )
         after_y = luminance(output, color_mode, xp=xp)
         error = float(xp.max(abs(after_y - light)).item())
         if error > 5e-7:
@@ -187,7 +249,9 @@ class FinalColorProcessor(processor):
             sky_median_gain=float(xp.median(gain[sky]).item()),
             luminance_max_abs=error,
         )
-        return backend.numpy(output).astype(np.float32), audit
+        result = backend.numpy(output).astype(np.float32)
+        validate_rgb(result)
+        return result, audit
 
     def post_process(
         self, input_path: Path, output_path: Path, args: argparse.Namespace | None = None,
@@ -229,6 +293,8 @@ class FinalColorProcessor(processor):
         -----
         Les gardes sont vérifiées après fusion pour les forces S, S/2, S/4,
         puis zéro. La première admissible est publiée sans modifier les sources.
+        Les fichiers sont directs dans <rapport>_work, sans sous-niveau 001 ;
+        ce dossier est réinitialisé après validation des entrées.
         """
         runtime = self._get_args(args)
         options = self.options(runtime)
@@ -252,7 +318,7 @@ class FinalColorProcessor(processor):
             second_wcs = WCS(star_header, naxis=2).celestial.to_header(relax=True)
             if data.shape != stars.shape or first_wcs != second_wcs:
                 raise ValueError('Géométrie ou WCS des couches couleur incompatibles')
-        backend = ComputeBackend(ComputeConfig.requested(runtime), data.nbytes * 12,
+        backend = TorchComputeBackend(ComputeConfig.requested(runtime, 'final_color_backend'), data.nbytes * 16,
                                  engine='Couleur finale')
         reference_y = (luminance(headroom * data + stars * (1 - headroom * data), color_mode)
                        if stars is not None else None)
@@ -286,7 +352,7 @@ class FinalColorProcessor(processor):
             raise ValueError('La fusion du rendu couleur et de sa référence échoue '
                              'aux gardes stellaires')
         colored, final, fusion, metrics = chosen
-        destination = reset_ordered_work_dir(report)
+        destination = reset_work_dir(report)
         starless_output = destination / f'{source.stem}_color.fits'
         output = destination / f'{source.stem}_color_final.fits'
         write_rgb(source, starless_output, colored, nonlinear=True, role='STARLESS')

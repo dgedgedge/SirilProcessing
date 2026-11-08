@@ -17,7 +17,7 @@ def test_integrated_script(tmp_path):
 
     script_content = mosaic._generate_mosaic_script(mosaic.input_files)
 
-    assert "requires 1.2.0" in script_content
+    assert "requires " not in script_content
     assert "convert mosaic_" in script_content
     assert "seqplatesolve mosaic_ -force" in script_content
     assert "seqapplyreg mosaic_ -framing=max" in script_content

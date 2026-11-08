@@ -3,7 +3,7 @@
 [Documentation](../../README.md)
 
 
-`lightProcess.py` et son wrapper `lightProcess.sh` traitent une ou plusieurs sessions, chacune
+`lightProcess.py` et son wrapper `lightProcess.sh` traitent une session (plusieurs uniquement avec `--mosaic`), chacune
 composée d’une ou plusieurs sous-sessions. Cet ensemble décrit leur utilisation
 et le détail des traitements effectués.
 
@@ -15,6 +15,8 @@ et le détail des traitements effectués.
 ## 1. Manuel d’utilisation
 
 - [Guide d’utilisation](GUIDE.md) : commandes, options et vue d’ensemble du parcours.
+- [Arborescence numérotée des sorties](output-layout.md).
+- [Index HTML des résultats et régénération](html-reports.md).
 - [Sessions et sous-sessions](SESSIONS.md) : organisation des données d’entrée.
 
 <a id="options-et-configuration"></a>
@@ -35,7 +37,7 @@ et le détail des traitements effectués.
 fichier différent de `~/.siril_darklib_config.json` ; `-S/--save-config` mémorise les
 paramètres. Les options explicites priment sur le JSON, qui prime sur les défauts.
 Voir [la configuration partagée](../postProcess/README.md#configuration-et-mémorisation).
-`--postprocess` enchaîne sur chaque stack final ou, avec `--mosaic`, sur la
+`--postprocess` enchaîne sur le stack final ou, avec `--mosaic`, sur la
 mosaïque finale. Il utilise les mêmes options de qualité, de restauration et
 de rendu que `bin/postProcess.sh`. L’enchaînement est activé par défaut, même
 sans option ; `--no-postprocess` le désactive. Une désactivation mémorisée dans
@@ -52,7 +54,9 @@ Les classes des traitements sont enregistrées avant le parsing. Les valeurs
 résolues sont ensuite liées aux classes avant la création des instances, y
 compris les enfants. Voir la [liaison des paramètres](treatments/postprocess/SEQUENCE_PROCESSOR.md#résolution-et-liaison-hiérarchique-des-paramètres).
 
-Le résultat empilé est écrit sous `<cible>_combined.fits`. Les anciens résultats
+Le résultat empilé est écrit sous `01_calibration/[part_XX/]stack_combined.fits`,
+puis transmis par `02_mosaic/image.fits`. Voir
+[l’arborescence et les reprises](output-layout.md). Les anciens résultats
 `.fit` restent utilisables en reprise ; `--force-stacking` demande de reconstruire
 le résultat avec la nouvelle extension. Voir [les sorties](treatments/OUTPUTS.md).
 

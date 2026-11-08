@@ -241,10 +241,13 @@ def test_processor_quality_and_source_preservation(
         assert Path(result['output_image']) == (final if status == 'accepted' else source)
     audit = json.loads(report.read_text())
     assert audit['status'] == status
+    timings = audit['evaluations']['cosmic_clarity']['timings']
+    assert set(timings) == {'inference_seconds', 'quality_seconds'}
+    assert all(value >= 0 for value in timings.values())
     assert Path(audit['evaluations']['cosmic_clarity']['candidate_image_path']).is_file()
     candidate = Path(audit['evaluations']['cosmic_clarity']['candidate_image_path'])
-    assert candidate.parent.name == '001'
-    assert candidate.parent.parent == tmp_path / 'report_cosmic_clarity_work'
+    assert candidate.parent == tmp_path / 'report_cosmic_clarity_work'
+    assert not (candidate.parent / '001').exists()
     assert not (tmp_path / 'report_cosmic_clarity_work' / 'stale.txt').exists()
     assert source.read_bytes() == original
 

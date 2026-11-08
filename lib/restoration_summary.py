@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from collections import Counter
 import logging
+import math
 from pathlib import Path
 
 from lib.type_defs import JSONReport, JSONValue
@@ -296,6 +297,122 @@ class RestorationSummary:
         return lines
 
     @classmethod
+    def accepted_ranking(cls, result: JSONReport) -> JSONReport:
+        """Classe les audits acceptés par score, en explicitant le choix enregistré.
+
+        N’invente pas les mesures absentes des anciens rapports. Les égalités
+        conservent l’ordre d’évaluation ; les rangs égaux partagent le même numéro.
+        L’écart est calculé par rapport au score effectivement retenu, qui peut
+        être celui de la référence (zéro). Les rejets ne figurent pas au classement.
+        """
+        accepted = [item for item in cls._entries(result.get('variants'))
+                    if item.get('status') == 'accepted']
+        measured = [item for item in accepted
+                    if isinstance(item.get('selection_score'), (int, float))
+                    and math.isfinite(item['selection_score'])]
+        ordered = sorted(measured, key=lambda item: -item['selection_score'])
+        rows = []
+        best = result.get('selection_score')
+        for item in ordered:
+            score = item['selection_score']
+            decision = cls._decision(
+                item, item.get('chain') == result.get('selected_chain'), best,
+                local=False, legacy=False, aborted=False,
+            )
+            details = cls._mapping(item.get('score_details'))
+            rows.append(dict(
+                rank=1 + sum(other['selection_score'] > score for other in ordered),
+                label=' → '.join(item.get('chain', [])),
+                decision=cls.DECISIONS[decision], selection_score=score,
+                gap_to_retained_score=best - score if isinstance(best, (int, float)) else None,
+                score_details=details, verification_path=item.get('verification_path'),
+            ))
+        formula = next((row['score_details'].get('formula') for row in rows
+                        if row['score_details'].get('formula')), None)
+        return dict(
+            policy='Parmi les chaînes acceptées, retenir le meilleur score strictement '
+                   'positif ; à égalité, garder la première évaluée. Sinon conserver '
+                   'l’image initiale (score zéro).',
+            formula=formula, rows=rows, accepted_count=len(accepted),
+            missing_score_count=len(accepted) - len(measured),
+            selected_chain=result.get('selected_chain'), retained_score=best,
+        )
+
+    @classmethod
+    def _ranking_lines(cls, ranking: JSONReport) -> list[str]:
+        """Expose mesures, contributions et écarts du classement des chaînes acceptées."""
+        lines = ['COMPARATIF DES CHAÎNES ACCEPTÉES', ranking['policy'],
+                 'Formule : ' + cls._value(ranking.get('formula')),
+                 'Ratios FWHM/bruit : après / avant ; gains et anneaux : fractions sans unité.']
+        for row in ranking['rows']:
+            lines.append(
+                f"Rang {row['rank']} — {row['label']} — {row['decision']} ; "
+                f"score={cls._value(row['selection_score'])} ; "
+                f"écart au score retenu={cls._value(row['gap_to_retained_score'])}"
+            )
+            detail = row['score_details']
+            for key in ('fwhm_mean_ratio', 'fwhm_median_ratio', 'useful_noise_gain',
+                        'max_ring_fraction', 'max_noise_ratio'):
+                lines.append(f'    {key}={cls._value(detail.get(key))}')
+            for key, value in cls._mapping(detail.get('contributions')).items():
+                lines.append(f'    Contribution {key}={cls._value(value)}')
+        if not ranking['rows']:
+            lines.append('Aucune chaîne acceptée avec score exploitable enregistré.')
+        if ranking['missing_score_count']:
+            lines.append(f"Scores absents/inexploitables : {ranking['missing_score_count']}.")
+        return lines
+
+    @classmethod
+    def write_checks(
+        cls, audit: JSONReport, path: Path, *, source: Path, candidate: Path,
+        label: str,
+    ) -> None:
+        """Décrit les contrôles réellement audités, leurs mesures et leurs verdicts.
+
+        Réutilise les critères publiés, sans modifier seuils ni sélection. Un
+        contrôle absent reste non documenté comme exécuté ; les valeurs UNKNOWN,
+        erreurs et essais internes sont conservés. Écrit un texte français UTF-8.
+        """
+        descriptions = {
+            'stars': 'Appariement des étoiles entre la référence et le candidat',
+            'sharpening': 'Amélioration des largeurs stellaires (FWHM)',
+            'roundness': 'Conservation de la rondeur des étoiles',
+            'noise': 'Contrôle du bruit mesuré sur les zones de ciel',
+            'useful_noise_gain': 'Gain utile de bruit sur les zones de ciel',
+            'global_noise_reduction': 'Réduction globale du bruit par rapport à la référence',
+            'rings': 'Recherche d’anneaux et d’artefacts autour des étoiles',
+            'stellar_flux': 'Conservation du flux photométrique des étoiles',
+            'diffuse': 'Conservation des structures diffuses',
+            'blur': 'Limitation de l’élargissement des profils stellaires',
+        }
+        lines = [
+            label, f'Référence : {source}', f'Image évaluée : {candidate}',
+            f"Verdict : {audit.get('status', 'UNKNOWN')}",
+            f"Score : {cls._value(audit.get('selection_score'))}",
+            'PASS = satisfait ; FAIL = non satisfait ; UNKNOWN = non vérifiable.',
+            'Les valeurs et seuils sont ceux de l’audit ; fractions relatives : 0.02 = 2 %.',
+            '', 'Contrôles effectués et résultats :',
+        ]
+        criteria = cls._criteria(audit)
+        if not criteria:
+            lines.append('Aucun détail de contrôle disponible dans cet audit.')
+        for name, item in criteria.items():
+            lines.append(f"- {descriptions.get(name, 'Critère ' + name)}")
+            lines.extend('  ' + text for text in cls._criterion_lines({name: item}))
+        if cls._reasons(audit):
+            lines.append(f"Motifs : {cls._value(cls._reasons(audit))}")
+        if audit.get('error'):
+            lines.append(f"Erreur : {audit['error']}")
+        if audit.get('score_details'):
+            details = cls._mapping(audit['score_details'])
+            lines.extend(['', 'Décomposition du score :', str(details.get('formula', 'UNKNOWN'))])
+            for key, value in cls._mapping(details.get('contributions')).items():
+                lines.append(f'- Contribution {key}={cls._value(value)}')
+        lines.extend(cls._attempt_lines(audit))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+
+    @classmethod
     def write(
         cls,
         result: JSONReport,
@@ -346,6 +463,7 @@ class RestorationSummary:
                         criteria=cls._criteria(audit),
                         steps=audit.get("steps", []),
                         rejection_stage=audit.get("rejection_stage"),
+                        verification_path=audit.get("verification_path"),
                     )
                 )
         else:
@@ -390,6 +508,7 @@ class RestorationSummary:
         if mode == "chains":
             summary["operation_count"] = result.get("operation_count")
             summary["reference"] = result.get("image_path")
+            summary["accepted_ranking"] = cls.accepted_ranking(result)
         result["summary"] = summary
         path = report.with_name(report.stem + "_summary.txt")
         result["summary_path"] = str(path)
@@ -414,6 +533,8 @@ class RestorationSummary:
             f"    {name}={cls._value(value)}"
             for name, value in summary["parameters"].items()
         )
+        if mode == "chains":
+            lines.extend(cls._ranking_lines(summary["accepted_ranking"]))
         operations = cls._entries(result.get("operations"))
         for row in rows:
             lines.append(
@@ -438,7 +559,11 @@ class RestorationSummary:
                 )
                 if cls._reasons(detail):
                     lines.append(f"        Motifs : {cls._value(cls._reasons(detail))}")
+                if detail.get("verification_path"):
+                    lines.append(f"        Compte rendu local : {detail['verification_path']}")
                 lines.extend(cls._attempt_lines(detail))
+            if row.get("verification_path"):
+                lines.append(f"    Compte rendu final : {row['verification_path']}")
             if row.get("criteria"):
                 if mode == "chains":
                     lines.append("    Contrôle global contre la référence commune :")

@@ -127,8 +127,8 @@ class DocumentationHTMLTests(unittest.TestCase):
                 for _, _, anchor in toc:
                     self.assertIn(f'id="{anchor}"', body)
 
-    def test_linked_project_sources_are_available_offline(self) -> None:
-        """L’export copie les fichiers référencés et conserve les chemins relatifs."""
+    def test_linked_project_sources_point_to_repository_without_copying(self) -> None:
+        """Les liens de code pointent vers GitHub et les sources restent hors export."""
         with TemporaryDirectory() as directory:
             root = Path(directory)
             output = self.build(root, {
@@ -142,15 +142,33 @@ class DocumentationHTMLTests(unittest.TestCase):
                     '[Module](../lib/model%20manager.py#L1)\n'
                 ),
             })
-            for relative in (
-                'lib/model manager.py', '.copilot/config.json', 'bin/run.sh',
-            ):
-                self.assertEqual(
-                    (output / relative).read_bytes(),
-                    (root / 'source' / relative).read_bytes(),
-                )
             self.assertIn(
-                'href="../bin/run.sh"', (output / 'docs/guide.html').read_text(),
+                'href="https://github.com/dgedgedge/SirilProcessing/blob/main/bin/run.sh"',
+                (output / 'docs/guide.html').read_text(),
+            )
+            guide = (output / 'docs/guide.html').read_text()
+            self.assertIn(
+                'href="../.copilot/config.json"', guide,
+            )
+            self.assertIn(
+                'href="https://github.com/dgedgedge/SirilProcessing/blob/main/lib/model%20manager.py#L1"',
+                guide,
+            )
+            home = (output / 'README.html').read_text()
+            self.assertIn(
+                'href="https://github.com/dgedgedge/SirilProcessing/blob/main/lib/model%20manager.py"',
+                home,
+            )
+            self.assertEqual(
+                (output / '.copilot/config.json').read_bytes(),
+                (root / 'source/.copilot/config.json').read_bytes(),
+            )
+            for relative in ('lib/model manager.py', 'bin/run.sh'):
+                self.assertFalse((output / relative).exists())
+            single_page = (output / 'all_docs.html').read_text()
+            self.assertIn(
+                'href="https://github.com/dgedgedge/SirilProcessing/blob/main/bin/run.sh"',
+                single_page,
             )
 
     def test_export_excludes_weights_and_files_outside_project(self) -> None:

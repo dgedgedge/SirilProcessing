@@ -3,6 +3,10 @@
 [Documentation](../../README.md) › [lightProcess](README.md)
 
 
+Les [étapes numérotées](output-layout.md) séparent calibration, mosaïque et
+post-traitements. Les temporaires de calibration utilisent
+`<work-dir>/<objet>/01_calibration/[part_XX/]`.
+
 Chaque sous-session dispose de son espace de travail. Les séquences d’entrée y
 référencent les acquisitions, tandis que `flat_process/` et `process/`
 contiennent les sorties intermédiaires de Siril.

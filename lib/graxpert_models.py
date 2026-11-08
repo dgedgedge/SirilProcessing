@@ -8,7 +8,6 @@ adaptateur ne lit ni ne reproduit ses identifiants internes. Le modèle 3.0.2 es
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import logging
 import os
@@ -23,6 +22,7 @@ from astropy.io import fits
 
 from lib.parameterized_component import ParameterizedComponent
 from lib.resource_cache import ResourceCache
+from lib.resource_manager import ResourceManager
 
 DEFAULT_MODEL_DIR = ResourceCache().model_directory('graxpert')
 DEFAULT_MODEL_VERSION = "3.0.2"
@@ -80,11 +80,7 @@ class GraXpertModels(ParameterizedComponent):
     @staticmethod
     def checksum(path: Path) -> str:
         """Calcule SHA256 par blocs, sans charger les poids en mémoire."""
-        digest = hashlib.sha256()
-        with path.open("rb") as stream:
-            for block in iter(lambda: stream.read(1024 * 1024), b""):
-                digest.update(block)
-        return digest.hexdigest()
+        return ResourceManager.file_checksum(path)
 
     def _valid(self, path: Path) -> bool:
         """Vérifie taille et empreinte attendues avant chargement ou installation."""

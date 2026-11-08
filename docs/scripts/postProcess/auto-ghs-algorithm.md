@@ -276,3 +276,15 @@ gain relatif si la largeur initiale est positive. Ces mesures concernent le fond
 avant fusion, y compris sur la figure avec étoiles. Un arrêt avant toute recherche
 (distribution constante) compte zéro recherche ; la chroma ne compte
 pas comme une itération GHS. Les données absentes ne sont pas remplacées par zéro.
+
+<a id="etirements-successifs-des-quartiles-centraux"></a>
+
+## Étirements successifs de la droite logarithmique
+
+Après la recherche finale protégée, `QuartileGHSProcessor` cherche la plus
+longue portion continue quasi rectiligne de l’histogramme semi-log, après le pic
+et jusqu’à 0,875. Une pente descendante n’est pas pénalisée face à un plateau.
+Une cible de hauteur log à cette extrémité complète le classement, par défaut
+0,25 du maximum logarithmique du canal rouge, sous les mêmes gardes.
+Les [critères, options et budgets cumulés](ghs-quartiles.md) sont décrits
+séparément. Cette phase est désactivée en mode fixe et avec force finale nulle.

@@ -220,9 +220,9 @@ remplacent pas une calibration sur plusieurs références astrophotographiques.
 Voir [le contrat et les limites](../docs/scripts/postProcess/quality.md).
 
 `test_docs_html.py` vérifie la navigation, l’exclusion des commentaires de code
-du sommaire, les diagrammes et la copie des fichiers
-Python, shell et JSON liés dans l’export HTML. Les poids binaires et les cibles
-hors dépôt restent exclus ; la génération n’exécute pas les sources copiées.
+du sommaire, les diagrammes et la copie des JSON liés dans l’export HTML.
+Les liens Python et shell pointent vers GitHub sans copie du code. Les poids
+binaires et les cibles hors dépôt restent exclus.
 `test_documentation_site.py` couvre les ancres distinctes des chapitres, leurs
 liens internes, les ressources embarquées du monofichier et la protection des
 dossiers. Une construction MkDocs complète rend les diagrammes dans Chromium
@@ -496,3 +496,211 @@ couvrent `--color-only` avec et sans mosaïque, sans calibration ni stacking.
 `test_stacking_annotation.py` vérifie les comptes indépendants des poids, les
 panneaux de mosaïque, les métadonnées absentes/incohérentes et les rapports
 périmés. L’intégration de l’encart utilise explicitement le stack d’origine.
+
+Les tests de `test_session_pipeline.py` appellent aussi directement
+`LightProcessor.process_target`, sans lancer le CLI : session directe, une ou
+plusieurs sous-sessions, image unique après rassemblement des calibrations,
+session vide et poursuite après un échec retourné ou une exception. Ils
+contrôlent les entrées exactes de l'unique empilement et l'exclusion des
+calibrations échouées. Un test vérifie que la découverte CLI délègue à la classe.
+La calibration et Siril sont simulés dans ces scénarios d'orchestration.
+
+La classe unique `Mosaic` est testée dans les deux contextes : les stacks de
+sessions fournis par `lightProcess`, et les panneaux CLI autonomes exposés par
+`add_arguments(parser, include_inputs=True)`. Les tests vérifient aussi
+l'enregistrement de la classe dans `Config`, les paramètres de son gradient
+enfant, les instantanés indépendants et la sauvegarde sélective.
+
+Le calcul du nom automatique de mosaïque appartient au script `lightProcess.py` ;
+ses cas de préfixe, mot commun, liste vide et session unique sont vérifiés
+dans `test_session_pipeline.py`.
+
+Le test de préparation du site exécute `DocumentationBuilder.build` sur un
+mini-guide lié à un JSON et à un fichier Python : seul le JSON est copié.
+Le rendu navigateur et MkDocs y sont simulés ; la construction réelle des
+exports et du site se vérifie avec `.venv/bin/python bin/build_documentation.py`.
+
+`test_config.py` contrôle également l'import de `Config` sans autre module
+applicatif et la déclaration parent/enfant sans héritage applicatif : alias,
+paramètres non rémanents, préfixes, copies indépendantes et sauvegarde explicite.
+
+Les tests de calibration vérifient `--no-flat` avec des flats réellement présents
+et Siril simulé : aucune sélection de flats ni création de master, aucune option
+`-flat` dans le script, darks conservés sauf `--no-dark`. Ils contrôlent aussi
+`--flat`, les priorités CLI/JSON, la sauvegarde explicite, les instantanés et la
+fabrique `from_config`. Une alternance avec/sans flats vérifie le recalcul des
+sorties en cache puis la reprise lorsque le réglage reste identique.
+
+Les tests `test_logging_utils.py` et `test_processing_timings.py` utilisent une
+horloge déterministe sans attente pour vérifier les cumuls en secondes, les
+rapports enfant/global, les étapes désactivées et la propagation des échecs ou
+interruptions. Les tests des chaînes vérifient un chronométrage par calcul et
+contrôle final réellement exécutés, les hits de cache et les cumuls par moteur.
+Les tests des moteurs utilisent Siril et les inférences simulés ; ils ne mesurent
+pas les performances matérielles réelles.
+
+Les tests de couleur finale couvrent les résidus float32 aux deux bornes du
+gamut : reprise du pixel RGB GHS entier, entrée intacte et audit explicite.
+Un dépassement significatif ou étendu reste refusé ; la tolérance ne s'applique
+pas aux entrées GHS invalides. L'essai réel NGC7331 reproduit un unique canal
+à environ -2,79e-9 avant correction, avec des couches sources valides.
+
+`test_quality_processors.py` vérifie les processeurs de mesure indépendants et
+l'orchestrateur récursif : masques avant tuiles, branche stellaire, branche des
+contrôles sur pixels, durées distinctes, tableaux partagés, conservation des
+sources, UNKNOWN sans arrêt des autres diagnostics et propagation des échecs
+avec audit partiel. Le catalogue de référence est réutilisé au second appel.
+Les tests stellaires contrôlent aussi l'arbre de comparaison/mesure locale.
+
+`test_noise_tiles.py` compare les calculs par lots aux moindres carrés et
+corrélations scalaires, teste les tuiles de bord, les masques incomplets et la
+sélection spatiale déterministe. Trois scénarios de parité CUDA/NumPy utilisent
+un GPU réel s'il est disponible. Les tests des processeurs vérifient plafond,
+quadrants, canaux RGB, mode exhaustif, options rémanentes et propagation d'une
+panne GPU sans reprise CPU. Les gains de temps sont mesurés séparément des
+assertions : aucun seuil de performance dépendant du matériel n'est imposé.
+
+Les tests de `test_quality_processors.py` vérifient aussi la propriété locale des
+options, leur collecte récursive, les branches partagées sans doublon et
+l’indépendance des listes de valeurs par défaut entre parseurs.
+
+`test_ghs_linear_histogram.py` et `test_ghs_quartiles.py` vérifient la priorité
+à la longueur continue rectiligne, la liberté de pente, les trous, les bosses
+et les SP aux ruptures de pente (dont 0,5), la hauteur log relative à 0,875,
+les maxima RGB indépendants, l'échelle de population, la validation finale de
+la grille et de la recomposition, le plafonnement et la désactivation du bonus,
+le support incomplet, le pic sombre isolé et son budget, les paramètres
+récursifs CLI/JSON, le déterminisme et la validation complète des passes.
+
+`test_gaia_spcc.py` vérifie les acquisitions spectrales miniatures, les reprises
+HTTP et les interruptions, les empreintes, les importations et la découverte
+sans réseau. Les tests d’installation et de photométrie couvrent les options
+Gaia complètes et la sélection automatique de SPCC local.
+
+Les tests d’installation contrôlent aussi l’activation par défaut de tous les
+modèles et catalogues, leurs désactivations indépendantes et globales, la
+transmission au worker et le mode `--test` sans acquisition.
+
+`test_resource_manager.py` couvre les points d’entrée partagés entre installateur
+et traitements, les contrôles communs et la réutilisation de ressources locales
+sans réseau, avec conservation des protocoles propres à chaque adaptateur.
+
+Les tests SPCC couvrent aussi les sélections nord/sud/complément/all, les
+intersections équatoriales, la continuation après échec d’une région et le
+bilan final qui empêche de certifier une sélection incomplète.
+
+`test_diffuse_regions.py` vérifie la sélection spatiale par octaves de taille,
+les grandes régions rares, le mode exhaustif et l’identité des mesures retenues
+avec celles du calcul exhaustif.
+
+`test_diffuse_filters.py` confronte les filtres PyTorch CUDA/MPS à SciPy
+lorsque le matériel est disponible. Les convolutions PyTorch sont aussi testées
+sur CPU (bords, petits axes, types flottants et médianes paires/NaN). Il
+vérifie les formes de fenêtres, l’absence de structure, la surcharge locale,
+le choix CPU pendant le contrôle initial et la propagation des pannes GPU.
+
+
+`test_torch_backend.py` vérifie sans GPU les opérations PyTorch partagées :
+médianes paires/NaN, percentiles interpolés, couleur finale pour human/even et
+forces 0/1/3, bruit double et hybride MPS sur fond élevé et fort gradient.
+Les tenseurs sont volontairement sur CPU pour ces vérifications numériques.
+Les options locales sont résolues récursivement par Config ; les tests des
+moteurs conservent les contrôles d'erreur et les essais matériels conditionnels.
+Les tests MPS ignorés sous Linux restent à exécuter sur un Mac compatible.
+
+
+`test_output_layout.py` vérifie les six étapes numérotées, les copies physiques
+et les en-têtes, l'identité stable des panneaux malgré leur réordonnancement,
+les synthèses JSON/TXT et les reprises d'un historique interrompu ou de la
+couleur seule. Les tests CLI imposent une seule entrée hors mosaïque et
+contrôlent les relais, chemins génériques et étapes communes sans Siril réel.
+Les tests d'annotation retrouvent les comptes du stack initial et des panneaux
+à travers le relais, sans inventer de poses ni modifier les sources.
+
+Les tests de calibration vérifient aussi les étapes `02_registration` à
+`05_stacking` directement sous `01_calibration`, et la conservation de
+`01_session` lors d’un empilement forcé.
+
+La préparation directe de séquence couvre les FITS mono/RGB, les liens et
+leur remplacement par des copies, avec comparaison binaire des sources.
+Ces tests ne valident pas une exécution réelle de Siril.
+
+La photométrie vérifie le dossier direct sans `001`, le nom `02_photometrie`
+dans le plan numéroté, la remise à zéro lors des relances et la protection
+d’une entrée placée dans ce dossier. Les appels Siril sont simulés.
+
+Les dossiers de restauration sont vérifiés dans `test_postprocess_paths.py`
+(noms numérotés, isolation des opérations, nettoyage et sources protégées).
+Les tests des moteurs contrôlent les artefacts directs sans `001` ; ceux des
+chaînes vérifient aussi le regroupement `04_restoration`.
+
+Les tests du rendu GHS vérifient les étapes nommées `01_separation` à
+`05_diagnostics`, le nettoyage des anciens niveaux `001` lors des relances
+et la protection des sources. La couleur finale vérifie des produits directs
+dans son dossier de travail, sans niveau `001`, avec des FITS synthétiques.
+
+La régression de transmission du stack (`.fit`/`.fits`) est couverte dans
+`test_lightprocessor_calibration.py` : le faux Siril réécrit les images
+astrométriques selon `setext`, puis les étapes réelles lisent la séquence
+transférée. Tous les scripts de stack fixent `setext fits` et les sources
+sont comparées avant/après. Un essai Siril 1.4.4 sur deux copies M31 a aussi
+vérifié la lecture après transfert et l’absence de doublon, sans relancer
+les traitements complets M31/M33.
+
+Le générateur commun Siril impose `setext fits` dans les scripts sauvegardés
+(native, AppImage et Flatpak). Les tests de validation vérifient cet en-tête ;
+ceux de calibration et des post-traitements couvrent les chemins `.fits`,
+tout en conservant la lecture des entrées historiques `.fit`.
+
+Les essais de restauration regroupent leurs rapports, masques FITS/PNG et
+résultats dans leur dossier. `test_restoration_chains.py` vérifie les chemins
+et la réutilisation du cache ; `test_postprocess_paths.py` vérifie que les
+moteurs Siril préservent les masques du dossier préparé et refusent une
+source qui serait écrasée. Les calculs moteurs de ces scénarios sont simulés.
+
+Les noms des dossiers d’essais décrivent désormais le parcours complet,
+par exemple `denoise_graxpert_then_sharpen_siril`. Les tests de chaînes
+vérifient les noms et numéros selon l’ordre normal ou inverse, ainsi que
+la conservation du chemin de la première exécution lors des réutilisations.
+
+Les tests de chaînes vérifient aussi le rattachement des masques à l’image
+d’entrée : un jeu partagé sous `00_mask_origine`, puis les masques des
+intermédiaires dans le dossier producteur. Les audits référencent FITS et PNG ;
+les scénarios dans les deux ordres vérifient l’absence de copies par consommateur.
+
+Les essais de chaînes conservent un FITS effectif auprès de leur rapport. Les
+tests contrôlent la sortie acceptée, la copie exacte de l’entrée en cas de
+rejet ou sans amélioration sûre, et l’absence de résultat artificiel en échec.
+Les audits distinguent `accepted_output` et `retained_input`.
+
+Les tests Drizzle vérifient que SKIPPED.txt décrit les décisions, mesures et
+seuils du rapport JSON. Les contrôles finaux sont rangés auprès du traitement
+évalué, avec textes et JSON, et restent liés par la synthèse globale.
+
+`test_processing_html.py` contrôle les index HTML hiérarchiques, aperçus
+JPEG/PNG et liens FITS, audits incomplets, protection des index étrangers,
+conservation des sources et reprise des stacks malgré la génération HTML.
+La préparation commune Siril est vérifiée dans `test_siril_validation.py`.
+Les transferts scientifiques omettent les pages HTML, même imbriquées.
+
+Dans le plan numéroté, les essais de restauration et `00_mask_origine` sont
+directement sous `04_restoration`, sans `01_chains` ni `diagnostics`. Les tests
+des chemins vérifient le nettoyage ciblé des produits et la conservation des
+rapports et fichiers voisins. Les tests de pipeline vérifient l’absence de
+nouvelle génération de diagnostics dans ce parcours.
+
+Les tests de restauration vérifient la décomposition du score existant
+(termes FWHM, gain utile, pénalités bruit/anneaux), les égalités et écarts du
+classement des chaînes acceptées, la conservation de la référence à score zéro
+et les mesures absentes. Les tests HTML vérifient le tableau de classement
+et l’extraction visible des statuts, paramètres, valeurs, seuils et motifs JSON.
+
+Les tests de sélection qualité couvrent aussi la trace par pose : seuils
+effectifs, rangs et égalités, contrôles désactivés ou non évalués après rejet,
+mesures non finies, profils et sélection finale. Les tests Drizzle vérifient
+la persistance dans les deux rapports JSON ; les tests HTML vérifient leur
+présentation et la distinction des audits anciens sans décisions détaillées.
+
+Les seuils de profils sont testés avec plusieurs groupes comparables : stockage
+unique dans les références, identifiant par pose, groupe insuffisant sans seuil,
+lecture des anciens `limits` et affichage des limites avant les tableaux.

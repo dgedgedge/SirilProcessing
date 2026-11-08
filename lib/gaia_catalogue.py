@@ -8,13 +8,14 @@ Ce catalogue ne contient pas les spectres nécessaires à SPCC.
 from __future__ import annotations
 
 import bz2
-import hashlib
 import errno
 import os
 from pathlib import Path
 import shutil
 from tempfile import TemporaryDirectory
 from urllib.request import urlopen
+
+from lib.resource_manager import ResourceManager
 
 
 class GaiaCatalogueInstaller:
@@ -30,13 +31,7 @@ class GaiaCatalogueInstaller:
     @staticmethod
     def matches(path: Path, size: int, digest: str) -> bool:
         """Vérifie taille et SHA-256 par blocs sans charger le catalogue en mémoire."""
-        if not path.is_file() or path.stat().st_size != size:
-            return False
-        checksum = hashlib.sha256()
-        with path.open('rb') as stream:
-            for block in iter(lambda: stream.read(1024 * 1024), b''):
-                checksum.update(block)
-        return checksum.hexdigest() == digest
+        return ResourceManager.matches(path, size, digest)
 
     def install(self, directory: Path, sources: tuple[Path, ...] = ()) -> Path:
         """Réutilise un fichier vérifié ou télécharge/décompresse avant remplacement.

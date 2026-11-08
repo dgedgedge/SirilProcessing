@@ -105,7 +105,7 @@ class DependencyInstaller:
                 ResourceCache(self.installer.root).reset_models((model_options.cosmic_model_dir,
                                                                  model_options.graxpert_model_dir))
             self.installer.install(install_only)
-        if not test and (assets.models or assets.with_gaia):
+        if not test and (assets.models or any(InstallationAssets.catalogue_selection(assets))):
             self.preload_assets(assets)
         if assets_only:
             print('Ressources demandées préchargées et vérifiées.', flush=True)
@@ -142,8 +142,6 @@ def main() -> int:
         parser.error('--reset est incompatible avec --test/--check-only, --assets-only et le contrôle interne')
     if (args.verify_worker or args.assets_worker) and (args.test or args.install_only or args.assets_only):
         parser.error('Le contrôle interne ne se combine pas avec un mode utilisateur')
-    if args.test and args.with_gaia:
-        parser.error('--test ne télécharge rien : utiliser --assets-only --with-gaia')
     try:
         manager = DependencyInstaller(Path(__file__).resolve().parents[1], args.venv)
         if args.verify_worker:

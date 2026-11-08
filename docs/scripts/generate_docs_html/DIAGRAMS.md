@@ -19,9 +19,9 @@ diagramme réel vérifie ces côtés pour signaler une régression lors d’une
 | Diagramme de référence | Implémentation à comparer | Contrôles d’exécution |
 |---|---|---|
 | [lightProcess : boucles et mosaïque](../lightProcess/treatments/README.md#diagramme-boucles-lightprocess) | [lightProcess.py](../../../bin/lightProcess.py), `_process_sessions` ; [mosaic.py](../../../lib/mosaic.py), `Mosaic.post_process` et `create_mosaic` | `test_session_pipeline.py`, `test_mosaic.py`, `test_mosaic_crop.py` |
-| [lightProcess : calibration](../lightProcess/treatments/README.md#diagramme-calibration-lightprocess) | [lightprocessor.py](../../../lib/lightprocessor.py), `process_session`, `process_light_group` et scripts de calibration | `test_lightprocessor_calibration.py`, `test_calibration_logging.py` |
-| [lightProcess : stacking](../lightProcess/treatments/README.md#diagramme-stacking-lightprocess) | [lightprocessor.py](../../../lib/lightprocessor.py), `stack_session_outputs` ; [drizzle.py](../../../lib/drizzle.py), `run_stack` | `test_lightprocessor_calibration.py`, `test_drizzle.py` |
-| [postProcess : séquence complète](../postProcess/README.md#ordre-et-circulation-des-images) | [postprocess.py](../../../lib/postprocess.py), `_PostProcessorSequence` ; [postprocessing.py](../../../lib/postprocessing.py), exports communs | `test_postprocessor.py`, `test_postprocessing.py`, `test_restoration_chains.py` |
+| [lightProcess : calibration](../lightProcess/treatments/README.md#diagramme-calibration-lightprocess) | [lightprocessor.py](../../../lib/lightprocessor.py), `process_session`, `process_light_group` ; [light_calibration.py](../../../lib/light_calibration.py), `SequenceCalibrationProcessor`, `MasterFlatProcessor` | `test_lightprocessor_calibration.py`, `test_calibration_logging.py` |
+| [lightProcess : stacking](../lightProcess/treatments/README.md#diagramme-stacking-lightprocess) | [light_stacking.py](../../../lib/light_stacking.py), `SessionStackingProcessor` ; [drizzle.py](../../../lib/drizzle.py), `run_stack` | `test_lightprocessor_calibration.py`, `test_drizzle.py` |
+| [postProcess : séquence complète](../postProcess/README.md#ordre-et-circulation-des-images) | [postprocess.py](../../../lib/postprocess.py), `_PostProcessorSequence`, `PostProcessingProcessor` et exports communs | `test_postprocessor.py`, `test_postprocessing.py`, `test_restoration_chains.py` |
 | [Restauration : comparaison par opération](../postProcess/cosmic-clarity.md) | [restoration.py](../../../lib/restoration.py), `engines` et `post_process` | `test_restoration.py` |
 | [solarEclipseGif : boucle des images et GIF](../solarEclipseGif/GUIDE.md#2-workflow-global) | [solarEclipseGif.py](../../../bin/solarEclipseGif.py), `main` et `build_movie_frames` | `test_solar_eclipse_sequence.py` |
 
@@ -84,7 +84,7 @@ exécutés simultanément.
 
 | Diagramme | Vérification et disposition retenue |
 |---|---|
-| Boucles lightProcess et mosaïque | Deux croisements entre la branche sans mosaïque et les chemins de résultat/échec de mosaïque ont été supprimés. La décision de succès reste dans le groupe mosaïque ; les entrées du post-traitement sont déclarées ensemble après ce groupe. |
+| Boucles lightProcess et mosaïque | Deux croisements entre la branche sans mosaïque et les chemins de résultat/échec de mosaïque ont été supprimés. La décision de succès reste dans le groupe mosaïque ; les entrées du post-traitement sont déclarées ensemble après ce groupe. L’appel à `LightProcessor.process_target` et la découverte partagent un symbole d’entrée, ce qui évite de croiser la sortie de boucle des sous-sessions. |
 | Groupes de calibration | Aucun croisement transverse détecté. Les retours vers le groupe suivant sont des convergences légitimes ; le choix de reprise conserve « Oui » à droite et « Non » à gauche. |
 | Détail du stacking | Les deux retours anticipés, avant et après le filtrage des structures FITS, ont chacun leur symbole de retour. Leur convergence commune n’occasionne plus le croisement des deux flèches d’entrée. |
 | postProcess complet | Aucun croisement transverse détecté. Les chemins de restauration convergent légitimement vers le choix AutoGHS. |

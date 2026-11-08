@@ -38,6 +38,8 @@ nav:
               - Drizzle: docs/scripts/lightProcess/filter/stacking/DRIZZLE_SPECIFICATION.md
               - Alignement et stacking: docs/scripts/lightProcess/treatments/STACKING.md
               - Mosaïque: docs/scripts/lightProcess/MOSAIC.md
+          - Arborescence des sorties: docs/scripts/lightProcess/output-layout.md
+          - Index HTML des résultats: docs/scripts/lightProcess/html-reports.md
           - Sorties et journaux: docs/scripts/lightProcess/treatments/OUTPUTS.md
           - Références:
               - Espace de travail: docs/scripts/lightProcess/WORKSPACE.md
@@ -58,15 +60,21 @@ nav:
           - Calcul CPU et GPU: docs/scripts/postProcess/compute-backend.md
           - Traitements détaillés:
               - Pipeline commun: docs/scripts/postProcess/pipeline.md
+              - Temps de traitement: docs/scripts/postProcess/timings.md
               - Photométrie: docs/scripts/postProcess/photometry.md
               - Restauration: docs/scripts/postProcess/restoration.md
               - Contrôles de qualité: docs/scripts/postProcess/quality.md
+              - Processeurs des contrôles: docs/scripts/postProcess/quality-processors.md
+              - Calculs PyTorch CUDA et MPS: docs/scripts/postProcess/torch-compute.md
+              - Bruit sur tuiles CPU et GPU: docs/scripts/postProcess/noise-tiles.md
+              - Régions diffuses: docs/scripts/postProcess/diffuse-regions.md
               - Mesures stellaires: docs/scripts/postProcess/reference-stars.md
               - Cosmic Clarity: docs/scripts/postProcess/cosmic-clarity.md
               - Couleurs Cosmic Clarity: docs/scripts/postProcess/cosmic-color.md
               - GraXpert: docs/scripts/postProcess/graxpert.md
               - AutoGHS: docs/scripts/postProcess/auto-ghs.md
               - Protection des hautes lumières: docs/scripts/postProcess/ghs-highlight-protection.md
+              - Quartiles GHS: docs/scripts/postProcess/ghs-quartiles.md
               - Algorithme AutoGHS: docs/scripts/postProcess/auto-ghs-algorithm.md
               - Rendu des étoiles: docs/scripts/postProcess/star-rendering.md
           - Annotation finale: docs/scripts/postProcess/annotations.md

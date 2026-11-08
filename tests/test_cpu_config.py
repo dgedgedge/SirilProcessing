@@ -1,7 +1,7 @@
 import pytest
 
 from lib.cpu_config import CpuConfig
-from lib.siril_utils import Siril
+from lib.siril import Siril
 
 
 @pytest.fixture(autouse=True)
@@ -31,7 +31,12 @@ def test_invalid_limit(limit):
         CpuConfig.configure(limit)
 
 
-@pytest.mark.parametrize('header', ['', 'requires 1.2\n', '# Script\n\nrequires 1.4\n'])
+@pytest.mark.parametrize('header', [
+    '',
+    'requires 1.2\n',
+    '# Script\n\nrequires 1.4\n',
+    'requires 1.2\n# legacy\nrequires 1.3\n',
+])
 def test_existing_siril_instance_uses_global_limit(tmp_path, monkeypatch, header):
     monkeypatch.setattr(Siril, '_validate_configuration', lambda self: True)
     monkeypatch.setattr('lib.cpu_config.os.cpu_count', lambda: 16)
@@ -40,4 +45,8 @@ def test_existing_siril_instance_uses_global_limit(tmp_path, monkeypatch, header
     for limit in (8, 3):
         CpuConfig.configure(limit)
         assert runner.run_siril_script(header + 'close\n', str(tmp_path), 'cpu.sps')
-        assert (tmp_path / 'cpu.sps').read_text() == header + f'setcpu {limit}\nclose\n'
+        script = (tmp_path / 'cpu.sps').read_text()
+        assert script.count('requires ') == 1
+        assert 'requires 1.4\n' in script
+        assert f'setcpu {limit}\n' in script
+        assert script.rstrip().endswith('close')

@@ -34,9 +34,7 @@ ConfigMap: TypeAlias = dict[str, ConfigValue]
 class ArgumentProvider(Protocol):
     """Traitement capable de déclarer ses paramètres dans le parseur partagé."""
 
-    def add_arguments(
-        self, parser: argparse.ArgumentParser, **kwargs: ConfigValue
-    ) -> None:
+    def add_arguments(self, parser: argparse.ArgumentParser) -> None:
         """Ajoute les options du traitement sans parser ni persister les valeurs."""
         ...
 

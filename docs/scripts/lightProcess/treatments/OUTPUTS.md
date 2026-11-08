@@ -5,40 +5,23 @@
 
 ## Fichiers produits
 
-Les chemins ci-dessous sont relatifs aux bases de sortie et de travail
-configurées. Pour toute session, avec une ou plusieurs sous-sessions :
+Les nouvelles exécutions suivent [l'arborescence numérotée](../output-layout.md) :
+`01_calibration`, `02_mosaic`, `03_photometrie`, `04_restoration`, `05_autoghs`,
+`06_color`. Les panneaux sont sous `01_calibration/part_XX`, les sous-sessions
+sous leur dossier `01_session/`. Le stack est `stack_combined.fits` avec son
+rapport `stack_combined.drizzle.json`.
 
-```text
-<sortie>/<session>/
-  sessions/<sous-session>/<sous-session>_<groupe>_calibrated/
-    pp_light_*.fit(s)
-    pp_light_*.seq
-  <session>_combined.fits
-  <session>_combined.drizzle.json
+Le relais linéaire est toujours `02_mosaic/image.fits`, une copie du stack
+sans mosaïque. Les rapports et synthèses texte sont rangés dans leurs étapes.
+Les fichiers finaux `<objet>.fits`, `.jpg` et éventuellement `_annotated.png`
+sont publiés à la racine de l'objet. La synthèse globale du post-traitement,
+son manifeste et son journal sont sous `06_color`.
 
-<travail>/<session>/
-  sessions/<sous-session>/
-  stacking/
-    00_inputs/
-    01_registration/
-    02_quality/stellar_profiles.json
-    03_capability/
-    04_stacking/
-```
-
-La séquence exportée permet de rouvrir les calibrations dans Siril. Les `.seq`
-contiennent les références, mesures et transformations, pas les pixels.
-Les scripts `.sps` et leurs journaux sont conservés avec les étapes de travail.
-Le stacking seul ne génère pas de prévisualisation JPG.
-Avec `--mosaic`, la base de sortie contient également `<nom>_mosaic.fits`
-et le rapport `<nom>_mosaic.json`, produit par `Mosaic.post_process()`.
-
-Avec `--postprocess`, le FITS final reste intact et reçoit à côté des produits
-`<image>_postprocess.fits`, `.json`, `.jpg` et un dossier `<image>_postprocess/`
-pour les étapes, journaux et diagnostics. Le JPEG dépend d’AutoGHS actif.
-Avec mosaïque, seul le résultat final assemblé est post-traité ; sans mosaïque,
-chaque stack final disponible l’est, même s’il provient du cache.
-Voir le [pipeline commun et ses erreurs](../../postProcess/pipeline.md).
+Les séquences exportées permettent de rouvrir les calibrations dans Siril.
+Les `.seq` contiennent les références, mesures et transformations, pas les
+pixels. Les scripts `.sps` et leurs journaux restent avec leurs étapes de
+travail. Le stacking seul ne génère pas de prévisualisation JPG.
+Voir [le pipeline commun et ses erreurs](../../postProcess/pipeline.md).
 
 ## Réutilisation et relance
 
@@ -63,8 +46,7 @@ le travail et les ressources du dématriçage et des rééchantillonnages.
 
 `--dry-run` simule la calibration et annonce les étapes de stacking, de
 mosaïque et de post-traitement sans les exécuter.
-L’option de purge est traitée avant ce parcours et n’est pas protégée par le
-mode simulation dans le code actuel.
+La purge n’est pas exécutée en simulation ; des journaux peuvent être créés.
 
 ## Lecture des journaux et rapports
 
@@ -78,7 +60,7 @@ non light, l’absence de dark et les erreurs de traitement. Le stack compte
 ensuite les incompatibilités FITS et les rejets d’alignement ou de qualité.
 Les entrées répétées pour la pondération sont distinguées des poses indépendantes.
 
-Le rapport `<session>_combined.drizzle.json` contient les réglages, le diagnostic
+Le rapport `stack_combined.drizzle.json` contient les réglages, le diagnostic
 Drizzle, les poses retenues et les contrôles géométriques. `quality_selection`
 décrit la sélection initiale ; `final_selection` tient compte des contrôles
 supplémentaires et des poses effectivement disponibles après le dernier
@@ -86,7 +68,7 @@ rééchantillonnage. Les entrées pondérées de `quality_selection` sont prévu
 celles de `final_selection` sont effectivement créées pour l’empilement.
 
 `stellar_profiles` référence le rapport détaillé
-`02_quality/stellar_profiles.json` : mesures par étoile, références, seuils,
+`03_quality/stellar_profiles.json` : mesures par étoile, références, seuils,
 fractions concordantes et motifs de rejet. Les résultats non concluants y sont
 explicites. Voir [les critères de sélection](../filter/stacking/IMAGE_SELECTION.md)
 pour les limites de traçabilité de chaque mesure.

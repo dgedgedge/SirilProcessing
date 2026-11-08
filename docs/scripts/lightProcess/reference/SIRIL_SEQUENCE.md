@@ -2,10 +2,21 @@
 
 [Documentation](../../../README.md) › [lightProcess](../README.md) › [Références](README.md)
 
-Le module [lib/siril_sequence.py](../../../../lib/siril_sequence.py) centralise la lecture,
-l’écriture et la modification des fichiers `.seq`. Toute manipulation d’une
-image appartenant à une séquence passe par un objet `SequenceImage` obtenu depuis
-`SirilSequence`.
+Le module [lib/siril.py](../../../../lib/siril.py) regroupe l’exécution de Siril
+et la lecture, l’écriture et la modification des fichiers `.seq`. Cette page
+détaille le modèle de séquence ; l’exécution des scripts ajoute aussi
+automatiquement `requires 1.4`, la limite CPU et `setext fits`. Les nouvelles
+images utilisent ainsi `.fits` indépendamment des préférences Siril ; les
+entrées historiques `.fit` restent acceptées. Le module journalise leur sortie et lève une erreur fatale
+en cas d’échec.
+
+`Siril.prepare_script(texte)` est le point unique de préparation de cet en-tête,
+sans accès au disque ni exécution. `run_siril_script` l’appelle avant chaque
+sauvegarde : les traitements fournissent seulement leur corps de commandes,
+sans répéter le réglage d’extension.
+
+Toute manipulation d’une image appartenant à une séquence passe par un objet
+`SequenceImage` obtenu depuis `SirilSequence`.
 
 ## Objets disponibles
 
@@ -23,9 +34,9 @@ le module n’en invente pas.
 ## Lecture et fichiers transmis aux traitements
 
 ```python
-from lib.siril_sequence import SirilSequence
+from lib.siril import SirilSequence
 
-sequence = SirilSequence.read('/chemin/01_registration/light_.seq')
+sequence = SirilSequence.read('/chemin/02_registration/light_.seq')
 image = sequence.images[0]
 
 print(image.number)                 # numéro du FITS, distinct de son indice dans la liste

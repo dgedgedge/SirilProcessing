@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 from astropy.io import fits
 
+from lib.resource_manager import ResourceManager
 from lib.compute_config import ComputeConfig
 from lib.cpu_config import CpuConfig
 from lib.graxpert_models import GraXpertModels
@@ -288,7 +289,7 @@ class GraXpertEngine(ParameterizedComponent):
                                                    'aucun fournisseur ONNX GPU/CoreML disponible')
                 logging.info("GraXpert : mode auto, périphérique choisi avant calcul : %s",
                              'GPU' if self.gpu else 'CPU')
-            model = self.models.ensure_model()
+            model = ResourceManager(self.args).graxpert_model(self.models)
             start = time.monotonic()
             try:
                 self.session = self._initialize_session(model)

@@ -185,3 +185,7 @@ Les alias originaux et le nom français éventuel sont conservés dans l'audit.
 Le journal INFO indique seulement le chemin de l'image annotée, ou le statut
 si aucune image n'est produite. Le rapport détaillé (métadonnées, objets et
 points des contours) est journalisé en DEBUG et conservé dans le rapport JSON.
+
+Avec les [sorties numérotées](../lightProcess/output-layout.md), la provenance
+est suivie depuis `02_mosaic/mosaic.json` vers le stack original ou ses panneaux,
+sans dupliquer ni modifier leurs rapports de sélection.

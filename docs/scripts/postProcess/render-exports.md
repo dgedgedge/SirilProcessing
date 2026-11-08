@@ -28,15 +28,15 @@ FITS. Les FITS originaux restent disponibles et ne sont pas modifiés.
 
 ## Emplacement des exports
 
-Les JPEG portent le même nom que les FITS finaux dans `004_recomposition/`.
+Les JPEG portent le même nom que les FITS finaux dans `04_recomposition/`.
 Le CLI copie le JPEG principal sous `<image>_postprocess.jpg`, près de l’export
 FITS principal, lorsque la phase AutoGHS a fourni ce JPEG.
 
-Un seul rendu RANGE est exporté. `003_ghs/` conserve son fond sans étoiles ;
-`004_recomposition/` contient le FITS et le JPEG étoilés. Aucun comparatif
+Un seul rendu RANGE est exporté. `03_ghs/` conserve son fond sans étoiles ;
+`04_recomposition/` contient le FITS et le JPEG étoilés. Aucun comparatif
 AutoGHS n'est généré et aucun ancien rendu n'est chargé en mémoire à cette fin.
-Les histogrammes du fond et de l'image étoilée restent dans `005_diagnostics/` ;
-ils sont distincts du diagnostic des étoiles seules dans `002_stars/`.
+Les histogrammes du fond et de l'image étoilée restent dans `05_diagnostics/` ;
+ils sont distincts du diagnostic des étoiles seules dans `02_stars/`.
 
 ## Erreurs et vérification
 

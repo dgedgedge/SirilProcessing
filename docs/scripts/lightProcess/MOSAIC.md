@@ -29,8 +29,8 @@ Après l’assemblage Siril, le recadrage est **activé par défaut**, sous rés
 de la limite par panneau ci-dessous. Lorsque le recadrage est accepté, deux FITS
 sont conservés dans le répertoire de la mosaïque :
 
-- `<nom>_mosaic_uncropped.fits` : mosaïque complète, sauvegardée avant tout recadrage ;
-- `<nom>_mosaic.fits` : résultat recadré, transmis aux traitements suivants.
+- `image_uncropped.fits` : mosaïque complète, sauvegardée avant tout recadrage ;
+- `image.fits` : résultat recadré, transmis aux traitements suivants.
 
 La mosaïque complète reste disponible **sans `--keep-intermediate`**, ainsi
 qu’en cas d’échec du recadrage. Le nettoyage ne supprime que les sous-dossiers
@@ -45,7 +45,8 @@ Cela peut retirer des parties valides des panneaux près des bords. À surface
 
 **Si ce rectangle retire plus de la moitié des pixels d’au moins un panneau,
 le recadrage est écarté.** La sortie `output_image` désigne alors directement
-`<nom>_mosaic_uncropped.fits`, pour la suite des traitements. Une perte de
+`image_uncropped.fits` dans l’API ; lightProcess en matérialise
+une copie `image.fits` pour la suite des traitements. Une perte de
 50 % exactement reste autorisée. Cette limite est vérifiée pour chaque panneau,
 et non sur la surface totale de la mosaïque.
 
@@ -88,7 +89,8 @@ Pour désactiver le recadrage :
   --mosaic --mosaic-name champ --no-mosaic-crop
 ```
 
-Dans ce cas, `output_image` désigne directement `<nom>_mosaic_uncropped.fits`.
+Dans ce cas, l’API `Mosaic` retourne `image_uncropped.fits` ;
+lightProcess en matérialise une copie sous `image.fits` pour le relais.
 `--mosaic-crop` le réactive explicitement. Cette préférence peut être mémorisée
 avec les autres options de configuration via `-S`.
 
@@ -119,7 +121,7 @@ du constructeur, écrit un rapport JSON dans `output_path` et retourne
 `output_image` pour transmettre la mosaïque au traitement suivant.
 
 `Mosaic` crée son `gradient_processor` (`GradientExtractor`) dans son constructeur.
-`Mosaic.add_arguments()` délègue aussi à `gradient_processor.add_arguments()` :
+`Mosaic.add_arguments()` délègue aussi à `GradientExtractor.add_arguments()` :
 le script appelant déclare ainsi les options de la mosaïque et de son gradient
 en un seul appel. `Mosaic.set_from_args()` configure également ce composant.
 
@@ -130,13 +132,14 @@ Le rapport indique `gradient_enabled` et contient une liste `gradient_results`
 vide lorsque cette étape est désactivée. Aucun rapport de gradient n'est alors créé.
 
 Avec `lightProcess --mosaic`, le nom est résolu avant toute calibration.
-La racine de travail devient `<work_dir>/<mosaic_name>/` et sert également
-aux sorties : toutes les sessions, calibrations, stacks, logs et fichiers
-intermédiaires sont créés directement sous cette racine. `--output` ne définit
-pas une seconde racine en mode mosaïque. Sans `--mosaic-name`, le nom commun
-des répertoires d'entrée est utilisé. Les stacks restent dans leurs sous-dossiers
-de session ; aucune copie supplémentaire n'est créée. Le rapport les liste
-dans `stacked_files`. `--keep-intermediate` contrôle toujours leur nettoyage.
+La racine de sortie est `<output>/<mosaic_name>/` : les panneaux sont sous
+`01_calibration/part_XX`, et les gradients, calculs d'assemblage et rapports
+sont sous `02_mosaic`. La base `--output` est respectée en mosaïque aussi.
+Les temporaires de calibration restent sous la base `--work-dir` avec la même
+numérotation. Le relais `02_mosaic/image.fits` est matérialisé même lorsque
+l'assemblage fournit directement l'image complète non recadrée. Voir
+[le plan des sorties](output-layout.md). `--keep-intermediate` contrôle toujours
+le nettoyage des temporaires de Siril.
 
 ## Correction du gradient des panneaux et préparation des raccords
 
@@ -209,7 +212,7 @@ L’implémentation du projet utilise NumPy/SciPy et n’ajoute pas de dépendan
 
 Chaque panneau conserve son FITS `<index>_gradient_…_gradient_corrected.fits`,
 son rapport `<index>_gradient.json` et son aperçu `…_measurement_points.png` dans
-`<work_dir>/<mosaic_name>/`. L’aperçu du mode `background` distingue :
+`<output>/<mosaic_name>/02_mosaic/`. L’aperçu du mode `background` distingue :
 
 | Repère | Interprétation |
 |---|---|
@@ -281,17 +284,29 @@ restent les valeurs de repli. Seuls les sous-dossiers temporaires `input` et
 `output` sont nettoyés après l’appel, même en cas d’échec Siril, sauf avec
 `keep_intermediate=True`. Le répertoire nommé de la mosaïque reste présent.
 
+Le script `lightProcess.py` calcule lui-même le nom automatique à partir des
+répertoires de session avec `calculate_common_basename`.
+
 `lightProcess.py` instancie `Mosaic()` et lui délègue la déclaration de
-`--mosaic-name` via `add_arguments(parser, include_inputs=False)`. Après le
+`--mosaic-name` via `Config.register(Mosaic, parser)`. Cette unique classe
+expose par défaut les options communes ; les panneaux sont fournis par
+le pipeline. Après le
 stacking, il configure la mosaïque avec `set_from_args(args)`, puis appelle
 `post_process()` sans repasser les paramètres :
 le premier stack est `input_path`, les autres sont `args.mosaic_inputs`.
 Le nom calculé est transmis dans `args.mosaic_name`. Le rapport JSON est écrit
-dans `<work_dir>/<nom>/<nom>_mosaic.json`, à côté du FITS final.
+dans `<output>/<nom>/02_mosaic/mosaic.json`, à côté du relais linéaire.
 
 Pour un usage autonome ou dans une séquence de processeurs, l’option
 `--mosaic-inputs FITS [FITS ...]` remplace les panneaux du constructeur pour
-cet appel. Elle n’est pas exposée par `lightProcess`, qui fournit exclusivement
-ses stacks de sessions. Les chemins sont dédupliqués et au moins deux images
+cet appel. Elle est exposée en appelant
+`Mosaic.add_arguments(parser, include_inputs=True)` ; l'appel sans cette option,
+utilisé par `lightProcess`, reçoit exclusivement les stacks de sessions.
+En Python, `input_files` au constructeur ou `mosaic_inputs` dans le Namespace
+permettent de fournir les panneaux sans cette option CLI.
+Les chemins sont dédupliqués et au moins deux images
 distinctes sont nécessaires. La méthode directe `create_mosaic()` reste
 disponible pour les anciens appels Python.
+
+Les appels Python autonomes sans répertoire numéroté conservent les noms
+historiques `<nom>_mosaic*.fits` et leur espace de travail propre.

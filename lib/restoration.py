@@ -11,7 +11,7 @@ from shutil import copyfile
 import time
 from typing import ClassVar, Literal
 
-from lib.logging_utils import log_section
+from lib.logging_utils import log_duration, log_section
 from lib.processor import processor
 from lib.parameterized_component import ParameterizedComponent
 from lib.restoration_quality import QualityReference, RestorationQuality
@@ -57,7 +57,11 @@ class RestorationComparisonProcessor(processor):
         """Recense moteurs et service qualité sans instanciation anticipée."""
         from lib.graxpert import GraXpertDenoiseProcessor
 
-        children = (cls.siril_processor, cls.cosmic_processor(), RestorationQuality)
+        from lib.quality_processors import ArtifactQualityProcessor, ReferencePreparationProcessor
+        from lib.quality_star_processors import StarComparisonProcessor
+
+        children = (cls.siril_processor, cls.cosmic_processor(), RestorationQuality,
+                    ArtifactQualityProcessor, ReferencePreparationProcessor, StarComparisonProcessor)
         return children + (
             (GraXpertDenoiseProcessor,) if cls.operation == "denoise" else ()
         )
@@ -220,7 +224,12 @@ class RestorationComparisonProcessor(processor):
             child_path = report.with_name(report.stem + "_" + name + ".json")
             start = time.monotonic()
             try:
-                evaluation = engine().post_process(source, child_path, args)
+                engine_durations: dict[str, float] = {}
+                with log_duration(
+                    f"{treatment} — moteur {label}",
+                    engine_durations, "processing_seconds",
+                ):
+                    evaluation = engine().post_process(source, child_path, args)
                 if evaluation.get("status") == "accepted":
                     score = self.score(evaluation, self.operation)
                     candidates.append((score, name, evaluation))

@@ -22,7 +22,7 @@ from astropy.io import fits
 
 from lib.processor import processor
 from lib.restoration_quality import normalized_planes
-from lib.siril_utils import Siril
+from lib.siril import Siril
 from lib.type_defs import JSONReport
 
 MAX_LINEAR_RECONSTRUCTION_ERROR = 1e-6  # Unités normalisées, marge d'arrondi float32.
@@ -243,9 +243,8 @@ class StarNetSeparator(processor):
         write_rgb(source, staged, data)
         script = "\n".join(
             [
-                "requires 1.4",
+
                 f"cd {quote_siril(work)}",
-                "setext fits",
                 "set32bits",
                 f"load {quote_siril(staged)}",
                 "starnet -stretch",

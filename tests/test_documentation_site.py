@@ -444,8 +444,8 @@ class DocumentationSiteTests(unittest.TestCase):
             self.assertIn('href="#chapter-0-intro"', result)
             self.assertIn('href="#chapter-1-intro"', result)
 
-    def test_sources_are_embedded_but_models_and_external_files_are_not(self) -> None:
-        """Le monofichier inclut ses références textuelles et exclut les poids."""
+    def test_code_links_stay_external_while_data_and_images_can_be_embedded(self) -> None:
+        """Le code pointe vers GitHub ; les poids et liens distants restent externes."""
         with TemporaryDirectory() as directory:
             root = Path(directory)
             document = root / "README.md"
@@ -458,10 +458,13 @@ class DocumentationSiteTests(unittest.TestCase):
                 '<a href="https://example.org/guide">Externe</a>'
             )
             result = "".join(parser.parts)
-            self.assertIn(base64.b64encode(source.read_bytes()).decode("ascii"), result)
+            self.assertIn(
+                'href="https://github.com/dgedgedge/SirilProcessing/blob/main/example.py"',
+                result,
+            )
             self.assertIn('href="weights.onnx"', result)
-            self.assertIn('download="example.py"', result)
             self.assertIn('href="https://example.org/guide"', result)
+            self.assertNotIn(base64.b64encode(source.read_bytes()).decode("ascii"), result)
             self.assertNotIn(base64.b64encode(b"model").decode("ascii"), result)
 
     def test_output_cannot_replace_sources_or_build_cache(self) -> None:
@@ -494,6 +497,48 @@ class DocumentationSiteTests(unittest.TestCase):
                 builder.renderer.discover_markdown_files(root, root / "out"),
                 [Path("README.md"), Path("docs/guide.md")],
             )
+
+
+    def test_build_stages_linked_data_without_copying_code(self) -> None:
+        """Le parcours complet prépare les JSON liés sans appeler l'ancienne API."""
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "README.md").write_text(
+                '# Guide\n[Configuration](settings.json) [Code](example.py)\n',
+                encoding="utf-8",
+            )
+            (root / "settings.json").write_text('{"amount": 3}\n')
+            (root / "example.py").write_text('VALUE = 1\n')
+            mermaid = root / "mermaid.js"
+            mermaid.write_text('// moteur simulé\n')
+            document = builder.DocumentationBuilder(root, root / "out", pdf=False)
+
+            def check_staging(
+                sources: list[Path], staging: Path, work: Path,
+                script: Path, navigation: list[builder.DocumentationSection],
+            ) -> None:
+                """Vérifie les ressources préparées avant le rendu des exports."""
+                self.assertEqual(sources, [Path("README.md")])
+                self.assertEqual((staging / "settings.json").read_text(), '{"amount": 3}\n')
+                self.assertFalse((staging / "example.py").exists())
+                self.assertIn(
+                    "https://github.com/dgedgedge/SirilProcessing/blob/main/example.py",
+                    (staging / "README.md").read_text(),
+                )
+                self.assertEqual(script, mermaid)
+                (staging / "downloads").mkdir()
+
+            with (
+                patch.object(document, "_mermaid", return_value=mermaid),
+                patch.object(document, "_exports", side_effect=check_staging) as exports,
+                patch.object(builder.subprocess, "run") as mkdocs,
+            ):
+                document.build()
+            exports.assert_called_once()
+            mkdocs.assert_called_once()
+            command = mkdocs.call_args.args[0]
+            self.assertEqual(command[:5], [sys.executable, "-m", "mkdocs", "build", "--strict"])
+            self.assertTrue(mkdocs.call_args.kwargs["check"])
 
 
 if __name__ == "__main__":

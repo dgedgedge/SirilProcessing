@@ -23,6 +23,7 @@ def rgb(tmp_path):
 @pytest.fixture
 def fake_siril(monkeypatch, rgb):
     monkeypatch.setattr('lib.resource_cache.ResourceCache.find_gaia', lambda self: None)
+    monkeypatch.setattr('lib.resource_cache.ResourceCache.find_spcc', lambda self: None)
     runner = Mock()
 
     def run(script, working_dir, script_name, **kwargs):
@@ -42,8 +43,8 @@ def fake_siril(monkeypatch, rgb):
 
 def arguments(*options):
     parser = argparse.ArgumentParser()
-    from lib.siril_utils import Siril
-    Siril.add_arguments(parser, photometry_aliases=True)
+    from lib.siril import Siril
+    Siril.add_arguments(parser)
     _PostProcessorSequence().add_arguments(parser)
     return parser.parse_args(['--disable-denoise', '--disable-autoghs', '--disable-deconvolution', *options])
 
@@ -450,15 +451,24 @@ def test_filter_metadata_does_not_override_pcc_or_mono_profiles(
     assert 'oscfilter' not in result['spectral_profiles']
 
 
-def test_photometry_reuses_ordered_directory(
-    rgb: Path, tmp_path: Path, fake_siril: tuple[Mock, Mock]
+@pytest.mark.parametrize("numbered", [False, True])
+def test_photometry_reuses_flat_directory(
+    rgb: Path, tmp_path: Path, fake_siril: tuple[Mock, Mock], numbered: bool,
 ) -> None:
     """Les relances réinitialisent le même dossier visible sans sortie périmée."""
     calibrator = PhotometricColorCalibrator()
     report = tmp_path / "02_photometry.json"
+    if numbered:
+        (tmp_path / "01_calibration").mkdir()
+        report = tmp_path / "03_photometrie/photometry.json"
+    original = rgb.read_bytes()
     calibrator.post_process(rgb, report)
     work = Path(fake_siril[1].run_siril_script.call_args.args[1])
-    assert work == tmp_path / "02_photometry_work/001"
+    expected = (tmp_path / "03_photometrie/02_photometrie" if numbered
+                else tmp_path / "02_photometry_work")
+    assert work == expected
+    assert not (work / "001").exists()
+    assert rgb.read_bytes() == original
     stale = work / "obsolete.fits"
     stale.write_bytes(b"obsolete")
     calibrator.post_process(rgb, report)
@@ -469,3 +479,45 @@ def test_photometry_reuses_ordered_directory(
     with pytest.raises(ValueError, match="réinitialisé"):
         calibrator.post_process(protected, report)
     assert protected.is_file()
+
+
+def test_complete_spcc_cache_selects_local_without_altering_user_preferences(
+    rgb: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_siril,
+) -> None:
+    """Les spectres complets sont choisis avant le lancement, sans requête distante."""
+    import configparser
+    from lib.resource_cache import ResourceCache
+    from lib.star_separation import StarNetSeparator
+
+    cached = tmp_path / 'spectral'
+    monkeypatch.setattr(ResourceCache, 'find_spcc', lambda self: cached)
+    preferences = configparser.ConfigParser()
+    preferences['core'] = {'catalogue_gaia_photo': 'old', 'other_setting': 'kept'}
+    original = tmp_path / 'preferences.ini'
+    original.write_text('untouched')
+    monkeypatch.setattr(StarNetSeparator, 'preferences', lambda args: (preferences, original))
+    result = PhotometricColorCalibrator().post_process(rgb, tmp_path / 'report.json', arguments())
+    assert result['spcc_command'].startswith('spcc -catalog=localgaia')
+    assert result['local_spcc_catalogue'] == str(cached)
+    isolated = fake_siril[1].run_siril_script.call_args.kwargs['initfile']
+    saved = configparser.ConfigParser()
+    saved.read(isolated)
+    assert saved['core']['catalogue_gaia_photo'] == str(cached)
+    assert saved['core']['other_setting'] == 'kept'
+    assert original.read_text() == 'untouched'
+
+
+@pytest.mark.parametrize('directory_name', ['', '.', '..', '../source', '/tmp/source', 'nested/work'])
+def test_invalid_work_directory_name_preserves_existing_files(
+    tmp_path: Path, directory_name: str,
+) -> None:
+    """Refuse un chemin de travail non local avant toute suppression."""
+    from lib.postprocess_paths import reset_work_dir
+
+    existing = tmp_path / 'result_work'
+    existing.mkdir()
+    protected = existing / 'source.fits'
+    protected.write_bytes(b'preserved')
+    with pytest.raises(ValueError, match='nom simple'):
+        reset_work_dir(tmp_path / 'result.json', directory_name=directory_name)
+    assert protected.read_bytes() == b'preserved'

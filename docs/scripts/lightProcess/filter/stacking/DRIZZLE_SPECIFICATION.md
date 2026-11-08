@@ -335,10 +335,14 @@ Le mode par défaut est `auto`. Paramètres persistants et options CLI :
 | `--drizzle-fwhm-limit` | 2.5 | FWHM limite en pixels natifs |
 | `--drizzle-max-drift` | 10 | Dérive lente maximale estimée en pixels |
 
-Le vrai Drizzle nécessite Siril ≥ 1.4. Une vérification `requires 1.4` précède
-l’activation ; une incompatibilité impose le traitement standard en `auto` et un
-échec explicite en `force`. Les séquences Siril de versions 4 à 7 sont lues.
-Un format inconnu empêche une activation automatique.
+Tous les scripts Siril du projet exigent désormais Siril ≥ 1.4 : le service
+d’exécution insère `requires 1.4` et transforme tout code de sortie non nul en
+erreur fatale avec le chemin du journal. La vérification avant le Drizzle
+confirme donc l’exécution de Siril 1.4 ; une erreur n’est pas convertie en
+repli standard. Le mode `auto` peut toujours choisir la branche standard selon
+les critères de qualité, d’échantillonnage et de ressources décrits ici.
+Les séquences Siril de versions 4 à 7 sont lues. Un format inconnu empêche une
+activation automatique.
 
 La nouvelle calibration en `auto/force` conserve le CFA. Les calibrations RGB déjà
 présentes sont recalculées si les brutes Bayer sont disponibles pendant le traitement
@@ -448,15 +452,20 @@ alignement : le journal ne les attribue pas tous à un mauvais alignement.
 
 ### Répertoires fixes et numéros d’étapes
 
-Le stacking utilise des chemins déterministes dans `work/<cible>/stacking/` :
+Le stacking utilise des chemins déterministes directement sous `01_calibration/` (ou son panneau),
+à côté de `01_session/` ; l’API autonome conserve `work/<cible>/stacking/` :
 
 | Étape | Répertoire | Script / résultat |
 | --- | --- | --- |
-| 00 | `00_inputs/` | Liens vers les entrées calibrées |
-| 01 | `01_registration/` | `01_registration.sps`, FITS natifs et transformations |
-| 02 | `02_quality/` | Copie de la séquence, filtres, pondération et analyse Python |
-| 03 | `03_capability/` | `03_capability.sps` si Drizzle sélectionné, sinon `SKIPPED.txt` |
-| 04 | `04_stacking/` | `04_debayer_registration.sps` et `04_realign.sps` si nécessaires, contrôles géométriques, `04_applyreg.sps`, répétitions par liens, puis `04_stacking.sps` |
+| 02 | `02_registration/` | Liens FITS, `.seq` écrit directement, `01_registration.sps` et transformations |
+| 03 | `03_quality/` | Copie de la séquence, filtres, pondération et analyse Python |
+| 04 | `04_drizzle/` | `04_drizzle.sps` si Drizzle sélectionné, sinon `SKIPPED.txt` |
+| 05 | `05_stacking/` | `04_debayer_registration.sps` et `04_realign.sps` si nécessaires, contrôles géométriques, `04_applyreg.sps`, répétitions par liens, puis `04_stacking.sps` |
+
+`04_drizzle/SKIPPED.txt` explicite une désactivation : mode demandé,
+contrôles satisfaits ou non, mesures et seuils des critères refusés, mesures
+indisponibles et éventuelle erreur d’analyse. Les motifs proviennent de
+`reason_details` dans le même diagnostic que le rapport `.drizzle.json`.
 
 Chaque script est stocké et exécuté dans le répertoire de son étape. Aucun nom
 aléatoire ni répertoire `run_*` n’est créé. Chaque reconstruction nettoie ces

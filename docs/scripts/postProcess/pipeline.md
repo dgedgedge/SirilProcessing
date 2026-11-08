@@ -4,7 +4,7 @@
 
 ## Responsabilité et interface
 
-[`PostProcessingProcessor`](../../../lib/postprocessing.py) hérite de
+[`PostProcessingProcessor`](../../../lib/postprocess.py) hérite de
 [`processor`](../../../lib/processor.py). Il porte l’exécution complète qui
 était dans `bin/postProcess.py` : séquence scientifique, journal par image,
 diagnostics de qualité et du gradient, puis exports FITS et
@@ -87,6 +87,9 @@ Les deux scripts enregistrent `PostProcessingProcessor` avec `Config.register`
 avant le parsing, puis lient les paramètres avant l’instanciation. La classe
 déclare `_PostProcessorSequence` par `parameter_children` ; la récursion conserve
 les instantanés des étapes et des moteurs créés tardivement.
+L’option `--postprocess` de `lightProcess`, qui active ce pipeline final, est
+déclarée par son orchestrateur `LightProcessor` plutôt que par le traitement
+réutilisé `PostProcessingProcessor`.
 
 Les options de correction du gradient, photométrie, restauration, étoiles,
 AutoGHS et calcul CPU/GPU ont les mêmes noms, défauts et règles de priorité :
@@ -131,7 +134,7 @@ traitements suivent le même fichier partagé que le lancement autonome.
 `postProcess.py` invoque toujours le processeur demandé, indépendamment de ce
 booléen d’enchaînement.
 
-Sans mosaïque, chaque stack final disponible est traité une fois, y compris
+Sans mosaïque, l’unique stack final disponible est traité une fois, y compris
 un stack réutilisé depuis le cache. Avec `--mosaic`, seule l’image finale
 validée par l’assemblage est traitée : les panneaux d’entrée restent linéaires.
 Si la mosaïque échoue, aucun rendu des panneaux n’est lancé à sa place.
@@ -142,26 +145,16 @@ reste possible en simulation.
 
 ## Produits, erreurs et limites
 
-Pour `<sortie>/M33/M33_combined.fits`, sans passe couleur finale, l’enchaînement crée à côté :
+Avec lightProcess, le relais est `<sortie>/M33/02_mosaic/image.fits` et les
+traitements suivent [le plan numéroté](../lightProcess/output-layout.md) :
+photométrie sous `03_photometrie`, restauration sous `04_restoration`, GHS sous
+`05_autoghs` et couleur sous `06_color`. Le rapport global est
+`06_color/postprocess.json`, avec son journal et son manifeste de reprise.
+Le résultat publié est `<sortie>/M33/M33.fits`, accompagné du JPEG et du PNG
+annoté lorsqu'ils sont produits. La mosaïque suit exactement le même relais.
 
-```text
-M33_combined_postprocess.fits
-M33_combined_postprocess.jpg
-M33_combined_postprocess.json
-M33_combined_postprocess/
-  00_M33_combined_postProcess.log
-  01_gradient.json
-  02_photometry.json
-  03_restoration.json
-  05_autoghs.json
-  05_autoghs_work/
-```
-
-Cet extrait suppose les traitements actifs et réussis. Le JPEG est publié
-si AutoGHS ou la passe couleur l’a produit. Les détails des diagnostics, étapes
-intermédiaires et noms des variantes sont dans [les sorties](README.md#rapports-images-et-journaux)
-et [les exports de rendu](render-exports.md). La mosaïque suit la même convention,
-en ajoutant `_postprocess` au nom de son FITS final réel.
+Le CLI autonome reconnaît ce relais et la racine numérotée ; les autres appels
+conservent leur convention historique décrite dans les [sorties](README.md#rapports-images-et-journaux).
 
 Les FITS de calibration, les stacks et la mosaïque linéaire sont conservés.
 L’activation du post-traitement ne change pas leurs critères de cache ; elle
@@ -172,8 +165,7 @@ Une erreur du processeur est journalisée puis propagée après fermeture de son
 journal. Le script libère sa protection énergétique à la sortie de son contexte,
 y compris après une erreur ou une interruption. Le CLI autonome traduit l’erreur en code 1
 (130 pour une interruption clavier). Dans lightProcess, un échec ou une sortie
-finale absente entraîne le code 1 ; les autres stacks disponibles peuvent
-encore être traités. Les sources et produits partiels restent disponibles.
+finale absente entraîne le code 1. Les sources et produits partiels restent disponibles.
 
 Les tests `test_postprocessing.py` vérifient les paramètres, la conservation du
 contrat JSON, les exports communs, la fermeture du journal et la protection
@@ -221,3 +213,11 @@ compatibilité fondée sur les chemins et dates n'est pas une preuve d'intégrit
 cryptographique. Une chaîne incohérente ou absente reste bloquante. Depuis
 lightProcess, `lightprocess_final_images.json` retrouve les mêmes produits finaux
 avant tout travail de calibration/stacking/mosaïque, même pour un stack à une pose.
+
+## Audit des durées
+
+Les appels des étapes actives sont chronométrés ; leur
+`processing_duration_seconds` est présent dans le rapport enfant et dans le
+rapport global. La restauration détaille ses préparations, calculs distincts,
+contrôles finaux et réutilisations de cache. Les moteurs distinguent aussi le
+calcul et la qualité. Voir les [champs, unités et limites](timings.md).

@@ -7,10 +7,14 @@ La [commande commune d'installation](scripts/install_dependances/README.md)
 détecte la plateforme : `./bin/install_dependances.sh`. Ajouter `--test` pour
 vérifier sans installer, ou `--reset` pour recréer complètement le venv.
 Les modèles Cosmic Clarity et GraXpert sont préchargés par défaut ; `--assets-only`
-permet de les préparer dans un venv existant. Ajouter `--with-gaia` pour l'extrait
-Gaia astrométrique facultatif (1,14 Go à télécharger, 1,52 Go installé).
+permet de préparer les ressources dans un venv existant. Les catalogues
+Gaia astrométrique et spectral SPCC sont aussi installés par défaut (environ 6,43 Go à télécharger
+et 12,01 Go installés pour Gaia astrométrique et SPCC nord).
 GraXpert nécessite un cache vérifié ou son application officielle pour acquérir
-un modèle absent. Le catalogue spectral Gaia SPCC n'est pas inclus.
+un modèle absent. `--disable-gaia` désactive les deux catalogues ; `--disable-gaia-spcc`
+désactive seulement les spectres et `--disable-models` les modèles.
+`--gaia-spcc-coverage all` prépare les 48 régions du ciel ; `south` prépare le
+sud céleste et `remaining` complète le nord.
 Le [guide Mac MPS/CoreML](scripts/install_macos/README.md) détaille les limites
 de validation et les logiciels natifs requis. L’installation comprend les
 paquets Python du projet et les logiciels astronomiques externes. **Installer

@@ -9,8 +9,8 @@
 
 | Étape | Principales options |
 |---|---|
-| Chemins | `--dark-lib`, `--output`, `--work-dir` |
-| Calibration | `--no-dark`, `--temperature-precision`, `--force` |
+| Chemins | `--output`, `--work-dir` ; [sorties numérotées](output-layout.md) |
+| Calibration | `--dark-lib`, `--no-dark`, `--flat` / `--no-flat`, `--temperature-precision`, `--force` |
 | Exécution | `--siril-path`, `--siril-mode`, `--dry-run`, `--log-level` |
 | Alignement | `--align-transform`, `--stack-platesolve` |
 | Sélection | `--fwhm-filter`, `--max-fwhm`, `--fwhm-reject-percent`, `--roundness-filter`, `--nbstars-filter` |
@@ -22,10 +22,18 @@
 | Mosaïque | `--mosaic`, `--mosaic-name` |
 | Post-traitement | `--postprocess`, `--no-postprocess`, mêmes options que `postProcess` |
 
+Une seule entrée est obligatoire hors `--mosaic`, même en simulation.
+Au moins deux répertoires distincts sont nécessaires avec `--mosaic`.
+
 Les défauts d’empilement sont `--rejection-method winsorizedsigma` et
 `--stack-method average`, comme dans `darkLibUpdate`. Le nom court historique
 `winsor` reste accepté par `lightProcess`. Les valeurs JSON explicites restent
 prioritaires sur ces défauts.
+Les options de calibration, dont `--dark-lib` et `--temperature-precision`, sont
+déclarées par [`SequenceCalibrationProcessor`](../../../lib/light_calibration.py).
+Les options de sélection, de Drizzle et de stacking sont déclarées par
+[`SessionStackingProcessor`](../../../lib/light_stacking.py) ; leur présence
+dans la commande commune ne transfère pas leur responsabilité à `LightProcessor`.
 
 `--help` expose toutes les options. Les réglages peuvent provenir du fichier
 persistant de configuration ; `--save-config` enregistre les arguments.
@@ -34,6 +42,13 @@ persistant de configuration ; `--save-config` enregistre les arguments.
 `darkLibUpdate`. Ce pas d'arrondi sert au regroupement des poses et à la
 recherche des masters darks. Une valeur explicite en configuration ou en ligne
 de commande reste prioritaire.
+
+`--no-flat` désactive la recherche des flats, la création du master flat et son
+application aux lights, même si `flat/` ou `Flat/` contient des acquisitions.
+Les darks restent actifs sauf avec `--no-dark`. `--flat` réactive les flats
+(défaut). Le réglage JSON `use_flat` suit la priorité CLI > JSON > défaut et
+n'est écrit qu'avec `-S` / `--save-config`. Un changement de mode impose une
+nouvelle calibration des sorties en cache.
 
 Pendant la calibration, les titres `=== Création du master flat … ===` puis
 `=== Calibration des lights … ===` mettent les opérations principales en

@@ -11,7 +11,11 @@ netteté → débruitage reste inchangé hors compétition des chaînes.
 
 ## Responsabilités
 
-- `lib/restoration_quality.py` : `RestorationQuality` déclare les paramètres via
+La [structure des processeurs de qualité](quality-processors.md) détaille les
+sous-étapes indépendantes, leur contexte partagé et leur chronométrage récursif.
+Les méthodes et fonctions historiques délèguent maintenant à ces processeurs.
+
+- `lib/restoration_quality.py` : `RestorationQuality` délègue les paramètres aux processeurs via
   `ParameterizedComponent` ; `QualityReference` construit les cartes et mesure
   bruit, signal diffus et flux d’ouverture. Aucun appel à `GradientExtractor`.
 - `lib/deconvolution_quality.py` : conserve les anneaux et les critères
@@ -72,7 +76,8 @@ le nombre de tuiles retenues et de quadrants couverts avant l’exécution des m
 
 Les masques `sky`, `star`, `object`, `uncertain`, `invalid` sont figés avant les
 moteurs. Le fichier `<rapport>_masks.fits` encode les bits 1, 2, 4, 8 et 16 ; en
-compétition, `common_masks.fits` appartient au dossier des chaînes. Les rapports
+compétition, `common_masks.fits` est sous `00_mask_origine/` dans le dossier
+des chaînes. Les rapports
 référencent aussi `quality_preview_path` : l’aperçu PNG est produit à côté du
 masque FITS (`common_masks.png` ou `<rapport>_masks.png`). Il affiche les zones
 stellaires en rouge, le signal diffus en orange, les zones incertaines en bleu
@@ -116,6 +121,11 @@ une image réorientée ou de dimensions différentes.
 
 Une tuile doit fournir au moins 128 pixels de ciel et 50 % de couverture.
 Au moins quatre tuiles réparties sur trois quadrants sont nécessaires par défaut.
+L'évaluation utilise au plus **256 tuiles**, réparties sur le champ de façon
+déterministe ; `--quality-max-noise-tiles 0` évalue toutes les tuiles disponibles.
+Les mêmes positions sont utilisées avant/après et sur les canaux RGB. Le
+[calcul par lots NumPy/PyTorch](noise-tiles.md) détaille le choix spatial, les
+limites de mémoire et les conséquences sur l'incertitude.
 Dans chaque tuile, une tendance plane est retirée pour le diagnostic ; le bruit
 est la MAD multipliée par 1,4826 du résidu. Le ratio après/avant est résumé par
 sa médiane. Un bootstrap déterministe de 256 répétitions, par tuiles et non par
@@ -181,6 +191,10 @@ Les options suivent CLI > JSON sauvegardé > défaut, avec sauvegarde explicite 
 | `--quality-mode` | `reliable` | `legacy` conserve les métriques historiques |
 | `--quality-tile-size` | 64 | Taille des tuiles, pixels ; minimum 16 |
 | `--quality-min-tiles` | 4 | Minimum de tuiles ; minimum configurable 2 |
+| `--quality-diffuse-backend` | politique globale | Filtres diffus : `auto`, `cpu` ou `cuda` forcé |
+| `--quality-max-diffuse-regions` | 256 | Plafond des régions diffuses par tailles et positions ; 0 pour toutes |
+| `--quality-max-noise-tiles` | 256 | Plafond spatial des tuiles évaluées ; 0 pour toutes |
+| `--quality-noise-batch-size` | 32 | Taille maximale des lots CPU/GPU, de 1 à 256 |
 | `--quality-source-sigma` | 4 | Seuil de segmentation, minimum 2 |
 | `--quality-scales` | 2 4 8 16 32 | Échelles de lissage, pixels, entre 1 et 128 |
 | `--quality-mask-growth` | 5 | Marge des objets ; les étoiles ont une marge plus grande |
@@ -217,11 +231,65 @@ lancement, pas une annonce de validation scientifique de M33.
 
 Les produits de comparaison des chaînes sont rangés directement dans
 `03_restoration_work/` : masques communs, opérations numérotées de débruitage et
-netteté, ainsi que dossiers `final_<numéro>` pour les contrôles finaux. Il n’y a
+netteté, avec les contrôles finaux dans le dossier du traitement évalué. Il n’y a
 pas de sous-niveau `001` autour de cet ensemble : la comparaison n’est pas une
 boucle de restauration successive. La réinitialisation à chaque lancement
 remplace les produits précédents ; les éventuels essais internes d’un moteur
-restent dans le dossier propre à ce moteur.
+restent dans le dossier propre à ce moteur, sans enveloppe `001`.
+
+Dans le plan numéroté de lightProcess, ce regroupement est
+`04_restoration/`. Les opérations ont chacune leur dossier, par
+exemple `01_denoise_siril/`. Ce dossier contient le rapport `.json`, les
+scripts, candidats, résultats FITS et catalogues de cette opération, sans
+suffixe `_work` ni sous-dossier moteur supplémentaire.
+
+Les masques sont rattachés à leur image de référence : les premiers traitements
+partagent `00_mask_origine/common_masks.fits` et son aperçu PNG. Lorsqu’un
+résultat intermédiaire devient l’entrée d’un traitement, ses masques FITS/PNG
+sont enregistrés à côté de cette image, dans le dossier de l’opération qui
+l’a produite. Ils ne sont pas copiés dans chaque dossier consommateur. Une
+image terminale non réutilisée ne génère pas de masque supplémentaire.
+Chaque opération terminée conserve aussi un FITS du même nom que son rapport
+dans son dossier, référencé par `result_image_path`. Pour une sortie acceptée,
+`result_image_role=accepted_output` ; pour un rejet local ou aucune amélioration
+sûre, `result_image_role=retained_input` et le FITS est une copie de l’entrée
+conservée. Les candidats rejetés restent distincts. Un échec technique ou un
+moteur indisponible ne produit pas de résultat artificiel (`result_image_path`
+vaut `null`). La sélection scientifique et les chemins transmis aux traitements
+suivants ne changent pas ; le cache réutilise le même fichier sauvegardé.
+
+Chaque audit d’opération indique `input_image`, `input_mask_path` et
+`input_mask_preview_path` ; le rapport global expose `quality_mask_path` et
+`quality_preview_path` pour les masques d’origine. Les contrôles finaux
+continuent d’employer la référence commune initiale pour comparer les chaînes.
+Le moteur conserve le dossier préparé pour ne pas effacer les produits.
+
+Le numéro du dossier reste celui du calcul distinct. Son nom indique
+l’enchaînement complet dans l’ordre, par exemple
+`09_denoise_graxpert_then_sharpen_siril/` pour une netteté Siril appliquée
+au débruitage GraXpert (le numéro dépend des moteurs actifs). En ordre inverse,
+le nom commence par `sharpen_…_then_denoise_…`.
+Le cache réutilise ces mêmes fichiers lorsqu’une opération est commune à
+plusieurs chaînes, en conservant le nom de leur première exécution ; les erreurs restent auditées dans le rapport de l’opération.
+Les évaluations finales sont sous `verification_finale/` dans le dossier
+du traitement qui produit l’image évaluée. Ce sous-dossier contient les
+catalogues, scripts, journaux, `verification.json` et `verifications.txt`.
+Le texte décrit les contrôles réellement audités, leurs verdicts
+PASS/FAIL/UNKNOWN, valeurs, seuils et motifs ; une erreur est indiquée
+explicitement. Les contrôles locaux ont leur `verifications_locales.txt`
+dans le dossier du traitement. Les anciens dossiers `final_XX` ne sont plus
+créés. Le catalogue stellaire de référence reste partagé sous
+`00_mask_origine/common_reference.tsv`.
+
+Au niveau supérieur, `04_restoration/restoration_summary.txt` récapitule
+les contrôles locaux et finaux de toutes les chaînes, leurs rejets et le
+classement, avec les chemins des comptes rendus détaillés. Il reste voisin
+du rapport global JSON ; les appels autonomes utilisent `<rapport>_summary.txt`.
+Sans comparaison des chaînes, les étapes restent `01_deconvolution/` et
+`02_denoise/`, avec un dossier direct par moteur. Les relances réinitialisent
+uniquement le dossier concerné et refusent une source qui s’y trouve.
+Ces chemins sont vérifiés par tests avec moteurs simulés ; aucune nouvelle
+validation scientifique avec Siril ou les moteurs neuronaux n’est annoncée.
 
 Avec trois débruiteurs et deux moteurs de netteté, la liste contient 12 chaînes :
 identité, trois débruitages seuls, deux nettetés seules et six associations.
@@ -339,7 +407,9 @@ sur l’ensemble des objets ni une calibration astrophysique générale du débr
 La segmentation version 3 a aussi été vérifiée sur les images après photométrie
 de M31 et M33 et les candidats de débruitage déjà enregistrés. Elle retient
 4 265 tuiles sur M31 (63,8 % de pixels de ciel) et 1 324 sur M33 (68,1 %),
-dans les quatre quadrants. Sur M31, les baisses de dispersion du pire canal
+dans les quatre quadrants. Ces effectifs décrivent les tuiles disponibles ;
+les mesures qui suivent ont utilisé l'évaluation exhaustive, reproductible avec
+`--quality-max-noise-tiles 0`. Sur M31, les baisses de dispersion du pire canal
 sont d’environ 12,4 % pour Clarity, 21,1 % pour Siril et 41,9 % pour GraXpert.
 Sur M33, elles sont d’environ 10,2 %, 35,3 % et 44,0 %. Les contrôles locaux
 publiés précédemment deviennent admissibles avec ces mesures de bruit.
@@ -348,3 +418,49 @@ de sélection du ciel, avec les cas synthétiques de protection du signal diffus
 La comparaison complète des nouvelles associations reste à exécuter lors du
 prochain traitement des images réelles ; la préservation de tous les halos
 faibles exige une calibration astrophysique plus large.
+
+Le contrôle diffus utilise une [sélection fixe par tailles et positions](diffuse-regions.md)
+de 256 régions au plus par défaut. Les mesures par région restent identiques ;
+`--quality-max-diffuse-regions 0` rétablit l’évaluation exhaustive.
+
+Dans le plan numéroté, le dossier `diagnostics` n’est plus généré. Les exports
+référencent les aperçus de masques déjà présents auprès de leurs images ;
+aucun jeu de masques d’illustration supplémentaire n’est calculé à cette fin.
+Les essais et `00_mask_origine` sont directement sous `04_restoration`. Lors
+d’une nouvelle restauration, seuls les dossiers de produits reconnus (dont
+les anciennes enveloppes `01_chains` et `diagnostics`) sont nettoyés ; les
+rapports globaux et fichiers voisins sont préservés. Les appels autonomes
+historiques conservent leur dossier `<rapport>_work`.
+
+## Comparatif des chaînes acceptées
+
+L’acceptation qualité ne signifie pas qu’une chaîne sera retenue. Le classement
+compare uniquement les chaînes ayant passé les contrôles finaux et conserve
+le meilleur score **strictement positif**. À égalité exacte, la première chaîne
+évaluée reste retenue ; si aucune ne bat zéro, l’image initiale est conservée.
+Un score inférieur n’est donc pas présenté comme un rejet scientifique.
+
+Le diagnostic final enregistre `score_details` : ratios FWHM après/avant
+(moyenne et médiane des ratios appariés), gain utile du bruit, fraction maximale
+d’anneaux, ratio maximal du bruit et contributions au score. Le calcul existant
+est conservé :
+
+```text
+score = 2 × (1 − ratio FWHM moyen) + 2 × (1 − ratio FWHM médian)
+        + max(0, gain utile du bruit)
+        − 0,2 × fraction d’anneaux
+        − 0,2 × max(0, ratio du bruit − 1)
+```
+
+Les deux termes FWHM s’appliquent seulement aux chaînes comprenant une netteté.
+Les ratios, fractions et scores sont sans unité. Un gain de bruit absent reste
+`null` dans les mesures ; sa contribution au score est zéro, sans prétendre
+qu’un gain nul a été mesuré. Un rejet final n’a pas de décomposition de score
+admissible, puisque son classement n’est pas effectué.
+
+`restoration_summary.txt` et `summary.accepted_ranking` du rapport JSON donnent
+le rang, le score, l’écart au score effectivement retenu et les mesures pour
+chaque chaîne acceptée. Les rangs ex æquo sont partagés ; les audits dont le
+score est absent restent signalés comme inexploitables. Les rapports de
+vérification individuels exposent également la formule et ses contributions.
+L’index HTML de la restauration affiche ce comparatif sous forme de tableau.

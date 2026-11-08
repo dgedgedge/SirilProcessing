@@ -19,9 +19,10 @@ import torch
 from torch import nn
 
 from lib.compute_config import ComputeConfig
+from lib.resource_manager import ResourceManager
 
 from lib.cosmic_clarity.models import (
-    DENOISE_MODEL, NONSTELLAR_MODELS, STELLAR_MODEL, manifest, ensure_model,
+    DENOISE_MODEL, NONSTELLAR_MODELS, STELLAR_MODEL, manifest,
 )
 from lib.cosmic_clarity.network import RestorationCNN
 from lib.cosmic_clarity.color import extract_luminance, guided_chroma, merge_luminance
@@ -126,7 +127,7 @@ class CosmicClarityEngine:
 
     def _load(self, name: str) -> nn.Module:
         """Récupère si nécessaire un poids vérifié puis charge strictement son checkpoint."""
-        path = ensure_model(self.directory, name)
+        path = ResourceManager().cosmic_model(name, self.directory)
         checkpoint = torch.load(path, map_location='cpu', weights_only=True)
         state = checkpoint.get('model_state_dict', checkpoint)
         model = RestorationCNN()
