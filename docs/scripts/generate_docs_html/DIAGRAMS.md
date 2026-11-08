@@ -4,7 +4,7 @@
 
 ## 1. Correspondance avec l’implémentation
 
-Les six diagrammes Mermaid décrivent le cheminement des traitements. Les
+Les diagrammes Mermaid décrivent le cheminement des traitements. Les
 symboles sont positionnés automatiquement ; leurs flèches restent une
 description à maintenir lors d’un changement du code. Un rendu correct ne
 prouve pas à lui seul la conformité du séquencement.
@@ -22,6 +22,7 @@ diagramme réel vérifie ces côtés pour signaler une régression lors d’une
 | [lightProcess : calibration](../lightProcess/treatments/README.md#diagramme-calibration-lightprocess) | [lightprocessor.py](../../../lib/lightprocessor.py), `process_session`, `process_light_group` ; [light_calibration.py](../../../lib/light_calibration.py), `SequenceCalibrationProcessor`, `MasterFlatProcessor` | `test_lightprocessor_calibration.py`, `test_calibration_logging.py` |
 | [lightProcess : stacking](../lightProcess/treatments/README.md#diagramme-stacking-lightprocess) | [light_stacking.py](../../../lib/light_stacking.py), `SessionStackingProcessor` ; [drizzle.py](../../../lib/drizzle.py), `run_stack` | `test_lightprocessor_calibration.py`, `test_drizzle.py` |
 | [postProcess : séquence complète](../postProcess/README.md#ordre-et-circulation-des-images) | [postprocess.py](../../../lib/postprocess.py), `_PostProcessorSequence`, `PostProcessingProcessor` et exports communs | `test_postprocessor.py`, `test_postprocessing.py`, `test_restoration_chains.py` |
+| [postProcess : séquence des couches et couleur](../postProcess/principle.md#sequence-postprocessing-couleur) | [final_render.py](../../../lib/final_render.py), `AutoGHSFinalRenderer.post_process` ; [final_color.py](../../../lib/final_color.py), `FinalColorProcessor.post_process` ; [postprocess.py](../../../lib/postprocess.py), orchestration et exports | `test_final_render.py`, `test_final_color.py`, `test_postprocessing.py` |
 | [Restauration : comparaison par opération](../postProcess/cosmic-clarity.md) | [restoration.py](../../../lib/restoration.py), `engines` et `post_process` | `test_restoration.py` |
 | [solarEclipseGif : boucle des images et GIF](../solarEclipseGif/GUIDE.md#2-workflow-global) | [solarEclipseGif.py](../../../bin/solarEclipseGif.py), `main` et `build_movie_frames` | `test_solar_eclipse_sequence.py` |
 
@@ -40,6 +41,12 @@ diagramme réel vérifie ces côtés pour signaler une régression lors d’une
 - La comparaison de chaînes suit la photométrie et précède AutoGHS. Dans le
   mode par opérations isolées, la netteté précède le débruitage ; les moteurs
   d’une opération reçoivent une entrée commune.
+- AutoGHS conserve un rendu complet et ses deux couches. La couleur finale
+  reçoit le fond GHS sans étoiles et la couche stellaire déjà rendue ; elle
+  renforce le fond, puis recompose une nouvelle image complète. Les exports
+  et l'annotation suivent cette recomposition. Les messages du diagramme de
+  séquence décrivent les échanges de données ; ils n'indiquent pas une
+  exécution simultanée des traitements.
 - Les corrections solaires sont exécutées pour chaque image film avant les
   slots temporels. Les images de debug du GIF sont écrites avant le GIF final.
 
@@ -97,6 +104,12 @@ d’absence d’entrées rejoignent le choix de session suivante : ces convergen
 reflètent le code et restent présentes. Aucun ordre de traitement n’a été
 modifié pour améliorer le dessin et aucune coordonnée n’a été imposée.
 
+Un contrôle distinct transforme les pages Markdown avec les extensions et
+formateurs déclarés dans `mkdocs.yml`, puis lance Mermaid dans Chromium sur le
+HTML obtenu. Il vérifie un SVG par bloc et l'absence de graphique d'erreur,
+aussi bien pour les diagrammes de flux que pour les séquences. Ce parcours
+couvre le formatage du site en plus de celui de l'export autonome.
+
 Le test de rendu parcourt tous les blocs Mermaid sous `docs/`, puis contrôle
 leurs flèches SVG dans un repère commun, y compris celles de groupes transformés.
 Il recherche les intersections transverses en échantillonnant les courbes tous
@@ -105,7 +118,7 @@ jonctions à moins d’une unité des extrémités et les segments quasi coliné
 Les cas synthétiques couvrent un croisement, une convergence, un recouvrement
 colinéaire et une translation qui sépare les chemins.
 
-Le contrôle passe sans croisement transverse sur les six diagrammes actuels.
+Le contrôle passe sans croisement transverse sur les diagrammes de flux actuels.
 Cette approximation ne constitue pas une preuve géométrique exhaustive : les
 recouvrements, contacts tangents, libellés et croisements très proches d’une
 extrémité demandent aussi une inspection visuelle. Une évolution du contenu ou

@@ -2,6 +2,8 @@
 
 [Documentation](../../README.md) › [Scripts](../README.md) › postProcess
 
+Présentation : [Principe du post-traitement et diagramme de séquence](principle.md).
+
 `bin/postProcess.py` traite une image FITS dans cet ordre :
 **correction du gradient → étalonnage spectrophotométrique → comparaison des chaînes complètes de restauration**.
 Chaque étape reçoit l’image retenue par la précédente et produit un rapport JSON.
@@ -33,9 +35,11 @@ il sépare les étoiles avec StarNet et produit une image finale étoilée RANGE
 en FITS et [JPEG](render-exports.md), avec ses histogrammes de diagnostic.
 Il est activé par défaut ; `--disable-autoghs` conserve la sortie linéaire.
 
-La [passe couleur finale adaptative](final-color.md) suit GHS par défaut avant
-la fusion et l'annotation : `--disable-final-color` la désactive et `--color-only`
-permet de la relancer seule sur les couches GHS existantes.
+La [passe couleur finale adaptative](final-color.md) renforce ensuite le fond
+sans étoiles étiré par GHS, puis le recompose avec les étoiles déjà rendues.
+`--disable-final-color` la désactive et `--color-only` permet de la relancer
+sur les couches existantes. Le [diagramme de séquence](principle.md#sequence-postprocessing-couleur)
+montre les deux couches, leurs recompositions et les exports de l'image complète.
 
 GraXpert est ajouté automatiquement à la comparaison lorsque des poids locaux
 valides sont présents, sauf désactivation explicite (`--no-enable-graxpert` ou
@@ -124,7 +128,7 @@ flowchart TD
     B --> U{"AutoGHS activé ?"}
     O --> U
     T --> U
-    U -->|Oui, par défaut| F["05 · Rendu AutoGHS et étoiles"]
+    U -->|Oui, par défaut| F["05 · Rendu AutoGHS et étoiles<br/>puis 06 · Couleur finale si activée"]
     U -->|Non| R["Exports FITS, JPEG si produit<br/>Diagnostics et rapport global"]
     F --> R
 ```

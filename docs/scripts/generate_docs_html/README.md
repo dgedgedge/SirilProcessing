@@ -8,6 +8,13 @@ maîtresses des scripts et de l’architecture restent leurs points d’entrée.
 MkDocs fournit navigation et recherche, avec le thème Read the Docs en français.
 `mkdocs.yml` configure le thème, le rendu Markdown et l’adresse du site.
 
+Les blocs `mermaid` sont transmis au moteur local dans des conteneurs dédiés
+par le formateur `fence_div_format` de SuperFences. Le texte du diagramme reste
+échappé dans le HTML et la bibliothèque Mermaid, embarquée dans `assets/`,
+produit les SVG à l'ouverture des pages. Le site et l'export autonome utilisent
+les mêmes réglages de placement. Les tests rendent aussi les blocs issus de
+la configuration Markdown réelle de MkDocs, avant leur interprétation Mermaid.
+
 La navigation suit un plan numéroté : installation, manuels des scripts,
 architecture, puis maintenance et tests. Chaque rubrique de script regroupe son
 manuel d’utilisation, ses options et ses traitements détaillés. La rubrique

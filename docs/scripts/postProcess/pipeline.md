@@ -52,6 +52,16 @@ reçoit le FITS exporté grâce à `output_image`.
 Comme pour le CLI historique, un ancien chemin de rapport passé en second
 argument sélectionne uniquement son parent.
 
+<a id="sequence-postprocessing-couleur"></a>
+<a id="sequence-du-post-traitement-et-des-couches-couleur"></a>
+
+## Principe et séquence des images
+
+Le [principe du post-traitement et son diagramme de séquence](principle.md#sequence-postprocessing-couleur)
+sont présentés dans **Présentation → Principe du post-traitement**. Ils
+détaillent les deux couches AutoGHS, la couleur du fond sans étoiles et la
+recomposition de l'image complète avant publication.
+
 ## Bandeaux du journal
 
 Le début du post-traitement et chaque étape active sont annoncés en INFO avec

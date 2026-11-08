@@ -244,6 +244,11 @@ réduite avec les réglages communs, textes conservés et aucun symbole superpos
 Le diagramme réel de calibration est aussi rendu : la sortie « Oui » du choix
 de reprise doit partir à droite du losange et la sortie « Non » à gauche,
 sans coordonnées fixes pour les symboles.
+Les pages contenant des blocs Mermaid sont également converties avec les
+extensions et formateurs réels de `mkdocs.yml`, puis rendues dans Chromium.
+Le test exige un SVG par bloc et aucun pictogramme d'erreur, pour les flux et
+les séquences. Il couvre notamment l'enveloppe HTML des blocs produite par
+SuperFences, qui n'est pas testée par un rendu des seules sources Mermaid.
 Tous les diagrammes réels sous `docs/` sont également rendus et contrôlés avec
 `fixtures/documentation_crossings.js` : les intersections transverses des
 flèches sont recherchées dans un repère SVG commun. Des cas synthétiques
