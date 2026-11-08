@@ -20,7 +20,7 @@ import numpy as np
 from astropy.io import fits
 
 from lib.auto_ghs import ComputeBackend, GHSOptimizer, HistogramAnalyzer
-from lib.postprocess_paths import reset_work_dir
+from lib.postprocess_paths import reset_autoghs_work_dir
 from lib.render_exports import write_render_jpeg
 from lib.processor import processor
 from lib.restoration_quality import normalized_planes
@@ -336,8 +336,10 @@ class AutoGHSFinalRenderer(processor):
     ) -> JSONReport:
         """Publie un rendu RANGE étoilé, ses couches et ses diagnostics.
 
-        Le dossier <rapport>_work est réinitialisé et contient les étapes
-        nommées 01_separation à 05_diagnostics, sans répertoire nommé 001.
+        Les étapes 01_separation à 05_diagnostics sont écrites directement
+        dans le parent du rapport, sans enveloppe autoghs_work. Seuls leurs
+        produits et l'ancienne enveloppe sont nettoyés ; une entrée située
+        dans ces dossiers est refusée avant toute suppression.
 
         Parameters
         ----------
@@ -389,12 +391,7 @@ class AutoGHSFinalRenderer(processor):
                 options.compute_backend, required_bytes=data.nbytes * 16
             )
             report_path.parent.mkdir(parents=True, exist_ok=True)
-            parent_work = report_path.parent / f"{report_path.stem}_work"
-            if source.is_relative_to(parent_work):
-                raise ValueError(
-                    "L’entrée ne peut pas se trouver dans le dossier réinitialisé"
-                )
-            work_root = reset_work_dir(report_path)
+            work_root = reset_autoghs_work_dir(report_path, source)
             separation_dir = work_root / "01_separation"
             stars_dir = work_root / "02_stars"
             ghs_dir = work_root / "03_ghs"

@@ -1883,8 +1883,6 @@ class ProcessingHtmlReport:
                 audits = [p for p in audits if p.name == 'restoration.json']
             content.append(
                 '<section><h2>Rapports, paramètres et vérifications</h2>'
-                '<p>PASS : satisfait ; FAIL : non satisfait ; ? : non '
-                'vérifiable. Un fichier absent n’est pas un succès.</p>'
                 + ''.join(self._audit(p, directory) for p in audits) + '</section>'
             )
             content.append(

@@ -112,13 +112,13 @@ def test_single_range_contract_and_published_artifacts(
         with Image.open(path) as image:
             assert image.format == "JPEG" and image.size == (48, 48)
     assert "comparison_paths" not in result and "comparison_previous" not in result
-    assert not list((tmp_path / "05_autoghs_work").rglob("*comparison*"))
-    assert not list((tmp_path / "05_autoghs_work").rglob("*peak*"))
+    assert not list(tmp_path.rglob("*comparison*"))
+    assert not list(tmp_path.rglob("*peak*"))
     assert result["histogram_paths"]["starless"] == result["histogram_path"]
     assert len(set(result["histogram_paths"].values())) == 2
     assert all(Path(path).is_file() for path in result["histogram_paths"].values())
-    work = tmp_path / "05_autoghs_work"
-    assert sorted(path.name for path in work.iterdir()) == [
+    work = tmp_path
+    assert sorted(path.name for path in work.iterdir() if path.is_dir()) == [
         "01_separation", "02_stars", "03_ghs", "04_recomposition", "05_diagnostics"
     ]
     assert not any(path.name.startswith(".") for path in work.rglob("*"))
@@ -559,10 +559,12 @@ def test_ordered_autoghs_directory_is_reset_on_rerun(
     )
     report = tmp_path / "05_autoghs.json"
     first = renderer.post_process(linear_rgb, report, args)
-    stale = tmp_path / "05_autoghs_work/obsolete.fits"
+    legacy_work = tmp_path / "05_autoghs_work"
+    legacy_work.mkdir()
+    stale = legacy_work / "obsolete.fits"
     stale.write_bytes(b"obsolete")
-    work = tmp_path / "05_autoghs_work"
-    legacy_stage = work / "001"
+    work = tmp_path
+    legacy_stage = legacy_work / "001"
     legacy_stage.mkdir()
     (legacy_stage / "obsolete.fits").write_bytes(b"obsolete")
     (work / "03_ghs/linear_starless_ghs_peak.fits").write_bytes(b"obsolete")
@@ -575,16 +577,17 @@ def test_ordered_autoghs_directory_is_reset_on_rerun(
     second = renderer.post_process(linear_rgb, report, args)
     assert first["output_images"] == second["output_images"]
     assert "comparison_previous" not in second and "comparison_paths" not in second
-    assert not list((tmp_path / "05_autoghs_work").rglob("*peak*"))
-    assert not list((tmp_path / "05_autoghs_work").rglob("*comparison*"))
+    assert not list(tmp_path.rglob("*peak*"))
+    assert not list(tmp_path.rglob("*comparison*"))
     assert not stale.exists()
     assert not legacy_stage.exists()
     assert not list(work.rglob("001"))
     assert len(fake_separation) == 2
     assert sorted(path.name for path in tmp_path.iterdir()) == [
-        "05_autoghs.json", "05_autoghs_work", "linear.fits"
+        "01_separation", "02_stars", "03_ghs", "04_recomposition",
+        "05_autoghs.json", "05_diagnostics", "linear.fits"
     ]
-    source = tmp_path / "05_autoghs_work/linear_input.fits"
+    source = tmp_path / "03_ghs/linear_input.fits"
     source.write_bytes(linear_rgb.read_bytes())
     before = source.read_bytes()
     with pytest.raises(ValueError, match="réinitialisé"):

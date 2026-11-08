@@ -209,7 +209,7 @@ introduit un dépassement : il ne relance pas les traitements amont.
 
 ### Diagnostic spécifique des étoiles
 
-Dans `05_autoghs_work/02_stars/`, `<image>_stars_diagnostic.png` présente :
+Dans `05_autoghs/02_stars/` (ou `02_stars/` à côté du rapport autonome), `<image>_stars_diagnostic.png` présente :
 
 - les mêmes extraits centraux (512 pixels de côté au plus) avant/après, avec les
   intensités affichées directement sans auto-étirement ni gamma ;

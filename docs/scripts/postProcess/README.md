@@ -665,15 +665,14 @@ rapports/
     ├── 03_restoration_summary.txt
     ├── 03_restoration_work/
     ├── 05_autoghs.json
-    └── 05_autoghs_work/
-        ├── 01_separation/separation_work/
-        ├── 02_stars/
-        ├── 03_ghs/
-        │   └── 03_restoration_starless_ghs_range.fits
-        ├── 04_recomposition/
-        │   ├── 03_restoration_render_range.fits
-        │   └── 03_restoration_render_range.jpg
-        └── 05_diagnostics/
+    ├── 01_separation/separation_work/
+    ├── 02_stars/
+    ├── 03_ghs/
+    │   └── 03_restoration_starless_ghs_range.fits
+    ├── 04_recomposition/
+    │   ├── 03_restoration_render_range.fits
+    │   └── 03_restoration_render_range.jpg
+    └── 05_diagnostics/
 ```
 
 Cet arbre omet les copies FITS et audits propres à chaque moteur de restauration.
@@ -727,10 +726,11 @@ argparse retourne `2` pour une ligne de commande invalide.
 ### 4.2. Ordre des produits AutoGHS
 
 AutoGHS conserve le numéro `05`, y compris lorsque `03_restoration` regroupe les
-étapes 03/04. Ses produits sont écrits dans `05_autoghs_work/`, avec des
-sous-dossiers numérotés pour la séparation, les étoiles, GHS, la recomposition et
-les diagnostics. La photométrie utilise `02_photometry_work/`. Ces dossiers
-visibles sont réinitialisés à chaque lancement ; voir [AutoGHS](auto-ghs.md).
+étapes 03/04. Les sous-dossiers de séparation, étoiles, GHS, recomposition et
+diagnostics sont placés directement à côté du rapport, sans `autoghs_work/`.
+Dans le plan lightProcess, ils se trouvent directement dans `05_autoghs/`.
+La photométrie utilise `02_photometry_work/`. Seuls les produits propres à chaque
+traitement sont nettoyés à la relance ; voir [AutoGHS](auto-ghs.md).
 
 La [recherche GHS par quartiles](ghs-quartiles.md) complète le rendu automatique
 par des passes successives, avec budget cumulé du point noir.

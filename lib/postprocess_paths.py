@@ -37,6 +37,33 @@ def reset_work_dir(
     return work
 
 
+def reset_autoghs_work_dir(report_path: Path | str, input_path: Path | str) -> Path:
+    """Prépare les cinq sous-étapes directement dans le parent du rapport.
+
+    Nettoie uniquement les dossiers 01_separation à 05_diagnostics et
+    l'ancienne enveloppe <rapport>_work. Les rapports, exports conservés et
+    fichiers voisins restent intacts. Une entrée située dans l'un des dossiers
+    à nettoyer est refusée avec ValueError avant toute suppression. Les liens
+    symboliques sont retirés sans parcourir leur cible ; les erreurs d'accès
+    sont propagées. Les appels autonomes utilisent également le parent du rapport.
+    """
+    report, source = Path(report_path).resolve(), Path(input_path).resolve()
+    work = report.parent
+    products = [work / name for name in (
+        "01_separation", "02_stars", "03_ghs", "04_recomposition",
+        "05_diagnostics", f"{report.stem}_work",
+    )]
+    if any(source.is_relative_to(path.resolve()) for path in products):
+        raise ValueError("L’entrée se trouve dans le dossier de travail réinitialisé")
+    work.mkdir(parents=True, exist_ok=True)
+    for path in products:
+        if path.is_symlink():
+            path.unlink()
+        elif path.is_dir():
+            shutil.rmtree(path)
+    return work
+
+
 def reset_restoration_work_dir(
     report_path: Path | str, input_path: Path | str, *,
     prepared_directory: Path | str | None = None,

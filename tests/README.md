@@ -635,8 +635,10 @@ Les tests des moteurs contrôlent les artefacts directs sans `001` ; ceux des
 chaînes vérifient aussi le regroupement `04_restoration`.
 
 Les tests du rendu GHS vérifient les étapes nommées `01_separation` à
-`05_diagnostics`, le nettoyage des anciens niveaux `001` lors des relances
-et la protection des sources. La couleur finale vérifie des produits directs
+`05_diagnostics` directement à côté du rapport, sans enveloppe `autoghs_work`.
+Ils couvrent le nettoyage des anciens produits et enveloppes lors des relances,
+la conservation des fichiers voisins, le retrait des liens sans suivre leur
+cible et le refus d'une source dans chaque dossier nettoyé avant toute suppression. La couleur finale vérifie des produits directs
 dans son dossier de travail, sans niveau `001`, avec des FITS synthétiques.
 
 La régression de transmission du stack (`.fit`/`.fits`) est couverte dans

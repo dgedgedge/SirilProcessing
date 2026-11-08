@@ -178,7 +178,8 @@ pour chaque combinaison. Les audits techniques restent sur disque.
 Les tableaux de classement, de décision et des contrôles locaux reprennent la
 présentation des tableaux de qualité : titres verticaux à 90°, grille visible,
 colonnes de libellés compactes, flottants à deux décimales et « ? » pour les
-valeurs absentes. Une légende colorée précède les tableaux de verdicts.
+valeurs absentes. La légende des verdicts est affichée auprès des tableaux
+concernés, sous forme de symboles colorés.
 **✓ vert** indique une chaîne retenue/admissible ou un contrôle satisfait ;
 **✗ rouge**, un rejet ; un **tiret blanc**, un contrôle ignoré/désactivé, une
 référence ou une chaîne acceptée dont le score n’a pas été retenu. Le survol

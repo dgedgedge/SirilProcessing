@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from lib.postprocess_paths import reset_restoration_work_dir
+from lib.postprocess_paths import reset_autoghs_work_dir, reset_restoration_work_dir
 
 
 @pytest.mark.parametrize('relative,expected', [
@@ -118,3 +118,70 @@ def test_numbered_restoration_flattens_work_and_cleans_only_owned_products(
     assert neighbor.read_text() == 'preserved'
     assert report.read_text() == '{}'
     assert source.read_bytes() == b'original'
+
+
+@pytest.mark.parametrize('report_name', ['05_autoghs.json', '05_autoghs/autoghs.json'])
+def test_autoghs_stages_are_direct_and_preserve_neighboring_files(
+    tmp_path: Path, report_name: str,
+) -> None:
+    """La relance nettoie ses produits et l'ancienne enveloppe, sans effacer ses voisins."""
+    report = tmp_path / report_name
+    report.parent.mkdir(parents=True, exist_ok=True)
+    source = report.parent / 'input.fits'
+    source.write_bytes(b'source')
+    report.write_text('{}')
+    neighbor = report.parent / 'render.fits'
+    neighbor.write_bytes(b'render')
+    for name in ('01_separation', '02_stars', '03_ghs', '04_recomposition',
+                 '05_diagnostics', f'{report.stem}_work'):
+        old = report.parent / name
+        old.mkdir()
+        (old / 'obsolete.fits').write_bytes(b'old')
+    unrelated = report.parent / '06_color'
+    unrelated.mkdir()
+    (unrelated / 'color.fits').write_bytes(b'color')
+    assert reset_autoghs_work_dir(report, source) == report.parent
+    assert sorted(path.name for path in report.parent.iterdir()) == sorted([
+        report.name, source.name, neighbor.name, unrelated.name,
+    ])
+    assert source.read_bytes() == b'source'
+    assert neighbor.read_bytes() == b'render'
+    assert report.read_text() == '{}'
+    assert (unrelated / 'color.fits').read_bytes() == b'color'
+
+
+@pytest.mark.parametrize('subdirectory', [
+    '01_separation', '02_stars', '03_ghs', '04_recomposition', '05_diagnostics', 'autoghs_work',
+])
+def test_autoghs_rejects_source_in_cleaned_products_before_any_removal(
+    tmp_path: Path, subdirectory: str,
+) -> None:
+    """Aucune étape n'est effacée si la source appartient à un dossier nettoyé."""
+    first = tmp_path / '01_separation'
+    first.mkdir()
+    marker = first / 'preserved.fits'
+    marker.write_bytes(b'preserved')
+    source = tmp_path / subdirectory / 'input.fits'
+    source.parent.mkdir(exist_ok=True)
+    source.write_bytes(b'source')
+    with pytest.raises(ValueError, match='réinitialisé'):
+        reset_autoghs_work_dir(tmp_path / 'autoghs.json', source)
+    assert source.read_bytes() == b'source'
+    assert marker.read_bytes() == b'preserved'
+
+
+def test_autoghs_cleanup_removes_symlink_without_removing_target(tmp_path: Path) -> None:
+    """Le nettoyage retire le lien d'étape, sans suivre sa cible extérieure."""
+    target = tmp_path / 'external'
+    target.mkdir()
+    marker = target / 'preserved.fits'
+    marker.write_bytes(b'preserved')
+    work = tmp_path / '05_autoghs'
+    work.mkdir()
+    link = work / '01_separation'
+    link.symlink_to(target, target_is_directory=True)
+    source = tmp_path / 'input.fits'
+    source.write_bytes(b'source')
+    assert reset_autoghs_work_dir(work / 'autoghs.json', source) == work
+    assert not link.exists()
+    assert marker.read_bytes() == b'preserved'

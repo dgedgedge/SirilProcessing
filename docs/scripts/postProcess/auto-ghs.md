@@ -89,13 +89,14 @@ de réexécuter la calibration, la photométrie ou la restauration.
 
 ## Sorties et publication
 
-Le dossier d'étapes habituel contient `05_autoghs.json` et le dossier visible
-`05_autoghs_work/`, sans suffixe aléatoire ni dossier temporaire. Le numéro 05
-reste fixe quand la restauration regroupe les étapes 03/04. Les transformations
-sont ordonnées dans les sous-dossiers suivants :
+Dans le plan numéroté de lightProcess, les produits sont directement dans
+`05_autoghs/`, à côté du rapport `autoghs.json`. En appel autonome postProcess,
+les cinq sous-étapes sont directement à côté de `05_autoghs.json`. Le niveau
+`autoghs_work/` n'est pas créé. Les transformations sont ordonnées ainsi :
 
 ```text
-05_autoghs_work/
+05_autoghs/
+  autoghs.json
   01_separation/separation_work/  # entrée, fond et étoiles linéaires, script et journal Siril
   02_stars/           # couche d’étoiles rendue commune
   03_ghs/             # fond étiré RANGE
@@ -105,6 +106,10 @@ sont ordonnées dans les sous-dossiers suivants :
 
 La séparation est une étape nommée `01_separation`, au même niveau que
 les autres traitements ; aucun répertoire nommé `001` n’est créé.
+À chaque relance, seuls les cinq dossiers de produits et l'ancienne enveloppe
+`<rapport>_work/` sont nettoyés. Les fichiers voisins, notamment les exports
+conservés et les rapports, restent en place. Une image d'entrée située dans
+un dossier à nettoyer est refusée avant toute suppression.
 
 Les fichiers sont répartis dans ces sous-dossiers :
 
