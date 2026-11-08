@@ -307,7 +307,6 @@ class _DeconvolutionExecution:
         script = "\n".join(
             [
                 f"cd {_quote(self.work)}",
-                "setext fits",
                 "set32bits",
                 *lines,
                 "close",

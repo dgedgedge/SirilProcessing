@@ -193,6 +193,43 @@ class RestorationChainProcessor(processor):
             },
         )
 
+    @staticmethod
+    def score_details(
+        comparison: JSONReport, artifacts: JSONReport, operations: tuple[str, ...],
+    ) -> JSONReport:
+        """Décompose le score existant, après validation des critères finaux.
+
+        Les FWHM sont des ratios après/avant positifs et les gains/fractions sans
+        unité. Les termes FWHM ne comptent que pour une chaîne de netteté. La
+        mesure de gain utile absente contribue zéro sans être présentée comme
+        une mesure nulle. L’ordre des opérations arithmétiques reste inchangé.
+        """
+        mean = comparison["after_fwhm_px"]["mean"] / comparison["before_fwhm_px"]["mean"]
+        median = comparison["paired_ratio"]["median"]
+        gain = artifacts.get("noise", {}).get("proven_gain")
+        rings = artifacts["max_ring_fraction"]
+        noise = artifacts["max_noise_ratio"]
+        sharpen = "sharpen" in operations
+        score = 2 * (1 - mean) + 2 * (1 - median) if sharpen else 0
+        score += max(0, gain) if gain is not None else 0
+        score -= 0.2 * rings
+        score -= 0.2 * max(0, noise - 1) if noise is not None else 0
+        return dict(
+            formula="2*(1-ratio_FWHM_moyenne) + 2*(1-ratio_FWHM_mediane) "
+                    "+ max(0,gain_bruit_utile) - 0.2*anneaux "
+                    "- 0.2*max(0,ratio_bruit-1) ; termes FWHM seulement avec netteté",
+            fwhm_mean_ratio=mean, fwhm_median_ratio=median,
+            useful_noise_gain=gain, max_ring_fraction=rings, max_noise_ratio=noise,
+            contributions=dict(
+                fwhm_mean=2 * (1 - mean) if sharpen else 0,
+                fwhm_median=2 * (1 - median) if sharpen else 0,
+                useful_noise_gain=max(0, gain) if gain is not None else 0,
+                rings=-0.2 * rings,
+                excess_noise=-0.2 * max(0, noise - 1) if noise is not None else 0,
+            ),
+            total=float(score),
+        )
+
     def _final_evaluation(
         self,
         source: Path,
@@ -277,29 +314,18 @@ class RestorationChainProcessor(processor):
             artifacts["max_noise_ratio"] is None or artifacts["max_noise_ratio"] >= 1
         ):
             reasons = [*reasons, "global_noise_reduction_not_demonstrated"]
-        # Un score final unique : un gain n’est compté qu’une seule fois.
+        score_details = None
         score = 0.0
         if not reasons:
-            mean = (
-                comparison["after_fwhm_px"]["mean"]
-                / comparison["before_fwhm_px"]["mean"]
-            )
-            median = comparison["paired_ratio"]["median"]
-            gain = artifacts.get("noise", {}).get("proven_gain")
-            score = 2 * (1 - mean) + 2 * (1 - median) if "sharpen" in operations else 0
-            score += max(0, gain) if gain is not None else 0
-            score -= 0.2 * artifacts["max_ring_fraction"]
-            score -= (
-                0.2 * max(0, artifacts["max_noise_ratio"] - 1)
-                if artifacts["max_noise_ratio"] is not None
-                else 0
-            )
+            score_details = self.score_details(comparison, artifacts, operations)
+            score = score_details["total"]
         return dict(
             status="rejected" if reasons else "accepted",
             processing=evaluation['processing'],
             comparison=comparison,
             artifacts=artifacts,
             selection_score=float(score),
+            score_details=score_details,
             rejection_reasons=reasons,
             criteria=criteria,
         )
@@ -312,7 +338,7 @@ class RestorationChainProcessor(processor):
     ) -> JSONReport:
         """Évalue les variantes et garde les audits dans un dossier direct.
 
-        Le plan numéroté utilise 04_restoration/01_chains ; les appels autonomes
+        Le plan numéroté utilise directement 04_restoration ; les appels autonomes
         conservent <rapport>_work. Chaque opération regroupe son rapport, ses
         candidats et scripts dans un même dossier numéroté, préparé
         avant l’appel moteur. Le numéro identifie le calcul ; son nom décrit
@@ -327,7 +353,11 @@ class RestorationChainProcessor(processor):
         échecs et moteurs indisponibles ne produisent aucun résultat artificiel.
         Les moteurs n’ajoutent aucun niveau 001.
 
-        Les opérations et contrôles finaux y sont numérotés ; aucun niveau de
+        Les contrôles finaux sont sous verification_finale dans le dossier
+        producteur, avec comptes rendus texte locaux et finaux. La synthèse
+        globale au niveau du rapport rassemble leurs résultats et leurs liens.
+        Les index HTML locaux documentent ensuite les audits et images présents.
+        Les opérations y sont numérotées ; aucun niveau de
         répétition artificiel n'est créé. Le dossier est réinitialisé à chaque
         appel et une entrée qui s'y trouve est refusée avant suppression.
         Les préparations, calculs distincts, contrôles finaux et classement sont
@@ -522,6 +552,13 @@ class RestorationChainProcessor(processor):
                             entry["result_image_role"] = (
                                 "accepted_output" if accepted else "retained_input"
                             )
+                    local_checks = operation_dir / "verifications_locales.txt"
+                    entry["verification_path"] = str(local_checks)
+                    RestorationSummary.write_checks(
+                        entry, local_checks, source=current,
+                        candidate=Path(entry.get("candidate_image_path") or entry.get("output_image") or current),
+                        label="VÉRIFICATIONS LOCALES DU TRAITEMENT",
+                    )
                     child_report.write_text(
                         json.dumps(entry, indent=2, allow_nan=False), encoding="utf-8",
                     )
@@ -576,6 +613,12 @@ class RestorationChainProcessor(processor):
                         f"{index + 1}/{len(variants)} : "
                         f"{description}", separator="-",
                     )
+                    verification_dir = Path(entry["report_path"]).parent / "verification_finale"
+                    verification_dir.mkdir(parents=True, exist_ok=True)
+                    final_args = copy(args)
+                    final_args._restoration_reference_catalog = (
+                        work / "00_mask_origine/common_reference.tsv"
+                    )
                     try:
                         with log_duration(
                             f"Restauration — contrôle final de la variante {index + 1:02d}",
@@ -585,17 +628,27 @@ class RestorationChainProcessor(processor):
                                 source,
                                 current,
                                 reference,
-                                work / f"final_{index:02d}",
-                                args,
+                                verification_dir,
+                                final_args,
                                 final_key[1],
                             )
                     except (OSError, ValueError, RuntimeError) as error:
                         final_cache[final_key] = dict(
                             status="unknown", error=str(error)
                         )
-                    final_cache[final_key]["duration_seconds"] = durations[
+                    final_audit = final_cache[final_key]
+                    final_text = verification_dir / "verifications.txt"
+                    final_audit["verification_path"] = str(final_text)
+                    RestorationSummary.write_checks(
+                        final_audit, final_text, source=source, candidate=current,
+                        label="VÉRIFICATIONS FINALES CONTRE L’IMAGE D’ORIGINE",
+                    )
+                    final_audit["duration_seconds"] = durations[
                         f"final_{index + 1:02d}_seconds"
                     ]
+                    (verification_dir / "verification.json").write_text(
+                        json.dumps(final_audit, indent=2, allow_nan=False), encoding="utf-8",
+                    )
                 else:
                     result["cache_hits"]["final_evaluations"] += 1
                 final = final_cache[final_key]
@@ -650,4 +703,6 @@ class RestorationChainProcessor(processor):
         report.write_text(
             json.dumps(result, indent=2, allow_nan=False), encoding="utf-8"
         )
+        from lib.processing_html import ProcessingHtmlReport
+        ProcessingHtmlReport.publish(report.parent)
         return result

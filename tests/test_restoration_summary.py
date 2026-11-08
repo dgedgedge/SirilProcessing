@@ -263,3 +263,59 @@ def test_legacy_siril_selection_has_no_circular_report(tmp_path: Path) -> None:
     assert result["summary"]["rows"][0]["decision"] == "selected"
     assert "Choix final : siril" in Path(result["summary_path"]).read_text()
     json.dumps(result, allow_nan=False)
+
+
+def test_checks_text_describes_verdicts_thresholds_and_missing_measurements(
+    tmp_path: Path,
+) -> None:
+    """Le texte expose les critères disponibles sans présenter UNKNOWN comme PASS."""
+    audit = dict(
+        status='rejected', selection_score=0.0,
+        criteria={
+            'stellar_flux': dict(status='FAIL', value=.2, threshold=.1, reason='FLUX_LOSS'),
+            'noise': dict(status='PASS', value=.7, threshold=1),
+            'diffuse': dict(status='UNKNOWN', reason='NO_LOCAL_SKY'),
+        },
+        error='mesure incomplète', rejection_reasons=['FLUX_LOSS'],
+    )
+    path = tmp_path / 'verification_finale/verifications.txt'
+    RestorationSummary.write_checks(
+        audit, path, source=tmp_path / 'source.fits',
+        candidate=tmp_path / 'candidate.fits', label='Contrôle final',
+    )
+    text = path.read_text()
+    assert 'Conservation du flux photométrique' in text
+    assert 'stellar_flux=FAIL ; value=0.2 ; threshold=0.1' in text
+    assert 'noise=PASS ; value=0.7 ; threshold=1' in text
+    assert 'diffuse=UNKNOWN' in text and 'NO_LOCAL_SKY' in text
+    assert 'Erreur : mesure incomplète' in text
+    assert str(tmp_path / 'source.fits') in text
+
+
+def test_accepted_ranking_explains_ties_gaps_and_reference_choice(tmp_path: Path) -> None:
+    """Les acceptations sont classées, les rejets exclus, les égalités explicites."""
+    result = dict(selected_chain=['first'], selection_score=.8, variants=[
+        dict(chain=['first'], status='accepted', selection_score=.8),
+        dict(chain=['lower'], status='accepted', selection_score=.3),
+        dict(chain=['equal'], status='accepted', selection_score=.8),
+        dict(chain=['rejected'], status='rejected', selection_score=10),
+        dict(chain=['zero'], status='accepted', selection_score=0),
+    ])
+    RestorationSummary.write(result, tmp_path / 'restoration.json', mode='chains')
+    ranking = result['summary']['accepted_ranking']
+    assert [row['label'] for row in ranking['rows']] == ['first', 'equal', 'lower', 'zero']
+    assert [row['rank'] for row in ranking['rows']] == [1, 1, 3, 4]
+    assert ranking['rows'][0]['decision'] == 'RETENUE'
+    assert 'ÉGALITÉ' in ranking['rows'][1]['decision']
+    assert ranking['rows'][2]['gap_to_retained_score'] == pytest.approx(.5)
+    text = Path(result['summary_path']).read_text()
+    assert 'COMPARATIF DES CHAÎNES ACCEPTÉES' in text
+    assert 'strictement positif' in text and 'première évaluée' in text
+    negative = dict(selected_chain=[], selection_score=0, variants=[
+        dict(chain=['no_gain'], status='accepted', selection_score=-.1),
+        dict(chain=['unknown'], status='accepted'),
+    ])
+    ranking = RestorationSummary.accepted_ranking(negative)
+    assert ranking['rows'][0]['gap_to_retained_score'] == pytest.approx(.1)
+    assert ranking['rows'][0]['decision'] == 'NE BAT PAS L’IMAGE INCHANGÉE'
+    assert ranking['missing_score_count'] == 1

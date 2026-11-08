@@ -384,7 +384,7 @@ class SessionStackingProcessor(processor):
         bandeaux de progression dans les journaux. La séquence est écrite
         directement à côté des liens FITS, sans conversion ni modification
         des sources ; le nombre de couches vient du premier FITS compatible.
-        L’extension Siril est fixée à fits pour que la résolution astrométrique
+        Le générateur commun Siril fixe l’extension à fits pour que la résolution astrométrique
         remplace les liens locaux sans créer un doublon .fit ambigu.
         ``stack_work_dir`` fournit
         une racine explicite pour les étapes 02 à 05 ; sinon le répertoire
@@ -435,12 +435,11 @@ class SessionStackingProcessor(processor):
                 if candidate.exists():
                     candidate.unlink()
 
-        for transient_dir in (
-            session_stack_dir / "input",
-            session_stack_dir / "output",
-        ):
-            if transient_dir.exists():
-                shutil.rmtree(transient_dir)
+        # Les anciens input/output appartiennent uniquement à l’API historique.
+        if stack_work_dir is None:
+            for transient_dir in (session_stack_dir / "input", session_stack_dir / "output"):
+                if transient_dir.exists():
+                    shutil.rmtree(transient_dir)
 
         stack_cfg = dict(stack_params or {})
         stack_cfg.setdefault("fwhm_filter", "1.8k")
@@ -559,7 +558,6 @@ class SessionStackingProcessor(processor):
             )
 
         prepare = f"""cd {output_stack_dir}
-setext fits
 seqfindstar {sequence_prefix}
 {platesolve_lines}register {sequence_prefix} -2pass -transf={align_transform}"""
 

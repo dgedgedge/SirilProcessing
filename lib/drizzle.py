@@ -24,11 +24,49 @@ from lib.quality_filter import (
     materialize_quality_weights,
     quality_mask,
 )
-from lib.siril import SirilSequence
+from lib.siril import SequenceImage, SirilSequence
 from lib.siril import Siril
 from lib.type_defs import ConfigMap, JSONReport
 
-QUALITY_PIPELINE_VERSION = 13
+QUALITY_PIPELINE_VERSION = 16
+
+
+def _registration_snapshot(images: Sequence[SequenceImage]) -> JSONReport:
+    """Capture les résultats initiaux avant toute sélection Python.
+
+    Les entrées sont des poses indépendantes. Le drapeau d'inclusion Siril et
+    la validité des mesures sont conservés séparément ; aucun motif physique
+    d'échec d'alignement n'est déduit des mesures manquantes.
+    """
+    frames: list[JSONReport] = []
+    for index, image in enumerate(images):
+        registration = image.registration()
+        included = bool(image.included)
+        valid = bool(registration.valid)
+        reasons = []
+        if not included:
+            reasons.append('excluded_by_siril')
+        if not valid:
+            reasons.append('invalid_registration')
+        measurements = {
+            name: float(value) if np.isfinite(value) else None
+            for name, value in zip(
+                ('fwhm', 'weighted_fwhm', 'roundness', 'quality', 'background', 'nbstars'),
+                registration.values,
+            )
+        }
+        frames.append(dict(
+            source=str(image.processing_path.resolve()), number=int(image.number),
+            sequence_index=index, included=included, registration_valid=valid,
+            status='aligned' if included and valid else 'excluded',
+            reasons=reasons, measurements=measurements,
+        ))
+    aligned = sum(frame['status'] == 'aligned' for frame in frames)
+    return dict(
+        schema_version=1, stage='registration', input_count=len(frames),
+        aligned_count=aligned, remaining_count=aligned,
+        rejected_count=len(frames) - aligned, frames=frames,
+    )
 
 
 def _fallback_available_memory() -> tuple[int, str]:
@@ -518,10 +556,55 @@ def analyse(
     return result
 
 
+def write_skipped_drizzle(
+    path: Path, decision: JSONReport, *, analysis_error: str | None = None,
+) -> None:
+    """Écrit les motifs et mesures de la décision Drizzle dans un fichier UTF-8.
+
+    Réutilise gates et reason_details issus de analyse : aucun seuil scientifique
+    n’est recalculé. Le mode off est distingué d’un rejet automatique. Les
+    mesures absentes restent inconnues et une erreur d’analyse est signalée.
+    Le dossier parent doit exister ; les erreurs d’écriture sont propagées.
+    """
+    lines = [
+        "Étape non exécutée : Drizzle non sélectionné après analyse qualité.",
+        f"Mode demandé : {decision['mode']}",
+        ("Motif : désactivation explicite (mode off)." if decision['mode'] == 'off'
+         else "Motif : critères d’activation automatique non satisfaits."),
+        "",
+        "Résultats des contrôles (NON SATISFAIT peut inclure une mesure indisponible) :",
+    ]
+    for criterion, passed in decision['gates'].items():
+        lines.append(f"- {criterion} : {'SATISFAIT' if passed else 'NON SATISFAIT'}")
+    lines.extend(["", "Raisons détaillées, mesures et seuils :"])
+    details = decision['reason_details']
+    lines.extend(f"- {item['message']}" for item in details)
+    if not details:
+        lines.append("Tous les critères qualité sont satisfaits ; seul le mode demandé désactive Drizzle.")
+    lines.extend(["", "Mesures de l’analyse :"])
+    for key, label in (
+        ('images_analysed', 'Poses indépendantes analysées'),
+        ('images_retained', 'Poses retenues'),
+        ('fwhm_pixels', 'FWHM médiane (px)'),
+        ('dither_count', 'Sauts de dithering détectés'),
+        ('drift_px', 'Dérive X/Y (px)'),
+        ('coverage', 'Couverture sous-pixel'),
+        ('cfa_coverage', 'Couverture CFA par site'),
+    ):
+        value = decision.get(key)
+        lines.append(f"- {label} : " + (
+            'indisponible' if value is None
+            else json.dumps(value, ensure_ascii=False, allow_nan=False)
+        ))
+    if analysis_error:
+        lines.extend(["", f"Erreur lors de l’analyse qualité : {analysis_error}"])
+    path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+
+
 STACK_STAGES = (
     "02_registration",
     "03_quality",
-    "04_capability",
+    "04_drizzle",
     "05_stacking",
 )
 
@@ -538,7 +621,11 @@ def reset_stage(path: Path | str) -> None:
 
 
 def copy_stage_inputs(source: Path | str, destination: Path | str) -> None:
-    """Copy mutable metadata; reference immutable FITS without duplicating pixels."""
+    """Copy scientific metadata and link FITS; omit scripts, logs and HTML indexes.
+
+    Presentation pages are regenerated from each stage’s own results instead
+    of being copied with the input data. Source pixels remain untouched.
+    """
 
     def transfer(src: Path | str, dst: Path | str) -> str:
         """Copie un fichier d’étape en conservant les liens symboliques lorsque possible."""
@@ -552,11 +639,14 @@ def copy_stage_inputs(source: Path | str, destination: Path | str) -> None:
     for entry in Path(source).iterdir():
         if entry.resolve() == destination.resolve() or entry.name in STACK_STAGES:
             continue
-        if entry.suffix in (".sps", ".log"):
+        if entry.suffix in (".sps", ".log", ".html"):
             continue
         target = destination / entry.name
         if entry.is_dir():
-            shutil.copytree(entry, target, copy_function=transfer)
+            shutil.copytree(
+                entry, target, copy_function=transfer,
+                ignore=shutil.ignore_patterns("*.html"),
+            )
         else:
             transfer(entry, target)
 
@@ -580,6 +670,14 @@ def run_stack(
     remains the extensionless base for the associated drizzle report.
     Each executed stage starts with an INFO section banner, including optional
     CFA reconstruction, robust realignment and Drizzle capability checks.
+    The preliminary Siril startup/version check is stored in 04_drizzle;
+    it does not exercise the Drizzle resampling commands.
+
+    The initial Siril result is persisted in registration.json before Python
+    filters modify sequence inclusion. selection_flow records independent-frame
+    counts at each selection boundary, with ordered quality/profile substeps;
+    weighting repetitions never enter these counts. The local selection audit
+    separates the complete inventory from poses admissible after registration.
     """
     log_section("Stacking — Alignement initial des images")
     if not siril.run_siril_script(
@@ -590,7 +688,7 @@ def run_stack(
     registration_dir = Path(input_dir)
     quality_dir = reset_stage(Path(work_dir) / "03_quality")
     stacking_dir = reset_stage(Path(work_dir) / "05_stacking")
-    capability_path = reset_stage(Path(work_dir) / "04_capability")
+    capability_path = reset_stage(Path(work_dir) / "04_drizzle")
     copy_stage_inputs(registration_dir, quality_dir)
     input_dir = quality_dir
     try:
@@ -629,22 +727,112 @@ def run_stack(
     records, error, effective_entries = [], None, 0
     geometry_checks = []
     stellar_report = None
+    selection_decisions: list[JSONReport] = []
+    selection_flow: list[JSONReport] = []
+    registered: int | None = None
     try:
-        geometry_checks.append(filter_registration_geometry(image_sequence))
         # Compute quality thresholds on independent exposures, before weighting.
         unique_by_source = {}
         for i, image in enumerate(images):
             unique_by_source.setdefault(str(image.processing_path.resolve()), i)
         unique_indices = list(unique_by_source.values())
         independent_images = [images[i] for i in unique_indices]
+        registration_report = _registration_snapshot(independent_images)
+        registration_path = registration_dir / 'registration.json'
+        registration_temporary = registration_path.with_suffix('.json.tmp')
+        registration_temporary.write_text(json.dumps(
+            registration_report, indent=2, ensure_ascii=False, allow_nan=False,
+        ) + '\n')
+        registration_temporary.replace(registration_path)
+        registered = int(registration_report['aligned_count'])
+        selection_flow.append(dict(
+            stage='registration', label='Registration initiale Siril',
+            input_count=len(independent_images),
+            rejected_count=len(independent_images) - registered,
+            remaining_count=registered,
+        ))
+        geometry_checks.append(filter_registration_geometry(image_sequence))
         valid_registration = [
             image.included and image.registration().valid
             for image in independent_images
         ]
-        unique_selection = quality_mask(independent_images, cfg, valid_registration)
+        after_geometry = int(sum(valid_registration))
+        selection_flow.append(dict(
+            stage='registration_geometry', label='Contrôle géométrique Python',
+            input_count=registered, rejected_count=registered - after_geometry,
+            remaining_count=after_geometry,
+        ))
+        unique_selection = quality_mask(
+            independent_images, cfg, valid_registration, audit=selection_decisions
+        )
+        after_quality = int(unique_selection.sum())
+        filter_steps: list[JSONReport] = []
+        surviving = after_geometry
+        filter_labels = {
+            'max_fwhm': 'Plafond FWHM', 'fwhm_filter': 'Filtre FWHM',
+            'fwhm_reject_percent': 'Pourcentage de rejet FWHM',
+            'roundness_filter': 'Filtre de rondeur',
+            'nbstars_filter': 'Filtre du nombre d’étoiles',
+        }
+        for criterion, label in filter_labels.items():
+            checks = [check for frame in selection_decisions for check in frame['checks']
+                      if check['criterion'] == criterion]
+            rejected = sum(check['status'] == 'FAIL' for check in checks)
+            enabled = any(check['status'] != 'DISABLED' for check in checks)
+            filter_steps.append(dict(
+                stage=criterion, label=label, input_count=surviving,
+                rejected_count=rejected, remaining_count=surviving - rejected,
+                enabled=enabled,
+            ))
+            surviving -= rejected
+        selection_flow.append(dict(
+            stage='quality_filters', label='Filtres qualité sur les mesures Siril',
+            input_count=after_geometry, rejected_count=after_geometry - after_quality,
+            remaining_count=after_quality, children=filter_steps,
+        ))
         stellar_report = filter_stellar_profiles(
             independent_images, unique_selection, cfg
         )
+        after_profiles = int(unique_selection.sum())
+        profile_steps: list[JSONReport] = []
+        profile_survivors = after_quality
+        profile_reasons_seen: set[int] = set()
+        for criterion, label in [('r80', 'Étalement R80'), ('elongation', 'Allongement cohérent')]:
+            rejected_indices = {
+                int(frame['sequence_index']) for frame in stellar_report.get('frames', [])
+                if criterion in frame.get('reasons', [])
+            } - profile_reasons_seen
+            rejected = len(rejected_indices)
+            profile_steps.append(dict(
+                stage=criterion, label=label, input_count=profile_survivors,
+                rejected_count=rejected, remaining_count=profile_survivors - rejected,
+                enabled=bool(stellar_report.get('enabled')),
+            ))
+            profile_survivors -= rejected
+            profile_reasons_seen.update(rejected_indices)
+        selection_flow.append(dict(
+            stage='stellar_profiles', label='Contrôle des profils stellaires',
+            input_count=after_quality, rejected_count=after_quality - after_profiles,
+            remaining_count=after_profiles, children=profile_steps,
+        ))
+        profiles_by_index = {frame['sequence_index']: frame
+                             for frame in stellar_report.get('frames', [])}
+        geometry_reasons = {str(Path(frame['filename']).resolve()): frame['reason']
+                            for frame in geometry_checks[0].get('rejected', [])}
+        for index, frame in enumerate(selection_decisions):
+            if frame['source'] in geometry_reasons:
+                frame['geometry_reason'] = geometry_reasons[frame['source']]
+            profile = profiles_by_index.get(index)
+            if profile is not None:
+                frame['profile'] = {key: value for key, value in profile.items()
+                                    if key not in ('stars', 'group')}
+                if profile['status'] == 'rejected':
+                    frame['reasons'].extend(profile.get('reasons', []))
+            frame['profile_status'] = (
+                profile['status'] if profile is not None else
+                'DISABLED' if not stellar_report.get('enabled') else 'SKIPPED'
+            )
+            frame['status'] = 'accepted' if unique_selection[index] else 'rejected'
         logging.info(
             "Sélection qualité — bilan : %d image(s) retirée(s), %d/%d restante(s)",
             len(independent_images) - int(unique_selection.sum()),
@@ -749,28 +937,30 @@ def run_stack(
         supported = siril.run_siril_script(
             f"cd {capability_dir}\nclose",
             str(capability_dir),
-            script_name="03_capability.sps",
+            script_name="04_drizzle.sps",
         )
         if not supported:
             raise RuntimeError(
                 "La vérification de compatibilité Drizzle a échoué ; "
-                f"consulter {capability_dir / '03_capability.log'}"
+                f"consulter {capability_dir / '04_drizzle.log'}"
             )
     if capability_dir is None:
-        (capability_path / "SKIPPED.txt").write_text(
-            "Étape non exécutée : Drizzle non sélectionné après analyse qualité.\n"
+        write_skipped_drizzle(
+            capability_path / "SKIPPED.txt", decision, analysis_error=error,
         )
     decision["siril_drizzle_supported"] = supported
     report = dict(
-        schema_version=1,
+        schema_version=2,
         quality_pipeline_version=QUALITY_PIPELINE_VERSION,
         geometry_checks=geometry_checks,
+        selection_decisions=selection_decisions,
+        selection_flow=selection_flow,
         stellar_profiles=dict(
             report=str(quality_dir / "stellar_profiles.json"),
             **{
                 k: v
                 for k, v in stellar_report.items()
-                if k not in ("frames", "references")
+                if k != "frames"
             },
         )
         if stellar_report is not None
@@ -801,7 +991,34 @@ def run_stack(
     report_path = Path(str(output_path) + ".drizzle.json")
 
     def save() -> None:
-        """Persiste le diagnostic Drizzle et les réglages du stack courant."""
+        """Persiste diagnostics, décisions et effectifs par étape sans les recalculer."""
+        final = report.get('final_selection')
+        if isinstance(final, dict) and isinstance(final.get('sources'), list):
+            final_sources = set(final['sources'])
+            for frame in selection_decisions:
+                frame['final_status'] = 'retained' if frame['source'] in final_sources else 'excluded'
+        selected_records = {record['source']: record for record in records}
+        for frame in selection_decisions:
+            record = selected_records.get(frame['source'])
+            if record is not None:
+                frame['weighting'] = {key: record[key] for key in (
+                    'roundness_multiplicity', 'fwhm_multiplicity',
+                    'quality_multiplicity', 'effective_stack_entries') if key in record}
+        decisions_path = quality_dir / 'selection_decisions.json'
+        decisions_temporary = decisions_path.with_suffix('.json.tmp')
+        decisions_temporary.write_text(json.dumps(
+            dict(schema_version=2, stage='pre_stack_selection', frames=selection_decisions,
+                 input_count=registered, inventory_count=metadata['unique_inputs'],
+                 selection_flow=selection_flow,
+                 profile_references=stellar_report.get('references', []) if stellar_report else [],
+                 complete=error is None, error=error),
+            indent=2, ensure_ascii=False, allow_nan=False) + '\n')
+        decisions_temporary.replace(decisions_path)
+        stacked_audit = stacking_dir / decisions_path.name
+        if stacked_audit.exists():
+            stacked_temporary = stacked_audit.with_suffix('.json.tmp')
+            stacked_temporary.write_bytes(decisions_path.read_bytes())
+            stacked_temporary.replace(stacked_audit)
         temporary = report_path.with_suffix(".json.tmp")
         temporary.write_text(
             json.dumps(report, indent=2, ensure_ascii=False, allow_nan=False) + "\n"
@@ -909,7 +1126,7 @@ def run_stack(
     def execute(lines: Sequence[str], script_name: str) -> bool:
         """Exécute une étape Siril nommée et indique son succès."""
         return siril.run_siril_script(
-            "\n".join([f"cd {stacking_dir}", "setext fits", *lines, "close"]),
+            "\n".join([f"cd {stacking_dir}", *lines, "close"]),
             str(stacking_dir),
             script_name=script_name,
         )
@@ -925,9 +1142,35 @@ def run_stack(
         nonlocal allowed
         try:
             aligned = SirilSequence.read(stacking_dir / f"{new_prefix}.seq")
+            eligible_sources = {sources_by_number[number] for number in allowed
+                                if number in sources_by_number}
             check = filter_registration_geometry(aligned, allowed_numbers=allowed)
+            rejected_by_source = {
+                sources_by_number[frame['number']]: frame['reason']
+                for frame in check['rejected'] if frame['number'] in sources_by_number
+            }
+            for frame in selection_decisions:
+                active = frame['source'] in eligible_sources
+                reason = rejected_by_source.get(frame['source'])
+                frame['checks'].append(dict(
+                    criterion='registration_geometry', stage=new_prefix,
+                    status='SKIPPED' if not active else 'FAIL' if reason else 'PASS',
+                    rule='Transformation valide et échelles locales autorisées',
+                    threshold=dict(min_scale=check['min_scale'], max_scale=check['max_scale']),
+                    reason=reason,
+                ))
+                if active and reason:
+                    frame['reasons'].append(reason)
             geometry_checks.append(check)
             allowed = {image.number for image in aligned.images if image.included}
+            surviving_sources = {sources_by_number[number] for number in allowed
+                                 if number in sources_by_number}
+            selection_flow.append(dict(
+                stage='registration_geometry', label='Contrôle géométrique : ' + new_prefix,
+                input_count=len(eligible_sources),
+                rejected_count=len(eligible_sources - surviving_sources),
+                remaining_count=len(eligible_sources & surviving_sources),
+            ))
             save()
             if not allowed:
                 raise ValueError("aucune image après contrôle géométrique")

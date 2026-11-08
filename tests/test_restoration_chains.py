@@ -30,7 +30,7 @@ def test_all_chains_are_evaluated_and_intermediates_cached(
     if numbered:
         (tmp_path / "01_calibration").mkdir()
         report = tmp_path / "04_restoration/restoration.json"
-        work = report.parent / "01_chains"
+        work = report.parent
     source = tmp_path / "source.fits"
     data = np.random.default_rng(1).normal(0.1, 0.001, (128, 128)).astype("float32")
     data[0, 0] = 0
@@ -79,6 +79,9 @@ def test_all_chains_are_evaluated_and_intermediates_cached(
     def final(self, original, candidate, reference, work, args, operations):
         """La meilleure sortie finale n’est pas celle des meilleurs scores locaux."""
         assert original == source
+        assert work.name == "verification_finale"
+        assert work.parent == candidate.parent
+        assert args._restoration_reference_catalog.parent.name == "00_mask_origine"
         masks.append(reference.mask_fingerprint)
         value = int(round(fits.getdata(candidate)[0, 0]))
         finals.append(value)
@@ -94,6 +97,8 @@ def test_all_chains_are_evaluated_and_intermediates_cached(
     result = RestorationChainProcessor().post_process(
         source, report, args
     )
+    assert (report.parent / "index.html").is_file()
+    assert (work / "00_mask_origine/index.html").is_file()
     assert len(result["variants"]) == variants
     assert result["operation_count"] == operations == len(calls)
     assert len(finals) == variants - 1
@@ -133,6 +138,7 @@ def test_all_chains_are_evaluated_and_intermediates_cached(
     assert Path(result["quality_preview_path"]).name == "common_masks.png"
     assert Path(result["quality_preview_path"]).parent == work / "00_mask_origine"
     assert not (work / "001").exists()
+    assert not list(work.glob("final_*"))
     assert any(work.glob("*_denoise_*/*.fits"))
     assert not list(work.glob("[0-9][0-9]_*.fits"))
     assert not list(work.glob("[0-9][0-9]_*.json"))
@@ -148,6 +154,9 @@ def test_all_chains_are_evaluated_and_intermediates_cached(
     for operation in result["operations"]:
         operation_report = Path(operation["report_path"])
         assert operation_report.is_file()
+        local_text = Path(operation["verification_path"])
+        assert local_text.parent == operation_report.parent
+        assert "VÉRIFICATIONS LOCALES" in local_text.read_text()
         assert Path(operation["result_image_path"]) == operation_report.with_suffix(".fits")
         assert operation["result_image_role"] == "accepted_output"
         assert Path(operation["result_image_path"]).is_file()
@@ -164,6 +173,13 @@ def test_all_chains_are_evaluated_and_intermediates_cached(
     written_masks = {str(path) for path in work.rglob("*masks.fits")}
     assert used_masks == written_masks
     assert len(written_masks) < len(result["operations"])
+    for variant in result["variants"]:
+        if variant["chain"]:
+            final_text = Path(variant["verification_path"])
+            assert final_text.parent.parent == Path(variant["output_image"]).parent
+            assert "VÉRIFICATIONS FINALES" in final_text.read_text()
+            assert (final_text.parent / "verification.json").is_file()
+            assert str(final_text) in Path(result["summary_path"]).read_text()
     messages = [record.getMessage() for record in caplog.records]
     titles = [message for message in messages if message.startswith((
         "Restauration — Préparation", "Restauration — Calcul ",
@@ -284,13 +300,15 @@ def test_final_catalogs_use_relative_siril_output_names(tmp_path, monkeypatch):
             candidate,
             reference,
             tmp_path / name,
-            argparse.Namespace(),
+            argparse.Namespace(
+                _restoration_reference_catalog=tmp_path / "00_mask_origine/common_reference.tsv",
+            ),
             ("denoise",),
         )
         assert result["status"] == "accepted"
         assert result["criteria"]["noise"]["status"] == "PASS"
         assert result["criteria"]["global_noise_reduction"]["value"] == 0.5
-    assert (tmp_path / "common_reference.tsv").is_file()
+    assert (tmp_path / "00_mask_origine/common_reference.tsv").is_file()
     assert sum("reference.tsv" in script for script in scripts) == 1
 
 
@@ -419,3 +437,37 @@ def test_local_and_global_exclusions_keep_child_audit_and_summary(
     assert "checkpoint incompatible" in text and "stellar_rings" in text
     assert "rings=FAIL ; value=0.12 ; threshold=0.1" in text
     assert "calcul #1 réutilisé" in text
+
+
+@pytest.mark.parametrize('operations,expected', [
+    (('sharpen',), .2 + .4 + .1 - .02 - .04),
+    (('denoise',), .1 - .02 - .04),
+    (('denoise', 'sharpen'), .2 + .4 + .1 - .02 - .04),
+])
+def test_final_score_decomposition_preserves_existing_formula(
+    operations: tuple[str, ...], expected: float,
+) -> None:
+    """Les termes expliquent exactement le score, sans double comptage du gain bruit."""
+    details = RestorationChainProcessor.score_details(
+        dict(before_fwhm_px={'mean': 4}, after_fwhm_px={'mean': 3.6},
+             paired_ratio={'median': .8}),
+        dict(noise={'proven_gain': .1}, max_ring_fraction=.1, max_noise_ratio=1.2),
+        operations,
+    )
+    assert details['total'] == pytest.approx(expected)
+    assert sum(details['contributions'].values()) == pytest.approx(expected)
+    assert details['fwhm_mean_ratio'] == .9
+    assert details['contributions']['rings'] == pytest.approx(-.02)
+    assert details['contributions']['excess_noise'] == pytest.approx(-.04)
+
+
+def test_score_does_not_present_missing_noise_gain_as_measured_zero() -> None:
+    """Un gain absent reste inconnu dans les mesures, avec une contribution nulle."""
+    details = RestorationChainProcessor.score_details(
+        dict(before_fwhm_px={'mean': 4}, after_fwhm_px={'mean': 4},
+             paired_ratio={'median': 1}),
+        dict(noise={}, max_ring_fraction=0, max_noise_ratio=None), ('denoise',),
+    )
+    assert details['useful_noise_gain'] is None
+    assert details['contributions']['useful_noise_gain'] == 0
+    assert details['total'] == 0

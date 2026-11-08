@@ -321,7 +321,7 @@ class SirilStarDetectionProcessor(QualityProcessor):
         """Exécute setfindstar/findstar sans modifier les FITS ni leurs métadonnées."""
         from lib.deconvolution import _quote
 
-        lines = [f'cd {_quote(self.work_dir)}', 'setext fits', 'set32bits']
+        lines = [f'cd {_quote(self.work_dir)}', 'set32bits']
         for image, catalog in self.images:
             lines += [
                 f'load {_quote(image)}', 'setfindstar reset',
@@ -356,7 +356,11 @@ class StellarAssessmentProcessor(QualityProcessor):
         return (SirilStarDetectionProcessor, StarComparisonProcessor)
 
     def _process(self, args: argparse.Namespace) -> JSONReport:
-        """Réutilise le catalogue commun puis mesure le candidat sans autre calcul d'image."""
+        """Réutilise le catalogue commun puis mesure le candidat sans autre calcul d'image.
+
+        L’orchestrateur peut désigner son catalogue partagé via
+        _restoration_reference_catalog ; sinon le parent du dossier est utilisé.
+        """
         from astropy.io import fits
         from shutil import copyfile
         from lib.siril import Siril
@@ -366,7 +370,11 @@ class StellarAssessmentProcessor(QualityProcessor):
             raise ValueError('Une image candidate est requise pour le contrôle stellaire')
         work = self.work_dir
         work.mkdir(parents=True, exist_ok=True)
-        before, after = work.parent / 'common_reference.tsv', work / 'final.tsv'
+        before = Path(getattr(
+            args, "_restoration_reference_catalog", work.parent / "common_reference.tsv",
+        ))
+        before.parent.mkdir(parents=True, exist_ok=True)
+        after = work / "final.tsv"
         staged_reference = work / 'reference.tsv'
         needs_reference = not before.is_file()
         images = [(candidate, after)]

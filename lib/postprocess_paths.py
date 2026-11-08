@@ -44,13 +44,15 @@ def reset_restoration_work_dir(
     """Prépare un dossier direct et protège l'entrée avant toute suppression.
 
     Dans un objet numéroté (04_restoration et marqueur 01_calibration), les
-    chaînes utilisent 01_chains et les moteurs le nom de leur rapport, sans
+    chaînes utilisent directement 04_restoration et les moteurs leur rapport, sans
     suffixe _work. Les appels autonomes conservent <rapport>_work, sans 001.
     ``prepared_directory`` désigne un dossier déjà nettoyé par l’orchestrateur,
     contenant les masques et le rapport : il est conservé pour éviter de les
     supprimer à l’initialisation du moteur. Il doit être le parent du rapport
     et ne pas contenir la source, sinon ValueError est levée.
-    Les opérations et leurs essais restent isolés. Une source dans le dossier
+    À la racine numérotée, seuls les dossiers de produits connus sont nettoyés
+    (masques, essais, anciennes enveloppes) ; rapports et fichiers voisins sont
+    conservés. Les opérations et leurs essais restent isolés. Une source dans le dossier
     réinitialisé est refusée avec ValueError ; les erreurs d'accès sont propagées.
     """
     report, source = Path(report_path).resolve(), Path(input_path).resolve()
@@ -65,10 +67,21 @@ def reset_restoration_work_dir(
         and (parent.parent / "01_calibration").is_dir()
         for parent in report.parents
     )
-    name = f"{report.stem}_work"
-    if numbered:
-        name = ("01_chains" if report.parent.name == "04_restoration"
-                and report.stem == "restoration" else report.stem)
+    if numbered and report.parent.name == "04_restoration" and report.stem == "restoration":
+        work = report.parent
+        if source.is_relative_to(work):
+            raise ValueError("L’entrée se trouve dans le dossier de travail réinitialisé")
+        work.mkdir(parents=True, exist_ok=True)
+        # Nettoyer seulement les produits identifiés, jamais la racine ni ses voisins.
+        for entry in work.iterdir():
+            owned = entry.name in {"00_mask_origine", "01_chains", "diagnostics", "001"}
+            owned = owned or re.match(r"^\d{2,}_(?:denoise|sharpen)_", entry.name)
+            if owned and entry.is_symlink():
+                entry.unlink()
+            elif owned and entry.is_dir():
+                shutil.rmtree(entry)
+        return work
+    name = report.stem if numbered else f"{report.stem}_work"
     work = report.parent / name
     if source.is_relative_to(work.resolve()):
         raise ValueError("L’entrée se trouve dans le dossier de travail réinitialisé")

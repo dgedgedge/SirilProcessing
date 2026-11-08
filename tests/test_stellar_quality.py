@@ -201,3 +201,22 @@ def test_pixel_filter_excludes_defects_before_stacking(
     final = json.loads((tmp_path/'final.drizzle.json').read_text())
     assert final['stellar_profiles']['rejected'] == 2
     assert final['quality_selection']['independent_retained'] == 10
+
+
+def test_profile_thresholds_are_stored_once_per_comparable_group() -> None:
+    """Les poses référencent des seuils communs, différents selon le groupe."""
+    first = [measured_frame(r80=4) for _ in range(8)]
+    second = [measured_frame(r80=8) for _ in range(8)]
+    for frame in second:
+        frame['group'][7] = 1100
+    unmatched = measured_frame()
+    unmatched['group'][7] = 1600
+    references = classify_stellar_profiles(first + second + [unmatched], {})
+    assert [reference['reference_id'] for reference in references] == [1, 2]
+    assert references[0]['r80']['limit'] == 5
+    assert references[1]['r80']['limit'] == 10
+    assert all(frame['reference_id'] == 1 for frame in first)
+    assert all(frame['reference_id'] == 2 for frame in second)
+    assert all('limits' not in frame for frame in first + second + [unmatched])
+    assert unmatched['status'] == 'insufficient_reference'
+    assert 'reference_id' not in unmatched

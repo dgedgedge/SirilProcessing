@@ -81,3 +81,7 @@ propose les pivots aux ruptures de pente pour les
 `output_layout.py` centralise les étapes numérotées, l’identité stable des panneaux
 et le relais physique `02_mosaic/image.fits` ; voir
 [le plan des sorties](../scripts/lightProcess/output-layout.md).
+
+`processing_html.py` publie les index hors ligne des résultats et leurs
+aperçus, sans relancer les moteurs ni lire les pixels FITS. Voir les
+[index de traitement](../scripts/lightProcess/html-reports.md).

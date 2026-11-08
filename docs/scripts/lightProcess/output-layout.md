@@ -15,6 +15,7 @@ de premier niveau sont fixes, sans préfixe d'objet répété :
 
 ```text
 M31/
+  index.html                      # accueil des résultats, images finales et exports
   01_calibration/
     calibration.json
     calibration.txt
@@ -38,18 +39,22 @@ M31/
     02_photometrie/                # scripts et journaux, sans niveau 001
   04_restoration/
     restoration.json
-    01_chains/
-      00_mask_origine/
-        common_masks.fits         # entrée des premiers traitements
-        common_masks.png
-      01_denoise_siril/            # exemple ; ordre selon les moteurs actifs
-        01_denoise_siril.json
-        01_denoise_siril.fits
-        01_denoise_siril_masks.fits # si ce résultat sert d’entrée ensuite
-        01_denoise_siril_masks.png
-        ...                       # scripts, candidats et résultat de cet essai
-      09_denoise_graxpert_then_sharpen_siril/  # exemple d’essai enchaîné
-    diagnostics/
+    restoration_summary.txt       # toutes les vérifications et le classement
+    00_mask_origine/
+      common_masks.fits         # entrée des premiers traitements
+      common_masks.png
+    01_denoise_siril/            # exemple ; ordre selon les moteurs actifs
+      01_denoise_siril.json
+      01_denoise_siril.fits
+      01_denoise_siril_masks.fits # si ce résultat sert d’entrée ensuite
+      01_denoise_siril_masks.png
+      verifications_locales.txt
+      verification_finale/
+        verifications.txt
+        verification.json
+        ...                     # catalogues, scripts et journaux finaux
+      ...                       # scripts, candidats et résultat de cet essai
+    09_denoise_graxpert_then_sharpen_siril/  # exemple d’essai enchaîné
   05_autoghs/
     autoghs.json
     render.fits                   # rendu GHS conservé avec la passe couleur
@@ -119,7 +124,7 @@ Les parcours et les chemins sont vérifiés par les tests avec moteurs simulés.
 Les temporaires de calibration et de stacking suivent le même regroupement
 sous `<work-dir>/<objet>/01_calibration/`, avec les mêmes panneaux. Les acquisitions sont sous `01_session/`. Les étapes du stack sont directement
 au même niveau : `02_registration/`, `03_quality/`,
-`04_capability/` et `05_stacking/`, avec `stacking.log` à leur racine. Les calculs de mosaïque,
+`04_drizzle/` et `05_stacking/`, avec `stacking.log` à leur racine. Les calculs de mosaïque,
 leurs gradients et leurs fichiers Siril sont sous le dossier de sortie
 `02_mosaic`, conformément au relais visible. `--output` est donc respecté aussi
 en mosaïque. `--keep-intermediate` conserve ses règles de nettoyage.
@@ -128,7 +133,7 @@ La photométrie inclut la correction initiale de gradient dans son sous-dossier
 `01_gradient/`. Si la comparaison de chaînes de restauration est désactivée,
 les moteurs sont rangés sous `04_restoration/01_deconvolution/` et
 `04_restoration/02_denoise/`. La comparaison complète utilise
-`04_restoration/01_chains/`, avec un dossier direct par opération, sans
+`04_restoration/`, avec un dossier direct par opération, sans
 suffixe `_work` ni niveau `001` ; voir les [chaînes de restauration](../postProcess/quality.md).
 
 `--autoghs-only` et `--color-only` retrouvent le relais avec le manifeste situé
@@ -166,3 +171,6 @@ sources, panneaux réordonnés, reprises GHS/couleur, étapes alternatives,
 synthèses localisées, noms génériques et rejet de plusieurs entrées sans
 mosaïque. Ces tests ne remplacent pas une nouvelle exécution avec Siril sur
 une mosaïque réelle ; les données M31/M33 existantes n'ont pas été déplacées.
+
+Chaque niveau dispose d’un `index.html` avec audits et aperçus JPEG/PNG.
+Voir les [index HTML et leur régénération](html-reports.md).

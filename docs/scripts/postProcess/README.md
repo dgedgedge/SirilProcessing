@@ -741,3 +741,8 @@ en conservant une représentation spatiale et par tailles sur la référence.
 Dans l’arborescence numérotée de lightProcess, les scripts et journaux
 photométriques sont directement sous `03_photometrie/02_photometrie/`,
 sans sous-dossier `001`. Le rapport reste `03_photometrie/photometry.json`.
+
+Les résultats sont également consultables dans les
+[index HTML hiérarchiques](../lightProcess/html-reports.md), avec aperçus
+JPEG/PNG, rapports et liens FITS. Le parent du rapport global porte l’accueil
+en mode autonome ; le plan numéroté conserve l’accueil à la racine de l’objet.

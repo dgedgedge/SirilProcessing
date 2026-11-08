@@ -123,6 +123,8 @@ def test_every_session_is_stacked_with_all_its_calibrations(
     assert all(parents[child] == root for child in children)
     assert run([root], *(['--force-stacking'] if force else [])) == 0
     stack.assert_called_once()
+    assert (tmp_path / "out/field/index.html").is_file()
+    assert (tmp_path / "work/field/index.html").is_file()
     call = stack.call_args.kwargs
     stack_args = call['args']
     assert call['output_path'] == tmp_path / 'out/field/01_calibration/stack_combined.fits'
@@ -506,7 +508,8 @@ def test_lightprocess_executes_common_exports_after_stack(
     assert final.read_bytes() == Path(result["gradient"]["output_image"]).read_bytes()
     assert source.is_file() and not final.with_suffix(".jpg").exists()
     work = directory
-    assert (work / "04_restoration/diagnostics/quality_masks.png").is_file()
+    assert not (work / "04_restoration/diagnostics").exists()
+    assert not (work / "04_restoration/01_chains").exists()
     assert (work / "06_color/postprocess.log").is_file()
     log = (work / "06_color/postprocess.log").read_text(encoding="utf-8")
     assert "Début du post-traitement : image.fits" in log

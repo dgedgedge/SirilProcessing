@@ -99,7 +99,6 @@ class _DenoisingExecution:
         return "\n".join(
             [
                 f"cd {_quote(self.work)}",
-                "setext fits",
                 "set32bits",
                 f"load {_quote(self.source)}",
                 f"denoise -vst -mod={self.modulation:g}",

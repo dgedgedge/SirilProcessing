@@ -399,3 +399,29 @@ Points de référence :
 - [lib/drizzle.py](../../../../../lib/drizzle.py) : lecture des mesures Siril, orchestration du stack et diagnostic Drizzle ;
 - [tests/test_quality_filter.py](../../../../../tests/test_quality_filter.py), [tests/test_drizzle.py](../../../../../tests/test_drizzle.py) et [tests/test_lightprocessor_calibration.py](../../../../../tests/test_lightprocessor_calibration.py) : vérification des comportements ;
 - [Spécification Drizzle](DRIZZLE_SPECIFICATION.md) : diagnostic et rééchantillonnage.
+
+## Traçabilité des décisions par pose
+
+La sélection Python enregistre ses décisions au moment où elle les applique,
+dans `03_quality/selection_decisions.json` et dans `selection_decisions` du
+rapport `*.drizzle.json`. Chaque pose indépendante conserve son identité, les
+mesures Siril, les filtres dans leur ordre réel, leurs seuils calculés, le
+verdict et les motifs. Les filtres désactivés sont distincts des contrôles
+non exécutés après un rejet. Le classement proportionnel FWHM conserve le rang
+et le nombre à retenir, y compris en cas d’égalité des mesures.
+
+Les profils stellaires, les contrôles géométriques ultérieurs, la pondération
+et la sélection finale complètent cet audit. Le résultat de sélection ne
+signifie pas à lui seul que l’empilement a réussi. Les index présentent ces
+données sans recalculer les décisions ni proposer les JSON au téléchargement.
+Un rapport ancien sans audit par pose reste explicitement incomplet ; une
+régénération HTML seule ne recrée pas les décisions manquantes. La version du
+pipeline qualité est augmentée pour invalider les diagnostics précédents lors
+d’un nouveau traitement.
+
+Le rapport `02_registration/registration.json` conserve désormais la sortie
+Siril avant les filtres Python. `selection_flow` sépare ensuite les effectifs
+de registration, géométrie, filtres qualité et profils, avec sous-étapes et
+retraits successifs. Dans l’audit qualité, `input_count` compte les poses
+admissibles après registration ; `inventory_count` compte toutes les poses
+référencées, y compris celles déjà exclues par Siril.

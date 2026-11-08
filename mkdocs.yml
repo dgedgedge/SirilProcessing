@@ -39,6 +39,7 @@ nav:
               - Alignement et stacking: docs/scripts/lightProcess/treatments/STACKING.md
               - Mosaïque: docs/scripts/lightProcess/MOSAIC.md
           - Arborescence des sorties: docs/scripts/lightProcess/output-layout.md
+          - Index HTML des résultats: docs/scripts/lightProcess/html-reports.md
           - Sorties et journaux: docs/scripts/lightProcess/treatments/OUTPUTS.md
           - Références:
               - Espace de travail: docs/scripts/lightProcess/WORKSPACE.md

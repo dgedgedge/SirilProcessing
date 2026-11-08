@@ -16,6 +16,7 @@ et le détail des traitements effectués.
 
 - [Guide d’utilisation](GUIDE.md) : commandes, options et vue d’ensemble du parcours.
 - [Arborescence numérotée des sorties](output-layout.md).
+- [Index HTML des résultats et régénération](html-reports.md).
 - [Sessions et sous-sessions](SESSIONS.md) : organisation des données d’entrée.
 
 <a id="options-et-configuration"></a>

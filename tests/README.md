@@ -632,7 +632,7 @@ d’une entrée placée dans ce dossier. Les appels Siril sont simulés.
 Les dossiers de restauration sont vérifiés dans `test_postprocess_paths.py`
 (noms numérotés, isolation des opérations, nettoyage et sources protégées).
 Les tests des moteurs contrôlent les artefacts directs sans `001` ; ceux des
-chaînes vérifient aussi le regroupement `04_restoration/01_chains`.
+chaînes vérifient aussi le regroupement `04_restoration`.
 
 Les tests du rendu GHS vérifient les étapes nommées `01_separation` à
 `05_diagnostics`, le nettoyage des anciens niveaux `001` lors des relances
@@ -672,3 +672,35 @@ Les essais de chaînes conservent un FITS effectif auprès de leur rapport. Les
 tests contrôlent la sortie acceptée, la copie exacte de l’entrée en cas de
 rejet ou sans amélioration sûre, et l’absence de résultat artificiel en échec.
 Les audits distinguent `accepted_output` et `retained_input`.
+
+Les tests Drizzle vérifient que SKIPPED.txt décrit les décisions, mesures et
+seuils du rapport JSON. Les contrôles finaux sont rangés auprès du traitement
+évalué, avec textes et JSON, et restent liés par la synthèse globale.
+
+`test_processing_html.py` contrôle les index HTML hiérarchiques, aperçus
+JPEG/PNG et liens FITS, audits incomplets, protection des index étrangers,
+conservation des sources et reprise des stacks malgré la génération HTML.
+La préparation commune Siril est vérifiée dans `test_siril_validation.py`.
+Les transferts scientifiques omettent les pages HTML, même imbriquées.
+
+Dans le plan numéroté, les essais de restauration et `00_mask_origine` sont
+directement sous `04_restoration`, sans `01_chains` ni `diagnostics`. Les tests
+des chemins vérifient le nettoyage ciblé des produits et la conservation des
+rapports et fichiers voisins. Les tests de pipeline vérifient l’absence de
+nouvelle génération de diagnostics dans ce parcours.
+
+Les tests de restauration vérifient la décomposition du score existant
+(termes FWHM, gain utile, pénalités bruit/anneaux), les égalités et écarts du
+classement des chaînes acceptées, la conservation de la référence à score zéro
+et les mesures absentes. Les tests HTML vérifient le tableau de classement
+et l’extraction visible des statuts, paramètres, valeurs, seuils et motifs JSON.
+
+Les tests de sélection qualité couvrent aussi la trace par pose : seuils
+effectifs, rangs et égalités, contrôles désactivés ou non évalués après rejet,
+mesures non finies, profils et sélection finale. Les tests Drizzle vérifient
+la persistance dans les deux rapports JSON ; les tests HTML vérifient leur
+présentation et la distinction des audits anciens sans décisions détaillées.
+
+Les seuils de profils sont testés avec plusieurs groupes comparables : stockage
+unique dans les références, identifiant par pose, groupe insuffisant sans seuil,
+lecture des anciens `limits` et affichage des limites avant les tableaux.

@@ -13,7 +13,7 @@ import numpy as np
 from astropy.io import fits
 
 from lib.siril import SequenceImage, SirilSequence
-from lib.type_defs import ConfigMap, JSONReport
+from lib.type_defs import ConfigMap, JSONReport, JSONValue
 
 
 def filter_registration_geometry(
@@ -136,16 +136,72 @@ def quality_mask(
     rows: Sequence[SequenceImage | tuple[np.ndarray, np.ndarray]],
     cfg: ConfigMap,
     included: Sequence[bool] | np.ndarray | None = None,
+    audit: list[JSONReport] | None = None,
 ) -> np.ndarray:
-    """Explicit selection shared by diagnostics and seqapplyreg -filter-included."""
+    """Sélectionne les poses et trace chaque décision effective si demandé.
+
+    ``audit`` reçoit un enregistrement par pose, dans l'ordre des entrées, avec
+    ses mesures et les contrôles successifs. Un filtre désactivé est DISABLED ;
+    une pose déjà exclue est SKIPPED, jamais présentée comme réévaluée. Les
+    seuils sont ceux calculés sur les survivantes au moment du contrôle.
+    Le masque et l'ordre historique des filtres restent inchangés.
+    """
     if not rows:
         raise ValueError("Aucune transformation disponible")
     values = np.array(
         [r.registration().values if hasattr(r, "registration") else r[0] for r in rows]
     )
+    if audit is not None:
+        audit.clear()
+        for index, row in enumerate(rows):
+            measurements = {
+                name: float(values[index, column]) if np.isfinite(values[index, column]) else None
+                for name, column in [('fwhm', 0), ('weighted_fwhm', 1),
+                                     ('roundness', 2), ('nbstars', 5)]
+            }
+            audit.append(dict(
+                sequence_index=index,
+                source=str(row.processing_path.resolve()) if hasattr(row, 'processing_path') else None,
+                number=int(row.number) if hasattr(row, 'number') else index + 1,
+                measurements=measurements, checks=[], reasons=[],
+            ))
+
+    def trace(
+        criterion: str, active: np.ndarray, column: int | None,
+        rule: str, threshold: JSONValue = None, *, enabled: bool = True,
+        ranks: dict[int, int] | None = None,
+    ) -> None:
+        """Enregistre le verdict après mise à jour du masque, sans le modifier."""
+        if audit is None:
+            return
+        for index, frame in enumerate(audit):
+            status = ('DISABLED' if not enabled else 'SKIPPED' if not active[index]
+                      else 'PASS' if mask[index] else 'FAIL')
+            value = (float(values[index, column]) if column is not None
+                     and np.isfinite(values[index, column]) else None)
+            check = dict(criterion=criterion, status=status, rule=rule,
+                         value=value, threshold=threshold)
+            if ranks is not None:
+                check['rank'] = ranks.get(index)
+            frame['checks'].append(check)
+            if status == 'FAIL':
+                frame['reasons'].append(criterion)
+            frame['status'] = 'accepted' if mask[index] else 'rejected'
+
     mask = np.isfinite(values).all(axis=1) & (values[:, 0] > 0)
     if included is not None:
         mask &= np.asarray(included, dtype=bool)
+    trace('registration_validity', np.ones(len(rows), dtype=bool), None,
+          'Mesures finies, FWHM positive et pose incluse après contrôle géométrique')
+    if audit is not None:
+        for index, frame in enumerate(audit):
+            frame['checks'][0]['inputs'] = dict(
+                finite_measurements=bool(np.isfinite(values[index]).all()),
+                positive_fwhm=bool(values[index, 0] > 0),
+                included=bool(included[index]) if included is not None else True,
+                registration_valid=bool(rows[index].registration().valid)
+                if hasattr(rows[index], 'registration') else None,
+            )
     logging.info(
         "Sélection qualité — mesures valides : %d image(s) retirée(s), %d/%d restante(s)",
         len(rows) - int(mask.sum()),
@@ -158,6 +214,7 @@ def quality_mask(
             "Plafond FWHM invalide : valeur finie positive ou nulle requise"
         )
     before = int(mask.sum())
+    active = mask.copy()
     if max_fwhm > 0:
         mask &= values[:, 0] <= max_fwhm
         logging.info(
@@ -173,6 +230,8 @@ def quality_mask(
             before,
             before,
         )
+    trace('max_fwhm', active, 0, 'value <= threshold', max_fwhm,
+          enabled=max_fwhm > 0)
     labels = {
         "fwhm_filter": "FWHM pondérée",
         "fwhm_reject_percent": "FWHM proportionnelle",
@@ -187,6 +246,7 @@ def quality_mask(
     ]:
         raw = str(cfg.get(key, "none")).strip().lower()
         before = int(mask.sum())
+        active = mask.copy()
         if key == "fwhm_reject_percent":
             percent = float(cfg.get(key, 0) or 0)
             if not np.isfinite(percent) or not 0 <= percent <= 95:
@@ -200,9 +260,8 @@ def quality_mask(
             else:
                 indices = np.flatnonzero(mask)
                 keep = min(before, max(2, int(np.ceil(before * (1 - percent / 100)))))
-                rejected = indices[
-                    np.argsort(values[indices, column], kind="stable")[keep:]
-                ]
+                ordered = indices[np.argsort(values[indices, column], kind="stable")]
+                rejected = ordered[keep:]
                 mask[rejected] = False
                 logging.info(
                     "Sélection qualité — FWHM proportionnelle : %d image(s) retirée(s), %d/%d restante(s) ; rejet %.3f%%",
@@ -211,6 +270,10 @@ def quality_mask(
                     before,
                     percent,
                 )
+            trace(key, active, column, 'stable_rank <= retained_count',
+                  dict(percent=percent, retained_count=keep if percent else before),
+                  enabled=percent > 0,
+                  ranks={int(index): rank for rank, index in enumerate(ordered, 1)} if percent else None)
             continue
         if raw in ("none", "off", "false", "0", ""):
             logging.info(
@@ -219,6 +282,7 @@ def quality_mask(
                 before,
                 before,
             )
+            trace(key, active, column, 'Filtre désactivé', enabled=False)
             continue
         sample = values[mask, column]
         if not len(sample):
@@ -226,6 +290,7 @@ def quality_mask(
                 "Sélection qualité — %s : aucune image à évaluer, 0 image(s) retirée(s), 0/0 restante(s)",
                 labels[key],
             )
+            trace(key, active, column, 'Aucune pose survivante')
             continue
         if key == "nbstars_filter":
             median, tolerance = star_count_bounds(sample, raw)
@@ -241,6 +306,9 @@ def quality_mask(
                 median - tolerance,
                 median + tolerance,
             )
+            trace(key, active, column, 'lower <= value <= upper',
+                  dict(median=median, tolerance=tolerance,
+                       lower=median - tolerance, upper=median + tolerance))
             continue
         if raw.endswith("k"):
             median = np.median(sample)
@@ -263,6 +331,8 @@ def quality_mask(
             ">=" if lower else "<=",
             limit,
         )
+        trace(key, active, column, 'value >= threshold' if lower else 'value <= threshold',
+              float(limit) if np.isfinite(limit) else None)
     return mask
 
 
@@ -273,6 +343,8 @@ def classify_stellar_profiles(
 
     Thresholds are computed once, before either profile criterion rejects.
     The median/MAD assumption is that defective exposures are a minority.
+    Thresholds are stored once in each returned reference; frames carry only
+    its reference_id. No per-frame copy of the limits is published.
     """
     coefficient = float(cfg.get("stellar_profile_sigma", 3))
     if not np.isfinite(coefficient) or coefficient <= 0:
@@ -280,6 +352,8 @@ def classify_stellar_profiles(
     groups = {}
     for frame in measurements:
         frame["reasons"] = []
+        frame.pop("limits", None)
+        frame.pop("reference_id", None)
         if frame["status"] == "measured":
             key = tuple(frame["group"])
             # Plate solving refines FOCALLEN per image: exact equality would
@@ -301,7 +375,7 @@ def classify_stellar_profiles(
             for frame in frames:
                 frame["status"] = "insufficient_reference"
             continue
-        reference = dict(group=list(group), frames=len(frames))
+        reference = dict(reference_id=len(references) + 1, group=list(group), frames=len(frames))
         for key in ("r80", "elongation"):
             values = np.array([frame[key] for frame in frames])
             median = float(np.median(values))
@@ -315,7 +389,7 @@ def classify_stellar_profiles(
         references.append(reference)
         for frame in frames:
             limits = {key: reference[key]["limit"] for key in ("r80", "elongation")}
-            frame["limits"] = limits
+            frame["reference_id"] = reference["reference_id"]
             stars = frame["stars"]
             broad = [star for star in stars if star["r80"] > limits["r80"]]
             direction = np.array([frame["e1"], frame["e2"]])
@@ -364,6 +438,7 @@ def filter_stellar_profiles(
 
     before = int(mask.sum())
     report = dict(
+        schema_version=2, input_count=before,
         enabled=bool(cfg.get("stellar_profile_filter", True)), frames=[], references=[]
     )
     if not report["enabled"]:
@@ -400,6 +475,7 @@ def filter_stellar_profiles(
         frame["sequence_index"] = int(index)
         report["frames"].append(frame)
     report["references"] = classify_stellar_profiles(report["frames"], cfg)
+    references = {reference["reference_id"]: reference for reference in report["references"]}
     for reason, label in [
         ("r80", "étalement R80"),
         ("elongation", "allongement cohérent"),
@@ -413,7 +489,7 @@ def filter_stellar_profiles(
                     label,
                     frame["source"],
                     frame[reason],
-                    frame["limits"][reason],
+                    references[frame["reference_id"]][reason]["limit"],
                     frame[reason + "_fraction"],
                 )
         logging.info(

@@ -231,14 +231,14 @@ lancement, pas une annonce de validation scientifique de M33.
 
 Les produits de comparaison des chaînes sont rangés directement dans
 `03_restoration_work/` : masques communs, opérations numérotées de débruitage et
-netteté, ainsi que dossiers `final_<numéro>` pour les contrôles finaux. Il n’y a
+netteté, avec les contrôles finaux dans le dossier du traitement évalué. Il n’y a
 pas de sous-niveau `001` autour de cet ensemble : la comparaison n’est pas une
 boucle de restauration successive. La réinitialisation à chaque lancement
 remplace les produits précédents ; les éventuels essais internes d’un moteur
 restent dans le dossier propre à ce moteur, sans enveloppe `001`.
 
 Dans le plan numéroté de lightProcess, ce regroupement est
-`04_restoration/01_chains/`. Les opérations ont chacune leur dossier, par
+`04_restoration/`. Les opérations ont chacune leur dossier, par
 exemple `01_denoise_siril/`. Ce dossier contient le rapport `.json`, les
 scripts, candidats, résultats FITS et catalogues de cette opération, sans
 suffixe `_work` ni sous-dossier moteur supplémentaire.
@@ -271,7 +271,20 @@ au débruitage GraXpert (le numéro dépend des moteurs actifs). En ordre invers
 le nom commence par `sharpen_…_then_denoise_…`.
 Le cache réutilise ces mêmes fichiers lorsqu’une opération est commune à
 plusieurs chaînes, en conservant le nom de leur première exécution ; les erreurs restent auditées dans le rapport de l’opération.
-Les dossiers `final_<numéro>` isolent les évaluations de sorties différentes.
+Les évaluations finales sont sous `verification_finale/` dans le dossier
+du traitement qui produit l’image évaluée. Ce sous-dossier contient les
+catalogues, scripts, journaux, `verification.json` et `verifications.txt`.
+Le texte décrit les contrôles réellement audités, leurs verdicts
+PASS/FAIL/UNKNOWN, valeurs, seuils et motifs ; une erreur est indiquée
+explicitement. Les contrôles locaux ont leur `verifications_locales.txt`
+dans le dossier du traitement. Les anciens dossiers `final_XX` ne sont plus
+créés. Le catalogue stellaire de référence reste partagé sous
+`00_mask_origine/common_reference.tsv`.
+
+Au niveau supérieur, `04_restoration/restoration_summary.txt` récapitule
+les contrôles locaux et finaux de toutes les chaînes, leurs rejets et le
+classement, avec les chemins des comptes rendus détaillés. Il reste voisin
+du rapport global JSON ; les appels autonomes utilisent `<rapport>_summary.txt`.
 Sans comparaison des chaînes, les étapes restent `01_deconvolution/` et
 `02_denoise/`, avec un dossier direct par moteur. Les relances réinitialisent
 uniquement le dossier concerné et refusent une source qui s’y trouve.
@@ -409,3 +422,45 @@ faibles exige une calibration astrophysique plus large.
 Le contrôle diffus utilise une [sélection fixe par tailles et positions](diffuse-regions.md)
 de 256 régions au plus par défaut. Les mesures par région restent identiques ;
 `--quality-max-diffuse-regions 0` rétablit l’évaluation exhaustive.
+
+Dans le plan numéroté, le dossier `diagnostics` n’est plus généré. Les exports
+référencent les aperçus de masques déjà présents auprès de leurs images ;
+aucun jeu de masques d’illustration supplémentaire n’est calculé à cette fin.
+Les essais et `00_mask_origine` sont directement sous `04_restoration`. Lors
+d’une nouvelle restauration, seuls les dossiers de produits reconnus (dont
+les anciennes enveloppes `01_chains` et `diagnostics`) sont nettoyés ; les
+rapports globaux et fichiers voisins sont préservés. Les appels autonomes
+historiques conservent leur dossier `<rapport>_work`.
+
+## Comparatif des chaînes acceptées
+
+L’acceptation qualité ne signifie pas qu’une chaîne sera retenue. Le classement
+compare uniquement les chaînes ayant passé les contrôles finaux et conserve
+le meilleur score **strictement positif**. À égalité exacte, la première chaîne
+évaluée reste retenue ; si aucune ne bat zéro, l’image initiale est conservée.
+Un score inférieur n’est donc pas présenté comme un rejet scientifique.
+
+Le diagnostic final enregistre `score_details` : ratios FWHM après/avant
+(moyenne et médiane des ratios appariés), gain utile du bruit, fraction maximale
+d’anneaux, ratio maximal du bruit et contributions au score. Le calcul existant
+est conservé :
+
+```text
+score = 2 × (1 − ratio FWHM moyen) + 2 × (1 − ratio FWHM médian)
+        + max(0, gain utile du bruit)
+        − 0,2 × fraction d’anneaux
+        − 0,2 × max(0, ratio du bruit − 1)
+```
+
+Les deux termes FWHM s’appliquent seulement aux chaînes comprenant une netteté.
+Les ratios, fractions et scores sont sans unité. Un gain de bruit absent reste
+`null` dans les mesures ; sa contribution au score est zéro, sans prétendre
+qu’un gain nul a été mesuré. Un rejet final n’a pas de décomposition de score
+admissible, puisque son classement n’est pas effectué.
+
+`restoration_summary.txt` et `summary.accepted_ranking` du rapport JSON donnent
+le rang, le score, l’écart au score effectivement retenu et les mesures pour
+chaque chaîne acceptée. Les rangs ex æquo sont partagés ; les audits dont le
+score est absent restent signalés comme inexploitables. Les rapports de
+vérification individuels exposent également la formule et ses contributions.
+L’index HTML de la restauration affiche ce comparatif sous forme de tableau.

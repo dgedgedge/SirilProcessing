@@ -1249,7 +1249,6 @@ class PhotometricColorCalibrator(processor):
 
                 f"cd {self._quote_path(work_dir)}",
                 "online",
-                "setext fits",
                 "set32bits",
                 f"load {self._quote_path(input_path)}",
                 " ".join(solve),
@@ -1976,13 +1975,19 @@ class PostProcessingProcessor(processor):
                     'parameters', {},
                 ).get('ghs_chroma')
             quality_preview, gradient_preview = None, None
-            if not (getattr(runtime, "autoghs_only", False) or color_only):
-                preview_dir = layout.root / '04_restoration' / 'diagnostics' if layout else steps_dir
-                preview_dir.mkdir(parents=True, exist_ok=True)
+            if layout:
+                # Référencer les masques déjà produits sans diagnostic supplémentaire.
+                for name in ("restoration", "deconvolution", "denoise"):
+                    stage = results.get(name)
+                    preview = stage.get("quality_preview_path") if isinstance(stage, dict) else None
+                    if isinstance(preview, str) and Path(preview).is_file():
+                        quality_preview = Path(preview)
+                        break
+            elif not (getattr(runtime, "autoghs_only", False) or color_only):
                 quality_preview = QualityMaskPreview.ensure_for_run(
-                    results, source, preview_dir, runtime,
+                    results, source, steps_dir, runtime,
                 )
-                gradient_preview = QualityMaskPreview.write_gradient_points(results, preview_dir)
+                gradient_preview = QualityMaskPreview.write_gradient_points(results, steps_dir)
             summary = self._export_results(results, source, report, quality_preview)
             log_section("Annotation finale : informations de prise de vue")
             annotation = FinalImageAnnotator().post_process(
@@ -2031,4 +2036,6 @@ class PostProcessingProcessor(processor):
             logging.error("Erreur: %s", error, exc_info=level == "DEBUG")
             raise
         finally:
+            from lib.processing_html import ProcessingHtmlReport
+            ProcessingHtmlReport.publish(layout.root if layout else report.parent)
             remove_session_file_logging(handler)

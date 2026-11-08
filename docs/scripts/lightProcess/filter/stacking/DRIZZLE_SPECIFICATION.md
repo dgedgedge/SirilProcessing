@@ -459,8 +459,13 @@ Le stacking utilise des chemins déterministes directement sous `01_calibration/
 | --- | --- | --- |
 | 02 | `02_registration/` | Liens FITS, `.seq` écrit directement, `01_registration.sps` et transformations |
 | 03 | `03_quality/` | Copie de la séquence, filtres, pondération et analyse Python |
-| 04 | `04_capability/` | `03_capability.sps` si Drizzle sélectionné, sinon `SKIPPED.txt` |
+| 04 | `04_drizzle/` | `04_drizzle.sps` si Drizzle sélectionné, sinon `SKIPPED.txt` |
 | 05 | `05_stacking/` | `04_debayer_registration.sps` et `04_realign.sps` si nécessaires, contrôles géométriques, `04_applyreg.sps`, répétitions par liens, puis `04_stacking.sps` |
+
+`04_drizzle/SKIPPED.txt` explicite une désactivation : mode demandé,
+contrôles satisfaits ou non, mesures et seuils des critères refusés, mesures
+indisponibles et éventuelle erreur d’analyse. Les motifs proviennent de
+`reason_details` dans le même diagnostic que le rapport `.drizzle.json`.
 
 Chaque script est stocké et exécuté dans le répertoire de son étape. Aucun nom
 aléatoire ni répertoire `run_*` n’est créé. Chaque reconstruction nettoie ces

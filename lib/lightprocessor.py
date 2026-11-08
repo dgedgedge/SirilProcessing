@@ -81,12 +81,18 @@ class LightProcessor(ParameterizedComponent):
 
     @staticmethod
     def _directory_last_modified(path: Path) -> float:
-        """Retourne la date de modification la plus récente sous un dossier."""
+        """Retourne la date la plus récente, hors index HTML de présentation.
+
+        Les dates de dossiers restent significatives pour les ajouts/suppressions
+        de poses ; le générateur HTML les préserve lors de sa publication.
+        """
         if not path.exists():
             return 0.0
         latest = path.stat().st_mtime
         if path.is_dir():
             for child in path.rglob("*"):
+                if child.name == "index.html":
+                    continue
                 try:
                     latest = max(latest, child.stat().st_mtime)
                 except OSError:

@@ -191,12 +191,12 @@ flowchart TD
     PROFILES --> WEIGHTS["Calculer les poids des poses retenues<br/>FWHM et rondeur, sans créer de répétitions"]
     WEIGHTS --> DRIZZLE["Analyser le dithering, l'échantillonnage<br/>la couverture et les ressources"]
     DRIZZLE --> DRIZZLE_CHOICE{"Drizzle sélectionné ?"}
-    DRIZZLE_CHOICE -->|Oui| CAPABILITY["04_capability : vérifier<br/>la compatibilité Siril"]
+    DRIZZLE_CHOICE -->|Oui| CAPABILITY["04_drizzle : vérifier<br/>la compatibilité Siril"]
     CAPABILITY --> SUPPORTED{"Compatibilité vérifiée ?"}
     SUPPORTED -->|Oui| DIAGNOSTICS
     SUPPORTED -->|Non| DISABLE["Désactiver Drizzle<br/>Consigner la compatibilité échouée"]
     DISABLE --> DIAGNOSTICS
-    DRIZZLE_CHOICE -->|Non| SKIP["04_capability : écrire SKIPPED.txt"]
+    DRIZZLE_CHOICE -->|Non| SKIP["04_drizzle : écrire SKIPPED.txt"]
     SKIP --> DIAGNOSTICS["Écrire le diagnostic Drizzle"]
     DIAGNOSTICS --> RETAINED{"Analyse valide et poses retenues ?"}
     RETAINED -->|Non| FAIL

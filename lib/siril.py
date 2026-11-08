@@ -271,6 +271,38 @@ class Siril(ParameterizedComponent):
             self._validated = False
             return False
 
+    @staticmethod
+    def prepare_script(siril_script_content: str) -> str:
+        """Ajoute l’en-tête commun de version, CPU et extension FITS.
+
+        Conserve les commentaires initiaux et le corps, remplace l’exigence de
+        version initiale par requires 1.4 et ajoute setext fits. Retourne le
+        script prêt à sauvegarder, sans accès au disque ni exécution de Siril.
+        """
+        lines = siril_script_content.splitlines(keepends=True)
+        header: list[str] = []
+        body_start = 0
+        for line in lines:
+            stripped = line.strip()
+            command = stripped.split(maxsplit=1)[0] if stripped else ""
+            if not stripped or stripped.startswith("#"):
+                header.append(line)
+                body_start += 1
+                continue
+            if command.lower() == "requires":
+                body_start += 1
+                continue
+            break
+        lines = lines[body_start:]
+        if header and not header[-1].endswith("\n"):
+            header[-1] += "\n"
+        script_lines = (
+            header
+            + ["requires 1.4\n", f"setcpu {CpuConfig.get_limit()}\n", "setext fits\n"]
+            + lines
+        )
+        return "".join(script_lines)
+
     def run_siril_script(
         self,
         siril_script_content: str,
@@ -335,29 +367,7 @@ class Siril(ParameterizedComponent):
 
         script_path = working_path / safe_name
         log_path = script_path.with_suffix(".log")
-        lines = siril_script_content.splitlines(keepends=True)
-        header: list[str] = []
-        body_start = 0
-        for line in lines:
-            stripped = line.strip()
-            command = stripped.split(maxsplit=1)[0] if stripped else ""
-            if not stripped or stripped.startswith("#"):
-                header.append(line)
-                body_start += 1
-                continue
-            if command.lower() == "requires":
-                body_start += 1
-                continue
-            break
-        lines = lines[body_start:]
-        if header and not header[-1].endswith("\n"):
-            header[-1] += "\n"
-        script_lines = (
-            header
-            + ["requires 1.4\n", f"setcpu {CpuConfig.get_limit()}\n", "setext fits\n"]
-            + lines
-        )
-        siril_script_content = "".join(script_lines)
+        siril_script_content = self.prepare_script(siril_script_content)
         logging.info(
             "Exécution du script Siril %s dans %s", script_path, working_dir
         )

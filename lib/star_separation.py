@@ -245,7 +245,6 @@ class StarNetSeparator(processor):
             [
 
                 f"cd {quote_siril(work)}",
-                "setext fits",
                 "set32bits",
                 f"load {quote_siril(staged)}",
                 "starnet -stretch",

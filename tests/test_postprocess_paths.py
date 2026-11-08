@@ -8,11 +8,11 @@ from lib.postprocess_paths import reset_restoration_work_dir
 
 @pytest.mark.parametrize('relative,expected', [
     ('report.json', 'report_work'),
-    ('04_restoration/restoration.json', '04_restoration/01_chains'),
-    ('04_restoration/01_chains/01_denoise_siril.json',
-     '04_restoration/01_chains/01_denoise_siril'),
-    ('04_restoration/01_chains/02_sharpen_cosmic_clarity.json',
-     '04_restoration/01_chains/02_sharpen_cosmic_clarity'),
+    ('04_restoration/restoration.json', '04_restoration'),
+    ('04_restoration/01_denoise_siril.json',
+     '04_restoration/01_denoise_siril'),
+    ('04_restoration/02_sharpen_cosmic_clarity.json',
+     '04_restoration/02_sharpen_cosmic_clarity'),
     ('04_restoration/02_denoise/denoise_graxpert.json',
      '04_restoration/02_denoise/denoise_graxpert'),
     ('04_restoration/01_deconvolution/deconvolution_siril.json',
@@ -94,3 +94,27 @@ def test_siril_execution_uses_prepared_operation_directory(
     assert execution.work == work
     assert mask.read_bytes() == b'masks'
     assert not (work / work.name).exists()
+
+
+def test_numbered_restoration_flattens_work_and_cleans_only_owned_products(
+    tmp_path: Path,
+) -> None:
+    """La racine reste intacte, seuls les anciens produits et essais sont nettoyés."""
+    root = tmp_path / '04_restoration'
+    root.mkdir()
+    (tmp_path / '01_calibration').mkdir()
+    source = tmp_path / 'input.fits'
+    source.write_bytes(b'original')
+    report = root / 'restoration.json'
+    report.write_text('{}')
+    neighbor = root / 'notes.txt'
+    neighbor.write_text('preserved')
+    for name in ('01_chains', 'diagnostics', '00_mask_origine', '03_denoise_siril'):
+        old = root / name
+        old.mkdir()
+        (old / 'obsolete.txt').write_text('old')
+    assert reset_restoration_work_dir(report, source) == root
+    assert sorted(path.name for path in root.iterdir()) == ['notes.txt', 'restoration.json']
+    assert neighbor.read_text() == 'preserved'
+    assert report.read_text() == '{}'
+    assert source.read_bytes() == b'original'

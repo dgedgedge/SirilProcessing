@@ -36,15 +36,25 @@ niveau que `01_session/`. L’API sans racine explicite conserve son dossier
 |---|---|
 | `02_registration/` | Liens FITS et séquence `.seq`, détection des étoiles, astrométrie et alignement initial |
 | `03_quality/` | Copie indépendante des séquences, sélection, contrôle des profils et pondérations |
-| `04_capability/` | Vérification Siril si Drizzle est choisi, sinon `SKIPPED.txt` |
+| `04_drizzle/` | Contrôle préalable de démarrage/version Siril si Drizzle est choisi, sinon `SKIPPED.txt` |
 | `05_stacking/` | Application des transformations et empilement |
+
+Le dossier `04_drizzle/` contient `04_drizzle.sps` et son journal lorsque
+Drizzle est retenu. Ce contrôle préalable ne teste pas les commandes de
+rééchantillonnage ; leur exécution a lieu dans `05_stacking/`.
+Si Drizzle n’est pas sélectionné, `04_drizzle/SKIPPED.txt` indique le mode
+demandé, le résultat de chaque critère, puis les motifs détaillés avec les
+mesures et seuils ayant conduit au refus. Il distingue `off` (désactivation
+explicite) et le refus automatique. Les valeurs absentes sont signalées comme
+indisponibles ; une erreur d’analyse est également inscrite. Ce texte reprend
+le diagnostic du rapport `.drizzle.json`, sans recalculer les critères.
 
 La séquence `.seq` est écrite avec `SirilSequence.from_files`, directement
 à côté des liens vers les poses calibrées (copies si les liens échouent).
 Aucune commande `convert` n’est exécutée. La préparation ne modifie ni les
-pixels ni les en-têtes sources. Le générateur commun `Siril.run_siril_script` ajoute `setext fits` ;
-les scripts de stack le fixent également explicitement,
-avant la détection et l’astrométrie puis lors de l’empilement. Les images
+pixels ni les en-têtes sources. Le générateur commun `Siril.prepare_script`,
+appelé par `run_siril_script`, ajoute `setext fits` à chaque en-tête ;
+les corps de commandes n’ont plus à répéter ce réglage. Les images
 astrométriques remplacent ainsi les liens locaux `.fits` sans créer de
 doublons `.fit` : leur coexistence rendrait la séquence ambiguë. Les sources
 calibrées restent intactes. La préparation est testée sur FITS synthétiques ;
@@ -56,8 +66,8 @@ L’alignement initial est calculé sur toutes les entrées compatibles, avant
 rejet de qualité et avant répétitions de pondération :
 
 ```text
-cd <02_registration>
 setext fits
+cd <02_registration>
 seqfindstar <session>_
 seqplatesolve <session>_ -force -nocache -disto=ps_distortion
 register <session>_ -2pass -transf=<transformation>
@@ -179,3 +189,10 @@ que le code n’effectue pas.
 Le succès demande que Siril termine correctement et que le FITS final existe.
 Le rapport est alors marqué `completed` ; les échecs conservent leurs raisons.
 Voir [les sorties et la reprise](OUTPUTS.md).
+
+Les transferts entre étapes copient les métadonnées scientifiques et
+référencent les FITS ; ils omettent les pages HTML, également dans les
+sous-dossiers. Les index sont régénérés à partir des résultats propres à
+chaque étape. Les nettoyages des anciens dossiers `input/output` restent
+réservés à l’API historique : une racine explicite n’est pas traitée comme
+l’ancienne enveloppe `stacking/`.

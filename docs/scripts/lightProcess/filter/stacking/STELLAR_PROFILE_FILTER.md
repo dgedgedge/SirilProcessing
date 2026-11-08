@@ -161,3 +161,14 @@ peuvent être affectés par des aberrations optiques cohérentes. La réduction 
 limite la sensibilité aux déplacements inférieurs à quelques pixels natifs.
 La validation synthétique et l’essai M33 ne constituent pas un banc d’essai
 représentatif de tous les instruments et types de bougé.
+
+### Stockage des seuils communs
+
+Le schéma 2 des rapports stocke les seuils une seule fois par groupe, dans
+`references` ; chaque pose désigne son groupe par `reference_id`. Les copies
+`limits` par pose sont supprimées, sans modifier le calcul ni les décisions.
+Le rapport de stacking conserve ces références dans `stellar_profiles.references`
+et l’audit de sélection dans `profile_references`. Un seuil est commun à un
+groupe comparable, pas nécessairement à toutes les images de plusieurs groupes.
+Les index affichent ces seuils avant les tableaux, puis le groupe de chaque pose.
+La lecture des anciens rapports avec `limits` reste prise en charge.

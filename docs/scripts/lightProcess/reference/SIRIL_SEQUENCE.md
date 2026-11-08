@@ -10,6 +10,11 @@ images utilisent ainsi `.fits` indépendamment des préférences Siril ; les
 entrées historiques `.fit` restent acceptées. Le module journalise leur sortie et lève une erreur fatale
 en cas d’échec.
 
+`Siril.prepare_script(texte)` est le point unique de préparation de cet en-tête,
+sans accès au disque ni exécution. `run_siril_script` l’appelle avant chaque
+sauvegarde : les traitements fournissent seulement leur corps de commandes,
+sans répéter le réglage d’extension.
+
 Toute manipulation d’une image appartenant à une séquence passe par un objet
 `SequenceImage` obtenu depuis `SirilSequence`.
 

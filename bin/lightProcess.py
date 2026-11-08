@@ -723,6 +723,12 @@ def _process_sessions(
             layout.root, input_roots, args.create_mosaic, final_images,
         )
 
+    if not args.dry_run:
+        from lib.processing_html import ProcessingHtmlReport
+        for report_root in dict.fromkeys((layout.root, work_layout.root)):
+            if report_root.is_dir():
+                ProcessingHtmlReport.publish(report_root)
+
     # Retour final
     if (
         successful_sessions == total_sessions

@@ -389,9 +389,9 @@ def test_stack_selection_only_after_registration(tmp_path, monkeypatch, method, 
         _write_fits_frame(source, 'Light')
     calls = []
     selections = []
-    def observed_selection(rows, cfg, included=None):
+    def observed_selection(rows, cfg, included=None, audit=None):
         selections.append(len(rows))
-        return quality_mask(rows, cfg, included)
+        return quality_mask(rows, cfg, included, audit=audit)
     monkeypatch.setattr(drizzle, 'quality_mask', observed_selection)
 
     class DummySiril:
@@ -401,6 +401,8 @@ def test_stack_selection_only_after_registration(tmp_path, monkeypatch, method, 
 
         def run_siril_script(self, script_content, working_dir, script_name=None):
             directory = Path(working_dir)
+            from lib.siril import Siril
+            script_content = Siril.prepare_script(script_content)
             calls.append(script_name)
             assert 'setext fits' in script_content
             assert '-filter-wfwhm' not in script_content
@@ -466,6 +468,10 @@ def test_stack_selection_only_after_registration(tmp_path, monkeypatch, method, 
     marker = calibration / "01_session/calibrated.fits"
     marker.parent.mkdir(parents=True)
     marker.write_bytes(b"preserved")
+    for name in ("input", "output"):
+        directory = calibration / name
+        directory.mkdir()
+        (directory / "preserved.txt").write_text("preserved")
     result = stacker.stack_outputs(
         sources,
         tmp_path / "out",
@@ -480,6 +486,8 @@ def test_stack_selection_only_after_registration(tmp_path, monkeypatch, method, 
     assert not list((tmp_path / "work").rglob("02_inputs"))
     assert marker.read_bytes() == b"preserved"
     if flat_layout:
+        for name in ("input", "output"):
+            assert (calibration / name / "preserved.txt").read_text() == "preserved"
         assert (calibration / "05_stacking").is_dir()
         assert not (calibration / "stack").exists()
     assert result == tmp_path/'out/target_name_combined.fits'

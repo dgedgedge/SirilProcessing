@@ -146,3 +146,15 @@ def test_all_siril_modes_set_fits_before_image_commands(tmp_path, monkeypatch, m
     assert script.index('setext fits') < script.index('load image')
     assert script.index('setext fits') < script.index('save result')
     assert calls[-1][0] == ('flatpak' if mode == 'flatpak' else str(executable))
+
+
+@pytest.mark.parametrize('body', ['close', '# Note\nrequires 1.2\nclose\n', '\n# Note\nclose'])
+def test_common_script_preparation_has_a_single_extension_setting(body: str) -> None:
+    """L'en-tête partagé conserve le corps et fixe une seule fois version et extension."""
+    script = Siril.prepare_script(body)
+    assert script.count('requires ') == 1
+    assert script.count('setext fits') == 1
+    assert script.index('setext fits') < script.index('close')
+    assert script.endswith('close\n' if body.endswith('\n') else 'close')
+    if '# Note' in body:
+        assert script.index('# Note') < script.index('requires 1.4')
