@@ -39,7 +39,7 @@ niveau que `01_session/`. L’API sans racine explicite conserve son dossier
 | `04_drizzle/` | Contrôle préalable de démarrage/version Siril si Drizzle est choisi, sinon `SKIPPED.txt` |
 | `05_stacking/` | Application des transformations et empilement |
 
-Le dossier `04_drizzle/` contient `04_drizzle.sps` et son journal lorsque
+Le dossier `04_drizzle/` contient `04_drizzle.commands.json` et son journal lorsque
 Drizzle est retenu. Ce contrôle préalable ne teste pas les commandes de
 rééchantillonnage ; leur exécution a lieu dans `05_stacking/`.
 Si Drizzle n’est pas sélectionné, `04_drizzle/SKIPPED.txt` indique le mode
@@ -52,8 +52,8 @@ le diagnostic du rapport `.drizzle.json`, sans recalculer les critères.
 La séquence `.seq` est écrite avec `SirilSequence.from_files`, directement
 à côté des liens vers les poses calibrées (copies si les liens échouent).
 Aucune commande `convert` n’est exécutée. La préparation ne modifie ni les
-pixels ni les en-têtes sources. Le générateur commun `Siril.prepare_script`,
-appelé par `run_siril_script`, ajoute `setext fits` à chaque en-tête ;
+pixels ni les en-têtes sources. Le générateur commun `Siril.prepare_commands`,
+appelé par `run_commands`, ajoute `setext fits` à chaque en-tête ;
 les corps de commandes n’ont plus à répéter ce réglage. Les images
 astrométriques remplacent ainsi les liens locaux `.fits` sans créer de
 doublons `.fit` : leur coexistence rendrait la séquence ambiguë. Les sources
@@ -102,7 +102,7 @@ Les titres suivent l’ordre du calcul :
 | Titre après `Stacking —` | Condition |
 |---|---|
 | Préparation des images calibrées | Préparation d’un nouvel empilement de plusieurs images |
-| Alignement initial des images | Appel du script initial de détection et d’alignement |
+| Alignement initial des images | Appels API de détection et d’alignement initial |
 | Contrôle de qualité, sélection et pondération | Après réussite de l’alignement initial |
 | Analyse et choix du Drizzle | Après la sélection des poses |
 | Vérification de la compatibilité Drizzle | Si l’analyse sélectionne Drizzle |
@@ -141,7 +141,7 @@ décrits dans [la référence Drizzle](../filter/stacking/DRIZZLE_SPECIFICATION.
 
 Lorsque Drizzle est actif, les transformations initiales contrôlées sont
 appliquées avec ses paramètres. Dans la branche standard, une source CFA est
-dématricée puis réalignée dans `04_debayer_registration.sps`. Le `.seq` produit
+dématricée puis réalignée dans `04_debayer_registration.commands.json`. Le `.seq` produit
 est contrôlé avant d’appliquer cette transformation. La séquence de travail est
 réduite aux poses indépendantes retenues avant le dématriçage ; les fichiers
 rejetés ne sont donc pas traités, même si Siril ignore les exclusions lors de
@@ -150,16 +150,16 @@ allocations simultanées. Cette limite est locale au processus de cette étape.
 
 Le réalignement robuste, actif si le réglage Python `robust_realign` n’est pas
 désactivé, applique un premier alignement puis recalcule les transformations
-dans `04_realign.sps`. Un nouveau contrôle géométrique précède le dernier
+dans `04_realign.commands.json`. Un nouveau contrôle géométrique précède le dernier
 rééchantillonnage. Les seuils de qualité ne sont pas réappliqués à ces étapes.
 Une entrée déjà exclue ne peut pas être réintroduite par un nouvel alignement.
 
 ## Commande d’empilement
 
-`04_applyreg.sps` applique l’alignement avec `seqapplyreg -filter-included` aux
+`04_applyreg.commands.json` applique l’alignement avec `seqapplyreg -filter-included` aux
 poses indépendantes. Python ajoute ensuite les répétitions de pondération par
 liens symboliques, selon les poids initiaux (sans recalcul après les rejets
-supplémentaires). `04_stacking.sps` empile les entrées incluses de cette séquence.
+supplémentaires). `04_stacking.commands.json` empile les entrées incluses de cette séquence.
 Le cadrage est `min`
 pour toutes les méthodes, avec ou sans Drizzle : Siril recadre les poses
 sélectionnées sur leur champ commun à partir des données d’alignement,

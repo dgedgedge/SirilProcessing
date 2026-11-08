@@ -19,7 +19,7 @@ son manifeste et son journal sont sous `06_color`.
 
 Les séquences exportées permettent de rouvrir les calibrations dans Siril.
 Les `.seq` contiennent les références, mesures et transformations, pas les
-pixels. Les scripts `.sps` et leurs journaux restent avec leurs étapes de
+pixels. Les plans d’appels `.commands.json` et leurs journaux restent avec leurs étapes de
 travail. Le stacking seul ne génère pas de prévisualisation JPG.
 Voir [le pipeline commun et ses erreurs](../../postProcess/pipeline.md).
 

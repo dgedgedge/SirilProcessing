@@ -17,6 +17,7 @@ et le détail des traitements effectués.
 - [Guide d’utilisation](GUIDE.md) : commandes, options et vue d’ensemble du parcours.
 - [Arborescence numérotée des sorties](output-layout.md).
 - [Index HTML des résultats et régénération](html-reports.md).
+- [Critères et audit de la registration Sirilpy](filter/stacking/IMAGE_SELECTION.md#audit-de-la-registration-avec-sirilpy).
 - [Sessions et sous-sessions](SESSIONS.md) : organisation des données d’entrée.
 
 <a id="options-et-configuration"></a>
@@ -87,3 +88,6 @@ ordre d’exécution :
 - [Séquences Siril et images associées](reference/SIRIL_SEQUENCE.md).
 - [Répertoires de travail et nettoyage](WORKSPACE.md).
 - [Rôle général des bibliothèques](../../architecture/LIBRARIES.md).
+
+Les traitements Siril utilisent la [factory de sessions sirilpy](../lightProcess/reference/SIRIL_API.md),
+avec démarrage automatique sans IHM, plans d’appels JSON et journaux de session.

@@ -1,4 +1,5 @@
 """Diagnostics indépendants, orchestration récursive et durées sans changer les mesures."""
+from lib.siril_api import format_commands as _format_commands, SirilCommand as _SirilCommand
 
 import argparse
 from itertools import count
@@ -131,13 +132,14 @@ def test_complete_orchestrator_recurses_and_caches_reference_catalog(
 
     def detect(script: str, directory: str, name: str) -> bool:
         """Simule seulement les catalogues, en gardant les vrais calculs sur tuiles."""
+        script = _format_commands(script)
         scripts.append(script)
         for line in script.splitlines():
             if line.startswith('findstar '):
                 (Path(directory) / line.split('-out=')[1]).write_text('catalog')
         return True
 
-    monkeypatch.setattr('lib.siril.Siril', lambda **kwargs: Mock(run_siril_script=detect))
+    monkeypatch.setattr('lib.siril.Siril', lambda **kwargs: Mock(run_commands=detect))
     monkeypatch.setattr(StarComparisonProcessor, '_process', lambda *args: {
         'status': star_status, 'pairs': [],
     })

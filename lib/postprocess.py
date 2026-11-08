@@ -7,6 +7,7 @@ scientifique et le processeur qui publie les rapports et exports partagés entre
 
 from __future__ import annotations
 
+
 import argparse
 import json
 import logging
@@ -38,6 +39,7 @@ from lib.quality_preview import QualityMaskPreview
 from lib.siril import Siril
 from lib.star_separation import StarNetSeparator
 from lib.type_defs import ConfigValue, JSONReport
+from lib.siril_api import SirilCommand, command
 
 
 def _write_report(output_path: Path, results: dict) -> None:
@@ -1244,20 +1246,10 @@ class PhotometricColorCalibrator(processor):
             raise ValueError("L’entrée se trouve dans le dossier de travail réinitialisé")
         work_dir = reset_work_dir(output_path, directory_name=work_name)
         staged_image = work_dir / f"{tag}calibrated.fits"
-        script = "\n".join(
-            [
-
-                f"cd {self._quote_path(work_dir)}",
-                "online",
-                "set32bits",
-                f"load {self._quote_path(input_path)}",
-                " ".join(solve),
-                " ".join(calibration),
-                f"save {self._quote_path(staged_image)}",
-                "close",
-                "",
-            ]
-        )
+        operations = [command('cd', work_dir), command('online'), command('set32bits'),
+                      command('load', input_path), SirilCommand.from_text(' '.join(solve)),
+                      SirilCommand.from_text(' '.join(calibration)),
+                      command('save', staged_image), command('close')]
         log_path = work_dir / f"{tag[:-1] if tag else 'photometry'}.log"
         init_options = {}
         if gaia_path is not None or spcc_path is not None:
@@ -1273,10 +1265,10 @@ class PhotometricColorCalibrator(processor):
             with isolated.open('w', encoding='utf-8') as stream:
                 preferences.write(stream, space_around_delimiters=False)
             init_options['initfile'] = isolated
-        if not siril.run_siril_script(
-            script,
+        if not siril.run_commands(
+            operations,
             str(work_dir),
-            script_name=f"{tag[:-1] if tag else 'photometry'}.sps",
+            name=f"{tag[:-1] if tag else 'photometry'}",
             **init_options,
         ):
             raise RuntimeError(
@@ -1322,7 +1314,7 @@ class PhotometricColorCalibrator(processor):
                 name: value for name, value in spectral_options.items() if value is not None
             },
             "unspecified_profiles_source": "Siril preferences" if method == "spcc" else None,
-            "script_path": str(work_dir / f"{tag[:-1] if tag else 'photometry'}.sps"),
+            "command_path": str(work_dir / f"{tag[:-1] if tag else 'photometry'}.commands.json"),
             "log_path": str(log_path),
             "report_saved_to": str(output_path),
         }

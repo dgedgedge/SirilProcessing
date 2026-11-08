@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+
 import argparse
 import logging
 import shutil
@@ -14,6 +15,7 @@ from lib.logging_utils import log_section
 from lib.processor import processor
 from lib.siril import Siril, SirilSequence
 from lib.type_defs import ConfigValue, JSONReport
+from lib.siril_api import SirilCommand, command
 
 
 class SessionStackingProcessor(processor):
@@ -534,21 +536,13 @@ class SessionStackingProcessor(processor):
         framing = "min"
         stack_sequence_prefix = f"r_{sequence_prefix}"
 
-        if method in {"median", "med"}:
-            stack_line = (
-                f"stack {stack_sequence_prefix} median -output_norm "
-                f"-out={output_path}.fits"
-            )
-        elif rejection == "none":
-            stack_line = (
-                f"stack {stack_sequence_prefix} mean -output_norm "
-                f"-out={output_path}.fits"
-            )
+        if method in {'median', 'med'}:
+            stack_line = command('stack', stack_sequence_prefix, 'median', '-output_norm', f'-out={output_path}.fits')
+        elif rejection == 'none':
+            stack_line = command('stack', stack_sequence_prefix, 'mean', 'none', '-output_norm', f'-out={output_path}.fits')
         else:
-            stack_line = (
-                f"stack {stack_sequence_prefix} rej {rejection_low} "
-                f"{rejection_high} -output_norm -out={output_path}.fits"
-            )
+            stack_line = command('stack', stack_sequence_prefix, 'rej', rejection_low, rejection_high,
+                                 '-output_norm', f'-out={output_path}.fits')
 
         platesolve_lines = ""
         if enable_stack_platesolve:
@@ -557,9 +551,11 @@ class SessionStackingProcessor(processor):
                 "-disto=ps_distortion\n"
             )
 
-        prepare = f"""cd {output_stack_dir}
-seqfindstar {sequence_prefix}
-{platesolve_lines}register {sequence_prefix} -2pass -transf={align_transform}"""
+        prepare = [command('cd', output_stack_dir), command('seqfindstar', sequence_prefix)]
+        if platesolve_lines:
+            prepare.append(SirilCommand.from_text(platesolve_lines.strip()))
+        prepare.append(command('register', sequence_prefix, '-2pass', f'-transf={align_transform}'))
+
 
         success = run_stack(
             self.siril,

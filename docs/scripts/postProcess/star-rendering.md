@@ -5,7 +5,7 @@
 ## Modules et ordre des opérations
 
 [`StarNetSeparator`](../../../lib/star_separation.py) hérite de `processor` et
-réutilise le service `Siril.run_siril_script`, ses modes d'exécution et ses
+réutilise le service `Siril.run_commands`, ses modes d'exécution et ses
 journaux. [`ConservativeStarRenderer`](../../../lib/star_rendering.py), également
 un `processor`, possède une méthode de calcul indépendante `render`.
 `recompose` est une opération sans état du même module.

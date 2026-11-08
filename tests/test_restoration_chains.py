@@ -1,4 +1,5 @@
 """Énumération exhaustive, mutualisation et décision sur la sortie finale."""
+from lib.siril_api import format_commands as _format_commands, SirilCommand as _SirilCommand
 
 import argparse
 from pathlib import Path
@@ -263,8 +264,9 @@ def test_final_catalogs_use_relative_siril_output_names(tmp_path, monkeypatch):
     class Runner:
         """Simule seulement l’écriture des catalogues annoncés par findstar."""
 
-        def run_siril_script(self, script, directory, name):
+        def run_commands(self, script, directory, name):
             """Refuse les flags à chemins absolus ou entourés de guillemets."""
+            script = _format_commands(script)
             scripts.append(script)
             for line in script.splitlines():
                 if line.startswith("findstar "):

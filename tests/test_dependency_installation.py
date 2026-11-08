@@ -31,6 +31,7 @@ def manager(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
         graxpert_model_dir=root / 'tmp/cache/models/graxpert',
     ))
     monkeypatch.setattr(selected, 'preload_assets', Mock())
+    monkeypatch.setattr('lib.siril_dependencies.SirilDependencies.verify', Mock())
     return selected
 
 
@@ -240,6 +241,7 @@ def test_reset_recreates_real_venv(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     selected = DependencyInstaller(tmp_path, target)
     monkeypatch.setattr(selected.installer, 'pip', Mock())
     monkeypatch.setattr(selected, 'preload_assets', Mock())
+    monkeypatch.setattr('lib.siril_dependencies.SirilDependencies.verify', Mock())
     monkeypatch.setattr(selected.installer, 'preflight', lambda: None)
     verify = Mock()
     monkeypatch.setattr(selected.installer, 'verify', verify)
@@ -316,3 +318,17 @@ def test_spectral_only_selection_starts_resource_worker(tmp_path: Path, monkeypa
     args = parser.parse_args(['--disable-models', '--disable-gaia-astrometry'])
     selected.run(assets_only=True, assets=args)
     selected.preload_assets.assert_called_once_with(args)
+
+
+def test_siril_verification_uses_installed_python_and_explicit_engine(tmp_path, monkeypatch):
+    """Le contrôle API suit l'installation et utilise les options de moteur demandées."""
+    from argparse import Namespace
+    from lib.siril_dependencies import SirilDependencies
+    run = Mock()
+    monkeypatch.setattr(subprocess, 'run', run)
+    SirilDependencies.verify(tmp_path/'env/bin/python', tmp_path,
+                             Namespace(siril_mode='native', siril_path='/opt/siril-cli'))
+    assert run.call_args.args[0] == [str(tmp_path/'env/bin/python'),
+        str(tmp_path/'bin/install_dependances.py'), '--siril-worker',
+        '--siril-mode', 'native', '--siril-path', '/opt/siril-cli']
+    assert run.call_args.kwargs['check'] is True

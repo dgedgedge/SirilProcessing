@@ -1,4 +1,5 @@
 """Contrats StarNet : une séparation linéaire, erreurs fatales et préférences isolées."""
+from lib.siril_api import format_commands as _format_commands, SirilCommand as _SirilCommand
 
 import argparse
 from pathlib import Path
@@ -26,8 +27,9 @@ def test_separation_signed_residual_and_geometry(tmp_path: Path, monkeypatch) ->
         def __init__(self, **kwargs):
             """Accepte le service configuré."""
 
-        def run_siril_script(self, script, work, **kwargs):
+        def run_commands(self, script, work, **kwargs):
             """Émet un starless signé, dans l'autre orientation FITS."""
+            script = _format_commands(script)
             calls.append(script)
             assert kwargs["initfile"].is_file()
             fits.writeto(
@@ -103,7 +105,7 @@ def test_starnet_failure_is_fatal(tmp_path: Path, monkeypatch) -> None:
     executable.touch()
     executable.chmod(0o755)
     fake_siril = Mock()
-    fake_siril.run_siril_script.return_value = False
+    fake_siril.run_commands.return_value = False
     monkeypatch.setattr("lib.star_separation.Siril", Mock(return_value=fake_siril))
     with pytest.raises(RuntimeError, match="StarNet échouée"):
         StarNetSeparator().post_process(
@@ -111,7 +113,7 @@ def test_starnet_failure_is_fatal(tmp_path: Path, monkeypatch) -> None:
             tmp_path / "failure.json",
             argparse.Namespace(starnet_path=executable),
         )
-    assert fake_siril.run_siril_script.call_count == 1
+    assert fake_siril.run_commands.call_count == 1
     assert not (tmp_path / "failure.json").exists()
 
 
@@ -143,11 +145,12 @@ def test_raw_starless_overshoot_is_preserved_for_compensation(
 
     def separate(script: str, work: str, **kwargs: object) -> bool:
         """Émet la sortie réseau brute, sans modifier l'entrée originale."""
+        script = _format_commands(script)
         fits.writeto(Path(work) / 'starless_linear.fits', raw)
         return True
 
     runner = Mock()
-    runner.run_siril_script.side_effect = separate
+    runner.run_commands.side_effect = separate
     monkeypatch.setattr('lib.star_separation.Siril', Mock(return_value=runner))
     if peak > 2:
         with pytest.raises(ValueError, match='somme linéaire en float32'):

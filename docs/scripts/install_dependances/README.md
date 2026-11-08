@@ -37,7 +37,12 @@ ensemble CPU lorsque le pilote NVIDIA manque : corriger le pilote ou utiliser
 Les six modèles Cosmic Clarity et le modèle GraXpert sont préchargés par défaut
 (environ **572 Mo** au total, dont 94 Mo pour Cosmic Clarity et 478 Mo pour GraXpert).
 Les fichiers déjà conformes sont réutilisés après contrôle SHA-256.
-Siril, le CLI StarNet avec son modèle et les pilotes restent des installations externes.
+Siril ≥ 1.4.4, le CLI StarNet avec son modèle et les pilotes restent des installations externes.
+Le script contrôle désormais une connexion réelle à sirilpy ≥ 1.0.25, fourni
+par le Python de Siril : aucun paquet PyPI homonyme n’est installé. Ce contrôle
+a lieu après pip, y compris en mode `--install-only`, et avec `--test`.
+`--assets-only` ne lance pas Siril. Le contrôle n’ouvre aucune image et utilise
+des préférences temporaires. Le journal est `tmp/siril-dependency-check/siril-api-check.log`.
 Les fichiers JSON de traitement ne sont pas modifiés. Les dépendances générales
 de `requirements.txt` sont incluses dans les deux installations.
 
@@ -231,3 +236,20 @@ Les recherches de noms et l'acquisition des profils Siril peuvent encore nécess
 Voir [le préchargement et ses contrôles](resources.md),
 [la source officielle Gaia](https://zenodo.org/records/14692304) et
 [la documentation Siril](https://siril.readthedocs.io/en/stable/astrometry/platesolving.html#download-astrometric-gaia-dr3).
+
+## 5. Moteur Siril et API Python
+
+`--siril-mode native|flatpak|appimage` et `--siril-path CHEMIN` permettent de
+contrôler le même moteur que les traitements. Le mode par défaut est Flatpak
+sous Linux ; sous macOS, le contrôle cherche l’installation native.
+
+```bash
+./bin/install_dependances.sh --test --siril-mode flatpak
+./bin/install_dependances.sh --install-only --siril-mode native --siril-path /opt/siril-cli
+```
+
+Le test échoue si Siril, son environnement Python, sa version de sirilpy ou
+la connexion ne sont pas utilisables. Installer Siril et laisser son gestionnaire
+préparer le Python intégré avant de relancer si nécessaire. Le mode sans
+calcul GPU ne dispense pas de cette dépendance des traitements. Voir
+[les sessions API](../lightProcess/reference/SIRIL_API.md).

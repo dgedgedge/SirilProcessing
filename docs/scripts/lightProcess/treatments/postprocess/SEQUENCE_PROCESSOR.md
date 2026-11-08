@@ -63,8 +63,8 @@ explicitement les défauts globaux pour les appelants qui demandent ce comportem
 
 Les scripts créent directement `Siril()` après la liaison, ou
 `Siril(siril_path=args.siril_path, siril_mode=args.siril_mode)` pour transmettre
-les réglages d’un appel explicite. Ils exécutent ensuite le script par la méthode
-`service.run_siril_script(contenu, dossier, script_name="traitement.sps")`.
+les réglages d’un appel explicite. Ils exécutent ensuite les appels API par la méthode
+`service.run_commands(appels, dossier, name="traitement")`.
 Il n’existe plus de fonction de module pour exécuter un script ou créer le service.
 
 

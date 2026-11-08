@@ -335,10 +335,10 @@ Le mode par défaut est `auto`. Paramètres persistants et options CLI :
 | `--drizzle-fwhm-limit` | 2.5 | FWHM limite en pixels natifs |
 | `--drizzle-max-drift` | 10 | Dérive lente maximale estimée en pixels |
 
-Tous les scripts Siril du projet exigent désormais Siril ≥ 1.4 : le service
-d’exécution insère `requires 1.4` et transforme tout code de sortie non nul en
+Tous les appels API du projet exigent Siril ≥ 1.4.4 : le service
+vérifie `requires 1.4.4` et transforme tout code de sortie non nul en
 erreur fatale avec le chemin du journal. La vérification avant le Drizzle
-confirme donc l’exécution de Siril 1.4 ; une erreur n’est pas convertie en
+confirme donc l’exécution de Siril 1.4.4 ou ultérieur ; une erreur n’est pas convertie en
 repli standard. Le mode `auto` peut toujours choisir la branche standard selon
 les critères de qualité, d’échantillonnage et de ressources décrits ici.
 Les séquences Siril de versions 4 à 7 sont lues. Un format inconnu empêche une
@@ -457,10 +457,10 @@ Le stacking utilise des chemins déterministes directement sous `01_calibration/
 
 | Étape | Répertoire | Script / résultat |
 | --- | --- | --- |
-| 02 | `02_registration/` | Liens FITS, `.seq` écrit directement, `01_registration.sps` et transformations |
+| 02 | `02_registration/` | Liens FITS, `.seq` écrit directement, `01_registration.commands.json` et transformations |
 | 03 | `03_quality/` | Copie de la séquence, filtres, pondération et analyse Python |
-| 04 | `04_drizzle/` | `04_drizzle.sps` si Drizzle sélectionné, sinon `SKIPPED.txt` |
-| 05 | `05_stacking/` | `04_debayer_registration.sps` et `04_realign.sps` si nécessaires, contrôles géométriques, `04_applyreg.sps`, répétitions par liens, puis `04_stacking.sps` |
+| 04 | `04_drizzle/` | `04_drizzle.commands.json` si Drizzle sélectionné, sinon `SKIPPED.txt` |
+| 05 | `05_stacking/` | `04_debayer_registration.commands.json` et `04_realign.commands.json` si nécessaires, contrôles géométriques, `04_applyreg.commands.json`, répétitions par liens, puis `04_stacking.commands.json` |
 
 `04_drizzle/SKIPPED.txt` explicite une désactivation : mode demandé,
 contrôles satisfaits ou non, mesures et seuils des critères refusés, mesures

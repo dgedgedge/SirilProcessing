@@ -44,7 +44,8 @@
 | [graxpert_inference.py](../../lib/graxpert_inference.py) | Exécuter le modèle ONNX avec préservation des FITS |
 | [graxpert_models.py](../../lib/graxpert_models.py) | Acquérir et vérifier les poids à la demande |
 | [graxpert.py](../../lib/graxpert.py) | Encapsuler le débruitage ONNX natif GraXpert |
-| [siril.py](../../lib/siril.py) | Centraliser l’exécution de Siril (prérequis `requires 1.4`, erreurs fatales) et la lecture, la modification et l’écriture des séquences FITS |
+| [siril_api.py](../../lib/siril_api.py) | Posséder les processus Siril, le transport API et les vues de modèles ; voir [sessions et API](../scripts/lightProcess/reference/SIRIL_API.md) |
+| [siril.py](../../lib/siril.py) | Fournir des sessions Siril autonomes via sirilpy (Siril ≥ 1.4.4, erreurs fatales) et la lecture, la modification et l’écriture des séquences FITS |
 | [darkprocess.py](../../lib/darkprocess.py) | Gérer la constitution et la mise à jour de la bibliothèque de master darks |
 | [lightprocessor.py](../../lib/lightprocessor.py) | Découvrir les sessions de lights, grouper les images et orchestrer leur calibration |
 | [light_calibration.py](../../lib/light_calibration.py) | Calibrer une séquence de lights et construire récursivement le master flat associé avec l'interface commune des traitements |

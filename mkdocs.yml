@@ -45,6 +45,7 @@ nav:
               - Espace de travail: docs/scripts/lightProcess/WORKSPACE.md
               - Filtres: docs/scripts/lightProcess/filter/README.md
               - Filtrage du stacking: docs/scripts/lightProcess/filter/stacking/README.md
+              - Sessions et API Siril: docs/scripts/lightProcess/reference/SIRIL_API.md
               - Séquences Siril: docs/scripts/lightProcess/reference/SIRIL_SEQUENCE.md
               - Sommaire des références: docs/scripts/lightProcess/reference/README.md
               - Extraction du gradient: docs/scripts/lightProcess/treatments/GRADIENT_EXTRACTION.md

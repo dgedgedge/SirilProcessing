@@ -4,10 +4,11 @@ Module de mosaïque pour assembler plusieurs sessions de light en utilisant Siri
 
 Ce module fournit des fonctionnalités pour :
 - Assembler les fichiers light traités en préparation pour Siril
-- Exécuter le script Siril de mosaïque
+- Exécuter les appels sirilpy de mosaïque
 """
 
 from __future__ import annotations
+
 
 import argparse
 import json
@@ -21,6 +22,7 @@ from lib.postprocess import GradientExtractor
 from lib.processor import processor
 from lib.siril import Siril
 from lib.type_defs import JSONReport
+from lib.siril_api import SirilCommand, command
 
 
 class Mosaic(processor):
@@ -308,61 +310,31 @@ class Mosaic(processor):
         )
         return prepared_files
 
-    def _generate_mosaic_script(self, input_files: list[Path]) -> str:
+    def _generate_mosaic_commands(self, input_files: list[Path]) -> list[SirilCommand]:
         """
-        Génère le script Siril pour créer la mosaïque.
+        Construit les appels API de conversion, alignement et empilement.
 
         Args:
             input_files: Liste des fichiers d'entrée préparés
 
         Returns:
-            Contenu du script Siril pour la mosaïque
+            Appels SirilCommand pour la mosaïque
         """
         image_stem = getattr(self, 'image_stem', f'{self.mosaic_name}_mosaic')
         input_dir = str(self.mosaic_input_dir)
 
-        # Chemin vers les scripts Python
-        script_dir = Path(__file__).parent.parent / "bin"
-        pyecho_path = script_dir / "pyecho.py"
-        pydir_path = script_dir / "pydir.py"
+        return [command('cd', input_dir), command('convert', 'mosaic_', f'-out={self.mosaic_output_dir}'),
+                command('cd', self.mosaic_output_dir),
+                command('seqplatesolve', 'mosaic_', '-force', '-nocache', '-disto=ps_distortion'),
+                command('seqapplyreg', 'mosaic_', '-framing=max'),
+                command('stack', 'r_mosaic_', 'rej', 3, 3, '-norm=addscale', '-output_norm',
+                        '-rgb_equal', '-maximize', '-overlap_norm', '-feather=5', f'-out={image_stem}'),
+                command('close')]
 
-        # Script Siril pour la mosaïque
-        script_content = f"""# Script de mosaïque automatique pour {self.mosaic_name}
-# Généré automatiquement par SirilProcessing
-
-cd "{input_dir}"
-pyscript {pyecho_path} "====================================================================="
-pyscript {pyecho_path} "============Convert Light Frames to .fit files"
-pyscript {pyecho_path} "============Convert files to sequence."
-pyscript {pyecho_path} "cmd:========> convert mosaic_ -out={self.mosaic_output_dir}"
-convert mosaic_ -out={self.mosaic_output_dir}
-
-cd "{self.mosaic_output_dir}"
-pyscript {pyecho_path} "====================================================================="
-pyscript {pyecho_path} "============Résolution astrométrique (platesolve) de la séquence..."
-seqplatesolve mosaic_ -force  -nocache -disto=ps_distortion
-pyscript {pyecho_path} "====================================================================="
-seqapplyreg mosaic_ -framing=max 
-pyscript {pydir_path}
-
-pyscript {pyecho_path} "====================================================================="
-pyscript {pyecho_path} "============Empilement (mosaïque finale)..."
-pyscript {pyecho_path} "cmd:========> stack r_mosaic_ rej 3 3 -norm=addscale -output_norm -rgb_equal -maximize -overlap_norm -feather=5 -out={image_stem} "
-stack r_mosaic_ rej 3 3 -norm=addscale -output_norm -rgb_equal -maximize -overlap_norm -feather=5 -out={image_stem}
-
-pyscript {pyecho_path} "====================================================================="
-
-
-pyscript {pyecho_path} "============Sauvegarde du résultat final"
-pyscript {pydir_path}
-
-close"""
-
-        return script_content
 
     def create_mosaic(self, args: argparse.Namespace | None = None) -> Path | None:
         """
-        Crée la mosaïque en utilisant le script Siril intégré.
+        Crée la mosaïque avec une session sirilpy gérée.
 
         Returns:
             Chemin vers le fichier de mosaïque créé ou None en cas d'échec
@@ -374,15 +346,14 @@ close"""
             logging.error("Impossible de créer la mosaïque : aucun fichier d'entrée")
             return None
 
-        # Générer le script Siril
-        script_content = self._generate_mosaic_script(input_files)
+        # Construire les appels API
+        operations = self._generate_mosaic_commands(input_files)
 
-        logging.info(f"Script Siril généré pour la mosaïque {self.mosaic_name}")
-        for i, line in enumerate(script_content.split("\n"), 1):
-            if line.strip():
-                logging.debug(f"  {i:2d}: {line}")
+        logging.info(f"Appels API préparés pour la mosaïque {self.mosaic_name}")
+        for operation in operations:
+            logging.debug("sirilpy.cmd : %s", operation.render())
 
-        # Exécuter le script Siril
+        # Exécuter les appels API
         siril = (
             Siril(
                 siril_path=getattr(args, "siril_path", None),
@@ -391,10 +362,10 @@ close"""
             if args is not None
             else Siril.create_with_defaults()
         )
-        success = siril.run_siril_script(script_content, str(self.mosaic_work_dir))
+        success = siril.run_commands(operations, str(self.mosaic_work_dir))
 
         if not success:
-            logging.error("Échec de l'exécution du script Siril pour la mosaïque")
+            logging.error("Échec de l'exécution des appels API pour la mosaïque")
             return None
 
         # Chercher le fichier de sortie de la mosaïque
@@ -412,7 +383,7 @@ close"""
 
         if not output_file:
             logging.error(
-                "Fichier de mosaïque non trouvé après exécution du script Siril"
+                "Fichier de mosaïque non trouvé après exécution des appels API"
             )
             logging.error(
                 f"Emplacements recherchés: {[str(p) for p in potential_outputs]}"

@@ -1,4 +1,5 @@
 """Contrats SPCC/PCC, profils spectraux et erreurs sans catalogues réseau."""
+from lib.siril_api import format_commands as _format_commands, SirilCommand as _SirilCommand
 import argparse
 from pathlib import Path
 from unittest.mock import Mock
@@ -26,16 +27,17 @@ def fake_siril(monkeypatch, rgb):
     monkeypatch.setattr('lib.resource_cache.ResourceCache.find_spcc', lambda self: None)
     runner = Mock()
 
-    def run(script, working_dir, script_name, **kwargs):
+    def run(script, working_dir, name, **kwargs):
+        script = _format_commands(script)
         wcs = WCS(naxis=2)
         wcs.wcs.crpix = [10, 10]
         wcs.wcs.crval = [270.6, -23.0]
         wcs.wcs.cdelt = [-0.001, 0.001]
         wcs.wcs.ctype = ['RA---TAN', 'DEC--TAN']
-        fits.writeto(Path(working_dir) / (f'{Path(script_name).stem}_calibrated.fits' if script_name[0].isdigit() else 'calibrated.fits'), fits.getdata(rgb) * 0.8, wcs.to_header())
+        fits.writeto(Path(working_dir) / (f'{Path(name).stem}_calibrated.fits' if name[0].isdigit() else 'calibrated.fits'), fits.getdata(rgb) * 0.8, wcs.to_header())
         return True
 
-    runner.run_siril_script.side_effect = run
+    runner.run_commands.side_effect = run
     factory = Mock(return_value=runner)
     monkeypatch.setattr('lib.postprocess.Siril', factory)
     return factory, runner
@@ -69,7 +71,7 @@ def test_cached_gaia_is_automatically_used_without_changing_preferences(
     assert result['platesolve_command'] == 'platesolve -force -catalog=localgaia'
     assert result['spcc_command'].startswith('spcc -catalog=gaia')
     assert result['local_gaia_catalogue'] == str(cached)
-    isolated = fake_siril[1].run_siril_script.call_args.kwargs['initfile']
+    isolated = fake_siril[1].run_commands.call_args.kwargs['initfile']
     saved = configparser.ConfigParser()
     saved.read(isolated)
     assert saved['core']['catalogue_gaia_astro'] == str(cached)
@@ -93,7 +95,7 @@ def test_object_resolution_and_all_options(rgb, tmp_path, monkeypatch, fake_siri
     result = _PostProcessorSequence().post_process(rgb, tmp_path / 'report.json', args)['photometry']
     resolver.assert_called_once_with('M20', cache=False)
     factory.assert_called_once_with(siril_path='/opt/siril-cli', siril_mode='native')
-    script = runner.run_siril_script.call_args.args[0]
+    script = _format_commands(runner.run_commands.call_args.args[0])
     assert script.index('load ') < script.index('platesolve ') < script.index('\npcc ') < script.index('\nsave ')
     assert 'platesolve -force 270.6000000000,-23.0000000000 -focal=750 -pixelsize=3.76 -noflip -downscale -catalog=gaia' in script
     assert '\npcc -catalog=apass -limitmag=14\n' in script
@@ -156,7 +158,7 @@ def test_name_resolution_failure(rgb, tmp_path, fake_siril, monkeypatch):
     monkeypatch.setattr('lib.postprocess.SkyCoord.from_name', Mock(side_effect=OSError('offline')))
     with pytest.raises(RuntimeError, match='Recherche CDS impossible'):
         PhotometricColorCalibrator().post_process(rgb, tmp_path / 'report.json', arguments('--photometry-object', 'M20'))
-    fake_siril[1].run_siril_script.assert_not_called()
+    fake_siril[1].run_commands.assert_not_called()
 
 
 @pytest.mark.parametrize('failure', ['exit', 'missing', 'no_wcs'])
@@ -165,12 +167,13 @@ def test_siril_failure_does_not_publish_stale_output(rgb, tmp_path, fake_siril, 
     output.write_bytes(b'previous output')
     factory, runner = fake_siril
 
-    def fail(script, working_dir, script_name):
+    def fail(script, working_dir, name):
+        script = _format_commands(script)
         if failure == 'no_wcs':
-            fits.writeto(Path(working_dir) / (f'{Path(script_name).stem}_calibrated.fits' if script_name[0].isdigit() else 'calibrated.fits'), fits.getdata(rgb))
+            fits.writeto(Path(working_dir) / (f'{Path(name).stem}_calibrated.fits' if name[0].isdigit() else 'calibrated.fits'), fits.getdata(rgb))
         return failure != 'exit'
 
-    runner.run_siril_script.side_effect = fail
+    runner.run_commands.side_effect = fail
     with pytest.raises(RuntimeError):
         _PostProcessorSequence().post_process(rgb, tmp_path / 'report.json', arguments(
             '--disable-gradient', '--enable-photometry', '--photometry-output', str(output)))
@@ -200,13 +203,13 @@ def test_calibrated_image_reaches_next_processor(rgb, tmp_path, fake_siril):
     sequence = _PostProcessorSequence([PhotometricColorCalibrator(), InspectImage()])
     result = sequence.post_process(rgb, tmp_path / 'report.json', arguments('--enable-photometry'))
     assert result['inspectimage']['input_received'] == result['photometry']['output_image']
-    script, work_dir = fake_siril[1].run_siril_script.call_args.args
-    assert f'cd "{work_dir}"' in script
+    operations, work_dir = fake_siril[1].run_commands.call_args.args
+    assert operations[0] == _SirilCommand.create('cd', work_dir)
 
 
 def test_rgb_sip_wcs_validates_spatial_axes(rgb, tmp_path, fake_siril):
     _, runner = fake_siril
-    generate = runner.run_siril_script.side_effect
+    generate = runner.run_commands.side_effect
 
     def generate_sip(*args, **kwargs):
         generate(*args, **kwargs)
@@ -222,7 +225,7 @@ def test_rgb_sip_wcs_validates_spatial_axes(rgb, tmp_path, fake_siril):
             header['B_0_2'] = -1.e-5
         return True
 
-    runner.run_siril_script.side_effect = generate_sip
+    runner.run_commands.side_effect = generate_sip
     result = PhotometricColorCalibrator().post_process(rgb, tmp_path / 'report.json')
     with fits.open(result['output_image']) as hdul:
         assert hdul[0].shape == (3, 20, 20)
@@ -246,7 +249,7 @@ def test_spcc_profiles_quotes_and_audit(
     )
     with caplog.at_level('INFO'):
         result = PhotometricColorCalibrator().post_process(rgb, tmp_path / 'spcc.json', args)
-    script = fake_siril[1].run_siril_script.call_args.args[0]
+    script = _format_commands(fake_siril[1].run_commands.call_args.args[0])
     expected = ('spcc -catalog=localgaia "-oscsensor=Sony IMX533" '
                 '"-oscfilter=No filter" "-whiteref=Average Spiral Galaxy"')
     assert f'\n{expected}\n' in script
@@ -294,7 +297,7 @@ def test_incompatible_spcc_options_do_not_run(
         PhotometricColorCalibrator().post_process(
             rgb, tmp_path / 'result.json', arguments(*options),
         )
-    fake_siril[1].run_siril_script.assert_not_called()
+    fake_siril[1].run_commands.assert_not_called()
 
 
 def test_existing_wcs_and_noflip_are_audited(
@@ -381,7 +384,7 @@ def test_default_resolve_and_orientation_overrides(
     assert result['force_solve'] is forced
     assert result['flip_allowed'] is flip_allowed
     assert result['platesolve_command'] == command
-    assert f'\n{command}\n' in fake_siril[1].run_siril_script.call_args.args[0]
+    assert f'\n{command}\n' in _format_commands(fake_siril[1].run_commands.call_args.args[0])
 
 
 def test_legacy_false_force_cannot_skip_astrometry(
@@ -463,7 +466,7 @@ def test_photometry_reuses_flat_directory(
         report = tmp_path / "03_photometrie/photometry.json"
     original = rgb.read_bytes()
     calibrator.post_process(rgb, report)
-    work = Path(fake_siril[1].run_siril_script.call_args.args[1])
+    work = Path(fake_siril[1].run_commands.call_args.args[1])
     expected = (tmp_path / "03_photometrie/02_photometrie" if numbered
                 else tmp_path / "02_photometry_work")
     assert work == expected
@@ -472,7 +475,7 @@ def test_photometry_reuses_flat_directory(
     stale = work / "obsolete.fits"
     stale.write_bytes(b"obsolete")
     calibrator.post_process(rgb, report)
-    assert Path(fake_siril[1].run_siril_script.call_args.args[1]) == work
+    assert Path(fake_siril[1].run_commands.call_args.args[1]) == work
     assert not stale.exists()
     protected = work / "source.fits"
     protected.write_bytes(rgb.read_bytes())
@@ -499,7 +502,7 @@ def test_complete_spcc_cache_selects_local_without_altering_user_preferences(
     result = PhotometricColorCalibrator().post_process(rgb, tmp_path / 'report.json', arguments())
     assert result['spcc_command'].startswith('spcc -catalog=localgaia')
     assert result['local_spcc_catalogue'] == str(cached)
-    isolated = fake_siril[1].run_siril_script.call_args.kwargs['initfile']
+    isolated = fake_siril[1].run_commands.call_args.kwargs['initfile']
     saved = configparser.ConfigParser()
     saved.read(isolated)
     assert saved['core']['catalogue_gaia_photo'] == str(cached)

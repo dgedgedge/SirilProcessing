@@ -131,10 +131,10 @@ compatibles, il appelle récursivement
 les lights. La préparation des séquences, l'appel Siril, l'export et le nettoyage
 font partie de ces étapes.
 
-Chaque script est soumis au service
-[`Siril.run_siril_script`](../../../../lib/siril.py), qui ajoute
-automatiquement `requires 1.4` et `setcpu` dans son en-tête. Cette version
-minimale s’applique aussi aux scripts de calibration et de création des masters.
+Chaque lot d’appels API est soumis au service
+[`Siril.run_commands`](../../../../lib/siril.py), qui ajoute
+automatiquement `requires 1.4.4`, `setcpu` et `setext fits` à la session. Cette
+version minimale s’applique aussi à la calibration et à la création des masters.
 Un code de sortie Siril non nul déclenche une erreur fatale avec le chemin du
 journal associé ; la calibration du groupe ne peut pas se poursuivre.
 

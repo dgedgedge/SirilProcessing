@@ -682,7 +682,7 @@ AutoGHS portent le nom de leur image amont ; ici `03_restoration` puisque la
 restauration a retenu un candidat. Le mode `--no-restoration-compare-chains`
 produit à la place les étapes séparées `03_deconvolution` et `04_denoise`.
 
-Les dossiers des moteurs conservent scripts `.sps`, journaux `.log`, catalogues
+Les dossiers des moteurs conservent plans d’appels `.commands.json`, journaux `.log`, catalogues
 stellaires et images candidates. Ils sont déterministes et recréés à chaque
 exécution ; pour la déconvolution Siril, ils contiennent aussi l’original de l’étape,
 les PSF et leurs aperçus, ainsi que `matched_stars.csv` préfixé par le nom de
@@ -746,3 +746,6 @@ Les résultats sont également consultables dans les
 [index HTML hiérarchiques](../lightProcess/html-reports.md), avec aperçus
 JPEG/PNG, rapports et liens FITS. Le parent du rapport global porte l’accueil
 en mode autonome ; le plan numéroté conserve l’accueil à la racine de l’objet.
+
+Les traitements Siril utilisent la [factory de sessions sirilpy](../lightProcess/reference/SIRIL_API.md),
+avec démarrage automatique sans IHM, plans d’appels JSON et journaux de session.

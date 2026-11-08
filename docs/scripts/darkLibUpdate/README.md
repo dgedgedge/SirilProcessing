@@ -42,3 +42,6 @@ Le lanceur utilise le Python du venv existant sans installer ni mettre à jour
 les dépendances, y compris avec `--help`. La sélection suit `VENV_DIR`, `.venv`,
 puis `venv`. Si l’environnement manque, il indique la commande d’installation.
 Voir [Installation](../../INSTALLATION.md) pour préparer les prérequis.
+
+Les traitements Siril utilisent la [factory de sessions sirilpy](../lightProcess/reference/SIRIL_API.md),
+avec démarrage automatique sans IHM, plans d’appels JSON et journaux de session.

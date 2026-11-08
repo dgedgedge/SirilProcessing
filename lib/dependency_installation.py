@@ -18,6 +18,7 @@ from lib.cuda_environment import CudaEnvironmentInstaller
 from lib.macos_environment import MacOSEnvironmentInstaller
 from lib.installation_assets import InstallationAssets
 from lib.resource_cache import ResourceCache
+from lib.siril_dependencies import SirilDependencies
 
 
 class DependencyInstaller:
@@ -76,7 +77,8 @@ class DependencyInstaller:
 
     def run(self, *, reset: bool = False, test: bool = False,
             install_only: bool = False, assets_only: bool = False,
-            assets: argparse.Namespace | None = None) -> None:
+            assets: argparse.Namespace | None = None,
+            siril_options: argparse.Namespace | None = None) -> None:
         """Installe puis vérifie, ou teste sans mutation, avec précontrôle avant reset.
 
         reset est incompatible avec test. install_only saute les calculs GPU et
@@ -105,6 +107,8 @@ class DependencyInstaller:
                 ResourceCache(self.installer.root).reset_models((model_options.cosmic_model_dir,
                                                                  model_options.graxpert_model_dir))
             self.installer.install(install_only)
+        if not assets_only:
+            SirilDependencies.verify(self.installer.python, self.installer.root, siril_options)
         if not test and (assets.models or any(InstallationAssets.catalogue_selection(assets))):
             self.preload_assets(assets)
         if assets_only:
@@ -134,15 +138,20 @@ def main() -> int:
     modes.add_argument('--assets-only', action='store_true',
                        help='Précharger les modèles/catalogues dans un venv déjà installé, sans pip')
     InstallationAssets.add_arguments(parser)
+    SirilDependencies.add_arguments(parser)
     workers = parser.add_mutually_exclusive_group()
+    workers.add_argument('--siril-worker', action='store_true', help=argparse.SUPPRESS)
     workers.add_argument('--verify-worker', action='store_true', help=argparse.SUPPRESS)
     workers.add_argument('--assets-worker', action='store_true', help=argparse.SUPPRESS)
     args = parser.parse_args()
-    if args.reset and (args.test or args.verify_worker or args.assets_worker or args.assets_only):
+    if args.reset and (args.test or args.verify_worker or args.assets_worker or args.siril_worker or args.assets_only):
         parser.error('--reset est incompatible avec --test/--check-only, --assets-only et le contrôle interne')
-    if (args.verify_worker or args.assets_worker) and (args.test or args.install_only or args.assets_only):
+    if (args.verify_worker or args.assets_worker or args.siril_worker) and (args.test or args.install_only or args.assets_only):
         parser.error('Le contrôle interne ne se combine pas avec un mode utilisateur')
     try:
+        if args.siril_worker:
+            SirilDependencies.verify_worker(Path(__file__).resolve().parents[1], args)
+            return 0
         manager = DependencyInstaller(Path(__file__).resolve().parents[1], args.venv)
         if args.verify_worker:
             manager.installer.verify_worker()
@@ -150,7 +159,7 @@ def main() -> int:
             InstallationAssets.install(manager.installer.root, args)
         else:
             manager.run(reset=args.reset, test=args.test, install_only=args.install_only,
-                        assets_only=args.assets_only, assets=args)
+                        assets_only=args.assets_only, assets=args, siril_options=args)
         return 0
     except (OSError, ValueError, RuntimeError, ImportError, AssertionError,
             subprocess.CalledProcessError) as error:

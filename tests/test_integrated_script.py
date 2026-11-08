@@ -1,3 +1,4 @@
+from lib.siril_api import format_commands as _format_commands, SirilCommand as _SirilCommand
 from pathlib import Path
 
 from lib.mosaic import Mosaic
@@ -15,7 +16,7 @@ def test_integrated_script(tmp_path):
         ],
     )
 
-    script_content = mosaic._generate_mosaic_script(mosaic.input_files)
+    script_content = _format_commands(mosaic._generate_mosaic_commands(mosaic.input_files))
 
     assert "requires " not in script_content
     assert "convert mosaic_" in script_content

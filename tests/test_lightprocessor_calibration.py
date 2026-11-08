@@ -1,3 +1,4 @@
+from lib.siril_api import format_commands as _format_commands, SirilCommand as _SirilCommand
 from argparse import Namespace
 import importlib.util
 from pathlib import Path
@@ -226,7 +227,7 @@ def test_master_flat_processor_rejects_empty_sequence(tmp_path):
             ),
         )
 
-    siril.run_siril_script.assert_not_called()
+    siril.run_commands.assert_not_called()
 
 
 def test_discover_session_roots_for_target_with_multiple_sessions(tmp_path):
@@ -250,12 +251,12 @@ def test_generate_siril_script_rebuilds_calibrated_sequence(tmp_path):
         tmp_path / "work",
     )
 
-    script = calibration._generate_script(
+    script = _format_commands(calibration._generate_commands(
         sequence_name="light_seq",
         dark_path="/tmp/master_dark.fit",
         flat_path="/tmp/master_flat.fit",
         stack_params={"method": "average", "rejection": "sigma", "rejection_low": 2.5, "rejection_high": 3.0},
-    )
+    ))
 
     assert "convert pp_light_seq" not in script
     assert "register pp_light_seq" not in script
@@ -269,11 +270,11 @@ def test_generate_flat_master_script_stacks_calibrated_sequence_without_reconver
         CalibrationProfile(),
     )
 
-    script = processor._generate_script(
+    script = _format_commands(processor._generate_commands(
         sequence_name="flat_seq",
         output_base=tmp_path / "work" / "master_flat",
         dark_path="/tmp/master_dark.fit",
-    )
+    ))
 
     assert "calibrate flat_seq -dark=/tmp/master_dark.fit -cc=dark -cfa" in script
     assert "convert pp_flat_seq" not in script
@@ -399,15 +400,15 @@ def test_stack_selection_only_after_registration(tmp_path, monkeypatch, method, 
         def create_with_defaults():
             return DummySiril()
 
-        def run_siril_script(self, script_content, working_dir, script_name=None):
+        def run_commands(self, script_content, working_dir, name=None):
             directory = Path(working_dir)
             from lib.siril import Siril
-            script_content = Siril.prepare_script(script_content)
-            calls.append(script_name)
+            script_content = _format_commands(Siril.prepare_commands(script_content))
+            calls.append(name)
             assert 'setext fits' in script_content
             assert '-filter-wfwhm' not in script_content
             assert '-filter-round' not in script_content
-            if script_name == '01_registration.sps':
+            if name == '01_registration':
                 assert not selections
                 inputs = sorted(directory.glob('target_name_*.fits'))
                 initial = SirilSequence.read(directory / 'target_name_.seq')
@@ -430,16 +431,16 @@ def test_stack_selection_only_after_registration(tmp_path, monkeypatch, method, 
                     + ''.join(f'I {i+1} 1\n' for i in range(4))
                     + ''.join(f'R0 {f} {f} .9 1 0 200 H 1 0 {i*.2} 0 1 0 0 0 1\n'
                               for i, f in enumerate([2,3,4,20])))
-            elif script_name == '04_realign.sps':
+            elif name == '04_realign':
                 framing = 'min'
                 assert f'seqapplyreg target_name_ -filter-included -framing={framing}' in script_content
                 assert 'register r_target_name_ -2pass -transf=affine' in script_content
                 assert '\nstack ' not in script_content
                 simulated_registered_sequence(directory, 'target_name_', 'r_target_name_')
-            elif script_name == '04_applyreg.sps':
+            elif name == '04_applyreg':
                 assert 'seqapplyreg r_target_name_ -filter-included -framing=min' in script_content
                 simulated_registered_sequence(directory, 'r_target_name_', 'r_r_target_name_')
-            elif script_name == '04_stacking.sps':
+            elif name == '04_stacking':
                 assert selections == [4]
                 assert 'seqapplyreg' not in script_content
                 assert '\nregister ' not in script_content
@@ -453,7 +454,7 @@ def test_stack_selection_only_after_registration(tmp_path, monkeypatch, method, 
                 assert '-out=' + str(tmp_path/'out/target_name_combined.fits') in script_content
                 (tmp_path/'out/target_name_combined.fits').touch()
             else:
-                raise AssertionError(script_name)
+                raise AssertionError(name)
             return True
 
     stacker = SessionStackingProcessor(siril=DummySiril())
@@ -491,7 +492,7 @@ def test_stack_selection_only_after_registration(tmp_path, monkeypatch, method, 
         assert (calibration / "05_stacking").is_dir()
         assert not (calibration / "stack").exists()
     assert result == tmp_path/'out/target_name_combined.fits'
-    assert calls == ['01_registration.sps', '04_realign.sps', '04_applyreg.sps', '04_stacking.sps']
+    assert calls == ['01_registration', '04_realign', '04_applyreg', '04_stacking']
     assert selections == [4]
     assert report['total_input'] == 4
     assert report['kept_unique_for_stack'] == retained
@@ -522,7 +523,8 @@ def test_stacking_processor_force_cleans_previous_artifacts(tmp_path):
         def create_with_defaults():
             return DummySiril()
 
-        def run_siril_script(self, script_content, working_dir, script_name=None):
+        def run_commands(self, script_content, working_dir, name=None):
+            script_content = _format_commands(script_content)
             assert not stale_file.exists()
             assert not stale_output_fit.exists()
             return False
@@ -562,15 +564,16 @@ def test_stacking_processor_rebuilds_transient_stack_dirs(tmp_path):
     (output_stack_dir / "M33_999.fits").write_bytes(b"old-convert")
     (output_stack_dir / "r_M33_999.fits").write_bytes(b"old-register")
     (session_stack_dir / "M33_stacking.log").write_text("keep log")
-    (session_stack_dir / "stack_M33.sps").write_text("old script")
+    (session_stack_dir / "stack_M33").write_text("old script")
 
     class DummySiril:
         @staticmethod
         def create_with_defaults():
             return DummySiril()
 
-        def run_siril_script(self, script_content, working_dir, script_name=None):
-            assert script_name == "01_registration.sps"
+        def run_commands(self, script_content, working_dir, name=None):
+            script_content = _format_commands(script_content)
+            assert name == "01_registration"
             assert not (input_dir / "M33_999.fits").exists()
             assert not (output_stack_dir / "M33_999.fits").exists()
             assert not (output_stack_dir / "r_M33_999.fits").exists()
@@ -807,9 +810,10 @@ def test_direct_stack_sequence_preserves_sources(
         monkeypatch.setattr(Path, 'symlink_to', fail_symlink)
 
     def inspect_preparation(
-        script: str, working_dir: str, script_name: str | None = None,
+        script: str, working_dir: str, name: str | None = None,
     ) -> bool:
         """Contrôle la séquence effectivement préparée avant tout appel Siril."""
+        script = _format_commands(script)
         directory = Path(working_dir)
         assert directory.name == '02_registration'
         assert 'convert ' not in script
@@ -822,10 +826,10 @@ def test_direct_stack_sequence_preserves_sources(
         return False
 
     siril = Mock()
-    siril.run_siril_script.side_effect = inspect_preparation
+    siril.run_commands.side_effect = inspect_preparation
     result = SessionStackingProcessor(siril=siril).stack_outputs(
         sources, tmp_path / 'out', tmp_path / 'work', 'target',
     )
     assert result is None
-    siril.run_siril_script.assert_called_once()
+    siril.run_commands.assert_called_once()
     assert {source: source.read_bytes() for source in sources} == before

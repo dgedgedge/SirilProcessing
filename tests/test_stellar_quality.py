@@ -1,3 +1,4 @@
+from lib.siril_api import format_commands as _format_commands, SirilCommand as _SirilCommand
 from copy import deepcopy
 from collections.abc import Callable
 import json
@@ -171,8 +172,9 @@ def test_pixel_filter_excludes_defects_before_stacking(
     original = seq.path.read_bytes()
 
     class FakeSiril:
-        def run_siril_script(self, script, directory, **kwargs):
-            if kwargs.get('script_name') == '04_applyreg.sps':
+        def run_commands(self, script, directory, **kwargs):
+            script = _format_commands(script)
+            if kwargs.get('name') == '04_applyreg':
                 simulated_registered_sequence(directory, 'light_', 'r_light_')
             if '\nstack ' in script:
                 selected = SirilSequence.read(tmp_path/'05_stacking/light_.seq')
@@ -183,7 +185,7 @@ def test_pixel_filter_excludes_defects_before_stacking(
 
     with caplog.at_level('DEBUG'):
         assert run_stack(FakeSiril(), files, {'drizzle': mode, 'robust_realign': False},
-                         tmp_path, tmp_path, 'light_', tmp_path/'final', 'requires 1.2',
+                         tmp_path, tmp_path, 'light_', tmp_path/'final', [_SirilCommand.from_text('requires 1.4.4')],
                          'stack r_light_ rej 3 3 -out=final', 'min')
     assert seq.path.read_bytes() == original
     report = json.loads((tmp_path/'03_quality/stellar_profiles.json').read_text())

@@ -194,7 +194,7 @@ def test_html_displays_recorded_accepted_chain_comparison(results: Path) -> None
     assert 'Comparatif des chaînes acceptées' in page
     assert 'Ratio FWHM moyen' in page and 'Écart au retenu' in page
     assert '&lt;chosen&gt;' in page and '<chosen>' not in page
-    assert 'RETENUE' in page and '0.8' in page and '0.9' in page
+    assert 'selection-kept' in page and '0.80' in page and '0.90' in page
 
 
 def test_index_extracts_visible_json_summary_parameters_and_quality(results: Path) -> None:
@@ -217,7 +217,7 @@ def test_index_extracts_visible_json_summary_parameters_and_quality(results: Pat
     for item in ('Synthèse du rapport', 'Chaîne retenue', 'denoise:siril',
                  'Score de sélection', '0.45', 'denoise_modulation', '0.5',
                  'Résultats des tests qualité', 'PASS', '0.7', 'Seuil',
-                 'UNKNOWN', 'NO_LOCAL_SKY', 'Comparaison contrôlée'):
+                 '?', 'NO_LOCAL_SKY', 'Comparaison contrôlée'):
         assert item in summary
 
 
@@ -243,7 +243,7 @@ def test_existing_json_without_prebuilt_ranking_is_summarized_without_changes(
     page = (report.parent / 'index.html').read_text()
     visible = page.split('Données JSON détaillées')[0]
     assert 'Comparatif des chaînes acceptées' in visible
-    assert 'RETENUE' in visible and '0.8' in visible
+    assert 'selection-kept' in visible and '0.80' in visible
     assert '0.9' in visible and '0.85' in visible and '0.5' in visible
     assert report.read_bytes() == original
 
@@ -287,10 +287,10 @@ def test_restoration_report_uses_json_and_only_explains_score_before_table(
     html = (directory / 'index.html').read_text()
     assert 'graxpert → siril' in html
     assert 'gain - penalites' in html
-    assert 'seuil=0.7' in html and 'PASS' in html
+    assert '<td>0.70</td>' in html and 'Satisfait (PASS)' in html
     assert 'CONCLUSION ERRONEE' not in html
     assert 'href="restoration.json"' not in html
-    introduction = html.split('Comparatif des chaînes acceptées</h3>', 1)[1].split('<table>', 1)[0]
+    introduction = html.split('Comparatif des chaînes acceptées</h3>', 1)[1].split('<table', 1)[0]
     assert 'gain - penalites' in introduction
     assert 'Classement d’affichage' not in introduction
 
@@ -370,8 +370,9 @@ def test_registration_displays_recorded_selection_and_profile_decisions(results:
     text = (quality / 'index.html').read_text()
     assert 'Images indépendantes admissibles en entrée : 64' in text
     assert 'Images considérées en entrée du contrôle des profils : 62' in text
-    assert 'bad&lt;pose&gt;.fits' in text and 'ÉCARTÉE' in text
-    assert 'NON CONCLUANTE' in text and 'UNKNOWN' in text
+    assert 'bad&lt;pose&gt;.fits' in text and '✗' in text
+    assert 'selection-rejected' in text
+    assert 'NON CONCLUANTE' in text and '?' in text
     assert 'kept-59.fits' in text
     assert 'quality-criteria.html#r80' in text
     assert 'href="stellar_profiles.json"' not in text
@@ -425,8 +426,8 @@ def test_html_uses_persisted_per_image_decisions(results: Path) -> None:
     ProcessingHtmlReport(results).generate()
     page = (calibration / 'index.html').read_text()
     for text in ['bad&lt;pose&gt;.fits', 'NON ÉVALUÉ : EXCLUSION ANTÉRIEURE',
-                 'DÉSACTIVÉ', 'mesure : 8', 'seuil : 5', 'quality_multiplicity : 4']:
-        assert text in page
+                 'DÉSACTIVÉ', '<td>8</td><td><span class="selection-mark selection-rejected"', 'Seuil ou paramètres communs', 'Multiplicité totale', '<td>4</td>']:
+        assert text in page.replace(' class="criteria-group-start"', '')
     assert 'quality-criteria.html#max_fwhm' in page
     assert 'href="stack.drizzle.json"' not in page
 
@@ -443,7 +444,7 @@ def test_shared_profile_limits_precede_frame_tables_for_new_and_old_reports() ->
     assert html.count('8.25') == html.count('12.75') == 1
     assert html.index('8.25') < html.index('a.fits')
     assert '<th>Groupe des seuils</th>' in html
-    assert 'Groupe 2' in html and 'UNKNOWN' in html
+    assert 'Groupe 2' in html and '?' in html
     rows = html.split('</table>', 1)[1]
     assert '8.25' not in rows and '12.75' not in rows
     old = [{'source': f'old-{i}.fits', 'limits': {'r80': 8.25, 'elongation': 1.5},
@@ -455,7 +456,9 @@ def test_shared_profile_limits_precede_frame_tables_for_new_and_old_reports() ->
                  for f in frames]
     html = ProcessingHtmlReport._decision_trace_view(decisions, references)
     assert html.count('8.25') == 1
-    assert 'référence des seuils : Groupe 1' in html
+    assert '>Groupe des seuils</span></span></th>' in html
+    assert '<td>1</td>' in html.replace(' class="criteria-group-start"', '')
+    assert 'référence des seuils :' not in html
 
 
 def test_pose_basename_links_preserve_sessions_and_rebase_moved_results(results: Path) -> None:
@@ -524,3 +527,319 @@ def test_registration_and_quality_have_distinct_stage_counts(results: Path) -> N
     assert '<td>247</td><td>26</td><td>221</td>' in text
     assert '<td>172</td><td>8</td><td>164</td>' in text
     assert 'Ancien rapport' not in text
+
+
+def test_siril_registration_data_have_definitions_and_no_json_download(results: Path) -> None:
+    """Les faits Siril sont liés aux définitions sans doublon ni cause inventée."""
+    registration = results/'01_calibration/02_registration'
+    stacking = results/'01_calibration/05_stacking'
+    registration.mkdir()
+    stacking.mkdir()
+    source = results/'pose & étoile.fits'
+    source.write_bytes(b'FITS')
+    api = dict(events=[dict(
+        complete=True, command_succeeded=True, sequence='light_', channel=0,
+        parameters=dict(transformation='affine', minpairs='12', maxstars=None,
+                        two_pass=True, selected_only=False),
+        input_count=2, included_count=1, excluded_count=1,
+        frames=[dict(source=str(source), included=True, is_reference=True,
+                     registration_available=True,
+                     measurements=dict(fwhm=2.5, roundness=.91, nbstars=37, pair_matched=0, inliers=0)),
+                dict(source=str(source), included=False, registration_available=False,
+                     measurements={})],
+    )])
+    (registration/'registration.json').write_text(json.dumps(dict(
+        input_count=2, aligned_count=1, rejected_count=1, frames=[], siril_api=api)))
+    (registration/'01_registration.registration.json').write_text(json.dumps(api))
+    (stacking/'04_realign.registration.json').write_text(json.dumps(api))
+    ProcessingHtmlReport(results).generate()
+    for directory in (registration, stacking):
+        page = (directory/'index.html').read_text()
+        assert page.count('Registration : mesures et décisions par image') == 1
+        assert 'INCLUSE' in page and 'EXCLUE' in page
+        assert 'Motif détaillé non exposé par Sirilpy' in page
+        assert '12 (argument explicite)' in page
+        assert 'valeur interne Siril non exposée' in page
+        assert 'Image de référence : compteurs' in page
+        assert '>pose &amp; étoile.fits</a>' in page
+        assert str(source) not in page
+        links = Links()
+        links.feed(page)
+        assert not any(urlsplit(url).path.endswith('.json') for url in links.urls)
+        for term in ('pair_matched', 'inliers', 'minpairs', 'maxstars',
+                     'registration_transform', 'detection_sigma', 'detection_roundness'):
+            assert '../../quality-criteria.html#' + term in links.urls
+            guide = (results/'quality-criteria.html').read_text()
+            assert 'id="' + term + '"' in guide
+    assert 'Registration : mesures et décisions' not in (results/'01_calibration/index.html').read_text()
+
+
+def test_siril_registration_audit_failure_is_visible_without_fabricated_counts(results: Path) -> None:
+    """Une collecte indisponible ou une commande échouée ne ressemble pas à un succès."""
+    registration = results/'01_calibration/02_registration'
+    registration.mkdir()
+    (registration/'failed.registration.json').write_text(json.dumps(dict(events=[dict(
+        complete=False, command_succeeded=False, command_error='<échec explicite>',
+        error='API inaccessible', parameters={}, frames=[],
+    )])))
+    ProcessingHtmlReport(results).generate()
+    page = (registration/'index.html').read_text()
+    assert 'Audit API incomplet : API inaccessible' in page
+    assert 'Commande Siril échouée : &lt;échec explicite&gt;' in page
+    assert 'Images dans la séquence : 0' not in page
+
+
+def test_legacy_registration_uses_recorded_measurements_and_common_definitions(results: Path) -> None:
+    """Les anciens JSON permettent déjà d'expliquer et d'afficher les mesures connues."""
+    registration = results/'01_calibration/02_registration'
+    registration.mkdir()
+    (registration/'registration.json').write_text(json.dumps(dict(
+        input_count=1, aligned_count=0, rejected_count=1,
+        frames=[dict(source='pose.fits', status='excluded', reasons=['excluded_by_siril'],
+                     measurements=dict(fwhm=2.73, roundness=.81, nbstars=42))],
+    )))
+    ProcessingHtmlReport(results).generate()
+    page = (registration/'index.html').read_text()
+    assert '<td>2.73</td><td>0.81</td><td>42</td>' in page
+    assert 'Exclusion Siril : motif détaillé non fourni' in page
+    assert '../../quality-criteria.html#minpairs' in page
+    assert '../../quality-criteria.html#registration_roundness' in page
+    assert 'Données détaillées Sirilpy non enregistrées' in page
+
+
+def test_quality_columns_have_numeric_rows_and_common_thresholds() -> None:
+    """Les règles ne sont pas répétées ; les seuils communs précèdent les poses."""
+    import copy
+
+    frames = []
+    for index in (1, 2):
+        frames.append(dict(
+            source=f'pose-{index}.fits', status='accepted', final_status='retained',
+            measurements={'fwhm': 2.25},
+            checks=[
+                dict(criterion='registration_validity', status='PASS', rule='TEXTE_COMMUN_INTERDIT',
+                     inputs=dict(finite_measurements=True, positive_fwhm=True,
+                                 included=True, registration_valid=True)),
+                dict(criterion='fwhm_filter', status='PASS', value=index,
+                     threshold=10.12345, rule='value <= threshold'),
+                dict(criterion='registration_geometry', stage='debayer_', status='PASS',
+                     threshold={'min_scale': .5, 'max_scale': 2}, reason='TEXTE_PAR_POSE_INTERDIT'),
+                dict(criterion='registration_geometry', stage='r_debayer_', status='SKIPPED',
+                     threshold={'min_scale': .5, 'max_scale': 2}),
+            ],
+            profile=dict(reference_id=1, status='accepted', stars_measured=72, sectors=9,
+                         r80=3.25, r80_fraction=0.0, elongation=1.25, elongation_fraction=0),
+            weighting=dict(roundness_multiplicity=1, fwhm_multiplicity=2,
+                           quality_multiplicity=2, effective_stack_entries=2),
+        ))
+    original = copy.deepcopy(frames)
+    html = ProcessingHtmlReport._decision_trace_view(frames, [dict(reference_id=1,
+        r80={'limit': 8.5}, elongation={'limit': 1.5})])
+    assert frames == original
+    assert html.count('10.12') == 1 and html.index('10.12') < html.index('pose-1.fits')
+    assert '10.12345' not in html
+    assert '<td>0.00</td>' in html
+    assert '<td>72</td>' in html
+    assert 'UNKNOWN' not in html
+    assert html.index('Seuils communs des profils') < html.index('class="quality-legend"')
+    assert html.index('class="quality-legend"') < html.index('class="criteria-scroll"')
+    legend = html.split('class="quality-legend"', 1)[1].split('</p>', 1)[0]
+    for marker in ('selection-kept', 'selection-skipped', 'selection-rejected'):
+        assert marker in legend
+    assert html.count('8.5') == 1
+    for text in ('TEXTE_COMMUN_INTERDIT', 'TEXTE_PAR_POSE_INTERDIT',
+                 'value &lt;= threshold', 'Décisions et mesures', '<ul>'):
+        assert text not in html
+    assert 'Contrôle géométrique Python — debayer_' in html
+    assert 'Contrôle géométrique Python — r_debayer_' in html
+    assert '>Validité</span></span></th>' in html
+    assert '>Mesures finies</span></span></th>' not in html
+    assert '>Transformation valide</span></span></th>' not in html
+    assert '>weighted_fwhm</span></span></th>' in html
+    assert '>Fraction r80</span></span></th>' in html
+    assert 'selection-kept' in html and '>✓</span>' in html
+    assert '>RETENUE<' not in html
+
+    class Rows(HTMLParser):
+        """Collecte les cellules du corps pour contrôler l'alignement des poses."""
+
+        def __init__(self) -> None:
+            """Initialise le suivi du corps et des cellules."""
+            super().__init__()
+            self.body = False
+            self.rows: list[list[str]] = []
+            self.cell = False
+
+        def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+            """Suit uniquement le tbody du tableau de critères."""
+            if tag == 'tbody':
+                self.body = True
+            elif tag == 'tr' and self.body:
+                self.rows.append([])
+            elif tag == 'td' and self.body:
+                self.rows[-1].append('')
+                self.cell = True
+
+        def handle_endtag(self, tag: str) -> None:
+            """Termine la collecte d'une cellule ou du corps."""
+            if tag == 'tbody':
+                self.body = False
+            elif tag == 'td':
+                self.cell = False
+
+        def handle_data(self, data: str) -> None:
+            """Conserve le texte des valeurs sans interpréter les nombres."""
+            if self.body and self.cell:
+                self.rows[-1][-1] += data
+
+    table = Rows()
+    table.feed(html)
+    assert len(table.rows) == 2 and len(table.rows[0]) == len(table.rows[1])
+    assert table.rows[0][0] == 'pose-1.fits'
+    assert table.rows[0][1:3] == ['✓', '✓']
+    assert '-' in table.rows[0]
+    assert 'PASS' not in table.rows[0] and 'SKIPPED' not in table.rows[0]
+    assert table.rows[0][-4:] == ['1', '2', '2', '2']
+
+
+def test_quality_columns_keep_varying_limits_ranks_and_missing_checks() -> None:
+    """Des seuils différents restent par pose ; zéro et absence restent distincts."""
+    frames = [
+        dict(source='a.fits', checks=[dict(criterion='fwhm_reject_percent', status='PASS',
+                                         value=20, rank=0, threshold={'retained_count': 5})]),
+        dict(source='b.fits', checks=[dict(criterion='fwhm_reject_percent', status='FAIL',
+                                         value=30, rank=7, threshold={'retained_count': 6})]),
+        dict(source='c.fits', checks=[]),
+    ]
+    html = ProcessingHtmlReport._decision_trace_view(frames)
+    assert 'Variables selon la pose' in html
+    assert '>Rang</span></span></th>' in html
+    assert '<td>20</td><td>0</td><td>5</td><td><span class="selection-mark selection-kept"' in html.replace(' class="criteria-group-start"', '')
+    assert '<td>30</td><td>7</td><td>6</td><td><span class="selection-mark selection-rejected"' in html.replace(' class="criteria-group-start"', '')
+    third = html[html.index('c.fits'):].replace(' class="criteria-group-start"', '')
+    assert '<td>?</td><td>?</td><td>?</td><td>?</td>' in third
+
+
+def test_quality_headers_link_to_calculation_definitions(results: Path) -> None:
+    """Les en-têtes conduisent aux calculs du guide commun, sans règles par ligne."""
+    quality = results/'01_calibration/03_quality'
+    quality.mkdir()
+    names = ('registration_validity', 'fwhm_filter', 'roundness_filter', 'nbstars_filter')
+    (quality/'selection_decisions.json').write_text(json.dumps(dict(
+        complete=True, frames=[dict(source='pose.fits', checks=[
+            dict(criterion=name, value=1, status='PASS', threshold=2,
+                 rule='FORMULE_A_NE_PAS_REPETER') for name in names])],
+    )))
+    ProcessingHtmlReport(results).generate()
+    page = (quality/'index.html').read_text()
+    guide = (results/'quality-criteria.html').read_text()
+    for name in (*names, 'weighted_fwhm'):
+        assert f'quality-criteria.html#{name}' in page
+        assert f'id="{name}"' in guide
+    assert 'transform:rotate(-90deg)' in page
+    import re
+    header = page.split('<table class="criteria-table">', 1)[1].split('</thead>', 1)[0]
+    assert all('criteria-vertical' in tag for tag in re.findall(r'<th\b[^>]*>', header))
+    assert 'class="criteria-vertical"' in page
+    assert '.criteria-table th,.criteria-table td{border:1px solid' in page
+    assert 'width:10rem;min-width:10rem;max-width:10rem' in page
+    assert '.selection-kept{color:#4ade80}' in page
+    assert '.selection-rejected{color:#f87171}' in page
+    assert '.selection-skipped{color:#fff}' in page
+    assert 'class="criteria-vertical criteria-group-start"' in page
+    assert '<td class="criteria-group-start">' in page
+    assert 'FORMULE_A_NE_PAS_REPETER' not in page
+    assert 'médiane + k' in guide and 'médiane − k' in guide
+
+
+def test_registration_validity_is_one_column_using_the_recorded_verdict() -> None:
+    """Une donnée absente ne devient pas OK ; aucun verdict n'est recalculé."""
+    frames = [dict(source=f'pose-{index}.fits', checks=[dict(
+        criterion='registration_validity', status=status, value=2,
+        inputs=dict(finite_measurements=True, positive_fwhm=True,
+                    included=True, registration_valid=True),
+    )]) for index, status in enumerate(('PASS', 'FAIL', None, 'SKIPPED', 'DISABLED'))]
+    html = ProcessingHtmlReport._decision_trace_view(frames)
+    body = html.split('<tbody>', 1)[1].split('</tbody>', 1)[0].replace(' class="criteria-group-start"', '')
+    import re
+    rows = re.findall(r'<tr>(.*?)</tr>', body, re.S)
+    validity = [re.findall(r'<td>(.*?)</td>', row, re.S)[3] for row in rows]
+    assert ['✓' if '>✓</span>' in cell else '✗' if '>✗</span>' in cell
+            else '-' if '>-</span>' in cell else cell for cell in validity] == ['✓', '✗', '?', '-', '-']
+    assert html.count('>Validité</span></span></th>') == 1
+    for title in ('Mesures finies', 'fwhm positive', 'Incluse', 'Transformation valide'):
+        assert '>' + title + '</span>' not in html
+    guide = ProcessingHtmlReport._quality_guide()
+    for explanation in ('ni NaN ni valeur infinie', 'strictement supérieure à zéro',
+                        'matrice 3 × 3', 'coche verte', 'croix rouge'):
+        assert explanation in guide
+
+
+def test_restoration_tables_use_vertical_groups_symbols_and_recorded_values() -> None:
+    """Les chaînes acceptées non retenues et les contrôles non bloquants restent distincts."""
+    import copy
+    import re
+
+    payload = dict(selected_chain=['best'], selection_score=1.67891, variants=[
+        dict(chain=[], status='reference', selection_score=0.0),
+        dict(chain=['other'], status='accepted', selection_score=1.23456,
+             criteria={'noise': dict(status='PASS', value=.123456, threshold=1.0)}),
+        dict(chain=['best'], status='accepted', selection_score=1.67891,
+             criteria={'noise': dict(status='PASS', value=.123456, threshold=1.0),
+                       'diffuse': dict(status='FAIL', value=.078912, threshold=.05, blocking=False)}),
+        dict(chain=['bad<name>'], status='rejected', selection_score=-.123456,
+             criteria={'noise': dict(status='FAIL', value=1.23456, threshold=1.0)}),
+    ])
+    original = copy.deepcopy(payload)
+    html = ProcessingHtmlReport._restoration_view(payload)
+    assert payload == original
+    assert '1.68' in html and '1.67891' not in html
+    assert '0.12' in html and '0.123456' not in html
+    assert 'bad&lt;name&gt;' in html and 'bad<name>' not in html
+    assert 'Bloquant' in html and 'UNKNOWN' not in html
+    assert 'title="Chaîne admissible"' in html
+    assert '>OK<' not in html and '>NOK<' not in html
+    tables = html.split('<table class="criteria-table presentation-table">')[1:]
+    assert len(tables) == 2
+    for table in tables:
+        header = table.split('</thead>', 1)[0]
+        assert all('criteria-vertical' in tag for tag in re.findall(r'<th\b[^>]*>', header))
+    main = tables[-1].split('<tbody>', 1)[1].split('</tbody>', 1)[0]
+    rows = re.findall(r'<tr>(.*?)</tr>', main, re.S)
+    cells = [[re.sub(r'<[^>]+>', '', cell) for cell in re.findall(r'<td\b[^>]*>(.*?)</td>', row, re.S)]
+             for row in rows]
+    assert len({len(row) for row in cells}) == 1
+    assert cells[1][:4] == ['other', '✓', '-', '1.23']
+    assert cells[2][:4] == ['best', '✓', '✓', '1.68']
+    assert cells[3][1:4] == ['✗', '✗', '-0.12']
+    assert cells[2][7:11] == ['0.08', '0.05', '0', '✗']
+    assert 'class="quality-legend"' in html.split('<table', 1)[0]
+
+
+def test_restoration_child_tables_share_style_without_changing_other_stages(results: Path) -> None:
+    """Les pages locales sont harmonisées ; les autres étapes gardent leur disposition."""
+    payload = dict(status='accepted', parameters={'gain': .123456},
+                   criteria={'noise': dict(status='PASS', value=.123456, threshold=1.0),
+                             'diffuse': dict(status='UNKNOWN', value=None, threshold=None)})
+    stage = results/'04_restoration/02_local'
+    stage.mkdir()
+    child = stage/'audit.json'
+    other = results/'01_calibration/audit.json'
+    data = json.dumps(payload)
+    child.write_text(data)
+    other.write_text(data)
+    ProcessingHtmlReport(results).generate()
+    local = (stage/'index.html').read_text()
+    calibration = (other.parent/'index.html').read_text()
+    root_page = (stage.parent/'index.html').read_text()
+    assert 'class="criteria-table presentation-table"' in root_page
+    assert '>Dossier</span></span></th>' in root_page
+    assert '>accepted<' not in root_page
+    assert '>✓</span>' in root_page
+    assert 'class="criteria-table presentation-table"' in local
+    assert 'class="criteria-table presentation-table"' not in calibration
+    assert '>0.12<' in local and '>0.123456<' not in local
+    assert '>✓</span>' in local and '>UNKNOWN<' not in local
+    assert 'quality-criteria.html#noise' in local
+    assert 'class="quality-legend"' in local
+    assert child.read_text() == other.read_text() == data

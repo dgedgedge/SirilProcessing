@@ -57,10 +57,10 @@ l’image hors du cadre reste accepté. Le contrôle de recouvrement par boîte
 englobante est conservateur : il ne mesure pas une fraction exacte de recouvrement.
 
 Dans le traitement standard, le dématriçage est suivi d’un nouvel alignement.
-Le script `04_debayer_registration.sps` se termine après ce calcul. Python
+Le script `04_debayer_registration.commands.json` se termine après ce calcul. Python
 contrôle alors la séquence `debayer_*.seq` et écrit les exclusions avant de
 permettre son rééchantillonnage. Le réalignement robuste utilise de même
-`04_realign.sps`, puis un contrôle avant `04_stacking.sps`. Ces scripts restent
+`04_realign.commands.json`, puis un contrôle avant `04_stacking.commands.json`. Ces scripts restent
 dans `05_stacking/`. Les alignements supplémentaires sont inutilisés en mode
 Drizzle actif, où les transformations initiales contrôlées sont appliquées.
 
@@ -359,11 +359,12 @@ Le fichier `<sortie>.drizzle.json` contient notamment :
 - `stellar_profiles` : bilan du filtre de profils et chemin vers les mesures
   détaillées dans `03_quality/stellar_profiles.json`.
 
-Pour les critères Siril, le rapport ne fournit pas les seuils effectifs de chaque filtre, ni les mesures
-et le motif individuel de rejet pour toutes les poses exclues. La FWHM pondérée
-utilisée pour sélectionner n’est pas enregistrée dans `frames`. Pour examiner
-ces valeurs, consulter la séquence de `02_registration`. Le journal indique
-la médiane, la tolérance et les bornes effectives du filtre du nombre d’étoiles.
+Les décisions Python et les seuils effectifs par pose figurent dans
+`03_quality/selection_decisions.json`, puis dans l’index HTML. Le tableau
+`frames` du bilan Drizzle reste limité aux survivantes : il ne remplace pas cet
+audit. Les informations d’alignement Siril sont capturées séparément, par l’API
+lorsqu’elle est accessible ou par le fichier de séquence enregistré par Siril,
+comme décrit ci-dessous ; elles ne fournissent pas un motif détaillé de rejet.
 
 La limite FWHM du diagnostic Drizzle décide de l’activation de Drizzle ; elle
 n’est pas un filtre supplémentaire de sélection des poses. Le rejet de pixels
@@ -414,14 +415,114 @@ Les profils stellaires, les contrôles géométriques ultérieurs, la pondérati
 et la sélection finale complètent cet audit. Le résultat de sélection ne
 signifie pas à lui seul que l’empilement a réussi. Les index présentent ces
 données sans recalculer les décisions ni proposer les JSON au téléchargement.
+Les tableaux HTML organisent les critères en colonnes de mesures et de
+verdicts, avec les seuils communs avant les poses et les seuils variables dans
+leurs colonnes. Les règles de calcul sont définies uniquement dans le guide
+commun accessible depuis les en-têtes ; elles ne sont pas répétées par pose.
+Les contrôles géométriques sont distingués selon leur étape d’exécution.
 Un rapport ancien sans audit par pose reste explicitement incomplet ; une
 régénération HTML seule ne recrée pas les décisions manquantes. La version du
 pipeline qualité est augmentée pour invalider les diagnostics précédents lors
 d’un nouveau traitement.
 
 Le rapport `02_registration/registration.json` conserve désormais la sortie
-Siril avant les filtres Python. `selection_flow` sépare ensuite les effectifs
+Siril avant les filtres Python. Ses effectifs comptent les drapeaux d’inclusion
+Siril ; `invalid_measurements_count` conserve séparément les poses encore
+incluses dont les mesures ou la matrice échouent au diagnostic de validité
+Python. Ces poses relèvent du contrôle géométrique suivant et ne sont pas
+présentées comme des exclusions décidées par Siril. `selection_flow` sépare ensuite les effectifs
 de registration, géométrie, filtres qualité et profils, avec sous-étapes et
 retraits successifs. Dans l’audit qualité, `input_count` compte les poses
 admissibles après registration ; `inventory_count` compte toutes les poses
 référencées, y compris celles déjà exclues par Siril.
+
+
+## Audit de la registration avec Sirilpy
+
+Chaque appel `register` exécuté par `Siril.run_commands()` est suivi d’une
+lecture de `get_seq()` avant `close` ou une autre commande. La séquence est
+préalablement chargée par `load_seq` lorsque ce mode le permet, pour que la
+registration utilise l’état public et conserve les compteurs en mémoire. Cela couvre
+l’alignement initial et les registrations supplémentaires après dématriçage
+ou réalignement. Les données proviennent des modèles publics `ImgData`,
+`RegData` et `Homography` lorsqu’ils sont accessibles, sans interprétation des
+messages textuels de Siril.
+
+**Limite vérifiée sur Siril 1.4.4 en console :** `load_seq` est refusé comme
+commande non scriptable, y compris avec le lancement `-p` à pipes. Les commandes
+de séquence travaillent alors sur un état temporaire et `get_seq()` ne peut
+pas le lire après la registration. L’audit utilise dans ce cas le fichier `.seq`
+produit par Siril, avec le lecteur de séquences existant. Il enregistre
+`data_source = siril_sequence`, `api_data_available = false` et l’erreur API.
+Les inclusions, mesures et matrices sont disponibles ; les nombres de paires
+et d’inliers ne sont pas stockés dans ce format et restent inconnus. Aucun
+changement du lancement automatique, aucune ouverture d’IHM ni analyse de logs
+ne sont nécessaires. Lorsque l’API est accessible, la source est `sirilpy` et
+les compteurs sont capturés avant leur perte à la fermeture.
+
+L’audit interne `<nom>.registration.json` conserve les événements dans leur
+ordre d’exécution. Pour l’alignement initial, ils sont intégrés sous `siril_api`
+dans `02_registration/registration.json`. La page HTML présente cet ensemble
+une seule fois. Les audits des réalignements sont affichés dans le répertoire
+où ils sont exécutés. Les JSON restent internes et ne sont pas proposés au
+lecteur ; les définitions sont liées depuis les tableaux vers le glossaire
+commun `quality-criteria.html`.
+
+Pour chaque appel sont conservés le nom de séquence, le canal, l’indice de
+référence, les effectifs et les options explicites. Les réglages communs sont
+affichés une seule fois avant le tableau. Pour chaque pose sont conservés :
+
+- l’indice API, à partir de zéro, et le numéro réel de fichier `filenum` ;
+- le fichier réellement donné par `get_seq_frame_filename()` ;
+- le drapeau d’inclusion `ImgData.incl` après la commande ;
+- la FWHM, la FWHM pondérée, la rondeur, la qualité, le fond et le nombre
+  d’étoiles disponibles dans `RegData` ;
+- la matrice `H` et, uniquement si l’API en mémoire est accessible,
+  `pair_matched` (paires d’étoiles appariées) et `Inliers` (correspondances
+  conservées après RANSAC).
+
+RANSAC cherche une transformation cohérente en écartant les correspondances
+aberrantes. Le nombre d’étoiles détectées, le nombre de paires appariées et le
+nombre d’inliers sont trois informations différentes. Une référence peut
+avoir une transformation identité et des compteurs nuls ; elle n’est pas
+rejetée pour cette seule raison. Une FWHM nulle est une mesure non initialisée.
+Une valeur absente ou non finie est conservée comme inconnue, jamais comme un
+zéro inventé.
+
+Les critères Siril sont documentés sans les confondre avec ceux de Python :
+
+| Réglage ou contrôle | Rôle | Information disponible |
+| --- | --- | --- |
+| `minpairs` | Minimum de paires communes avec la référence exigé par Siril ; une pose insuffisamment appariée est exclue. | Argument explicite s’il est fourni ; valeur interne implicite inconnue. |
+| `maxstars` | Nombre maximal d’étoiles recherchées par pose ; limite de travail, pas seuil de rejet d’une pose. | Argument explicite s’il est fourni. |
+| `transf` | Modèle géométrique recherché : translation, similitude, affine ou homographie. | Modèle explicite et matrice calculée. |
+| Détection stellaire | Seuil au-dessus du bruit (`sigma`), rondeur minimale et ajustement des candidats stellaires. | Mesures globales après détection ; valeurs courantes de ces seuils non exposées par les structures API utilisées. |
+| Géométrie Python | Mesures finies, FWHM positive, matrice non singulière, orientation, échelles locales et présence dans le cadre. | Bornes et motif appliqué dans l’audit Python, après la registration Siril. |
+
+`RegData` ne contient aucun code détaillé de rejet par pose. Le rapport
+indique donc « motif détaillé non exposé par Sirilpy » ; il ne transforme pas
+une absence de données ou un compteur nul en diagnostic de suivi, nuage,
+manque d’étoiles ou échec RANSAC. Il ne compare pas arbitrairement les compteurs
+à un seuil implicite supposé. Avec `-selected`, les poses déjà exclues peuvent
+rester présentes dans l’inventaire sans être retraitées : le drapeau après
+commande ne mesure pas à lui seul de nouvelles exclusions.
+
+Une erreur de commande reste fatale et son éventuel état de séquence encore
+lisible est conservé. Une erreur de collecte API conserve sa cause et déclenche la lecture du `.seq`.
+Si cette lecture échoue aussi, l’audit est explicitement incomplet, sans faux
+effectifs à zéro. `complete` décrit la collecte de l’inventaire ; il ne garantit
+ni un succès de commande ni la disponibilité d’un motif détaillé ou des compteurs. La version du pipeline qualité est
+augmentée pour que les reprises anciennes ne dispensent pas de cette collecte.
+Une simple régénération HTML ne peut pas retrouver des compteurs API qui
+n’ont pas été enregistrés : il faut relancer le traitement concerné.
+
+Les tests `test_registration_audit.py` couvrent les valeurs inconnues, les
+références, les canaux, les registrations successives et la capture avant
+fermeture. Le test réel optionnel `test_siril_api_integration.py` vérifie quatre
+poses étoilées, puis le même parcours avec une cinquième pose sans étoiles :
+Siril conserve les quatre premières et exclut la cinquième ; le rapport et
+l’index doivent refléter ce résultat sans attribuer de cause détaillée.
+
+Références : [API Sirilpy et modèles](https://siril.readthedocs.io/en/stable/Python-API.html),
+[commande register](https://siril.readthedocs.io/en/stable/Commands.html#register),
+[détection stellaire](https://siril.readthedocs.io/en/stable/Commands.html#setfindstar).

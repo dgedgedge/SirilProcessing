@@ -704,3 +704,32 @@ présentation et la distinction des audits anciens sans décisions détaillées.
 Les seuils de profils sont testés avec plusieurs groupes comparables : stockage
 unique dans les références, identifiant par pose, groupe insuffisant sans seuil,
 lecture des anciens `limits` et affichage des limites avant les tableaux.
+
+`test_siril_api.py` couvre la factory avec un véritable transport local et le
+worker sirilpy : fermeture et erreurs, authentification, isolation des sessions,
+modèles et tableaux. Les tests des traitements utilisent des `SirilCommand`
+et vérifient les mêmes opérations et critères scientifiques. L’installateur
+vérifie aussi le module fourni par le moteur Siril choisi.
+
+`SIRIL_API_INTEGRATION=1 .venv/bin/python -m pytest -q tests/test_siril_api_integration.py`
+valide avec Siril réel un champ synthétique irrégulier : quatre poses décalées,
+registration, audit qualité et empilement. Les sources et les préférences sont
+préservées. Les produits sont temporaires sous `tmp/`, accessible au Flatpak.
+Le test est désactivé par défaut et accepte `SIRIL_API_MODE` / `SIRIL_API_PATH`.
+
+
+Les tests `test_registration_audit.py` vérifient l’audit structuré de chaque
+registration : compteurs d’appariement, référence, seuils explicites ou
+inconnus, collecte incomplète et capture avant fermeture. Les tests HTML
+vérifient les liens de définition et l’absence de téléchargement JSON.
+L’essai opt-in `SIRIL_API_INTEGRATION=1` couvre aussi une pose synthétique sans
+étoiles rejetée par Siril parmi quatre poses étoilées retenues ; il contrôle
+les effectifs, l’inclusion enregistrée, l’index et la conservation des sources.
+
+
+Les tableaux HTML de restauration sont vérifiés avec les mêmes conventions
+que la qualité : titres verticaux, groupes de critères, deux décimales,
+symboles et légendes. Les tests distinguent une chaîne rejetée d’une chaîne
+acceptée non retenue, conservent les drapeaux non bloquants, vérifient les
+contrôles locaux et laissent les autres étapes dans leur disposition actuelle.
+Les valeurs JSON restent inchangées.
