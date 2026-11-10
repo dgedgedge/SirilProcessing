@@ -157,3 +157,111 @@ def test_invalid_log_heights_cannot_enter_the_score(height: float) -> None:
 
     with pytest.raises(ValueError, match='Hauteur'):
         add_tail_height_objective(linear_histogram_profile(line_counts()), {'height': height}, .25, 'red')
+
+
+def test_regression_floor_uses_display_bins_and_full_population() -> None:
+    """Une droite d'effectif connu est convertie vers le graphique et le champ."""
+    from lib.ghs_linear_histogram import add_regression_floor_objective
+
+    counts = np.full(128, 320.)
+    counts[4] = 100000
+    line = linear_histogram_profile(counts)
+    original = line.copy()
+    full = add_regression_floor_objective(line, 4096)
+    assert full['regression_floor']['predicted_log10_count'] == pytest.approx(1)
+    assert full['regression_floor']['achieved']
+    sampled = add_regression_floor_objective(linear_histogram_profile(counts / 4), 4096, 4)
+    assert sampled['regression_floor']['predicted_log10_count'] == pytest.approx(1)
+    assert sampled['regression_floor']['estimated']
+    finer = add_regression_floor_objective(line, 8192)
+    assert finer['regression_floor']['predicted_log10_count'] == pytest.approx(np.log10(5))
+    assert not finer['regression_floor']['achieved']
+    assert line == original
+
+
+def test_regression_floor_prefers_target_and_guides_intermediate_passes() -> None:
+    """La progression sous le seuil est possible, sans bonus après son atteinte."""
+    from lib.ghs_linear_histogram import add_regression_floor_objective
+
+    counts = np.full(128, 32.)
+    counts[4] = 100000
+    line = linear_histogram_profile(counts)
+    low = add_regression_floor_objective(line, 4096)
+    higher = add_regression_floor_objective(dict(line, intercept=line['intercept']+.5), 4096)
+    target = add_regression_floor_objective(dict(line, intercept=line['intercept']+1.01), 4096)
+    above = add_regression_floor_objective(dict(line, intercept=line['intercept']+2), 4096)
+    assert low['score'] < higher['score'] < target['score']
+    assert above['score'] == target['score'] == line['score']
+    assert add_regression_floor_objective(line, 4096, minimum_count=0)['score'] == line['score']
+    missing = add_regression_floor_objective(linear_histogram_profile(np.zeros(128)), 4096)
+    assert missing['regression_floor']['predicted_log10_count'] is None
+    assert not missing['regression_floor']['achieved'] and missing['loss'] is None
+
+
+@pytest.mark.parametrize('bins,scale,minimum', [(0, 1, 10), (True, 1, 10),
+                                               (128, 0, 10), (128, np.inf, 10),
+                                               (128, 1, -1), (128, 1, np.nan)])
+def test_regression_floor_rejects_invalid_units(bins: int, scale: float, minimum: float) -> None:
+    """Les conversions invalides ne produisent aucun score exploitable."""
+    from lib.ghs_linear_histogram import add_regression_floor_objective
+
+    with pytest.raises(ValueError):
+        add_regression_floor_objective(linear_histogram_profile(line_counts()), bins, scale, minimum)
+
+
+def test_regression_floor_evaluates_falling_line_at_point_eight() -> None:
+    """Le seuil utilise la pente à 0,8 même en dehors du segment mesuré."""
+    from lib.ghs_linear_histogram import add_regression_floor_objective
+
+    x = (np.arange(128) + .5) / 128
+    counts = np.rint(3200 * 10 ** (-3*x))
+    counts[4] = 100000
+    counts[64:] = 0
+    line = linear_histogram_profile(counts)
+    result = add_regression_floor_objective(line, 4096)
+    assert line['measurable'] and line['line_end'] <= .5
+    segment = (x >= line['line_start']) & (x < line['line_end'])
+    slope, intercept = np.polyfit(x[segment], np.log10(counts[segment]), 1)
+    expected = intercept + slope*.8 + np.log10(128/4096)
+    assert result['regression_floor']['predicted_log10_count'] == pytest.approx(expected)
+    assert not result['regression_floor']['achieved']
+
+
+def test_extrapolation_cannot_validate_the_reference_floor() -> None:
+    """Une droite haute arrêtée à 0,5 ne prouve aucun niveau à 0,8."""
+    from lib.ghs_linear_histogram import add_regression_floor_objective
+
+    counts = line_counts()
+    counts[64:] = 0
+    report = add_regression_floor_objective(linear_histogram_profile(counts), 4096)
+    floor = report['regression_floor']
+    assert floor['predicted_log10_count'] > 1
+    assert floor['extrapolated'] and not floor['reference_covered']
+    assert not floor['achieved'] and report['score'] < 0
+    covered = add_regression_floor_objective(linear_histogram_profile(np.full(128, 640.)), 4096)
+    assert covered['regression_floor']['achieved']
+    assert covered['score'] > report['score']
+
+
+def test_reference_coverage_selects_a_supported_line_over_a_long_left_plateau() -> None:
+    """La régression du seuil porte sur une droite qui contient réellement 0,8."""
+    x = (np.arange(128)+.5)/128
+    counts = np.zeros(128)
+    left = (x >= .0625) & (x < .47)
+    right = (x >= .6) & (x < .875)
+    counts[left] = np.rint(1e5*10**(-2*x[left]))
+    counts[right] = np.rint(1e6*10**(-4*x[right]))
+    counts[4] = 1e9
+    free = linear_histogram_profile(counts)
+    supported = linear_histogram_profile(counts, reference_intensity=.8)
+    assert free['line_end'] < .5
+    assert supported['reference_covered']
+    assert supported['line_start'] <= .8 <= supported['line_end']
+    assert supported['line_span'] < free['line_span']
+
+
+@pytest.mark.parametrize('reference', [-.1, .9, float('nan'), float('inf')])
+def test_invalid_reference_intensity_is_rejected(reference: float) -> None:
+    """La référence ne peut sortir de la fenêtre réellement analysée."""
+    with pytest.raises(ValueError, match='référence'):
+        linear_histogram_profile(line_counts(), reference_intensity=reference)

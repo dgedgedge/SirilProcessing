@@ -225,8 +225,10 @@ Les moteurs Siril organisent leur calcul en [phases d’exécution indépendante
 
 Le [rendu final AutoGHS](auto-ghs.md) termine cette séquence par défaut.
 Voir aussi son [moteur et ses histogrammes](auto-ghs-algorithm.md) et le
-[traitement séparé des étoiles](star-rendering.md). Une panne de cette phase
-est fatale, sans reprise automatique ni substitution de rendu.
+[traitement séparé des étoiles](star-rendering.md). En mode `auto`, une
+saturation mémoire CUDA dans le moteur GHS autorise une reprise CPU unique,
+sans relancer StarNet. Les autres pannes restent fatales, sans substitution
+de rendu ; voir la [politique CPU/GPU](compute-backend.md).
 
 <a id="options-et-configuration"></a>
 <a id="configuration-et-m-morisation"></a>

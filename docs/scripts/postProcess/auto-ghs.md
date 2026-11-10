@@ -15,7 +15,29 @@ Chaque fond passe aussi par une recherche finale D/B/SP/HP avec protection des
 hautes lumières, après l’optimisation et la chroma éventuelle, avant la fusion.
 Elle est complétée par des [étirements successifs de la droite logarithmique](ghs-quartiles.md)
 pour allonger la portion continue rectiligne après le pic, jusqu’à 0,875, sans
-privilégier une pente nulle. Le niveau relatif de la queue est également
+privilégier une pente nulle. La droite doit également atteindre la graduation 10¹ à l’abscisse 0,8
+sur l’échelle des effectifs du graphique, sous les mêmes protections.
+Deux recherches indépendantes sont comparées : longueur de droite et niveau
+à 0,8. La recherche de niveau diversifie ses courbes et poursuit les validations
+après les premiers rejets, dans un budget de 12 candidats par passe par défaut.
+La sélection finale revérifie les objectifs sur tous les pixels et conserve
+la luminosité diffuse déjà obtenue. Une extrapolation hors du segment mesuré
+ne suffit pas à valider le point à 0,8. Les bornes du segment de contrôle et
+celles de la portion globale sont distinguées dans le rapport.
+Un sondage ciblé des régions brillantes complète la grille régulière pour
+éviter qu’un petit cœur soit absent des contrôles préalables.
+Dans cette phase, une queue très peu peuplée au-dessus de 0,8 autorise une
+conservation du contraste brillant allant de 50 % à la protection normale
+de 90 % ; le cœur, les couleurs, le bruit et l’écrêtage restent protégés.
+Les transformations de rectitude sont calculées par blocs pour borner les
+temporaires float64. Seuls les paramètres du meilleur essai sont conservés
+entre les validations ; son image est recalculée après sélection.
+En mode `auto`, la géométrie du FITS final permet de choisir le CPU avant
+calcul si le budget VRAM est insuffisant. Un manque de mémoire CUDA en cours
+de GHS déclenche aussi une reprise CPU unique depuis l'entrée linéaire, avec
+les étoiles déjà rendues, sans relancer StarNet. Voir la
+[politique CPU/GPU](compute-backend.md).
+Le niveau relatif de la queue est également
 recherché, par défaut à 0,25 de la hauteur logarithmique rouge vers 0,875.
 
 La [couleur finale adaptative](final-color.md), activée par défaut, renforce ensuite
@@ -168,15 +190,20 @@ astronomique.
 | Option | Défaut | Rôle |
 |---|---|---|
 | `--compute-backend` | `auto` | Politique commune de postProcess ; NumPy/CuPy pour le GHS |
+| `--ghs-regression-min-count` | `10` | Effectif prédit minimal de la droite à 0,8, dans les classes du graphique ; zéro désactive |
 | `--ghs-tail-height` | `0.25` | Hauteur log cible du canal à 0,875 ; `[0,1]`, zéro désactive le complément |
 | `--ghs-tail-channel` | `red` | Canal de référence `red`, `green` ou `blue`, normalisé par son propre pic |
 | `--ghs-linearity-tolerance` | `0.05` | RMS maximal en dex pour une droite log ; `[0.005,0.5]` |
+| `--ghs-quartile-block-pixels` | `262144` | Maximum de pixels par bloc GHS float64, de 1 à 4194304 ; limite les temporaires CUDA |
+| `--ghs-quartile-validations` | `12` | Budget de candidats diversifiés vérifiés sur tout le champ par passe, de 1 à 64 |
 | `--ghs-quartile-iterations` | `12` | Passes supplémentaires pour allonger la droite log, de 0 à 64 |
 | `--ghs-quartile-max-strength` | `10` | D maximal par passe supplémentaire, dans ]0,10] |
 | `--ghs-blackpoint-loss` | `0.001` | Fraction cumulée annulable pour un pic sombre isolé, de 0 à 0,01 |
 | `--ghs-max-iterations` | `8` | Limite de 1 à 32 recherches GHS |
 | `--ghs-final-strength` | `1.25` | D maximal en mode auto, force imposée en mode fixed ; 0 désactive |
 | `--ghs-final-mode` | `auto` | Recherche protégée ou courbe comparative `fixed` |
+| `--ghs-sparse-tail-fraction` | `0.001` | Fraction Y >= 0,8 du fond actif rétablissant la protection normale en rectitude ; 0 désactive |
+| `--ghs-sparse-highlight-retention` | `0.5` | Conservation minimale du contraste brillant pour une queue rare ; le cœur garde sa protection normale |
 | `--ghs-highlight-retention` | `0.9` | Conservation des indicateurs de contraste brillant, dans `]0,1]` |
 | `--ghs-log-rms-weight` | `2.0` | Poids de la réduction relative du RMS logarithmique ; `[0,10]`, zéro désactive ce terme |
 | `--ghs-dynamic-target` | `1.0` | Étendue RGB minimale du fond après GHS, dans `]0,1]` ; par exemple `0.8` |
@@ -248,8 +275,11 @@ avec avertissement et mesures dans `residual_compensation`. Ils n’interrompent
 pas le rendu. Les couches corrigées doivent rester finies et bornées ; voir
 la [politique de compensation](star-rendering.md#politique-des-residus-negatifs).
 
-Une panne StarNet, CUDA en cours de calcul, FITS, disque ou publication est
-**fatale**, sans reprise CPU ou substitution de rendu. La CLI retourne `1`.
+En mode `auto`, une saturation mémoire CUDA dans le moteur GHS déclenche
+une reprise CPU unique ; le budget initial peut aussi choisir le CPU avant
+calcul. StarNet n'est pas relancé. Une panne StarNet, une autre erreur CUDA,
+une erreur FITS, disque ou publication reste **fatale**, sans substitution de
+rendu. Une reprise CPU qui échoue reste fatale. La CLI retourne alors `1`.
 Le rapport d'étape porte `ERROR` si son écriture est possible et conserve le
 chemin du dossier de travail pour diagnostic. Un arrêt de recherche sans gain est
 normal : `NO_IMPROVEMENT`, avec recomposition malgré tout des branches valides.

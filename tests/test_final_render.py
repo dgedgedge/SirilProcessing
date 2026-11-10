@@ -602,3 +602,48 @@ def test_starless_overshoot_cannot_hide_invalid_reconstructed_source() -> None:
         AutoGHSFinalRenderer.compensate_residual(
             background, np.zeros_like(background), .005,
         )
+
+
+def test_ghs_annotation_reports_regression_floor() -> None:
+    """L'encart distingue un seuil atteint d'une droite non mesurable."""
+    from lib.final_render import ghs_annotation
+
+    floor = dict(minimum_count=10, predicted_log10_count=1.2, achieved=True)
+    report = {'quartile_stretch': {'after': {'regression_floor': floor}}}
+    text = ghs_annotation(report)
+    assert 'DROITE LOG À 0,8' in text
+    assert 'Seuil : 10 pixels/classe' in text
+    assert 'Prédiction log10 : 1.200' in text
+    assert 'Seuil atteint' in text
+    floor.update(predicted_log10_count=None, achieved=False)
+    text = ghs_annotation(report)
+    assert 'non mesurable' in text and 'Seuil non atteint' in text
+
+
+def test_annotation_shows_adaptive_and_core_contrast_separately() -> None:
+    """L'encart distingue le contraste brillant adapté du cœur protégé."""
+    from lib.final_render import ghs_annotation
+
+    report = {'quartile_stretch': {'sparse_tail': {
+        'effective_retention': .502165, 'requested_retention': .9,
+    }}}
+    text = ghs_annotation(report)
+    assert 'Brillant : 50.2 %' in text
+    assert 'Cœur : 90.0 %' in text
+
+
+def test_annotation_cannot_hide_an_unsupported_floor_and_unreached_tail() -> None:
+    """L'encart expose la portion mesurée, l'extrapolation et la cible manquée."""
+    from lib.final_render import ghs_annotation
+
+    report = {'quartile_stretch': {'targets_achieved': False, 'after': {
+        'measurable': True, 'line_start': .015625, 'line_end': .4453125,
+        'tail': {'target': .25, 'height': 0},
+        'regression_floor': {'minimum_count': 10, 'predicted_log10_count': 1.23,
+                             'achieved': False, 'extrapolated': True},
+    }}}
+    text = ghs_annotation(report)
+    assert 'Objectifs : incomplets' in text
+    assert '0.016 → 0.445' in text
+    assert '0.0 % / 25.0 %' in text
+    assert 'Seuil non atteint' in text and 'Extrapolation hors du segment' in text

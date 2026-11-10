@@ -75,7 +75,21 @@ Les tableaux des sections suivantes décrivent les options de chaque étape. Les
 
 AutoGHS recherche par défaut un renforcement final protégé
 (`--ghs-final-mode auto`), avec D borné par `--ghs-final-strength 1.25`,
-avant recomposition. `--ghs-final-strength 0` le désactive.
+avant recomposition. La recherche de droite logarithmique vise également
+10 pixels par classe du graphique à l'intensité 0,8
+(`--ghs-regression-min-count 10` ; 0 désactive ce seuil), sous les gardes
+cumulatives. `--ghs-quartile-validations` fixe le budget de candidats
+diversifiés validés sur toute l’image par passe (12 par défaut, de 1 à 64).
+`--ghs-quartile-block-pixels` limite les temporaires GHS float64 à des blocs
+de 262144 pixels par défaut (de 1 à 4194304), sur CPU comme sur CUDA.
+En rectitude, la protection du contraste brillant s'adapte entre 50 % et
+la conservation normale selon la fraction du fond actif au-dessus de 0,8.
+`--ghs-sparse-tail-fraction 0` désactive cette adaptation ; son défaut est
+0,001 (0,1 % du signal actif). Le plancher est réglable avec
+`--ghs-sparse-highlight-retention` (0,5 par défaut). Le cœur garde sa
+protection normale.
+Voir [le critère de régression](ghs-quartiles.md#seuil-de-la-droite-à-08).
+`--ghs-final-strength 0` désactive le renforcement et cette recherche.
 Cette option est rémanente avec `-S` et commune à postProcess et à lightProcess.
 
 ## Annotation finale

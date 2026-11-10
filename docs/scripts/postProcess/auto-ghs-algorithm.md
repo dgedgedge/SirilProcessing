@@ -233,8 +233,10 @@ Les histogrammes et `final` portent sur le fond retenu après cette étape.
 ## CPU, CUDA et ressources
 
 Le choix du backend et la vérification VRAM ont lieu avant StarNet. Le budget
-est estimé à 16 fois la taille du RGB float32 pour les temporaires ; 20 % de la
-VRAM libre reste disponible. CuPy est facultatif et n'est pas ajouté aux
+est estimé à 16 tableaux RGB float32 plein champ plus 12 temporaires RGB
+float64 de bloc. Le budget du bloc vient de `--ghs-quartile-block-pixels`
+(262144 pixels par défaut). La géométrie réelle du FITS inclut les effets de
+mosaïque et de recadrage ; 20 % de la VRAM libre reste disponible. CuPy est facultatif et n'est pas ajouté aux
 dépendances CPU. Son installation doit correspondre au CUDA de la machine,
 selon la [documentation CuPy](https://docs.cupy.dev/en/stable/install.html).
 
@@ -242,8 +244,15 @@ Le moteur conserve ses états image sur GPU, transfère les histogrammes et
 résumés compacts pour la recherche, puis récupère le résultat accepté. Les
 calculs de séparation, de rendu stellaire, les E/S et les figures restent CPU
 ou dépendent de StarNet. `--compute-backend` ne force pas le moteur StarNet.
-`auto` choisit CPU seulement si le précontrôle CUDA échoue ; une panne après
-initialisation se propage sans reprise. CUDA forcé indisponible est une erreur.
+`auto` choisit CPU si le précontrôle CUDA échoue ou si le budget dépasse
+80 % de la VRAM libre. Si une allocation échoue ensuite avec l'erreur précise
+CuPy `OutOfMemoryError`, `GHSOptimizer.optimize` reprend une seule fois tout
+le moteur GHS sur CPU depuis son entrée linéaire et les mêmes étoiles rendues.
+Les images des essais interrompus sont libérées avant de vider le pool libre
+CUDA. StarNet n'est pas relancé et aucun candidat partiel n'est publié.
+Le backend effectif devient CPU et la cause est consignée dans
+`backend_fallback`. Les autres erreurs, le manque de RAM hôte et le choix
+interne CUDA forcé se propagent sans reprise.
 
 La mémoire CPU peut dépasser plusieurs copies du FITS et de ses extensions.
 Les mesures des finalistes impliquent des parcours complets de l'image ; le

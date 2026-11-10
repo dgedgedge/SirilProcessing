@@ -2,7 +2,9 @@
 
 import argparse
 import json
+import weakref
 from pathlib import Path
+from types import ModuleType
 
 import numpy as np
 import pytest
@@ -10,6 +12,7 @@ from astropy.io import fits
 
 from lib.auto_ghs import ComputeBackend, GHSOptimizer, HistogramAnalyzer
 from lib.config import Config
+from lib.type_defs import JSONReport
 from lib.ghs_log_histogram import HISTOGRAM_BINS
 from lib.ghs_quartiles import QuartileGHSProcessor, isolated_blackpoint, quartile_profile
 
@@ -68,12 +71,22 @@ def test_isolated_dark_peak_has_a_limited_blackpoint() -> None:
 
 @pytest.mark.parametrize('name,value', [
     ('ghs_quartile_iterations', -1), ('ghs_quartile_iterations', 65),
+    ('ghs_quartile_block_pixels', 0), ('ghs_quartile_block_pixels', 4194305),
+    ('ghs_quartile_block_pixels', True), ('ghs_quartile_block_pixels', 1.5),
+    ('ghs_quartile_validations', 0), ('ghs_quartile_validations', 65),
+    ('ghs_quartile_validations', True), ('ghs_quartile_validations', 2.5),
     ('ghs_quartile_iterations', True), ('ghs_quartile_max_strength', 0),
     ('ghs_quartile_max_strength', 11), ('ghs_quartile_max_strength', float('nan')),
     ('ghs_blackpoint_loss', -.01), ('ghs_blackpoint_loss', .02),
     ('ghs_blackpoint_loss', float('inf')),
     ('ghs_linearity_tolerance', 0), ('ghs_linearity_tolerance', .6),
     ('ghs_linearity_tolerance', float('nan')),
+    ('ghs_sparse_tail_fraction', -1), ('ghs_sparse_tail_fraction', 1.1),
+    ('ghs_sparse_tail_fraction', float('nan')),
+    ('ghs_sparse_highlight_retention', 0), ('ghs_sparse_highlight_retention', 1.1),
+    ('ghs_sparse_highlight_retention', float('inf')),
+    ('ghs_regression_min_count', -1), ('ghs_regression_min_count', float('nan')),
+    ('ghs_regression_min_count', float('inf')),
     ('ghs_tail_height', -.1), ('ghs_tail_height', 1.1),
     ('ghs_tail_height', float('nan')), ('ghs_tail_channel', 'yellow'),
 ])
@@ -132,9 +145,12 @@ def test_search_is_deterministic_bounded_and_preserves_source() -> None:
     assert report['tail_height_target'] == .25 and report['tail_height_channel'] == 'red'
     assert report['after']['tail']['population_scale'] == 1
     assert set(report['tail_channels_after']) == {'red', 'green', 'blue'}
+    assert report['regression_floor_achieved'] == report['after']['regression_floor']['achieved']
+    assert report['after']['regression_floor']['reference_bins'] == analyzer.bins
+    assert not report['after']['regression_floor']['estimated']
     assert report['tail_height_achieved'] == report['after']['tail']['achieved']
     for entry in report['iterations']:
-        assert len(entry['validations']) <= 3
+        assert len(entry['validations']) <= args.ghs_quartile_validations
         if entry['accepted']:
             accepted = entry['accepted']
             assert not accepted['rejections']
@@ -181,7 +197,8 @@ def test_search_extends_the_log_linear_span() -> None:
     uniform = np.random.default_rng(8).random((192, 192))
     light = .01 - .15 * np.log(1 - uniform * (1 - np.exp(-.98/.15)))
     data = np.repeat(light[None].astype('f4'), 3, axis=0)
-    args = GHSOptimizer.options(argparse.Namespace(ghs_quartile_iterations=4, ghs_tail_height=0))
+    args = GHSOptimizer.options(argparse.Namespace(ghs_quartile_iterations=4, ghs_tail_height=0,
+                                                      ghs_regression_min_count=0))
     _, report = QuartileGHSProcessor().search(
         data, HistogramAnalyzer(), ComputeBackend('cpu'), args,
     )
@@ -233,19 +250,41 @@ def test_cuda_quartile_parity_when_available() -> None:
 def test_tail_options_save_explicitly_and_instances_keep_their_snapshot(tmp_path: Path) -> None:
     """Les réglages de hauteur appartiennent à la feuille et suivent CLI > JSON > défaut."""
     path = tmp_path / 'settings.json'
-    path.write_text(json.dumps({'ghs_tail_height': .4, 'ghs_tail_channel': 'blue'}))
+    path.write_text(json.dumps({'ghs_tail_height': .4, 'ghs_tail_channel': 'blue',
+                                'ghs_quartile_validations': 6,
+                                'ghs_quartile_block_pixels': 32768,
+                                'ghs_sparse_tail_fraction': .002,
+                                'ghs_sparse_highlight_retention': .6}))
     config = Config(path)
     parser = argparse.ArgumentParser()
     config.add_arguments(parser)
     config.register(GHSOptimizer, parser)
     saved = config.parse_args(parser, [])
     assert saved.ghs_tail_height == .4 and saved.ghs_tail_channel == 'blue'
-    args = config.parse_args(parser, ['--ghs-tail-height', '.25', '--ghs-tail-channel', 'red', '-S'])
+    assert saved.ghs_quartile_validations == 6
+    assert saved.ghs_quartile_block_pixels == 32768
+    assert saved.ghs_sparse_tail_fraction == .002
+    assert saved.ghs_sparse_highlight_retention == .6
+    args = config.parse_args(parser, ['--ghs-tail-height', '.25', '--ghs-tail-channel', 'red',
+                                      '--ghs-quartile-validations', '16',
+                                      '--ghs-quartile-block-pixels', '65536',
+                                      '--ghs-sparse-tail-fraction', '.001',
+                                      '--ghs-sparse-highlight-retention', '.5', '-S'])
     config.bind_parameters(args)
     instance = QuartileGHSProcessor()
     assert config.save_requested(args)
     assert json.loads(path.read_text())['ghs_tail_height'] == .25
     assert json.loads(path.read_text())['ghs_tail_channel'] == 'red'
+    assert json.loads(path.read_text())['ghs_quartile_validations'] == 16
+    assert json.loads(path.read_text())['ghs_sparse_tail_fraction'] == .001
+    assert json.loads(path.read_text())['ghs_sparse_highlight_retention'] == .5
+    args.ghs_sparse_tail_fraction = 0
+    assert instance._get_args().ghs_sparse_tail_fraction == .001
+    assert json.loads(path.read_text())['ghs_quartile_block_pixels'] == 65536
+    args.ghs_quartile_block_pixels = 1024
+    assert instance._get_args().ghs_quartile_block_pixels == 65536
+    args.ghs_quartile_validations = 32
+    assert instance._get_args().ghs_quartile_validations == 16
     args.ghs_tail_height = .9
     assert instance._get_args().ghs_tail_height == .25
 
@@ -268,3 +307,423 @@ def test_tail_estimation_is_remeasured_on_all_pixels(monkeypatch: pytest.MonkeyP
         assert report['tail_channels_after'][channel] == log_tail_height(counts)
     assert report['tail_height_achieved'] == report['after']['tail']['achieved']
     json.dumps(report, allow_nan=False)
+
+
+def test_regression_floor_option_precedence(tmp_path: Path) -> None:
+    """Le seuil suit défauts, JSON et CLI, avec zéro comme désactivation."""
+    path = tmp_path / 'config.json'
+    path.write_text(json.dumps({'ghs_regression_min_count': 20}))
+    config = Config(path)
+    parser = argparse.ArgumentParser()
+    config.register(GHSOptimizer, parser)
+    assert config.parse_args(parser, []).ghs_regression_min_count == 20
+    assert config.parse_args(parser, ['--ghs-regression-min-count', '0']).ghs_regression_min_count == 0
+    assert GHSOptimizer.options(argparse.Namespace()).ghs_regression_min_count == 10
+
+
+def test_candidate_grid_has_gentle_and_early_tangent_curves() -> None:
+    """La grille explore de faibles D et HP précoces sans violer SP <= HP."""
+    counts = np.full(128, 100.)
+    counts[4] = 100000
+    records = list(QuartileGHSProcessor.candidate_parameters(counts, 10, (.1, .15, .2)))
+    assert any(item['D'] == .0625 for item in records)
+    assert {item['HP'] for item in records} >= {.1, .15, .2, .25, .5, .75, 1}
+    assert sum(item['D'] == 0 for item in records) == 1
+    assert all(0 <= item['LP'] <= item['SP'] <= item['HP'] <= 1 for item in records)
+    assert len({tuple(item.values()) for item in records}) == len(records)
+    weak = list(QuartileGHSProcessor.candidate_parameters(counts, .03, (.1,)))
+    assert all(0 <= item['D'] <= .03 for item in weak)
+
+
+def test_finalist_order_spreads_families_before_near_duplicates() -> None:
+    """Des variantes BP/SP du meilleur gain ne prennent pas toutes les places."""
+    records = []
+    for gain, strength, sp, hp in [(10, 1, .18, 1), (9.9, 1, .19, 1),
+                                   (9.8, 1, .18, .75), (8, .125, .1, 1),
+                                   (7, 1, .1, .2)]:
+        records.append(dict(gain=gain, parameters=dict(D=strength, B=5, SP=sp, HP=hp)))
+    original = records.copy()
+    ordered = QuartileGHSProcessor.diverse_candidates(records)
+    assert ordered[:3] == [records[0], records[3], records[4]]
+    assert ordered.index(records[2]) < ordered.index(records[1])
+    assert records == original
+    assert len(ordered) == len(records)
+    assert QuartileGHSProcessor.diverse_candidates([]) == []
+
+
+def test_search_continues_after_three_full_resolution_rejections(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Un quatrième candidat peut gagner après trois échecs du champ entier."""
+    from lib.ghs_final_stretch import ProtectedGHSFinalizer
+
+    monkeypatch.setattr('lib.ghs_quartiles.MAX_SAMPLE_PIXELS', 2048)
+    original_measure = ProtectedGHSFinalizer.measure
+    full_trials = 0
+    data = field()
+
+    def measure(
+        original: np.ndarray, candidate: np.ndarray,
+        thresholds: dict[str, float], color_mode: str, xp: ModuleType = np,
+        mask_reference: np.ndarray | None = None,
+        tail_endpoint: float | None = None,
+    ) -> JSONReport:
+        """Simule une structure rare absente de la grille aux trois premiers essais."""
+        nonlocal full_trials
+        result = original_measure(
+            original, candidate, thresholds, color_mode, xp,
+            mask_reference=mask_reference, tail_endpoint=tail_endpoint,
+        )
+        if original.shape == data.shape and candidate is not original:
+            full_trials += 1
+            if full_trials <= 3:
+                result['noise'] = 1.0
+        return result
+
+    monkeypatch.setattr(ProtectedGHSFinalizer, 'measure', staticmethod(measure))
+    args = GHSOptimizer.options(argparse.Namespace(ghs_quartile_iterations=1))
+    _, report = QuartileGHSProcessor().search(
+        data, HistogramAnalyzer(256), ComputeBackend('cpu'), args,
+    )
+    trials = report['iterations'][0]['validations']
+    assert len(trials) > 3
+    assert all('background noise amplification' in item['rejections'] for item in trials[:3])
+    assert any(not item['rejections'] for item in trials[3:])
+    assert report['status'] == 'applied'
+    assert len(trials) <= args.ghs_quartile_validations
+    entry = report['iterations'][0]
+    assert entry['candidate_count'] == (len(trials) + len(entry['sample_rejections'])
+                                         + entry['unexamined_candidates'])
+
+
+def test_validation_budget_exhaustion_is_explicit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Un budget consommé ne prétend pas épuiser les courbes possibles."""
+    from lib.ghs_final_stretch import ProtectedGHSFinalizer
+
+    monkeypatch.setattr('lib.ghs_quartiles.MAX_SAMPLE_PIXELS', 2048)
+    original_measure = ProtectedGHSFinalizer.measure
+    data = field()
+
+    def measure(
+        original: np.ndarray, candidate: np.ndarray,
+        thresholds: dict[str, float], color_mode: str, xp: ModuleType = np,
+        mask_reference: np.ndarray | None = None,
+        tail_endpoint: float | None = None,
+    ) -> JSONReport:
+        """Rejette toute transformation du champ entier pour un bruit révélé au champ entier."""
+        result = original_measure(
+            original, candidate, thresholds, color_mode, xp,
+            mask_reference=mask_reference, tail_endpoint=tail_endpoint,
+        )
+        if original.shape == data.shape and candidate is not original:
+            result['noise'] = 1.0
+        return result
+
+    monkeypatch.setattr(ProtectedGHSFinalizer, 'measure', staticmethod(measure))
+    args = GHSOptimizer.options(argparse.Namespace(
+        ghs_quartile_iterations=1, ghs_quartile_validations=1,
+    ))
+    output, report = QuartileGHSProcessor().search(
+        data, HistogramAnalyzer(256), ComputeBackend('cpu'), args,
+    )
+    np.testing.assert_array_equal(output, data)
+    assert report['stop_reason'] == 'full-resolution validation budget exhausted'
+    entry = report['iterations'][0]
+    assert len(entry['validations']) == 1
+    assert entry['validation_budget_exhausted']
+    assert entry['unexamined_candidates'] > 0
+
+
+def test_highlight_probes_keep_rare_regions_and_horizontal_neighbors() -> None:
+    """Les pixels brillants hors grille restent représentés sans joindre deux lignes."""
+    light = np.zeros((20, 30))
+    light[3, 7] = .8
+    light[12, 29] = .9
+    rows, columns = QuartileGHSProcessor.highlight_coordinates(light)
+    np.testing.assert_array_equal(rows, [3, 12])
+    np.testing.assert_array_equal(columns, [7, 28])
+    assert np.all(light[::4, ::4] < .75)
+    bounded_rows, bounded_columns = QuartileGHSProcessor.highlight_coordinates(np.ones((100, 100)))
+    assert bounded_rows.size == bounded_columns.size == 2048
+    assert np.all(bounded_columns + 1 < 100)
+    rows, columns = QuartileGHSProcessor.highlight_coordinates(np.zeros((10, 1)))
+    assert rows.size == columns.size == 0
+    rows, columns = QuartileGHSProcessor.highlight_coordinates(np.ones((10, 1)))
+    assert rows.size == 10 and np.all(columns == 0)
+
+
+@pytest.mark.parametrize('failed_guard', ['color_drift', 'core_contrast'])
+def test_highlight_probes_reject_before_full_validation(
+    monkeypatch: pytest.MonkeyPatch, failed_guard: str,
+) -> None:
+    """Les gardes ciblées voient un petit cœur manqué par la grille régulière."""
+    from lib.ghs_final_stretch import ProtectedGHSFinalizer
+
+    monkeypatch.setattr('lib.ghs_quartiles.MAX_SAMPLE_PIXELS', 2048)
+    data = field()
+    data[:, 45:49, 61:65] = .96 + np.arange(16).reshape(4, 4)*.001
+    original_measure = ProtectedGHSFinalizer.measure
+    full_trials = 0
+    probe_trials = 0
+
+    def measure(
+        original: np.ndarray, candidate: np.ndarray,
+        thresholds: dict[str, float], color_mode: str, xp: ModuleType = np,
+        mask_reference: np.ndarray | None = None,
+        tail_endpoint: float | None = None,
+    ) -> JSONReport:
+        """Rend une perte de couleur visible uniquement dans le sondage ciblé."""
+        nonlocal full_trials, probe_trials
+        result = original_measure(
+            original, candidate, thresholds, color_mode, xp,
+            mask_reference=mask_reference, tail_endpoint=tail_endpoint,
+        )
+        if candidate is not original:
+            if original.shape[1:] == (16, 2):
+                probe_trials += 1
+                result[failed_guard] = 1.0 if failed_guard == 'color_drift' else 0.0
+            elif original.shape == data.shape:
+                full_trials += 1
+        return result
+
+    monkeypatch.setattr(ProtectedGHSFinalizer, 'measure', staticmethod(measure))
+    args = GHSOptimizer.options(argparse.Namespace(ghs_quartile_iterations=1))
+    output, report = QuartileGHSProcessor().search(
+        data, HistogramAnalyzer(256), ComputeBackend('cpu'), args,
+    )
+    assert report['highlight_probe_count'] == 16
+    assert probe_trials > 0 and full_trials == 0
+    assert not report['iterations'][0]['validations']
+    reason = ('highlight probe: color_drift' if failed_guard == 'color_drift'
+              else 'highlight probe: core_contrast loss')
+    assert any(reason in trial['rejections']
+               for trial in report['iterations'][0]['sample_rejections'])
+    np.testing.assert_array_equal(output, data)
+
+
+@pytest.mark.parametrize('tail_count', [0, 1, 5, 10, 20])
+def test_sparse_tail_interpolates_from_real_population(tail_count: int) -> None:
+    """La rareté est mesurée sur le champ actif, sans dilution par les bordures."""
+    light = np.zeros((20, 1000))
+    light[:10] = .1
+    light[0, :tail_count] = .8
+    report = QuartileGHSProcessor.sparse_tail_retention(light, .9, .001, .5)
+    assert report['active_count'] == 10000
+    assert report['tail_count'] == tail_count
+    assert report['fraction'] == pytest.approx(tail_count/10000)
+    expected = .5 + .4 * min(tail_count/10, 1)
+    assert report['effective_retention'] == pytest.approx(expected)
+    json.dumps(report, allow_nan=False)
+
+
+def test_sparse_tail_can_be_disabled_without_tightening_loose_settings() -> None:
+    """La désactivation restaure la garde demandée ; un plancher ne la durcit pas."""
+    light = np.full((10, 10), .1)
+    assert QuartileGHSProcessor.sparse_tail_retention(light, .9, 0, .5)['effective_retention'] == .9
+    assert QuartileGHSProcessor.sparse_tail_retention(light, .4, .001, .5)['effective_retention'] == .4
+    empty = QuartileGHSProcessor.sparse_tail_retention(np.zeros((10, 10)), .9, .001, .5)
+    assert empty['effective_retention'] == .9 and empty['fraction'] is None
+
+
+@pytest.mark.parametrize('requested,fraction,minimum', [
+    (0, .001, .5), (1.1, .001, .5), (float('nan'), .001, .5),
+    (.9, -.1, .5), (.9, float('inf'), .5), (.9, .001, 0), (.9, .001, 1.1),
+])
+def test_sparse_tail_rejects_invalid_limits(
+    requested: float, fraction: float, minimum: float,
+) -> None:
+    """Les limites invalides ne peuvent pas relâcher silencieusement les gardes."""
+    with pytest.raises(ValueError):
+        QuartileGHSProcessor.sparse_tail_retention(np.ones((2, 2)), requested, fraction, minimum)
+
+
+@pytest.mark.parametrize('block_pixels', [1, 7, 37, 262144])
+@pytest.mark.parametrize('color_mode', ['human', 'even'])
+@pytest.mark.parametrize('blackpoint', [0.0, .003])
+def test_block_transform_matches_full_precision_order(
+    block_pixels: int, color_mode: str, blackpoint: float,
+) -> None:
+    """Les blocs conservent exactement BP float32 puis GHS/RGBBlend float64."""
+    from lib.auto_ghs import ghs_rgb, linear_blackpoint
+
+    source = np.random.default_rng(15).random((3, 11, 29), dtype=np.float32)
+    original = source.copy()
+    params = dict(D=2.3, B=5., SP=.2, LP=.1, HP=.5)
+    shifted = linear_blackpoint(source, blackpoint) if blackpoint else source
+    expected = ghs_rgb(shifted.astype(np.float64), **params, color_mode=color_mode).astype('f4')
+    actual = QuartileGHSProcessor.transform_candidate(
+        source, params, blackpoint=blackpoint, block_pixels=block_pixels,
+        color_mode=color_mode,
+    )
+    np.testing.assert_array_equal(actual, expected)
+    np.testing.assert_array_equal(source, original)
+    assert actual.dtype == source.dtype and not np.shares_memory(source, actual)
+
+
+def test_block_transform_bounds_temporaries_for_wide_noncontiguous_images(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Une ligne plus large que le budget est aussi découpée sans copie globale."""
+    import lib.auto_ghs as module
+
+    source = np.random.default_rng(5).random((3, 9, 179), dtype=np.float32)[:, ::2, ::2]
+    original = module.ghs_rgb
+    sizes = []
+
+    def transfer(data: np.ndarray, **kwargs: object) -> np.ndarray:
+        """Observe la taille réelle des entrées float64 du noyau mathématique."""
+        assert data.dtype == np.float64
+        sizes.append(data.shape[1] * data.shape[2])
+        return original(data, **kwargs)
+
+    monkeypatch.setattr(module, 'ghs_rgb', transfer)
+    params = dict(D=1.2, B=15., SP=.1, LP=0., HP=.5)
+    result = QuartileGHSProcessor.transform_candidate(source, params, block_pixels=7)
+    expected = original(source.astype(np.float64), **params).astype(source.dtype)
+    np.testing.assert_array_equal(result, expected)
+    assert len(sizes) > 1 and max(sizes) <= 7
+
+
+def test_search_releases_candidate_images_before_the_next_validation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Seuls les paramètres du gagnant subsistent entre les validations complètes."""
+    monkeypatch.setattr('lib.ghs_quartiles.MAX_SAMPLE_PIXELS', 2048)
+    transform = QuartileGHSProcessor.transform_candidate
+    source = field()
+    references = []
+
+    def track(
+        image: np.ndarray, params: dict[str, float], xp: ModuleType = np,
+        *, blackpoint: float = 0.0, block_pixels: int = 262144,
+        color_mode: str = 'human',
+    ) -> np.ndarray:
+        """Vérifie la disparition des images complètes avant l'allocation suivante."""
+        full = image.shape == source.shape
+        if full:
+            assert all(reference() is None for reference in references)
+        result = transform(image, params, xp, blackpoint=blackpoint,
+                           block_pixels=block_pixels, color_mode=color_mode)
+        if full:
+            references.append(weakref.ref(result))
+        return result
+
+    monkeypatch.setattr(QuartileGHSProcessor, 'transform_candidate', staticmethod(track))
+    args = GHSOptimizer.options(argparse.Namespace(
+        ghs_quartile_iterations=1, ghs_quartile_validations=4,
+    ))
+    output, report = QuartileGHSProcessor().search(
+        source, HistogramAnalyzer(256), ComputeBackend('cpu'), args,
+    )
+    assert report['status'] == 'applied'
+    assert report['candidate_storage'] == 'parameters_only'
+    assert len(references) == len(report['iterations'][0]['validations']) + 1
+    assert references[-1]() is output
+    best = report['iterations'][0]['accepted']
+    expected = transform(source, best['parameters'], blackpoint=best['BP'])
+    np.testing.assert_array_equal(output, expected)
+
+
+@pytest.mark.parametrize('block_pixels', [0, -1, True, 1.5, 4194305])
+def test_invalid_transform_blocks_are_rejected(block_pixels: int) -> None:
+    """Un budget invalide échoue avant d'allouer l'image de sortie."""
+    with pytest.raises(ValueError, match='bloc'):
+        QuartileGHSProcessor.transform_candidate(
+            np.zeros((3, 2, 2), dtype='f4'), dict(D=1), block_pixels=block_pixels,
+        )
+
+
+def test_cuda_block_transform_limits_full_size_allocations() -> None:
+    """Un vrai GPU ne reçoit aucune allocation float64 RGB de tout le champ."""
+    try:
+        backend = ComputeBackend('cuda')
+    except RuntimeError as error:
+        pytest.skip(str(error))
+    from cupy.cuda import MemoryHook
+
+    source = np.random.default_rng(6).random((3, 512, 1024), dtype=np.float32)
+    device = backend.xp.asarray(source)
+    params = dict(D=2.3, B=5., SP=.2, LP=.1, HP=.5)
+    sizes = []
+
+    class AllocationSizes(MemoryHook):
+        """Observe les demandes réelles au pool CUDA pendant la transformation."""
+
+        name = 'test_ghs_block_allocations'
+
+        def malloc_postprocess(self, **kwargs: int) -> None:
+            """Retient la taille demandée, avant tout arrondi du pool."""
+            sizes.append(kwargs['size'])
+
+    with AllocationSizes():
+        output = QuartileGHSProcessor.transform_candidate(
+            device, params, backend.xp, blackpoint=.003, block_pixels=65536,
+        )
+    backend.xp.cuda.get_current_stream().synchronize()
+    expected = QuartileGHSProcessor.transform_candidate(
+        source, params, blackpoint=.003, block_pixels=65536,
+    )
+    np.testing.assert_allclose(backend.numpy(output), expected, atol=2e-6, rtol=2e-6)
+    np.testing.assert_array_equal(backend.numpy(device), source)
+    assert sizes and max(sizes) <= source.nbytes
+
+
+def test_diffuse_guard_rejects_the_m33_dimming_pattern() -> None:
+    """La droite ne peut s'allonger en perdant les structures diffuses déjà révélées."""
+    before = dict(sky_median=.043588, diffuse_median=.084597)
+    dark = dict(sky_median=.003634, diffuse_median=.021265)
+    assert QuartileGHSProcessor.diffuse_rejections(before, dark) == [
+        'diffuse brightness loss', 'diffuse separation loss',
+    ]
+    brighter = dict(sky_median=.049430, diffuse_median=.117572)
+    assert not QuartileGHSProcessor.diffuse_rejections(before, brighter)
+    washed_out = dict(sky_median=.09, diffuse_median=.10)
+    assert QuartileGHSProcessor.diffuse_rejections(before, washed_out) == ['diffuse separation loss']
+    assert not QuartileGHSProcessor.diffuse_rejections(before, before.copy())
+    assert not QuartileGHSProcessor.diffuse_rejections(dict(diffuse_median=None), dark)
+    assert 'diffuse brightness loss' in QuartileGHSProcessor.diffuse_rejections(before, {})
+
+
+def test_repeated_probe_neighbors_do_not_create_a_measurable_bright_region(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Sept pixels uniques restent insuffisants même si leurs voisins sont répétés."""
+    from lib.ghs_final_stretch import ProtectedGHSFinalizer
+
+    monkeypatch.setattr('lib.ghs_quartiles.MAX_SAMPLE_PIXELS', 2048)
+    data = field()
+    data[:, 50, 60:67] = .8 + np.arange(7)*.001
+    measure = ProtectedGHSFinalizer.measure
+
+    def measured(
+        original: np.ndarray, candidate: np.ndarray, thresholds: dict[str, float],
+        color_mode: str, xp: ModuleType = np,
+        mask_reference: np.ndarray | None = None, tail_endpoint: float | None = None,
+    ) -> JSONReport:
+        """Expose une fausse dérive seulement dans les paires qui répètent les pixels."""
+        result = measure(original, candidate, thresholds, color_mode, xp,
+                         mask_reference=mask_reference, tail_endpoint=tail_endpoint)
+        if original.shape[1:] == (7, 2) and candidate is not original:
+            result['color_drift'] = 1.0
+            result['highlight_contrast'] = 0.0
+            result['local_contrast'] = 0.0
+        return result
+
+    monkeypatch.setattr(ProtectedGHSFinalizer, 'measure', staticmethod(measured))
+    args = GHSOptimizer.options(argparse.Namespace(
+        ghs_quartile_iterations=1, ghs_quartile_validations=2,
+    ))
+    _, report = QuartileGHSProcessor().search(
+        data, HistogramAnalyzer(256), ComputeBackend('cpu'), args,
+    )
+    assert report['protection_before']['bright_count'] == 7
+    assert report['protection_before']['highlight_contrast'] is None
+    assert report['highlight_probe_before']['highlight_contrast'] is None
+    assert report['highlight_probe_before']['color_drift'] is None
+    reasons = [reason for entry in report['iterations']
+               for trial in entry['sample_rejections'] for reason in trial['rejections']]
+    assert 'highlight probe: color_drift' not in reasons
+    assert 'highlight probe: highlight_contrast loss' not in reasons
+    assert report['iterations'][0]['validations']

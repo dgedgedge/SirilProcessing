@@ -63,7 +63,10 @@ def ghs_annotation(report: JSONReport) -> str:
     Les applications acceptées et les corrections BP sont comptées séparément.
     Les métriques décrivent le fond optimisé avant fusion, même sur le PNG avec
     étoiles. Le GHS final explicite est distingué des recherches sous contraintes.
-    Une information absente est affichée comme non renseignée.
+    Une information absente est affichée comme non renseignée. Le seuil de
+    régression à 0,8 est affiché avec sa prédiction en effectifs logarithmiques.
+    Les conservations de contraste brillante et du cœur sont distinguées
+    lorsque la protection de queue rare est renseignée.
     """
     lines = ["OBJECTIF", textwrap.fill(
         "Élargir l’étendue robuste des intensités entre les quantiles "
@@ -116,6 +119,55 @@ def ghs_annotation(report: JSONReport) -> str:
                 f"B : {parameters['B']:.2f} — SP : {parameters['SP']:.4f}",
                 f"HP : {parameters['HP']:.4f}",
             ])
+    quartiles = report.get("quartile_stretch", {})
+    after = quartiles.get("after", {})
+    longest = quartiles.get('longest_line_after', after)
+    if longest.get('measurable'):
+        lines.extend([
+            "", "RECTITUDE MESURÉE",
+            f"Segment : {longest['line_start']:.3f} → {longest['line_end']:.3f}",
+        ])
+    if quartiles.get('selected_search'):
+        labels = {'length': 'longueur', 'reference_level': 'niveau à 0,8',
+                  'unchanged': 'entrée conservée'}
+        lines.append('Recherche : ' + labels.get(quartiles['selected_search'], quartiles['selected_search']))
+    tail = after.get('tail')
+    if tail is not None and tail.get('target', 0) > 0:
+        height = tail.get('height')
+        lines.append('Queue à 0,875 : ' +
+                     (f"{100*height:.1f} % / {100*tail['target']:.1f} %"
+                      if height is not None else 'non mesurable'))
+    if 'targets_achieved' in quartiles:
+        lines.append('Objectifs : ' + ('atteints' if quartiles['targets_achieved'] else 'incomplets'))
+    sparse_tail = quartiles.get("sparse_tail")
+    if sparse_tail is not None:
+        protection = quartiles.get('protection_before', {})
+        bright_missing = ('highlight_contrast' in protection
+                          and protection['highlight_contrast'] is None)
+        core_missing = 'core_contrast' in protection and protection['core_contrast'] is None
+        lines.extend([
+            "", "PROTECTION DU CONTRASTE",
+            f"Brillant : {100 * sparse_tail['effective_retention']:.1f} %"
+            + (' (non mesuré)' if bright_missing else ''),
+            f"Cœur : {100 * sparse_tail['requested_retention']:.1f} %"
+            + (' (non mesuré)' if core_missing else ''),
+        ])
+    floor = quartiles.get("after", {}).get("regression_floor")
+    if floor is not None and floor['minimum_count'] > 0:
+        predicted = floor['predicted_log10_count']
+        lines.extend([
+            "", "DROITE LOG À 0,8",
+            f"Seuil : {floor['minimum_count']:g} pixels/classe",
+            "Prédiction log10 : " + (f"{predicted:.3f}" if predicted is not None else "non mesurable"),
+            "Seuil " + ("atteint" if floor['achieved'] else "non atteint"),
+        ])
+        if floor.get('extrapolated'):
+            lines.append('Extrapolation hors du segment mesuré')
+        elif after.get('measurable'):
+            lines.append(f"Segment de contrôle : {after['line_start']:.3f} → {after['line_end']:.3f}")
+        global_prediction = floor.get('longest_line_predicted_log10_count')
+        if global_prediction is not None:
+            lines.append(f"Droite globale log10 : {global_prediction:.3f}")
     reasons = {
         "max_iterations": "limite d’itérations atteinte",
         "constant distribution": "distribution constante",
@@ -153,7 +205,10 @@ def histogram_figure(
     from matplotlib.backends.backend_agg import FigureCanvasAgg
     from matplotlib.figure import Figure
 
-    figure = Figure(figsize=(16, 6.5), constrained_layout=True)
+    annotation_text = ghs_annotation(report)
+    # 9 points, interligne 1,2 et marge pour titre/légende : aucun encart tronqué.
+    annotation_height = len(annotation_text.splitlines()) * 9 * 1.2 / 72 + 1.4
+    figure = Figure(figsize=(16, max(6.5, annotation_height)), constrained_layout=True)
     figure.suptitle(
         "Images finales avec étoiles recomposées"
         if with_stars else "Évolution de l’image sans étoiles"
@@ -205,7 +260,7 @@ def histogram_figure(
     annotation = figure.add_subplot(grid[0, 2])
     annotation.set_axis_off()
     annotation.text(
-        0.03, 0.98, ghs_annotation(report),
+        0.03, 0.98, annotation_text,
         transform=annotation.transAxes, va="top", fontsize=9,
         bbox={"boxstyle": "round,pad=0.7", "facecolor": "#f3f5f7",
               "edgecolor": "#c5cbd1"},
@@ -388,7 +443,10 @@ class AutoGHSFinalRenderer(processor):
                 raise ValueError("Limites de couleur stellaire hors de [0,1]")
             # Réserver le budget avant StarNet ; ensuite aucune bascule de moteur.
             backend = ComputeBackend(
-                options.compute_backend, required_bytes=data.nbytes * 16
+                options.compute_backend,
+                required_bytes=GHSOptimizer.estimate_working_bytes(
+                    data.shape, options.ghs_quartile_block_pixels,
+                ),
             )
             report_path.parent.mkdir(parents=True, exist_ok=True)
             work_root = reset_autoghs_work_dir(report_path, source)
@@ -534,6 +592,7 @@ class AutoGHSFinalRenderer(processor):
                         "auto_ghs.py",
                         "ghs_final_stretch.py",
                         "ghs_quartiles.py",
+                        "ghs_log_render.py",
                         "ghs_log_histogram.py",
                         "ghs_linear_histogram.py",
                         "final_render.py",
@@ -553,6 +612,7 @@ class AutoGHSFinalRenderer(processor):
                     "requested": options.compute_backend,
                     "selected": backend.name,
                     "reason": backend.reason,
+                    "estimated_working_bytes": backend.required_bytes,
                     **backend.device,
                 },
                 "separation": separation,

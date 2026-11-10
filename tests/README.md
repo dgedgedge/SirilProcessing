@@ -740,3 +740,100 @@ symboles et légendes. Les tests distinguent une chaîne rejetée d’une chaîn
 acceptée non retenue, conservent les drapeaux non bloquants, vérifient les
 contrôles locaux et laissent les autres étapes dans leur disposition actuelle.
 Les valeurs JSON restent inchangées.
+
+### Seuil de régression AutoGHS à 0,8
+
+`test_ghs_linear_histogram.py` vérifie la conversion de densité vers les
+classes du graphique, le seuil 10¹, la correction de population échantillonnée,
+la priorité du seuil, la progression intermédiaire, la désactivation et les
+entrées invalides. `test_ghs_quartiles.py` contrôle l'audit pleine résolution et
+les protections cumulatives. Ces tests synthétiques ne valident pas le rendu
+visuel de M31 ou M33 ; relancer AutoGHS sur ces images reste nécessaire.
+
+### Diversification de la recherche de rectitude AutoGHS
+
+`tests/test_ghs_quartiles.py` couvre les forces faibles, les raccords HP
+précoces, SP <= HP, l'absence de doublons de grille, l'alternance des familles,
+la poursuite après trois rejets complets simulés et l'acceptation d'un candidat
+suivant. Les tests contrôlent le budget configurable et l'audit des candidats
+restant à examiner. Le sondage ciblé est vérifié sur des régions brillantes
+absentes de la grille régulière, avec leurs voisins et une population bornée ;
+un rejet par ce sondage doit précéder toute validation complète. Les protections cumulatives restent vérifiées sur le fond
+et sa recomposition. Une validation sur un champ réel est distincte de ces
+tests synthétiques ; les résultats M31 doivent préciser le seuil atteint ou
+non, les rejets et le nombre de validations effectivement réalisées.
+
+### Contraste brillant et queue rare AutoGHS
+
+Les tests de `test_ghs_quartiles.py` vérifient le comptage du champ actif,
+l'exclusion des bordures nulles, l'interpolation de 50 % à 90 %, le retour à
+la protection normale à 0,1 %, la désactivation, les populations vides et
+les limites invalides. Le sondage ciblé doit encore rejeter une perte de
+contraste du cœur à Y >= 0,95 : l'adaptation brillante ne relâche pas cette
+garde. Les contraintes de bruit, couleur et écrêtage sont conservées.
+
+L'essai réel M31 de la phase de rectitude est décrit dans la section
+[Vérification](../docs/scripts/postProcess/ghs-quartiles.md#6-vérification).
+Il utilise les couches rendues existantes et ne remplace pas les tests
+Siril/StarNet ; les FITS, JPEG et rapports d'essai ne sont pas versionnés.
+
+### Mémoire de la rectitude AutoGHS
+
+`test_ghs_quartiles.py` compare exactement les transformations par blocs au
+calcul plein champ float64, pour deux modes de luminosité, avec/sans point
+noir et plusieurs tailles de bloc. Une vue non contiguë plus large que le
+budget vérifie la borne réelle des entrées du noyau. Des références faibles
+vérifient la destruction de chaque candidat avant le suivant, puis le
+recalcul exact du meilleur avec ses seuls paramètres. Les tailles invalides
+sont rejetées avant allocation. `test_auto_ghs.py` vérifie que le nettoyage du
+pool libre CUDA reste sans effet sur CPU et propage les erreurs de pilote.
+Ces tests CPU ne remplacent pas une mesure de mémoire sur un GPU réel.
+
+Les tests CUDA `test_cuda_quartile_parity_when_available` et
+`test_cuda_block_transform_limits_full_size_allocations` confrontent le
+résultat au CPU et observent les tailles réellement demandées au pool. Ils
+sont ignorés si CUDA est indisponible. Exécution ciblée utilisée :
+
+```bash
+.venv/bin/python -m pytest -q tests/test_ghs_quartiles.py -k 'cuda' --basetemp=/tmp/autoghs-cuda-pytest
+```
+
+### Prévision VRAM et reprise CPU AutoGHS
+
+`test_auto_ghs.py` vérifie le budget depuis la géométrie RGB finale, le choix
+CPU préventif avec une VRAM simulée insuffisante, puis une reprise CPU unique
+sur la seule erreur CUDA OutOfMemoryError en auto. Les tests contrôlent la
+libération des cadres interrompus, les entrées intactes, la provenance du
+backend et l'absence de reprise sur erreur de calcul, RAM hôte ou CUDA forcé.
+Une reprise CPU qui échoue reste fatale. Le test matériel suivant limite
+volontairement le pool CuPy à 4096 octets sur un petit tableau, restaure sa
+limite dans finally et confronte la reprise au résultat CPU direct :
+
+```bash
+.venv/bin/python -m pytest -q tests/test_auto_ghs.py -k cuda_pool_limit --basetemp=/tmp/autoghs-cuda-fallback-pytest
+```
+
+La validation réelle du GHS complet de M31 sur CUDA, avec mesure du pool,
+est décrite dans [la gestion mémoire](../docs/scripts/postProcess/ghs-quartiles.md#33-mémoire-cpu-et-cuda).
+Elle réutilise des couches StarNet existantes et ne valide pas à nouveau cette
+séparation. Les données et rapports de cet essai ne sont pas versionnés.
+
+### Régression de qualité M33 et sélection des moteurs GHS
+
+`test_ghs_linear_histogram.py` vérifie qu'une extrapolation haute depuis un
+segment qui s'arrête avant 0,8 ne valide pas le seuil, et qu'un segment peuplé
+couvrant 0,8 est recherché. `test_ghs_quartiles.py` reproduit la perte diffuse
+mesurée sur M33 et le cas de sept pixels brillants répétés dans des paires :
+le sondage ne doit pas inventer une région exploitable absente du champ entier.
+`test_ghs_log_render.py` contrôle les sorties indépendantes des moteurs de
+longueur et de niveau, le classement commun, le rejet d'une sortie assombrie,
+la préférence pour les objectifs réellement atteints et la conservation de
+l'entrée quand la sélection est désactivée. Les encarts doivent afficher une
+queue non atteinte, l'extrapolation éventuelle et les segments effectivement
+mesurés. Les essais matériels sur M33 et M31 restent distincts de ces tests.
+
+Les comparaisons CUDA sur copies de M33 et M31 sont détaillées dans
+[la vérification des deux recherches](../docs/scripts/postProcess/ghs-quartiles.md#6-vérification).
+Le rendu M33 choisi retrouve exactement la référence du dépôt, avec contrôle
+soutenu à 0,8 et hauteur rouge atteinte. M31 retient l'autre recherche, sous
+les mêmes critères. Les jeux réels ne sont pas distribués avec les tests.
