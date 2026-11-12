@@ -17,6 +17,45 @@ from lib.star_separation import validate_rgb
 JPEG_QUALITY = 95
 
 
+def render_array_image(
+    data: np.ndarray, row_order: str = 'BOTTOM-UP',
+) -> Image.Image:
+    """Convertit un tableau RGB [0,1] en 8 bits, sans étirement ni gamma.
+
+    Parameters
+    ----------
+    data : numpy.ndarray
+        Trois plans finis, dans l'ordre RGB, de forme (3, hauteur, largeur).
+    row_order : str
+        Orientation FITS BOTTOM-UP ou TOP-DOWN ; la sortie est orientée écran.
+
+    Returns
+    -------
+    PIL.Image.Image
+        Copie RGB quantifiée au plus proche, à fermer par l'appelant.
+    """
+    validate_rgb(data)
+    if row_order not in ('TOP-DOWN', 'BOTTOM-UP'):
+        raise ValueError(f'ROWORDER inconnu : {row_order}')
+    if row_order == 'BOTTOM-UP':
+        data = data[:, ::-1, :]
+    pixels = np.rint(np.moveaxis(data, 0, -1)*255).astype(np.uint8)
+    return Image.fromarray(pixels)
+
+
+def write_array_jpeg(
+    data: np.ndarray, destination: Path, row_order: str = 'BOTTOM-UP',
+) -> None:
+    """Écrit un instantané RGB entier en JPEG 95, sans FITS intermédiaire.
+
+    Les unités, l'arrondi et l'orientation sont ceux de render_array_image.
+    Aucune image n'est retenue après l'écriture ; les erreurs remontent.
+    """
+    with render_array_image(data, row_order) as rendered:
+        rendered.save(destination, format='JPEG', quality=JPEG_QUALITY,
+                      subsampling=0, optimize=True)
+
+
 def read_render_image(source: Path) -> Image.Image:
     """Convertit un FITS RGB non linéaire en image RGB 8 bits orientée pour l'écran.
 
@@ -31,14 +70,8 @@ def read_render_image(source: Path) -> Image.Image:
         data = hdul[0].data
         if data is None:
             raise ValueError("Le FITS ne contient pas de rendu RGB")
-        validate_rgb(data)
         row_order = hdul[0].header.get("ROWORDER", "BOTTOM-UP")
-        if row_order not in ("TOP-DOWN", "BOTTOM-UP"):
-            raise ValueError(f"ROWORDER inconnu : {row_order}")
-        if row_order == "BOTTOM-UP":
-            data = data[:, ::-1, :]
-        pixels = np.rint(np.moveaxis(data, 0, -1) * 255).astype(np.uint8)
-    return Image.fromarray(pixels)
+        return render_array_image(data, row_order)
 
 
 def write_render_jpeg(source: Path, destination: Path) -> None:

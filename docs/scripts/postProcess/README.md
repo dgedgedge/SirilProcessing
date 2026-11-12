@@ -624,6 +624,16 @@ compatibles s'ils contiennent explicitement `autoghs.image_path`, sans pouvoir
 vérifier rétroactivement l'intégrité des fichiers. Si le traitement précédent
 n'a pas laissé de référence exploitable, refaire un traitement complet.
 
+Le [classement final par morceaux](ghs-histogram-shape.md#13-conservation-de-la-forme)
+plafonne le bonus contraste/bruit à 100 % et pénalise progressivement les bosses,
+les déformations et la compression brillante. Les objectifs lumineux restent
+secondaires ; le déplacement du pic départage les scores égaux. Les réglages
+`--ghs-quality-cnr-floor` (0,9) et `--ghs-quality-tail-bonus` (0,1) respectent la
+priorité CLI > configuration > défauts. Les encarts détaillent le score, y compris les bosses du pic mesurées
+indépendamment de la spline globale. Le recalage BP précède les évaluations ;
+son budget compte la perte d'un canal RGB par pixel, tandis que le graphique
+montre Y. Voir [les limites et la précision du BP](ghs-blackpoint.md).
+
 La [dernière passe protégée](ghs-highlight-protection.md) est active par défaut.
 `--ghs-highlight-retention 0.95` renforce la conservation des nuances brillantes ;
 `--ghs-final-mode fixed` permet de comparer l'ancienne courbe finale.
@@ -740,6 +750,20 @@ traitement sont nettoyés à la relance ; voir [AutoGHS](auto-ghs.md).
 
 La [recherche GHS par quartiles](ghs-quartiles.md) complète le rendu automatique
 par des passes successives, avec budget cumulé du point noir.
+Le [mode par défaut par morceaux](ghs-histogram-shape.md) utilise une spline
+de mesure et conserve l'ordre des variations de pente. La même page décrit
+les séries de graphiques des essais majeurs, uniquement logarithmiques.
+Les encarts indiquent le déplacement du pic depuis la référence de forme,
+son plafond connu et si la mesure est estimée sur échantillon.
+La recherche conserve plusieurs branches de familles et positions du pic
+différentes, avec affinage des intervalles ; elle utilise uniquement l'image
+courante. Les alternatives admissibles apparaissent aussi dans la galerie.
+Les encarts identifient le groupe et le numéro de chaque essai ; les dernières
+figures indiquent le numéro de l'essai effectivement retenu dans la série.
+Les graphiques AutoGHS et stellaires ainsi que la galerie d'essais utilisent
+un fond noir et des textes clairs pour leur consultation dans l'obscurité.
+Le [recalage du BP après chaque courbe](ghs-blackpoint.md) place les mesures
+et les tests de conformité après la correction du pied sombre.
 
 La [sélection des régions diffuses](diffuse-regions.md) limite leur nombre
 en conservant une représentation spatiale et par tailles sur la référence.

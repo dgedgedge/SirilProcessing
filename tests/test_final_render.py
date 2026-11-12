@@ -107,6 +107,14 @@ def test_single_range_contract_and_published_artifacts(
     assert set(result["output_images"]) == {"range"}
     assert set(result["output_jpegs"]) == {"range"}
     assert result["output_jpeg"] == result["output_jpegs"]["range"]
+    assert not result['trial_jpegs_enabled']
+    assert not list((tmp_path/'05_diagnostics/histogram_trials').glob('image_*.jpg'))
+    quality = result['strategies']['range']['quartile_stretch']
+    assert result['targets_achieved'] == quality.get('targets_achieved')
+    assert result['unmet_targets'] == quality.get('unmet_targets', [])
+    if quality.get('targets_achieved') is False and quality['status'] != 'disabled':
+        assert result['status'] == 'TARGETS_NOT_REACHED'
+        assert result['unmet_targets']
     from PIL import Image
     for path in result["output_jpegs"].values():
         with Image.open(path) as image:
@@ -271,7 +279,7 @@ def test_range_rendering_survives_local_starnet_overshoot(
         linear_rgb, tmp_path / "05_autoghs.json",
         argparse.Namespace(compute_backend="cpu", ghs_bins=256, ghs_max_iterations=1),
     )
-    assert result["status"] in ("SUCCESS", "NO_IMPROVEMENT")
+    assert result["status"] in ("SUCCESS", "NO_IMPROVEMENT", "TARGETS_NOT_REACHED")
     assert result["residual_compensation"]["tolerance_exceeded"]
     assert set(result["output_images"]) == {"range"}
     assert all(Path(path).is_file() for path in result["output_jpegs"].values())
@@ -452,7 +460,9 @@ def test_histogram_figure_uses_real_log_axis(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, counts: list[int],
     with_stars: bool,
 ) -> None:
-    """Chaque figure isole sa population et conserve un véritable axe log."""
+    """Chaque population conserve ses données et axes log sur un fond noir local."""
+    from matplotlib import rc_context, rcParams
+    from matplotlib.colors import to_rgba
     from matplotlib.figure import Figure
     from lib.final_render import histogram_figure
 
@@ -461,22 +471,28 @@ def test_histogram_figure_uses_real_log_axis(
 
     def capture(figure: Figure, *args, **kwargs) -> None:
         """Inspecte les axes réels au moment d'écrire le PNG."""
-        left, right = figure.axes[:2]
-        assert left.get_yscale() == 'linear'
+        right = figure.axes[0]
         assert right.get_yscale() == 'log'
         assert right.get_xscale() == 'linear'
-        assert left.get_xlim() == right.get_xlim() == (0, 1)
-        assert left.get_title() == "1. RANGE — étendue globale\nEffectifs en échelle linéaire"
-        assert right.get_title() == "2. RANGE — étendue globale\nEffectifs en échelle logarithmique"
-        assert len(figure.axes) == 3
-        assert not figure.axes[2].axison
-        assert left.get_legend() is None and right.get_legend() is None
+        assert right.get_xlim() == (0, 1)
+        assert right.get_title() == "Effectifs en échelle logarithmique"
+        assert len(figure.axes) == 2
+        assert not figure.axes[1].axison
+        assert right.get_legend() is None
         assert len(figure.legends) == 1
+        assert figure.get_facecolor() == to_rgba('black')
+        assert right.get_facecolor() == to_rgba('black')
+        for text in (right.title, right.xaxis.label, right.yaxis.label,
+                     figure._suptitle, *figure.legends[0].get_texts(),
+                     *figure.axes[1].texts):
+            assert min(to_rgba(text.get_color())[:3]) > .7
+        assert max(figure.legends[0].get_frame().get_facecolor()[:3]) < .1
+        assert max(figure.axes[1].texts[0].get_bbox_patch().get_facecolor()[:3]) < .1
         assert right.get_legend_handles_labels()[1] == [
             "Image finale — étoiles recomposées"
             if with_stars else "Sans étoiles — entrée linéaire"
         ]
-        assert len(right.lines) == len(left.lines) == 1
+        assert len(right.lines) == 1
         assert ("avec étoiles" if with_stars else "sans étoiles") in figure._suptitle.get_text()
         for line in right.lines:
             values = line.get_ydata()
@@ -492,12 +508,50 @@ def test_histogram_figure_uses_real_log_axis(
 
     monkeypatch.setattr(Figure, 'savefig', capture)
     destination = tmp_path / "histograms.png"
-    histogram_figure(
-        {"histograms": [{"counts": counts}],
-         "recomposed_histogram": {"counts": [2 * count for count in counts]}},
-        destination, with_stars=with_stars,
-    )
+    with rc_context({'savefig.facecolor': 'white', 'axes.facecolor': 'white',
+                     'savefig.transparent': True}):
+        histogram_figure(
+            {"histograms": [{"counts": counts}],
+             "recomposed_histogram": {"counts": [2 * count for count in counts]}},
+            destination, with_stars=with_stars,
+        )
+        assert rcParams['savefig.facecolor'] == rcParams['axes.facecolor'] == 'white'
+        assert rcParams['savefig.transparent'] is True
     assert captured == [True] and destination.stat().st_size > 0
+    from PIL import Image
+    with Image.open(destination) as image:
+        assert image.getpixel((0, 0))[:3] == (0, 0, 0)
+        if image.mode == 'RGBA':
+            assert image.getpixel((0, 0))[3] == 255
+
+
+def test_smoothed_profile_and_threshold_remain_visible_on_black_background(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """L'enveloppe et le repère noirs de l'ancien thème deviennent clairs."""
+    from matplotlib.figure import Figure
+    from matplotlib.colors import to_rgba
+    from lib.final_render import histogram_figure
+    from lib.ghs_histogram_shape import piecewise_histogram_profile
+    from lib.ghs_linear_histogram import add_regression_floor_objective
+
+    x = (np.arange(128)+.5)/128
+    counts = 10**(5-6*x+5*np.maximum(x-.3, 0)-6*np.maximum(x-.6, 0))
+    counts[4] = 1e9
+    profile = add_regression_floor_objective(piecewise_histogram_profile(counts), 4096)
+    save = Figure.savefig
+
+    def inspect(figure: Figure, *args: object, **kwargs: object) -> None:
+        """Contrôle les deux repères indépendamment des couleurs des données."""
+        legend = figure.legends[0]
+        lines = dict(zip((text.get_text() for text in legend.get_texts()), legend.legend_handles))
+        for name in ('Enveloppe lissée', 'Seuil à 0,8'):
+            assert min(to_rgba(lines[name].get_color())[:3]) > .7
+        save(figure, *args, **kwargs)
+
+    monkeypatch.setattr(Figure, 'savefig', inspect)
+    histogram_figure(dict(histograms=[dict(counts=counts.tolist())],
+                          quartile_stretch={'after': profile}), tmp_path/'shape.png')
 
 
 def test_ghs_annotation_counts_searches_and_applications() -> None:
@@ -647,3 +701,155 @@ def test_annotation_cannot_hide_an_unsupported_floor_and_unreached_tail() -> Non
     assert '0.016 → 0.445' in text
     assert '0.0 % / 25.0 %' in text
     assert 'Seuil non atteint' in text and 'Extrapolation hors du segment' in text
+
+
+@pytest.mark.parametrize('location', ['profile', 'after', 'shape_preservation', 'summary'])
+def test_annotation_shows_peak_shift_and_its_limit(location: str) -> None:
+    """Essais, présentation et synthèse exposent la même mesure de sélection."""
+    from lib.final_render import ghs_annotation
+
+    audit = {'peak_shift': .0546875, 'maximum_peak_shift': .25}
+    if location == 'summary':
+        report = {'quartile_stretch': {'after': {'shape_preservation': audit, 'peak': .1}}}
+    else:
+        trial = {'stage': 'Essai', 'status': 'rejected'}
+        trial[location] = audit if location == 'shape_preservation' else {'shape_preservation': audit, 'peak': .1}
+        report = {'diagnostic_trial': trial}
+    text = ghs_annotation(report)
+    assert 'Déplacement du pic : 0.054688' in text
+    assert 'Plafond du déplacement : 0.250000' in text
+    assert 'Intensité 0–1 ; référence de forme' in text
+    assert '(estimé)' not in text
+    if location != 'shape_preservation':
+        assert 'Position du pic : 0.100000' in text
+
+
+def test_summary_annotation_identifies_the_selected_series_image() -> None:
+    """Les synthèses principales reprennent le numéro résolu par la série."""
+    from lib.final_render import ghs_annotation
+
+    assert 'Essai sélectionné : 054' in ghs_annotation({'selected_trial_index': 54})
+    assert 'Essai sélectionné : non renseigné' in ghs_annotation({'selected_trial_index': None})
+
+
+@pytest.mark.parametrize('shift', [None, float('nan'), float('inf'), 0.])
+def test_annotation_distinguishes_estimated_and_unavailable_peak_shifts(shift: float | None) -> None:
+    """Une absence ou une mesure non finie ne devient jamais un pic immobile."""
+    from lib.final_render import ghs_annotation
+
+    report = {'diagnostic_trial': {
+        'stage': 'Essai', 'status': 'rejected', 'estimated': True,
+        'profile': {'shape_preservation': {'peak_shift': shift}},
+    }}
+    text = ghs_annotation(report)
+    value = '0.000000' if shift == 0. else 'non renseigné'
+    assert f'Déplacement du pic (estimé) : {value}' in text
+    assert 'Plafond du déplacement' not in text
+
+
+def test_decline_retention_rejection_does_not_claim_the_curve_is_horizontal() -> None:
+    """Le rejet de M33 031 explique le ratio global, sans confondre droite et plateau."""
+    from lib.final_render import ghs_annotation
+
+    trial = dict(stage='Essai', status='rejected', estimated=True,
+                 rejections=['global histogram flattening'], profile=dict(shape_preservation=dict(
+                     drop_retention=.5751766792560526, minimum_drop_retention=.65)))
+    text = ghs_annotation({'diagnostic_trial': trial})
+    assert 'Conservation de décroissance' in text
+    assert '57.5 % < 65.0 %' in text
+    assert 'aplatie' not in text and 'horizontal' not in text
+
+
+@pytest.mark.parametrize('model', ['line', 'piecewise'])
+def test_optional_trial_jpegs_are_published_for_each_histogram(
+    linear_rgb: Path, fake_separation: list[str], tmp_path: Path, model: str,
+) -> None:
+    """Le pipeline complet publie la galerie et les JPEG des mêmes pixels finaux."""
+    from PIL import Image
+
+    original = linear_rgb.read_bytes()
+    result = AutoGHSFinalRenderer().post_process(
+        linear_rgb, tmp_path/'trial_run.json', argparse.Namespace(
+            compute_backend='cpu', ghs_bins=512, ghs_max_iterations=1,
+            ghs_histogram_model=model, ghs_quartile_iterations=1,
+            ghs_quartile_validations=1, ghs_save_trial_jpegs=True,
+        ),
+    )
+    assert result['trial_jpegs_enabled']
+    assert result['parameters']['ghs_save_trial_jpegs']
+    series = result['histogram_series']
+    assert series[-1]['population'] == 'with_stars'
+    selected = result['selected_trial_index']
+    assert selected is not None and 1 <= selected < len(series)-1
+    assert series[-1]['selected_trial_index'] == series[-2]['selected_trial_index'] == selected
+    assert result['strategies']['range']['selected_trial_index'] == selected
+    assert Path(series[-1]['image_jpeg']).read_bytes() == Path(result['output_jpeg']).read_bytes()
+    for index, item in enumerate(series, 1):
+        assert Path(item['image_jpeg']).name == f'image_{index:03d}.jpg'
+        with Image.open(item['image_jpeg']) as image:
+            assert image.format == 'JPEG' and image.size == (48, 48)
+        assert ('with_stars_jpeg' in item) == (item['population'] == 'starless')
+    assert linear_rgb.read_bytes() == original
+
+
+def test_trial_jpeg_write_error_closes_the_disk_cache(
+    linear_rgb: Path, fake_separation: list[str], tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Un échec d'écriture reste fatal et ferme le cache temporaire des captures."""
+    from lib.ghs_diagnostics import HistogramDiagnostics
+    from lib.type_defs import JSONReport
+
+    recorders = []
+
+    def fail_capture(self: HistogramDiagnostics, record: JSONReport, data: np.ndarray) -> None:
+        """Simule un disque plein dès la première capture de la phase GHS."""
+        recorders.append(self)
+        raise OSError('trial JPEG disk full')
+
+    monkeypatch.setattr(HistogramDiagnostics, 'capture', fail_capture)
+    report = tmp_path/'failure.json'
+    with pytest.raises(OSError, match='disk full'):
+        AutoGHSFinalRenderer().post_process(
+            linear_rgb, report, argparse.Namespace(compute_backend='cpu', ghs_save_trial_jpegs=True),
+        )
+    assert recorders and all(recorder._cache is None for recorder in recorders)
+    assert json.loads(report.read_text())['status'] == 'ERROR'
+
+
+@pytest.mark.parametrize('trial', [False, True])
+def test_annotation_explains_render_quality_without_turning_penalties_into_rejections(trial: bool) -> None:
+    """Le score et ses contributions sont visibles sur la série comme sur la synthèse."""
+    from lib.final_render import ghs_annotation
+
+    quality = dict(available=True, estimated=False, score=1.12, cnr_retention=.96,
+                   cnr_reward=.96, visibility_reward=.2, light_reward=.01,
+                   cnr_penalty=0., shape_penalty=.02, rise_penalty=.01, bright_penalty=.02)
+    profile = dict(render_quality=quality,
+                   shape_preservation=dict(rejections=['global histogram flattening']))
+    report = (dict(diagnostic_trial=dict(stage='Profil', status='admissible', profile=profile))
+              if trial else dict(quartile_stretch=dict(after=profile)))
+    text = ghs_annotation(report)
+    assert 'Score : 1.1200' in text
+    assert 'Contraste/bruit conservé : 96.0 %' in text
+    assert 'Pénalité compression brillante : 0.020' in text
+    assert 'rejeté' not in text
+    quality['available'] = False
+    assert 'QUALITÉ : non mesurable' in ghs_annotation(report)
+
+
+def test_trial_annotation_explains_the_rgb_blackpoint_budget() -> None:
+    """La montée en luminosité ne doit pas être confondue avec le minimum RGB contrôlé."""
+    from lib.final_render import ghs_annotation
+
+    audit = dict(BP=1.7e-5, budget=.001, loss_fraction_before=.0009933669,
+                 remaining_loss_budget=.0000066331,
+                 threshold_basis='minimum_initially_positive_rgb_channel')
+    text = ghs_annotation(dict(diagnostic_trial=dict(
+        stage='Essai', status='admissible', post_BP=audit['BP'], post_blackpoint=audit,
+    )))
+    assert 'BP après courbe : 1.7e-05' in text
+    assert 'Perte avant BP : 0.09934 %' in text
+    assert 'Marge avant BP : 0.00066 %' in text
+    assert 'Budget BP total : 0.10000 %' in text
+    assert 'BP commun RGB' in text

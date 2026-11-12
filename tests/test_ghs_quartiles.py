@@ -17,18 +17,50 @@ from lib.ghs_log_histogram import HISTOGRAM_BINS
 from lib.ghs_quartiles import QuartileGHSProcessor, isolated_blackpoint, quartile_profile
 
 
+def test_population_sample_preserves_rare_tail_and_weighted_transforms() -> None:
+    """Le sondage conserve la queue absente d'une grille et les effectifs réels."""
+    centers = (np.arange(128, dtype='f4')+.5)/128
+    counts = np.full(128, 5)
+    counts[4] = 100000
+    plane = np.repeat(centers, counts)[None]
+    image = np.repeat(plane[None], 3, axis=0)
+    sample, weights, indices = QuartileGHSProcessor.population_sample(image, 'human')
+    assert weights.sum() == pytest.approx(plane.size)
+    assert sample.shape[2] < plane.size
+    np.testing.assert_array_equal(sample[:, 0], image.reshape(3, -1)[:, indices])
+    full = np.histogram(plane, bins=128, range=(0, 1))[0]
+    weighted = np.histogram(sample[0], bins=128, range=(0, 1), weights=weights)[0]
+    np.testing.assert_allclose(weighted, full)
+    parameters = dict(D=.5, B=5., SP=.1, LP=0., HP=.75)
+    transformed = QuartileGHSProcessor.transform_candidate(image, parameters, np)
+    predicted = QuartileGHSProcessor.transform_candidate(sample, parameters, np)
+    np.testing.assert_allclose(
+        np.histogram(predicted[0], bins=128, range=(0, 1), weights=weights)[0],
+        np.histogram(transformed[0], bins=128, range=(0, 1))[0],
+    )
+
+
+def test_population_sample_keeps_inactive_pixels_separate_from_faint_signal() -> None:
+    """Un même premier bin ne mélange pas les zéros et les pixels actifs faibles."""
+    plane = np.r_[np.zeros(200), np.full(100, 2e-6), np.full(50, .9)].astype('f4')[None]
+    image = np.repeat(plane[None], 3, axis=0)
+    sample, weights, _ = QuartileGHSProcessor.population_sample(image, 'human')
+    assert weights[sample[0] <= 1e-6].sum() == pytest.approx(200)
+    assert weights[sample[0] > 1e-6].sum() == pytest.approx(150)
+
+
 def test_long_line_beats_flat_then_falling_histogram() -> None:
     """Une droite longue prime sur le plateau des octiles 2–4 puis la décroissance."""
     x = (np.arange(HISTOGRAM_BINS)+.5)/HISTOGRAM_BINS
     broken = np.zeros(HISTOGRAM_BINS)
     straight = np.zeros(HISTOGRAM_BINS)
-    band = (x >= .0625) & (x < .875)
+    band = (x >= 6/128) & (x < .875)
     broken[band] = np.rint(1e5*10**(-4*np.maximum(x[band]-.5, 0)))
     straight[band] = np.rint(1e5*10**(-2*x[band]))
     broken[4] = straight[4] = 1e7
     first, last = quartile_profile(broken), quartile_profile(straight)
-    assert last['line_start'] == .0625 and last['line_end'] == .875
-    assert last['line_span'] == .8125
+    assert last['line_start'] == last['peak_exit'] == 6/128 and last['line_end'] == .875
+    assert last['line_span'] == .875-6/128
     assert last['line_span'] > first['line_span']
     assert last['score'] > first['score']
     assert last['slope'] == pytest.approx(-2, abs=1e-4)
@@ -75,6 +107,8 @@ def test_isolated_dark_peak_has_a_limited_blackpoint() -> None:
     ('ghs_quartile_block_pixels', True), ('ghs_quartile_block_pixels', 1.5),
     ('ghs_quartile_validations', 0), ('ghs_quartile_validations', 65),
     ('ghs_quartile_validations', True), ('ghs_quartile_validations', 2.5),
+    ('ghs_shape_branches', 0), ('ghs_shape_branches', 9),
+    ('ghs_shape_branches', True), ('ghs_shape_branches', 2.5),
     ('ghs_quartile_iterations', True), ('ghs_quartile_max_strength', 0),
     ('ghs_quartile_max_strength', 11), ('ghs_quartile_max_strength', float('nan')),
     ('ghs_blackpoint_loss', -.01), ('ghs_blackpoint_loss', .02),
@@ -114,6 +148,12 @@ def test_options_are_collected_recursively_and_configurable(tmp_path: Path) -> N
     config.register(GHSOptimizer, parser)
     assert config.parse_args(parser, []).ghs_tail_height == .3
     assert config.parse_args(parser, ['--ghs-tail-height', '.2']).ghs_tail_height == .2
+    assert config.parse_args(parser, []).ghs_shape_branches == 3
+    config.set('ghs_shape_branches', 5)
+    parser = argparse.ArgumentParser()
+    config.register(GHSOptimizer, parser)
+    assert config.parse_args(parser, []).ghs_shape_branches == 5
+    assert config.parse_args(parser, ['--ghs-shape-branches', '2']).ghs_shape_branches == 2
 
 
 def field() -> np.ndarray:
@@ -455,11 +495,13 @@ def test_highlight_probes_keep_rare_regions_and_horizontal_neighbors() -> None:
 
 
 @pytest.mark.parametrize('failed_guard', ['color_drift', 'core_contrast'])
+@pytest.mark.parametrize('piecewise', [False, True])
 def test_highlight_probes_reject_before_full_validation(
-    monkeypatch: pytest.MonkeyPatch, failed_guard: str,
+    monkeypatch: pytest.MonkeyPatch, failed_guard: str, piecewise: bool,
 ) -> None:
-    """Les gardes ciblées voient un petit cœur manqué par la grille régulière."""
+    """Couleur et cœur restent protégés, même quand les brillants sont pénalisés."""
     from lib.ghs_final_stretch import ProtectedGHSFinalizer
+    from lib.ghs_log_render import ShapeGHSProcessor
 
     monkeypatch.setattr('lib.ghs_quartiles.MAX_SAMPLE_PIXELS', 2048)
     data = field()
@@ -490,7 +532,8 @@ def test_highlight_probes_reject_before_full_validation(
 
     monkeypatch.setattr(ProtectedGHSFinalizer, 'measure', staticmethod(measure))
     args = GHSOptimizer.options(argparse.Namespace(ghs_quartile_iterations=1))
-    output, report = QuartileGHSProcessor().search(
+    engine = ShapeGHSProcessor() if piecewise else QuartileGHSProcessor()
+    output, report = engine.search(
         data, HistogramAnalyzer(256), ComputeBackend('cpu'), args,
     )
     assert report['highlight_probe_count'] == 16
@@ -504,16 +547,17 @@ def test_highlight_probes_reject_before_full_validation(
 
 
 @pytest.mark.parametrize('tail_count', [0, 1, 5, 10, 20])
-def test_sparse_tail_interpolates_from_real_population(tail_count: int) -> None:
+@pytest.mark.parametrize('minimum', [.45, .5])
+def test_sparse_tail_interpolates_from_real_population(tail_count: int, minimum: float) -> None:
     """La rareté est mesurée sur le champ actif, sans dilution par les bordures."""
     light = np.zeros((20, 1000))
     light[:10] = .1
     light[0, :tail_count] = .8
-    report = QuartileGHSProcessor.sparse_tail_retention(light, .9, .001, .5)
+    report = QuartileGHSProcessor.sparse_tail_retention(light, .9, .001, minimum)
     assert report['active_count'] == 10000
     assert report['tail_count'] == tail_count
     assert report['fraction'] == pytest.approx(tail_count/10000)
-    expected = .5 + .4 * min(tail_count/10, 1)
+    expected = minimum + (.9-minimum) * min(tail_count/10, 1)
     assert report['effective_retention'] == pytest.approx(expected)
     json.dumps(report, allow_nan=False)
 

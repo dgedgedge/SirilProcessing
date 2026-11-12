@@ -1,5 +1,6 @@
 """Instantanés de classe, hiérarchie et isolation des traitements configurés."""
 import argparse
+import json
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -106,3 +107,51 @@ def test_bound_sequence_executes_with_saved_activation(tmp_path):
     report = tmp_path / 'report.json'
     assert sequence.post_process(tmp_path / 'unused.fits', report) == {}
     assert json.loads(report.read_text()) == {}
+
+
+def test_trial_jpeg_option_uses_config_and_explicit_cli_priority(tmp_path: Path) -> None:
+    """L'export est opt-in ; un réglage mémorisé peut être désactivé par la CLI."""
+    from lib.final_render import AutoGHSFinalRenderer
+    from lib.ghs_diagnostics import HistogramDiagnostics
+
+    config = Config(tmp_path/'settings.json')
+    parser = argparse.ArgumentParser()
+    config.register(AutoGHSFinalRenderer, parser)
+    assert not config.parse_args(parser, []).ghs_save_trial_jpegs
+    config.set('ghs_save_trial_jpegs', True)
+    parser = argparse.ArgumentParser()
+    config.register(AutoGHSFinalRenderer, parser)
+    assert config.parse_args(parser, []).ghs_save_trial_jpegs
+    args = config.parse_args(parser, ['--no-ghs-save-trial-jpegs'])
+    config.bind_parameters(args)
+    assert not args.ghs_save_trial_jpegs
+    assert not HistogramDiagnostics()._get_args().ghs_save_trial_jpegs
+    assert not AutoGHSFinalRenderer()._get_args().ghs_save_trial_jpegs
+    enabled = config.parse_args(parser, ['--ghs-save-trial-jpegs'])
+    enabled.save_config = True
+    config.bind_parameters(enabled)
+    assert config.save_requested(enabled)
+    assert json.loads((tmp_path/'settings.json').read_text())['ghs_save_trial_jpegs'] is True
+    config.bind_parameters(args)
+
+
+def test_piecewise_default_preserves_explicit_legacy_configuration(tmp_path: Path) -> None:
+    """Piecewise devient le défaut ; les choix explicites gardent leur priorité."""
+    from lib.auto_ghs import GHSOptimizer
+    from lib.final_render import AutoGHSFinalRenderer
+
+    assert GHSOptimizer.options(argparse.Namespace()).ghs_histogram_model == 'piecewise'
+    config = Config(tmp_path/'piecewise.json')
+    parser = argparse.ArgumentParser()
+    config.register(AutoGHSFinalRenderer, parser)
+    assert config.parse_args(parser, []).ghs_histogram_model == 'piecewise'
+    config.set('ghs_histogram_model', 'line')
+    parser = argparse.ArgumentParser()
+    config.register(AutoGHSFinalRenderer, parser)
+    assert config.parse_args(parser, []).ghs_histogram_model == 'line'
+    args = config.parse_args(parser, ['--ghs-histogram-model', 'piecewise'])
+    assert args.ghs_histogram_model == 'piecewise'
+    assert args.ghs_post_blackpoint == 'rise'
+    assert args.ghs_shape_local_retention == .1
+    assert args.ghs_shape_peak_shift == .25
+    assert args.ghs_sparse_highlight_retention == .45

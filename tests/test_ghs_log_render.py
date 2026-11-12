@@ -2,6 +2,7 @@
 
 import argparse
 import json
+from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
@@ -9,7 +10,7 @@ import pytest
 from astropy.io import fits
 
 from lib.auto_ghs import ComputeBackend, GHSOptimizer, HistogramAnalyzer
-from lib.ghs_log_render import LogHistogramRenderer, LogSpanGHSProcessor
+from lib.ghs_log_render import LogHistogramRenderer, LogSpanGHSProcessor, PopulationGHSProcessor
 from lib.ghs_quartiles import QuartileGHSProcessor
 from lib.type_defs import JSONReport
 
@@ -22,6 +23,65 @@ def assessment(met: bool, span: float) -> JSONReport:
                 targets_achieved=met, met_count=2 if met else 0)
 
 
+def test_population_search_estimates_candidates_and_recounts_final_pixels() -> None:
+    """L'estimation pondérée n'est jamais publiée comme mesure pleine résolution."""
+    rng = np.random.default_rng(7331)
+    image = np.repeat(rng.uniform(.03, .9, (64, 128))[None], 3, axis=0).astype('f4')
+    args = GHSOptimizer.options(argparse.Namespace(ghs_histogram_model='line', ghs_quartile_iterations=1,
+                                                  ghs_quartile_validations=1))
+    output, report = PopulationGHSProcessor().search(
+        image, HistogramAnalyzer(), ComputeBackend('cpu'), args,
+    )
+    assert report['histogram_sampling']['method'] == 'intensity_strata'
+    assert report['histogram_sampling']['population'] == pytest.approx(64*128)
+    assert not report['after']['regression_floor']['estimated']
+    assert not report['after']['tail']['estimated']
+    verified = LogHistogramRenderer.assess(output, args, None, .95)['profile']
+    assert verified['regression_floor']['achieved'] == report['regression_floor_achieved']
+    assert verified['tail']['height'] == report['after']['tail']['height']
+
+
+@pytest.mark.parametrize('first_met', [True, False])
+def test_population_fallback_runs_only_when_regular_searches_miss_targets(
+    monkeypatch: pytest.MonkeyPatch, first_met: bool,
+) -> None:
+    """La reprise reste conditionnelle et peut gagner après validation commune."""
+    original = np.full((3, 32, 32), .1, dtype='f4')
+    reference, guided, population = (np.full_like(original, x) for x in (.12, .14, .16))
+    calls = []
+
+    def produce(
+        image: np.ndarray, name: str,
+    ) -> Callable[..., tuple[np.ndarray, JSONReport]]:
+        """Construit un moteur simulé dont l'exécution est comptée."""
+        def search(self: QuartileGHSProcessor, *args: object, **kwargs: object) -> tuple[np.ndarray, JSONReport]:
+            """Retourne un candidat fixe ; le sélecteur effectue ses contrôles."""
+            calls.append(name)
+            return image, dict(status='applied', iterations=[])
+        return search
+
+    def evaluate(image: np.ndarray, *args: object) -> JSONReport:
+        """Distingue le succès des objectifs des sorties partielles."""
+        if image is population:
+            return assessment(True, .6)
+        if image is reference:
+            return assessment(first_met, .4)
+        return assessment(False, .2)
+
+    monkeypatch.setattr(LogSpanGHSProcessor, 'search', produce(reference, 'length'))
+    monkeypatch.setattr(QuartileGHSProcessor, 'search', produce(guided, 'reference_level'))
+    monkeypatch.setattr(PopulationGHSProcessor, 'search', produce(population, 'population'))
+    monkeypatch.setattr(LogHistogramRenderer, 'assess', staticmethod(evaluate))
+    args = GHSOptimizer.options(argparse.Namespace(ghs_histogram_model='line', ghs_quartile_iterations=1))
+    output, report = LogHistogramRenderer().search(
+        original, HistogramAnalyzer(), ComputeBackend('cpu'), args,
+    )
+    assert ('population' in calls) is not first_met
+    assert report['targets_achieved']
+    assert report['selected_search'] == ('length' if first_met else 'population')
+    np.testing.assert_array_equal(output, reference if first_met else population)
+
+
 @pytest.mark.parametrize('dark_guided', [True, False])
 def test_selector_keeps_valid_reference_over_darker_or_unqualified_candidate(
     monkeypatch: pytest.MonkeyPatch, dark_guided: bool,
@@ -30,7 +90,7 @@ def test_selector_keeps_valid_reference_over_darker_or_unqualified_candidate(
     original = np.full((3, 32, 32), .1, dtype='f4')
     reference = np.full_like(original, .2)
     guided = np.full_like(original, .05 if dark_guided else .3)
-    args = GHSOptimizer.options(argparse.Namespace(ghs_quartile_iterations=1))
+    args = GHSOptimizer.options(argparse.Namespace(ghs_histogram_model='line', ghs_quartile_iterations=1))
 
     def reference_search(
         self: LogSpanGHSProcessor, data: np.ndarray, analyzer: HistogramAnalyzer,
@@ -80,7 +140,7 @@ def test_assessment_requires_actual_supported_reference_segment() -> None:
     counts[4] = 100000
     pixels = np.repeat((np.arange(128, dtype='f4')+.5)/128, counts)
     image = np.repeat(pixels[None, None, :], 3, axis=0)
-    args = GHSOptimizer.options(argparse.Namespace(ghs_tail_height=0))
+    args = GHSOptimizer.options(argparse.Namespace(ghs_histogram_model='line', ghs_tail_height=0))
     result = LogHistogramRenderer.assess(image, args, None, .95)
     assert result['targets_achieved']
     assert result['profile']['regression_floor']['reference_covered']
@@ -112,7 +172,7 @@ def test_length_engine_checks_its_own_final_diffuse_output(
 ) -> None:
     """Une exploration de longueur terminée trop sombre ne produit aucun candidat valide."""
     source = np.full((3, 32, 32), .1, dtype='f4')
-    args = GHSOptimizer.options(argparse.Namespace())
+    args = GHSOptimizer.options(argparse.Namespace(ghs_histogram_model='line', ))
 
     def explored(
         self: QuartileGHSProcessor, data: np.ndarray, analyzer: HistogramAnalyzer,
@@ -141,7 +201,7 @@ def test_assessment_does_not_certify_a_peak_above_the_allowed_quarter() -> None:
     counts[60] = 100000
     pixels = np.repeat((np.arange(128, dtype='f4')+.5)/128, counts)
     image = np.repeat(pixels[None, None, :], 3, axis=0)
-    args = GHSOptimizer.options(argparse.Namespace(ghs_tail_height=0))
+    args = GHSOptimizer.options(argparse.Namespace(ghs_histogram_model='line', ghs_tail_height=0))
     result = LogHistogramRenderer.assess(image, args, None, .95)
     assert result['profile']['regression_floor']['achieved']
     assert result['profile']['peak'] >= .25

@@ -78,6 +78,8 @@ nav:
               - AutoGHS: docs/scripts/postProcess/auto-ghs.md
               - Protection des hautes lumières: docs/scripts/postProcess/ghs-highlight-protection.md
               - Quartiles GHS: docs/scripts/postProcess/ghs-quartiles.md
+              - Forme des histogrammes GHS: docs/scripts/postProcess/ghs-histogram-shape.md
+              - Point noir après GHS: docs/scripts/postProcess/ghs-blackpoint.md
               - Algorithme AutoGHS: docs/scripts/postProcess/auto-ghs-algorithm.md
               - Rendu des étoiles: docs/scripts/postProcess/star-rendering.md
           - Annotation finale: docs/scripts/postProcess/annotations.md

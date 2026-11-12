@@ -12,6 +12,11 @@ StarNet et de la publication. `ghs_transfer` traite une intensité scalaire,
 `GHSOptimizer(processor)` recherche une variante sans étoiles.
 `ComputeBackend` sélectionne NumPy/CuPy avant le traitement.
 
+Le mode par défaut est le [profil par morceaux](ghs-histogram-shape.md).
+Dans ce mode, chaque courbe est suivie d'un [recalage affine du point noir](ghs-blackpoint.md)
+avant la mesure des critères et le choix. Les descriptions de droite globale
+ci-dessous restent celles du mode historique `--ghs-histogram-model line`.
+
 `optimize(data, strategy, args, backend)` reçoit un tableau RGB CPU float32,
 normalisé, sans étoiles ; retourne le tableau étiré et son rapport. `strategy`
 vaut toujours `range`, seule recherche disponible. Le moteur
@@ -263,19 +268,19 @@ Références : [étirements Siril](https://siril.readthedocs.io/en/stable/proces
 [tutoriel GHS](https://siril.org/fr/tutorials/ghs/),
 [guide de rendu final](auto-ghs.md), [étoiles et fusion](star-rendering.md).
 
-Les figures de diagnostic affichent les mêmes effectifs bruts sur deux axes Y :
-linéaire et logarithmique (graduations en puissances de 10). Les classes vides
-sont masquées dans la vue log, sans ajouter de pseudo-effectif ; X reste linéaire.
-Cette présentation est distincte du `log1p` interne utilisé pour analyser les pics.
+Les figures de diagnostic affichent les effectifs uniquement sur un axe Y
+logarithmique, avec graduations en puissances de 10. Les classes vides sont
+masquées sans pseudo-effectif ; X reste l'intensité linéaire. Le panneau des
+effectifs linéaires est supprimé. Cette présentation reste indépendante du
+`log1p` interne utilisé pour analyser les pics.
 
-Les deux panneaux RANGE sont numérotés : 1 = échelle linéaire à gauche,
-2 = échelle logarithmique à droite. Aucun panneau PEAK n’est calculé.
-Chaque titre indique son objectif et son échelle. Les populations sont séparées
-entre deux PNG : la figure sans étoiles montre l’entrée linéaire, une étape
-intermédiaire et le rendu final (au plus trois courbes par panneau) ; la figure
-avec étoiles montre uniquement le rendu final recomposé (une courbe par panneau).
-Chaque figure possède sa légende commune. Ces panneaux ne représentent pas les
-étoiles seules.
+La synthèse sans étoiles montre l'entrée, une étape intermédiaire et la sortie ;
+la synthèse avec étoiles montre le rendu recomposé. Une
+[série des essais majeurs](ghs-histogram-shape.md#15-série-de-graphiques-exclusivement-logarithmiques)
+ajoute les passages acceptés et les meilleurs rejets consignés, avec paramètres,
+verdicts, courbe lissée et morceaux lorsqu'ils sont disponibles. Les histogrammes
+estimés sont signalés. La galerie et son manifeste utilisent exclusivement des
+mesures CPU, sans conserver les images candidates sur GPU.
 
 Un encart rappelle l’objectif RANGE et résume la boucle GHS : recherches
 ayant évalué des candidats / limite configurée, GHS acceptés, recherches sans
@@ -290,10 +295,17 @@ pas comme une itération GHS. Les données absentes ne sont pas remplacées par 
 
 ## Étirements successifs de la droite logarithmique
 
-Après la recherche finale protégée, `QuartileGHSProcessor` cherche la plus
-longue portion continue quasi rectiligne de l’histogramme semi-log, après le pic
-et jusqu’à 0,875. Une pente descendante n’est pas pénalisée face à un plateau.
-Une cible de hauteur log à cette extrémité complète le classement, par défaut
-0,25 du maximum logarithmique du canal rouge, sous les mêmes gardes.
-Les [critères, options et budgets cumulés](ghs-quartiles.md) sont décrits
-séparément. Cette phase est désactivée en mode fixe et avec force finale nulle.
+Après la présentation protégée, `LogHistogramRenderer` utilise par défaut
+`ShapeGHSProcessor` pour explorer plusieurs chemins GHS avec une référence de
+forme fixe. La spline mesure l'enveloppe dès la sortie du pic, et les morceaux
+la couvrent sans sauter de bosse. Le score plafonne la récompense de
+contraste/bruit à 100 % et pénalise progressivement les déformations, les bosses
+intermédiaires et la compression brillante. Les objectifs à 0,8 et 0,875 sont
+des bonus bornés ; le déplacement du pic départage les qualités égales.
+Les [mesures, formules et options](ghs-histogram-shape.md) sont décrites séparément.
+
+Le mode explicite `--ghs-histogram-model line` compare les recherches de
+longueur et de niveau de `LogSpanGHSProcessor` et `QuartileGHSProcessor`, puis
+une reprise stratifiée si leurs objectifs restent incomplets. Il conserve
+ses [critères et budgets historiques](ghs-quartiles.md).
+Cette phase est désactivée en mode fixe et avec force finale nulle.

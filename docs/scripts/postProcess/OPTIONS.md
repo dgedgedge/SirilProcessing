@@ -80,15 +80,44 @@ avant recomposition. La recherche de droite logarithmique vise également
 (`--ghs-regression-min-count 10` ; 0 désactive ce seuil), sous les gardes
 cumulatives. `--ghs-quartile-validations` fixe le budget de candidats
 diversifiés validés sur toute l’image par passe (12 par défaut, de 1 à 64).
+En mode `piecewise`, `--ghs-shape-branches` conserve jusqu'à trois chemins
+de familles et positions du pic différentes (de 1 à 8). Le budget de
+validations reste partagé par profondeur, et les forces sont affinées entre
+positions de pic trop espacées. Aucun ancien candidat n'est réutilisé.
 `--ghs-quartile-block-pixels` limite les temporaires GHS float64 à des blocs
 de 262144 pixels par défaut (de 1 à 4194304), sur CPU comme sur CUDA.
-En rectitude, la protection du contraste brillant s'adapte entre 50 % et
+En rectitude, la protection du contraste brillant s'adapte entre 45 % et
 la conservation normale selon la fraction du fond actif au-dessus de 0,8.
 `--ghs-sparse-tail-fraction 0` désactive cette adaptation ; son défaut est
 0,001 (0,1 % du signal actif). Le plancher est réglable avec
-`--ghs-sparse-highlight-retention` (0,5 par défaut). Le cœur garde sa
+`--ghs-sparse-highlight-retention` (0,45 par défaut). Le cœur garde sa
 protection normale.
 Voir [le critère de régression](ghs-quartiles.md#seuil-de-la-droite-à-08).
+`--ghs-histogram-model piecewise` sélectionne le profil par morceaux par défaut ;
+`line` conserve le mode historique sur demande explicite. Les réglages `--ghs-shape-smoothing`
+(0,0001), `--ghs-shape-retention` (0,65), `--ghs-shape-local-retention` (0,1),
+`--ghs-shape-distance` (0,15), `--ghs-shape-peak-shift` (0,25) et
+`--ghs-shape-stiffness` (1,25) sont décrits dans
+[la conservation de forme](ghs-histogram-shape.md). `--ghs-linearity-tolerance`
+s'applique alors à chaque morceau. Le poids global `--ghs-log-rms-weight`
+concerne seulement le mode `line`.
+Le classement `piecewise` plafonne le bonus contraste/bruit à 100 %, pénalise
+progressivement les déformations, les bosses intermédiaires et la compression
+brillante, puis départage par le déplacement du pic. `--ghs-quality-cnr-floor`
+(0,9 ; ]0,1]) règle le début de pénalité de perte contraste/bruit ;
+`--ghs-quality-tail-bonus` (0,1 ; [0,1]) borne le bonus total des niveaux à
+0,8 et 0,875. Ces niveaux ne priment pas sur la qualité. Les seuils de forme
+et de contraste brillant sont des cibles progressives dans cette recherche
+finale ; écrêtage, cœur, couleurs et bruit restent des gardes obligatoires.
+`--ghs-post-blackpoint rise` recale le BP après chaque courbe, avant conformité,
+en mode `piecewise` ; `off` désactive ce recalage. Voir
+[le pied de montée et son budget cumulatif](ghs-blackpoint.md).
+Les graphiques sont uniquement logarithmiques et la série est exposée par
+`histogram_gallery`, `histogram_series_manifest` et `histogram_series`.
+`--ghs-save-trial-jpegs` ajoute les JPEG des essais de cette galerie, avec
+les mêmes numéros que les histogrammes et des aperçus avec étoiles.
+Le défaut est désactivé ; `--no-ghs-save-trial-jpegs` permet de désactiver
+une valeur mémorisée. Voir [les images de chaque essai](ghs-histogram-shape.md#151-images-jpeg-de-chaque-essai).
 `--ghs-final-strength 0` désactive le renforcement et cette recherche.
 Cette option est rémanente avec `-S` et commune à postProcess et à lightProcess.
 

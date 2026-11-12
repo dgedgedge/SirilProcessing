@@ -1,8 +1,9 @@
 """Dernière phase facultative : StarNet → étoiles → GHS RANGE → fusion.
 
 Les artefacts sont écrits dans des sous-dossiers visibles et ordonnés.
-Le rapport SUCCESS est écrit uniquement après réussite de tous les rendus.
-Une erreur conserve les diagnostics, sans reprise CPU ni rendu de substitution.
+Un rendu calculé dont les objectifs actifs restent incomplets porte le statut
+TARGETS_NOT_REACHED. Une erreur conserve les diagnostics ; la reprise CPU
+limitée au manque de mémoire CUDA en mode auto appartient à GHSOptimizer.
 """
 
 from __future__ import annotations
@@ -20,6 +21,8 @@ import numpy as np
 from astropy.io import fits
 
 from lib.auto_ghs import ComputeBackend, GHSOptimizer, HistogramAnalyzer
+from lib.ghs_diagnostics import HistogramDiagnostics
+from lib.diagnostic_style import DIAGNOSTIC_COLORS, apply_dark_diagnostic_style
 from lib.postprocess_paths import reset_autoghs_work_dir
 from lib.render_exports import write_render_jpeg
 from lib.processor import processor
@@ -55,6 +58,72 @@ def atomic_report(path: Path, report: JSONReport) -> None:
         temporary.unlink(missing_ok=True)
 
 
+def _peak_shift_annotation(audit: JSONReport, *, estimated: bool = False) -> list[str]:
+    """Formate le déplacement absolu du pic depuis la référence de forme.
+
+    Parameters
+    ----------
+    audit : JSONReport
+        Audit de conservation de forme ; peak_shift et maximum_peak_shift
+        sont des différences d'intensité sur [0,1]. Une valeur absente ou
+        non finie reste non renseignée, sans être remplacée par zéro.
+    estimated : bool
+        Signale une mesure sur échantillon plutôt qu'un recomptage complet.
+
+    Returns
+    -------
+    list[str]
+        Lignes de l'encart avec la mesure et, s'il est connu, son plafond.
+    """
+    shift = audit.get('peak_shift')
+    label = 'Déplacement du pic' + (' (estimé)' if estimated else '')
+    value = f'{shift:.6f}' if shift is not None and np.isfinite(shift) else 'non renseigné'
+    lines = [f'{label} : {value}', 'Intensité 0–1 ; référence de forme']
+    limit = audit.get('maximum_peak_shift')
+    if limit is not None and np.isfinite(limit):
+        lines.append(f'Plafond du déplacement : {limit:.6f}')
+    return lines
+
+
+def _render_quality_annotation(profile: JSONReport) -> list[str]:
+    """Formate les contributions du score, sans confondre pénalités et rejets.
+
+    Parameters
+    ----------
+    profile : JSONReport
+        Profil après BP ; render_quality peut manquer dans un ancien rapport.
+
+    Returns
+    -------
+    list[str]
+        Score sans unité, conservation relative contraste/bruit en pourcentage
+        et pénalités. Une mesure indisponible reste explicitement non renseignée.
+    """
+    quality = profile.get('render_quality')
+    if quality is None:
+        return []
+    if not quality.get('available'):
+        return ['', 'QUALITÉ : non mesurable']
+    lines = ['', 'QUALITÉ DU RENDU' + (' (estimée)' if quality.get('estimated') else ''),
+             f"Score : {quality['score']:.4f}",
+             f"Contraste/bruit conservé : {100*quality['cnr_retention']:.1f} %",
+             f"Bonus contraste/bruit : {quality['cnr_reward']:.3f} (plafond 1)",
+             f"Bonus visibilité : {quality['visibility_reward']:.3f}",
+             f"Bonus niveaux : {quality['light_reward']:.3f}"]
+    for key, label in (('cnr_penalty', 'Perte contraste/bruit'),
+                       ('sky_compression_penalty', 'Compression du ciel'),
+                       ('shape_penalty', 'Déformation'), ('rise_penalty', 'Bosse intermédiaire'),
+                       ('initial_peak_penalty', 'Bosse du pic initial'),
+                       ('prepeak_valley_penalty', 'Creux avant le pic'),
+                       ('bright_penalty', 'Compression brillante')):
+        if key in quality:
+            lines.append(f"Pénalité {label.lower()} : {quality[key]:.3f}")
+    warnings = profile.get('shape_preservation', {}).get('rejections', [])
+    if warnings:
+        lines.append('Écarts de forme consignés dans l’audit')
+    return lines
+
+
 def ghs_annotation(report: JSONReport) -> str:
     """Résume l'objectif et les recherches GHS consignées dans le rapport.
 
@@ -66,12 +135,107 @@ def ghs_annotation(report: JSONReport) -> str:
     Une information absente est affichée comme non renseignée. Le seuil de
     régression à 0,8 est affiché avec sa prédiction en effectifs logarithmiques.
     Les conservations de contraste brillante et du cœur sont distinguées
-    lorsque la protection de queue rare est renseignée.
+    lorsque la protection de queue rare est renseignée. Le déplacement absolu
+    du pic est exprimé en intensité [0,1] depuis la référence de forme ; les
+    estimations sur échantillon et le plafond connu sont indiqués.
+    Un rejet de conservation de décroissance explicite son ratio et son seuil
+    lorsqu'ils sont enregistrés ; il ne qualifie pas la pente d'horizontale.
+    Les figures de série portent leur groupe et leur numéro ; les synthèses
+    finales indiquent le numéro d'essai retenu lorsque sa provenance est connue.
     """
+    trial = report.get('diagnostic_trial')
+    if trial is not None:
+        statuses = {'accepted': 'accepté', 'rejected': 'rejeté', 'selected': 'retenu',
+                    'reference': 'référence', 'applied': 'appliqué',
+                    'admissible': 'admissible', 'no admissible improvement': 'entrée conservée'}
+        lines = [trial['stage'], '', 'Statut : '+statuses.get(trial['status'], trial['status'])]
+        if trial.get('series_label'):
+            lines = [textwrap.fill('SÉRIE — '+trial['series_label'].upper(), 38),
+                     f"IMAGE {trial['series_index']:03d} / {trial['series_count']:03d}", '', *lines]
+        if trial.get('parent_branch_id') is not None:
+            lines.append(f"Branche parente : {trial['parent_branch_id']}")
+        if 'selected_trial_index' in trial:
+            index = trial['selected_trial_index']
+            lines.extend(['', f'Essai sélectionné : {index:03d}' if index is not None
+                          else 'Essai sélectionné : non renseigné'])
+            if index is not None:
+                lines.append(f'Histogramme : histogram_{index:03d}.png')
+                if trial.get('selected_trial_jpeg'):
+                    lines.append('Image : '+Path(trial['selected_trial_jpeg']).name)
+        if trial.get('estimated'):
+            lines.append('Estimation sur échantillon pondéré')
+        parameters = trial.get('parameters') or {}
+        lines.extend(f'{key} : {value:.5g}' for key, value in parameters.items()
+                     if isinstance(value, (int, float)))
+        if trial.get('BP') is not None and 'BP' not in parameters:
+            lines.append(f"BP : {trial['BP']:.5g}")
+        if trial.get('post_BP') is not None:
+            lines.append(f"BP après courbe : {trial['post_BP']:.5g}")
+        blackpoint = trial.get('post_blackpoint') or {}
+        if blackpoint.get('threshold_basis') == 'minimum_initially_positive_rgb_channel':
+            lines.append('BP commun RGB ; perte d’un canal comptée par pixel')
+        if blackpoint.get('loss_fraction_before') is not None:
+            lines.append(f"Perte avant BP : {100*blackpoint['loss_fraction_before']:.5f} %")
+        if blackpoint.get('remaining_loss_budget') is not None:
+            lines.append(f"Marge avant BP : {100*blackpoint['remaining_loss_budget']:.5f} %")
+        if blackpoint.get('budget') is not None:
+            lines.append(f"Budget BP total : {100*blackpoint['budget']:.5f} %")
+        limit = blackpoint.get('limit_reason')
+        if limit:
+            lines.append({'below_histogram_resolution': 'BP limité par la résolution du quantile',
+                          'below_intensity_resolution': 'BP inférieur à la précision utile du type',
+                          'no_safe_positive_shift': 'Aucun décalage positif sûr du BP'}.get(limit, limit))
+        profile = trial.get('profile') or trial.get('after', {})
+        audit = profile.get('shape_preservation', trial.get('shape_preservation', {}))
+        reasons = {'global histogram flattening': 'Conservation de décroissance insuffisante',
+                   'local histogram flattening': 'Conservation de pente locale insuffisante',
+                   'histogram slope deformation': 'Proportions des pentes trop modifiées',
+                   'histogram slope stiffness': 'Évolution des pentes trop hétérogène',
+                   'histogram slope sequence': 'Ordre des variations de pente modifié',
+                   'histogram shape distortion': 'Forme globale trop modifiée',
+                   'histogram peak shoulder distortion': 'Épaulement du pic trop modifié',
+                   'histogram peak displacement': 'Déplacement excessif du pic',
+                   'unmeasurable render quality': 'Qualité de rendu non mesurable',
+                   'no full-resolution render quality improvement':
+                       'Pas de gain de qualité sur tout le champ',
+                   'unmeasurable histogram shape': 'Forme non mesurable'}
+        lines.append('')
+        for reason in trial.get('rejections', []):
+            label = reasons.get(reason, reason)
+            fields = {
+                'global histogram flattening': ('drop_retention', 'minimum_drop_retention'),
+                'local histogram flattening': ('local_slope_retention', 'minimum_local_retention'),
+            }.get(reason)
+            if fields is not None:
+                value, minimum = (audit.get(field) for field in fields)
+                if value is not None and minimum is not None:
+                    label += f' : {100*value:.1f} % < {100*minimum:.1f} %'
+            lines.append(textwrap.fill(label, 38))
+        if profile.get('shape'):
+            lines.extend(['', f"Morceaux : {len(profile.get('pieces', []))}",
+                          f"Décroissance : {profile['shape']['drop_dex']:.3f} dex",
+                          'Variations de pente : '+str(profile['shape']['slope_sequence'])])
+        if profile.get('peak') is not None:
+            lines.append(f"Position du pic : {profile['peak']:.6f}")
+        lines.extend(['', *_peak_shift_annotation(audit, estimated=bool(trial.get('estimated')))])
+        if audit.get('drop_retention') is not None:
+            lines.append(f"Décroissance conservée : {100*audit['drop_retention']:.1f} %")
+        if audit.get('local_slope_retention') is not None:
+            lines.append(f"Pente locale conservée : {100*audit['local_slope_retention']:.1f} %")
+            lines.append(f"Hétérogénéité des pentes : {audit['slope_stiffness']:.3f}")
+        peak = profile.get('initial_peak')
+        if peak is not None:
+            lines.append(f"Remontée près du pic : {100*peak['secondary_rise_fraction']:.1f} % du sommet")
+        lines.extend(_render_quality_annotation(profile))
+        return '\n'.join(lines)
     lines = ["OBJECTIF", textwrap.fill(
         "Élargir l’étendue robuste des intensités entre les quantiles "
         "configurés, sous contraintes de bruit et d’écrêtage.", width=38
     ), "", "BOUCLE GHS — FOND SANS ÉTOILES"]
+    if 'selected_trial_index' in report:
+        index = report['selected_trial_index']
+        lines.extend(['', f'Essai sélectionné : {index:03d}' if index is not None
+                      else 'Essai sélectionné : non renseigné'])
     records = report.get("iterations")
     if records is None:
         lines.append("Itérations : non renseignées")
@@ -121,14 +285,25 @@ def ghs_annotation(report: JSONReport) -> str:
             ])
     quartiles = report.get("quartile_stretch", {})
     after = quartiles.get("after", {})
+    lines.extend(_render_quality_annotation(after))
+    if after.get('peak') is not None:
+        lines.append(f"Position du pic : {after['peak']:.6f}")
+    lines.extend(['', *_peak_shift_annotation(
+        after.get('shape_preservation', {}),
+        estimated=bool(after.get('regression_floor', {}).get('estimated')),
+    )])
     longest = quartiles.get('longest_line_after', after)
     if longest.get('measurable'):
         lines.extend([
-            "", "RECTITUDE MESURÉE",
+            "", "PROFIL PAR MORCEAUX" if longest.get('model') == 'piecewise' else "RECTITUDE MESURÉE",
             f"Segment : {longest['line_start']:.3f} → {longest['line_end']:.3f}",
         ])
+    elif longest.get('anchored_to_peak'):
+        lines.extend(["", "RECTITUDE NON VALIDÉE", "Depuis la sortie du pic principal"])
     if quartiles.get('selected_search'):
         labels = {'length': 'longueur', 'reference_level': 'niveau à 0,8',
+                  'population': 'populations rares',
+                  'shape': 'forme préservée',
                   'unchanged': 'entrée conservée'}
         lines.append('Recherche : ' + labels.get(quartiles['selected_search'], quartiles['selected_search']))
     tail = after.get('tail')
@@ -141,22 +316,25 @@ def ghs_annotation(report: JSONReport) -> str:
         lines.append('Objectifs : ' + ('atteints' if quartiles['targets_achieved'] else 'incomplets'))
     sparse_tail = quartiles.get("sparse_tail")
     if sparse_tail is not None:
+        progressive = after.get('render_quality') is not None
         protection = quartiles.get('protection_before', {})
         bright_missing = ('highlight_contrast' in protection
                           and protection['highlight_contrast'] is None)
         core_missing = 'core_contrast' in protection and protection['core_contrast'] is None
         lines.extend([
-            "", "PROTECTION DU CONTRASTE",
-            f"Brillant : {100 * sparse_tail['effective_retention']:.1f} %"
+            "", "CONTRASTE : CIBLE ET GARDE" if progressive else "PROTECTION DU CONTRASTE",
+            ('Cible brillante' if progressive else 'Brillant')
+            + f" : {100 * sparse_tail['effective_retention']:.1f} %"
             + (' (non mesuré)' if bright_missing else ''),
-            f"Cœur : {100 * sparse_tail['requested_retention']:.1f} %"
+            ('Cœur (minimum)' if progressive else 'Cœur')
+            + f" : {100 * sparse_tail['requested_retention']:.1f} %"
             + (' (non mesuré)' if core_missing else ''),
         ])
     floor = quartiles.get("after", {}).get("regression_floor")
     if floor is not None and floor['minimum_count'] > 0:
         predicted = floor['predicted_log10_count']
         lines.extend([
-            "", "DROITE LOG À 0,8",
+            "", "NIVEAU LISSÉ À 0,8" if after.get('model') == 'piecewise' else "DROITE LOG À 0,8",
             f"Seuil : {floor['minimum_count']:g} pixels/classe",
             "Prédiction log10 : " + (f"{predicted:.3f}" if predicted is not None else "non mesurable"),
             "Seuil " + ("atteint" if floor['achieved'] else "non atteint"),
@@ -166,10 +344,12 @@ def ghs_annotation(report: JSONReport) -> str:
         elif after.get('measurable'):
             lines.append(f"Segment de contrôle : {after['line_start']:.3f} → {after['line_end']:.3f}")
         global_prediction = floor.get('longest_line_predicted_log10_count')
-        if global_prediction is not None:
+        if global_prediction is not None and after.get('model') != 'piecewise':
             lines.append(f"Droite globale log10 : {global_prediction:.3f}")
     reasons = {
         "max_iterations": "limite d’itérations atteinte",
+        "iteration limit": "limite d’itérations atteinte",
+        "no admissible render quality improvement": "aucun gain de qualité admissible",
         "constant distribution": "distribution constante",
         "no admissible improvement": "aucune amélioration admissible",
     }
@@ -189,18 +369,20 @@ def ghs_annotation(report: JSONReport) -> str:
 def histogram_figure(
     report: JSONReport, destination: Path, *, with_stars: bool = False
 ) -> None:
-    """Trace les effectifs avec axes Y linéaire et logarithmique, X linéaire.
+    """Trace les effectifs sur un seul axe Y logarithmique, avec X linéaire.
 
     Les classes vides sont masquées dans la vue logarithmique, sans ajouter
     de pseudo-effectif. Le log1p utilisé par l'analyse GHS reste indépendant
     de cette présentation. Une distribution entièrement vide garde un axe
     log valide de 1 à 10 pixels.
-    Les deux panneaux numérotés identifient l'objectif RANGE et l'échelle. Une
-    légende commune distingue les étapes sans répéter les mêmes libellés.
+    Un seul panneau d'effectifs logarithmiques est tracé. L'abscisse conserve
+    les intensités linéaires ; aucun panneau d'effectifs linéaires n'est produit.
     Avec ``with_stars=True``, seuls les histogrammes finaux recomposés sont
     tracés ; sinon, la figure contient uniquement les états sans étoiles.
     Un encart rappelle l’objectif et les statistiques de boucle
     du fond avant fusion. Le PNG est écrit dans ``destination``.
+    Le fond noir, les textes clairs et les courbes contrastées s'appliquent
+    uniquement à cette figure, sans modifier les autres affichages Matplotlib.
     """
     from matplotlib.backends.backend_agg import FigureCanvasAgg
     from matplotlib.figure import Figure
@@ -208,14 +390,14 @@ def histogram_figure(
     annotation_text = ghs_annotation(report)
     # 9 points, interligne 1,2 et marge pour titre/légende : aucun encart tronqué.
     annotation_height = len(annotation_text.splitlines()) * 9 * 1.2 / 72 + 1.4
-    figure = Figure(figsize=(16, max(6.5, annotation_height)), constrained_layout=True)
+    figure = Figure(figsize=(12, max(6.5, annotation_height)), constrained_layout=True)
     figure.suptitle(
         "Images finales avec étoiles recomposées"
         if with_stars else "Évolution de l’image sans étoiles"
     )
     FigureCanvasAgg(figure)
-    grid = figure.add_gridspec(1, 3, width_ratios=(1, 1, 0.8))
-    axes = [figure.add_subplot(grid[0, column]) for column in range(2)]
+    grid = figure.add_gridspec(1, 2, width_ratios=(2, 1))
+    axis = figure.add_subplot(grid[0, 0])
     legend_handles = {}
     states = report["histograms"]
     selection = sorted({0, len(states) // 2, len(states) - 1})
@@ -223,53 +405,71 @@ def histogram_figure(
     for index in ([] if with_stars else selection):
         if index == 0:
             label = "Sans étoiles — entrée linéaire"
-            color = "C0"
+            color = DIAGNOSTIC_COLORS[0]
         elif index == len(states) - 1:
             label = "Sans étoiles — rendu final"
-            color = "C2"
+            color = DIAGNOSTIC_COLORS[2]
         else:
             label = "Sans étoiles — étape intermédiaire"
-            color = "C1"
+            color = DIAGNOSTIC_COLORS[1]
+        if report.get('diagnostic_trial'):
+            label = 'Référence de la phase' if index == 0 else 'Essai évalué'
         curves.append((states[index]["counts"], label, color))
     if with_stars:
         curves.append((
             report["recomposed_histogram"]["counts"],
-            "Image finale — étoiles recomposées", "C3",
+            "Image finale — étoiles recomposées", DIAGNOSTIC_COLORS[3],
         ))
     maximum = 0.0
     for raw_counts, label, color in curves:
         counts = np.asarray(raw_counts)
         maximum = max(maximum, float(np.max(counts)))
         x = (np.arange(len(counts)) + 0.5) / len(counts)
-        line, = axes[0].plot(x, counts, label=label, color=color)
+        line, = axis.plot(x, np.ma.masked_less_equal(counts, 0), label=label, color=color)
         legend_handles[label] = line
-        axes[1].plot(
-            x, np.ma.masked_less_equal(counts, 0), label=label, color=color
-        )
-    axes[1].set_ylim(1, max(10, maximum * 1.2))
-    axes[1].set_yscale("log")
-    for column, axis in enumerate(axes):
-        axis.set_title(
-            f"{column + 1}. RANGE — étendue globale\n"
-            "Effectifs en échelle "
-            + ("linéaire" if column == 0 else "logarithmique")
-        )
-        axis.set_xlabel("Intensité (linéaire sur cet axe)")
-        axis.set_xlim(0, 1)
-        axis.set_ylabel("Nombre de pixels")
-    annotation = figure.add_subplot(grid[0, 2])
+    axis.set_ylim(1, max(10, maximum * 1.2, report.get('histogram_ymax', 0)))
+    axis.set_yscale("log")
+    axis.set_title('Effectifs en échelle logarithmique')
+    axis.set_xlabel('Intensité Y')
+    axis.set_xlim(0, 1)
+    axis.set_ylabel('Nombre de pixels par classe')
+    trial = report.get('diagnostic_trial', {})
+    profile = trial.get('profile') or report.get('quartile_stretch', {}).get('after', {})
+    shape = profile.get('shape')
+    if shape and curves and not with_stars:
+        density = np.array(shape['log_density'])
+        values = 10**density*profile['support']/len(curves[-1][0])
+        line, = axis.plot(shape['x'], values, color='#dedede', linestyle='--',
+                          linewidth=1.3, label='Enveloppe lissée')
+        legend_handles['Enveloppe lissée'] = line
+        for index, piece in enumerate(profile.get('pieces', [])):
+            xx = np.array([piece['start'], piece['end']])
+            yy = 10**(piece['intercept']+piece['slope']*xx)*profile['support']/len(curves[-1][0])
+            line, = axis.plot(xx, yy, color='#dd99ee', linewidth=1, marker='o', markersize=3)
+            if index == 0:
+                legend_handles['Approximation par morceaux'] = line
+        floor = profile.get('regression_floor', {})
+        if floor.get('minimum_count', 0) > 0:
+            target = floor['minimum_count']*floor['reference_bins']/len(curves[-1][0])
+            line, = axis.plot([.8], [target], marker='x', color='white', linestyle='none', markersize=8)
+            legend_handles['Seuil à 0,8'] = line
+    annotation = figure.add_subplot(grid[0, 1])
     annotation.set_axis_off()
     annotation.text(
         0.03, 0.98, annotation_text,
         transform=annotation.transAxes, va="top", fontsize=9,
-        bbox={"boxstyle": "round,pad=0.7", "facecolor": "#f3f5f7",
-              "edgecolor": "#c5cbd1"},
+        bbox={"boxstyle": "round,pad=0.7"},
     )
     figure.legend(
         handles=list(legend_handles.values()),
-        loc="outside lower center", ncol=2, fontsize=9,
+        labels=list(legend_handles),
+        # Les audits de qualité sont longs : garder la légende sous le graphe,
+        # à gauche, évite son chevauchement avec le bas de l'encart à droite.
+        loc="outside lower left", ncol=2, fontsize=9,
     )
-    figure.savefig(destination, dpi=130)
+    apply_dark_diagnostic_style(figure)
+    figure.savefig(destination, dpi=130, facecolor=figure.get_facecolor(),
+                   edgecolor=figure.get_edgecolor(), transparent=False)
     figure.clear()
 
 
@@ -294,7 +494,7 @@ class AutoGHSFinalRenderer(processor):
     @classmethod
     def parameter_children(cls) -> tuple[type[processor], ...]:
         """Déclare les moteurs de séparation, d'étoiles et de GHS indépendants."""
-        return (StarNetSeparator, ConservativeStarRenderer, GHSOptimizer)
+        return (StarNetSeparator, ConservativeStarRenderer, GHSOptimizer, HistogramDiagnostics)
 
     @classmethod
     def add_arguments(cls, parser: argparse.ArgumentParser) -> None:
@@ -408,7 +608,10 @@ class AutoGHSFinalRenderer(processor):
         Returns
         -------
         dict
-            output_image et output_jpeg référencent le rendu RANGE. Les cartes
+            output_image et output_jpeg référencent le rendu RANGE. Le statut
+            TARGETS_NOT_REACHED signale les objectifs actifs incomplets ; les
+            exports restent disponibles et unmet_targets décrit ces objectifs.
+            Les cartes
             output_images/output_jpegs gardent une seule entrée range pour les
             lecteurs de rapports existants.
 
@@ -422,6 +625,7 @@ class AutoGHSFinalRenderer(processor):
         if source == report_path:
             raise ValueError("Le rapport AutoGHS ne peut pas remplacer la source")
         work_root: Path | None = None
+        trial_images: HistogramDiagnostics | None = None
         started = time.monotonic()
         try:
             args = self._get_args(args)
@@ -513,15 +717,24 @@ class AutoGHSFinalRenderer(processor):
             )
             # Histograms CPU des sorties finales ; le calcul GHS conserve ses tableaux GPU.
             cpu = ComputeBackend("cpu")
+            if getattr(args, 'ghs_save_trial_jpegs', False):
+                trial_images = HistogramDiagnostics(
+                    backend, stars, headroom, header.get('ROWORDER', 'BOTTOM-UP'),
+                )
             stretched, branch = optimizer.optimize(
                 background, "range", args, backend,
                 rendered_stars=stars, headroom=headroom,
+                **({'trial_images': trial_images} if trial_images is not None else {}),
             )
             starless_path = ghs_dir / f"{source.stem}_starless_ghs_range.fits"
             write_rgb(
                 source, starless_path, stretched, nonlinear=True, role="STARLESS"
             )
             final, fusion = recompose(stretched, stars, headroom)
+            if trial_images is not None:
+                captured: JSONReport = {}
+                trial_images.capture(captured, final, with_stars=True)
+                branch['recomposed_trial_image_id'] = captured['trial_image_id']
             fusion["peak_contrast"] = peak_visibility(
                 final - headroom * stretched, star_positions,
             )
@@ -566,6 +779,10 @@ class AutoGHSFinalRenderer(processor):
                 positive, stars, star_report, stars_diagnostic,
                 row_order=header.get("ROWORDER", "BOTTOM-UP"),
             )
+            series = HistogramDiagnostics.write_series(
+                branch, diagnostics_dir / 'histogram_trials', trial_images,
+            )
+            branch.update({key: series[key] for key in ('selected_trial_index', 'selected_trial_stage')})
             histogram_path = diagnostics_dir / f"{source.stem}_ghs_histograms.png"
             histogram_figure(branch, histogram_path)
             recomposed_histogram_path = (
@@ -578,11 +795,9 @@ class AutoGHSFinalRenderer(processor):
                     digest.update(block)
             fingerprint = digest.hexdigest()
             result = {
-                "status": (
-                    "SUCCESS"
-                    if branch["status"] == "SUCCESS"
-                    else "NO_IMPROVEMENT"
-                ),
+                "status": branch["status"],
+                "targets_achieved": branch.get('quartile_stretch', {}).get('targets_achieved'),
+                "unmet_targets": branch.get('quartile_stretch', {}).get('unmet_targets', []),
                 "algorithm": "AutoGHS v1; experimental histogram heuristics",
                 "implementation_sha256": {
                     module: hashlib.sha256(
@@ -595,6 +810,10 @@ class AutoGHSFinalRenderer(processor):
                         "ghs_log_render.py",
                         "ghs_log_histogram.py",
                         "ghs_linear_histogram.py",
+                        "ghs_histogram_shape.py",
+                        "ghs_render_quality.py",
+                        "ghs_diagnostics.py",
+                        "ghs_blackpoint.py",
                         "final_render.py",
                         "render_exports.py",
                         "star_rendering.py",
@@ -632,6 +851,7 @@ class AutoGHSFinalRenderer(processor):
                     "starless": str(histogram_path),
                     "with_stars": str(recomposed_histogram_path),
                 },
+                **series,
                 "parameters": {
                     **vars(options),
                     "starnet_path": separation["executable"],
@@ -656,6 +876,7 @@ class AutoGHSFinalRenderer(processor):
                     "ghs_negative_tolerance": getattr(
                         args, "ghs_negative_tolerance", 0.005
                     ),
+                    "ghs_save_trial_jpegs": bool(getattr(args, 'ghs_save_trial_jpegs', False)),
                 },
                 "duration_seconds": time.monotonic() - started,
             }
@@ -678,3 +899,6 @@ class AutoGHSFinalRenderer(processor):
             except OSError:
                 LOGGER.exception("Impossible d’écrire le rapport d’échec AutoGHS")
             raise
+        finally:
+            if trial_images is not None:
+                trial_images.close()

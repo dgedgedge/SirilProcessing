@@ -16,6 +16,9 @@ LINE_ENDPOINT = .875
 MIN_LINE_BINS = 20
 DEFAULT_LINEARITY_TOLERANCE = .05  # RMS en dex, soit environ 12 % de densité.
 MAX_RESIDUAL_FACTOR = 3.0
+# Sortie du pic et de son épaulement : 2 % du maximum des effectifs lissés.
+# Un profil gaussien atteint ce niveau à environ 2,8 sigma de son centre.
+PEAK_EXIT_FRACTION = .02
 # La régularité ne peut jamais compenser une seule classe de longueur perdue.
 REGULARITY_BONUS = .25 / HISTOGRAM_BINS
 INFLECTION_HALF_WIDTH = 8
@@ -57,6 +60,12 @@ def linear_histogram_profile(
 ) -> JSONReport:
     """Classe la longueur continue quasi rectiligne après le pic jusqu'à 0,875.
 
+    Le segment commence au bord droit à 2 % du pic principal, mesuré
+    sur les effectifs lissés [1,2,1]/4. Aucun intervalle ultérieur ne peut
+    contourner une bosse ou un trou entre cette sortie et la droite.
+    Si les vingt classes juste après le maximum satisfont déjà les mêmes
+    tolérances de droite, le départ reste immédiat : une décroissance sans
+    épaulement ne doit pas être coupée tardivement par le seuil relatif.
     Chaque classe du segment doit contenir au moins trois pixels. Les moindres
     carrés non pondérés doivent avoir un RMS <= tolerance dex et aucun écart
     supérieur à trois fois cette tolérance. La pente est librement négative ou
@@ -81,10 +90,27 @@ def linear_histogram_profile(
     support = float(values.sum())
     centers = (np.arange(HISTOGRAM_BINS)+.5) / HISTOGRAM_BINS
     peak_index = _peak(values)
-    start, stop = peak_index+1, int(LINE_ENDPOINT * HISTOGRAM_BINS)
+    stop = int(LINE_ENDPOINT * HISTOGRAM_BINS)
+    smooth = np.convolve(values, [1/4, 1/2, 1/4], mode='same')
+    exits = (np.flatnonzero(smooth[peak_index+1:stop] <= PEAK_EXIT_FRACTION*smooth[peak_index])
+             if support > 0 else np.array([], dtype=np.int64))
+    start = peak_index+1+int(exits[0]) if exits.size else stop
+    exit_method = 'peak_fraction'
+    # Une décroissance déjà rectiligne n'a pas d'épaulement à exclure :
+    # le seuil relatif ne doit pas déplacer son début loin dans la queue.
+    first = peak_index+1
+    prefix = values[first:first+MIN_LINE_BINS]
+    if prefix.size == MIN_LINE_BINS and first+MIN_LINE_BINS <= stop and np.all(prefix >= MIN_BIN_COUNT):
+        coordinates = centers[first:first+MIN_LINE_BINS]
+        levels = np.log10(prefix)
+        a, b = np.polyfit(coordinates, levels, 1)
+        residual = levels-(a*coordinates+b)
+        if (a <= 1e-6 and np.sqrt(np.mean(residual**2)) <= tolerance
+                and np.max(abs(residual)) <= MAX_RESIDUAL_FACTOR*tolerance):
+            start, exit_method = first, 'already_linear'
     valid = values[start:stop] >= MIN_BIN_COUNT
-    edges = np.flatnonzero(np.diff(np.r_[False, valid, False]))
-    support_bins = int(np.max(edges[1::2]-edges[::2])) if edges.size else 0
+    missing = np.flatnonzero(~valid)
+    support_bins = int(missing[0]) if missing.size else int(valid.size)
     peak = float(centers[peak_index]) if support else None
     report: JSONReport = dict(
         peak=peak, bins=HISTOGRAM_BINS, support=int(support), window_end=LINE_ENDPOINT,
@@ -96,13 +122,26 @@ def linear_histogram_profile(
         objective='longest_contiguous_log_linear_span',
         reference_intensity=reference_intensity,
         reference_covered=False if reference_intensity is not None else None,
+        peak_exit=start/HISTOGRAM_BINS if start < stop else None,
+        peak_exit_fraction=PEAK_EXIT_FRACTION, anchored_to_peak=True,
+        peak_exit_method=exit_method,
     )
     if support_bins < MIN_LINE_BINS:
         return report
     x = centers[start:stop]
     y = np.zeros(x.size)
     y[valid] = np.log10(values[start:stop][valid] * HISTOGRAM_BINS / support)
-    left, right = np.triu_indices(x.size, k=MIN_LINE_BINS-1)
+    # Avant une droite admissible, diminuer la courbure du début de queue
+    # fournit une direction de recherche sans certifier de linéarité.
+    initial_x, initial_y = x[:MIN_LINE_BINS], y[:MIN_LINE_BINS]
+    initial_slope, initial_intercept = np.polyfit(initial_x, initial_y, 1)
+    initial_rms = float(np.sqrt(np.mean((initial_y-initial_intercept-initial_slope*initial_x)**2)))
+    rise = max(0.0, float(initial_slope*(initial_x[-1]-initial_x[0])))
+    report.update(bootstrap_rms_dex=initial_rms, bootstrap_rise_dex=rise,
+                  score=-1+(support_bins/HISTOGRAM_BINS)/(1+initial_rms+rise))
+    # Seuls les préfixes issus de la sortie du pic sont admissibles.
+    right = np.arange(MIN_LINE_BINS-1, support_bins)
+    left = np.zeros_like(right)
     size = right-left+1
 
     def sums(array: np.ndarray) -> np.ndarray:
@@ -244,7 +283,8 @@ def add_tail_height_objective(
         line_score=line['score'], tail=dict(tail, channel=channel, target=target,
                                            achieved=achieved),
         tail_height_bonus=bonus, score=line['score']+bonus,
-        objective='longest_log_linear_span_with_tail_height' if target > 0 else line['objective'],
+        objective=(('piecewise_log_shape_with_tail_height' if line.get('model') == 'piecewise'
+                    else 'longest_log_linear_span_with_tail_height') if target > 0 else line['objective']),
     )
     report['loss'] = -report['score'] if report['measurable'] else None
     return report
@@ -287,6 +327,9 @@ def add_regression_floor_objective(
     Une extrapolation à 0,8 reste diagnostique : elle ne valide pas le seuil.
     Le point doit appartenir au segment mesuré et peuplé. Les gardes cumulatives restent à la charge de
     l'appelant. La désactivation conserve exactement le score précédent.
+    Pour model='piecewise', le niveau vient de reference_log_density dans le
+    support observé de la spline. Une enveloppe mesurable encore trop courte
+    est guidée vers 0,8 par sa borne de support, sans extrapolation de niveau.
     """
     if (not isinstance(reference_bins, (int, np.integer))
             or isinstance(reference_bins, bool) or reference_bins <= 0):
@@ -296,13 +339,19 @@ def add_regression_floor_objective(
     if not np.isfinite(minimum_count) or minimum_count < 0:
         raise ValueError('Effectif minimal de régression fini et positif ou nul requis')
     predicted = None
-    if profile['measurable']:
+    if profile.get('model') == 'piecewise':
+        density = profile.get('reference_log_density')
+        if profile['measurable'] and density is not None:
+            predicted = float(density+np.log10(profile['support'])
+                              + np.log10(population_scale)-np.log10(reference_bins))
+    elif profile['measurable']:
         predicted = float(
             profile['intercept'] + profile['slope'] * REGRESSION_REFERENCE_INTENSITY
             + np.log10(profile['support']) + np.log10(population_scale)
             - np.log10(reference_bins)
         )
-    covered = (bool(profile['line_start'] <= REGRESSION_REFERENCE_INTENSITY <= profile['line_end'])
+    covered = (bool(profile.get('reference_covered')) if profile.get('model') == 'piecewise' else
+               bool(profile['line_start'] <= REGRESSION_REFERENCE_INTENSITY <= profile['line_end'])
                if profile['measurable'] else False)
     achieved = (bool(covered and predicted is not None and predicted >=
                      float(np.log10(minimum_count)) - REGRESSION_THRESHOLD_EPSILON)
@@ -310,7 +359,13 @@ def add_regression_floor_objective(
     score = profile['score']
     if minimum_count > 0:
         if predicted is None:
-            score = -4 + REGRESSION_SECONDARY_WEIGHT * score
+            if profile.get('model') == 'piecewise' and profile['measurable']:
+                # Une enveloppe mesurée mais encore trop courte peut progresser
+                # vers 0,8 sans inventer de niveau extrapolé. Les gardes de
+                # forme restent bloquantes, même pendant cet amorçage.
+                score = -3+min(REGRESSION_REFERENCE_INTENSITY, profile['line_end'])+.05*score
+            else:
+                score = -4 + REGRESSION_SECONDARY_WEIGHT * score
         elif not covered:
             # Une extrapolation haute ne doit pas guider le rendu : tant que
             # 0,8 n'est pas couvert, garder l'objectif réel de longueur/queue.
@@ -326,6 +381,7 @@ def add_regression_floor_objective(
             estimated=population_scale != 1, predicted_log10_count=predicted,
             achieved=achieved, reference_covered=covered,
             extrapolated=predicted is not None and not covered,
+            method='smoothing_spline' if profile.get('model') == 'piecewise' else 'linear_regression',
         ),
         score=score, loss=-score if profile['measurable'] else None,
         objective=(profile['objective'] + '_with_regression_floor'

@@ -11,6 +11,7 @@ from PIL import Image
 from lib.render_exports import (
     read_render_image,
     write_render_jpeg,
+    write_array_jpeg,
 )
 
 
@@ -45,6 +46,22 @@ def test_final_jpeg_keeps_size_color_and_source(tmp_path: Path) -> None:
     assert source.read_bytes() == before
     with pytest.raises(ValueError, match="remplacer"):
         write_render_jpeg(source, source)
+
+
+def test_array_jpeg_keeps_full_resolution_and_orientation(tmp_path: Path) -> None:
+    """Un instantané exporte directement les intensités, avec l'orientation FITS."""
+    data = np.full((3, 40, 64), .2, dtype='f4')
+    data[:, :20] = np.array([.6, .3, .1])[:, None, None]
+    original = data.copy()
+    path = tmp_path/'trial.jpg'
+    write_array_jpeg(data, path, 'BOTTOM-UP')
+    with Image.open(path) as image:
+        assert image.size == (64, 40)
+        np.testing.assert_allclose(image.getpixel((32, 5)), [51, 51, 51], atol=3)
+        np.testing.assert_allclose(image.getpixel((32, 35)), [153, 76, 26], atol=3)
+    np.testing.assert_array_equal(data, original)
+    with pytest.raises(ValueError, match='ROWORDER'):
+        write_array_jpeg(data, tmp_path/'bad.jpg', 'INVALID')
 
 
 @pytest.mark.parametrize("nonlinear,level", [(False, 0.2), (True, 1.1), (True, np.nan)])

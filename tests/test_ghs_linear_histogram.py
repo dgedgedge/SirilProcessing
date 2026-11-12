@@ -238,16 +238,18 @@ def test_extrapolation_cannot_validate_the_reference_floor() -> None:
     assert floor['predicted_log10_count'] > 1
     assert floor['extrapolated'] and not floor['reference_covered']
     assert not floor['achieved'] and report['score'] < 0
-    covered = add_regression_floor_objective(linear_histogram_profile(np.full(128, 640.)), 4096)
+    populated = np.full(128, 640.)
+    populated[4] = 100000
+    covered = add_regression_floor_objective(linear_histogram_profile(populated), 4096)
     assert covered['regression_floor']['achieved']
     assert covered['score'] > report['score']
 
 
-def test_reference_coverage_selects_a_supported_line_over_a_long_left_plateau() -> None:
-    """La régression du seuil porte sur une droite qui contient réellement 0,8."""
+def test_reference_cannot_skip_a_gap_after_the_main_peak() -> None:
+    """Une droite isolée vers 0,8 ne contourne plus une rupture après le pic."""
     x = (np.arange(128)+.5)/128
     counts = np.zeros(128)
-    left = (x >= .0625) & (x < .47)
+    left = (x >= 6/128) & (x < .47)
     right = (x >= .6) & (x < .875)
     counts[left] = np.rint(1e5*10**(-2*x[left]))
     counts[right] = np.rint(1e6*10**(-4*x[right]))
@@ -255,9 +257,44 @@ def test_reference_coverage_selects_a_supported_line_over_a_long_left_plateau() 
     free = linear_histogram_profile(counts)
     supported = linear_histogram_profile(counts, reference_intensity=.8)
     assert free['line_end'] < .5
-    assert supported['reference_covered']
-    assert supported['line_start'] <= .8 <= supported['line_end']
-    assert supported['line_span'] < free['line_span']
+    assert not supported['reference_covered']
+    assert supported['line_start'] == supported['peak_exit']
+    assert supported['line_end'] == free['line_end']
+
+
+def test_bimodal_distribution_cannot_be_certified_from_its_remote_tail() -> None:
+    """Deux bosses après le pic invalident la rectitude malgré une queue droite."""
+    x = (np.arange(128)+.5)/128
+    counts = line_counts()
+    counts[15:35] *= 10**(2*np.sin(np.linspace(0, np.pi, 20)))
+    report = linear_histogram_profile(counts, reference_intensity=.8)
+    assert not report['measurable']
+    assert not report['reference_covered']
+    assert report['line_start'] is None
+    assert report['peak_exit'] < .1
+
+
+def test_peak_shoulder_is_excluded_at_two_percent_of_the_smoothed_peak() -> None:
+    """La sortie est définie sur le pic, sans rechercher une droite plus loin."""
+    counts = line_counts()
+    counts[4:8] = [1e8, 9e7, 6e7, 2e7]
+    report = linear_histogram_profile(counts)
+    assert report['peak'] == pytest.approx(5.5/128)
+    assert report['peak_exit'] == 9/128
+    assert report['peak_exit_fraction'] == .02
+    assert not report['measurable'] or report['line_start'] == 9/128
+
+
+def test_already_linear_decline_starts_immediately_after_the_peak() -> None:
+    """Une décroissance exponentielle n'est pas repoussée vers sa queue rare."""
+    x = (np.arange(128)+.5)/128
+    counts = np.rint(1e6*10**(-3*x))
+    counts[:3] = 0
+    report = linear_histogram_profile(counts)
+    assert report['measurable']
+    assert report['peak_exit_method'] == 'already_linear'
+    assert report['line_start'] == pytest.approx(report['peak']+.5/128)
+    assert report['line_end'] == .875
 
 
 @pytest.mark.parametrize('reference', [-.1, .9, float('nan'), float('inf')])

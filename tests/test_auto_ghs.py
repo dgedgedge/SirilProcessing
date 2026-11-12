@@ -134,7 +134,8 @@ def test_optimizer_completes_dynamic_range(target: float) -> None:
     assert dynamic["stop_reason"] == "target reached"
     assert all(record["gain"] <= 2 for record in dynamic["iterations"])
     assert all(record["BP"] > 0 for record in dynamic["iterations"])
-    assert report["iterations"][0]["BP"] == float(data.min())
+    distance = float(data.min())-report["iterations"][0]["BP"]
+    assert np.finfo(data.dtype).eps <= distance <= 2*np.finfo(data.dtype).eps
 
 
 def test_dynamic_range_bound_and_already_wide_input() -> None:
@@ -406,6 +407,49 @@ def test_histogram_balancing_preserves_colors_and_disable() -> None:
     np.testing.assert_array_equal(output, constant)
 
 
+def test_piecewise_balance_reduces_strength_against_a_fixed_reference() -> None:
+    """La CDF réduit sa force plutôt que de transformer une pente en plateau."""
+    centers = (np.arange(128)+.5)/128
+    counts = np.rint(1000*10**(-2*centers)).astype(int)
+    counts[4] = 20000
+    levels = np.concatenate([
+        (index+(np.arange(size)+.5)/size)/128 for index, size in enumerate(counts)
+    ]).astype('f4')
+    data = np.broadcast_to(levels, (3, 1, len(levels))).copy()
+    original = data.copy()
+    options = GHSOptimizer.options(argparse.Namespace(ghs_histogram_model='piecewise'))
+    output, report = GHSOptimizer().balance_histogram(
+        data, HistogramAnalyzer(), ComputeBackend('cpu'), .7, 4, options,
+    )
+    assert report['status'] == 'applied'
+    assert 0 < report['strength'] < .7
+    attempts = report['full_validation']
+    assert 'local histogram flattening' in attempts[0]['rejections']
+    assert not attempts[-1]['rejections']
+    for index, attempt in enumerate(attempts):
+        assert attempt['parameters']['strength'] == pytest.approx(.7/2**index)
+        assert attempt['profile']['shape_preservation']['drop_retention'] == pytest.approx(
+            attempt['profile']['shape']['drop_dex']/report['shape_reference']['shape']['drop_dex'],
+        )
+    assert report['shape_preservation']['achieved']
+    assert np.all(np.diff(output[0, 0]) >= 0)
+    np.testing.assert_array_equal(data, original)
+    np.testing.assert_array_equal(output[0], output[1])
+
+
+def test_piecewise_balance_preserves_input_without_a_measurable_reference() -> None:
+    """Une plage trop étroite ne fournit pas de certification de forme fictive."""
+    data = np.broadcast_to(np.linspace(.01, .02, 1000, dtype='f4'), (3, 1, 1000)).copy()
+    options = GHSOptimizer.options(argparse.Namespace(ghs_histogram_model='piecewise'))
+    output, report = GHSOptimizer().balance_histogram(
+        data, HistogramAnalyzer(), ComputeBackend('cpu'), .7, 4, options,
+    )
+    np.testing.assert_array_equal(output, data)
+    assert report['reason'] == 'unmeasurable histogram shape'
+    assert report['strength'] == 0
+    assert not report['full_validation']
+
+
 @pytest.mark.parametrize("option,value", [
     ("ghs_histogram_strength", -0.1), ("ghs_histogram_strength", 1.1),
     ("ghs_histogram_clip", 0.5), ("ghs_histogram_clip", float("nan")),
@@ -664,3 +708,29 @@ def test_cuda_pool_limit_triggers_automatic_cpu_retry() -> None:
     assert backend.name == 'cpu' and backend.requested == 'auto'
     assert report['backend_fallback']['from'] == 'cuda'
     assert report['backend_fallback']['to'] == 'cpu'
+
+
+def test_cdf_cannot_accept_a_blackpoint_budget_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Une forme admissible ne masque pas un dépassement cumulatif du BP en préparation."""
+    import lib.auto_ghs as module
+    from lib.ghs_blackpoint import HistogramBlackpointNormalizer
+
+    source = np.repeat(np.linspace(.01, .8, 1024, dtype='f4').reshape(1, 32, 32), 3, axis=0)
+
+    def exhausted(
+        image: np.ndarray, *args: object, **kwargs: object,
+    ) -> tuple[np.ndarray, JSONReport]:
+        """Isole la garde cumulée des statistiques de forme de la CDF."""
+        return image, dict(BP=0., loss_fraction=.002, status='budget exhausted')
+
+    monkeypatch.setattr(HistogramBlackpointNormalizer, 'apply', staticmethod(exhausted))
+    monkeypatch.setattr(module, 'piecewise_histogram_profile', lambda *args: {'measurable': True})
+    monkeypatch.setattr(module, 'compare_histogram_shapes', lambda *args: dict(achieved=True, rejections=[]))
+    args = GHSOptimizer.options(argparse.Namespace())
+    output, report = GHSOptimizer().balance_histogram(
+        source, HistogramAnalyzer(), ComputeBackend('cpu'), .35, 4., shape_options=args,
+    )
+    assert report['status'] == 'no admissible improvement'
+    assert report['full_validation']
+    assert all(r['rejections'] == ['cumulative blackpoint loss'] for r in report['full_validation'])
+    np.testing.assert_array_equal(output, source)

@@ -23,8 +23,17 @@ def test_stellar_figure_scales_and_orientation(
 
     def inspect(figure: Figure, *args: object, **kwargs: object) -> None:
         """Vérifie les objets réellement transmis au moteur PNG."""
+        from matplotlib.colors import to_rgba
+
         axes = figure.axes
         assert len(axes) == 4
+        assert figure.get_facecolor() == to_rgba('black')
+        assert all(axis.get_facecolor() == to_rgba('black') for axis in axes)
+        assert all(min(to_rgba(axis.title.get_color())[:3]) > .7 for axis in axes)
+        assert all(min(to_rgba(text.get_color())[:3]) > .7 for text in figure.texts)
+        assert max(figure.texts[-1].get_bbox_patch().get_facecolor()[:3]) < .1
+        for axis in axes[2:]:
+            assert max(axis.get_legend().get_frame().get_facecolor()[:3]) < .1
         expected = before[:, ::-1] if row_order == "BOTTOM-UP" else before
         np.testing.assert_array_equal(
             axes[0].images[0].get_array(), expected.transpose(1, 2, 0),
@@ -43,6 +52,7 @@ def test_stellar_figure_scales_and_orientation(
     with Image.open(destination) as image:
         assert image.format == "PNG"
         assert image.size == (1680, 1320)
+        assert image.getpixel((0, 0))[:3] == (0, 0, 0)
 
 
 def test_empty_stars_have_valid_log_diagnostic(
