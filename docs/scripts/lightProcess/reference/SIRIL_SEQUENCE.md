@@ -4,16 +4,15 @@
 
 Le module [lib/siril.py](../../../../lib/siril.py) regroupe l’exécution de Siril
 et la lecture, l’écriture et la modification des fichiers `.seq`. Cette page
-détaille le modèle de séquence ; l’exécution des scripts ajoute aussi
-automatiquement `requires 1.4`, la limite CPU et `setext fits`. Les nouvelles
+détaille le modèle de séquence ; les sessions API appliquent aussi
+automatiquement `requires 1.4.4`, la limite CPU et `setext fits`. Les nouvelles
 images utilisent ainsi `.fits` indépendamment des préférences Siril ; les
 entrées historiques `.fit` restent acceptées. Le module journalise leur sortie et lève une erreur fatale
 en cas d’échec.
 
-`Siril.prepare_script(texte)` est le point unique de préparation de cet en-tête,
-sans accès au disque ni exécution. `run_siril_script` l’appelle avant chaque
-sauvegarde : les traitements fournissent seulement leur corps de commandes,
-sans répéter le réglage d’extension.
+`Siril.prepare_commands(appels)` prépare les réglages API communs sans accès
+au disque. `run_commands` utilise une session sirilpy et conserve un plan JSON,
+sans exécuter de fichier de commandes. Voir les [sessions API](SIRIL_API.md).
 
 Toute manipulation d’une image appartenant à une séquence passe par un objet
 `SequenceImage` obtenu depuis `SirilSequence`.

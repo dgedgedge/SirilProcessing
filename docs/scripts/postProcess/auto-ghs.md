@@ -13,9 +13,38 @@ séparation StarNet, un étirement dédié aux étoiles, puis une optimisation R
 fond sans étoiles et une recomposition. Les étapes amont gardent leur ordre.
 Chaque fond passe aussi par une recherche finale D/B/SP/HP avec protection des
 hautes lumières, après l’optimisation et la chroma éventuelle, avant la fusion.
-Elle est complétée par des [étirements successifs de la droite logarithmique](ghs-quartiles.md)
-pour allonger la portion continue rectiligne après le pic, jusqu’à 0,875, sans
-privilégier une pente nulle. Le niveau relatif de la queue est également
+Le mode par défaut `--ghs-histogram-model piecewise` poursuit cette recherche
+sur une [enveloppe lissée et des morceaux conservant la forme](ghs-histogram-shape.md),
+depuis la sortie du pic. Le niveau à 0,8 vise la graduation 10¹ de l'histogramme.
+Chaque candidat est [recalé au BP après sa courbe](ghs-blackpoint.md), puis
+mesuré et contrôlé avant sélection.
+Le mode historique `line` recherche une
+[portion continue rectiligne](ghs-quartiles.md) jusqu'à 0,875, sans privilégier
+une pente nulle. Dans ce mode, deux recherches sont comparées : longueur de droite et niveau
+à 0,8. La recherche de niveau diversifie ses courbes et poursuit les validations
+après les premiers rejets, dans un budget de 12 candidats par passe par défaut.
+Une reprise par classes de luminosité pondérées est essayée si les objectifs
+restent incomplets, pour représenter aussi les populations rares.
+La sélection finale revérifie les objectifs sur tous les pixels et conserve
+la luminosité diffuse déjà obtenue. Une extrapolation hors du segment mesuré
+ne suffit pas à valider le point à 0,8. Les bornes du segment de contrôle et
+celles de la portion globale sont distinguées dans le rapport.
+Les deux mesures commencent à la sortie du pic principal ; une droite isolée
+plus loin dans la queue ne valide pas la rectitude.
+Un sondage ciblé des régions brillantes complète la grille régulière pour
+éviter qu’un petit cœur soit absent des contrôles préalables.
+Dans cette phase, une queue très peu peuplée au-dessus de 0,8 autorise une
+conservation du contraste brillant allant de 50 % à la protection normale
+de 90 % ; le cœur, les couleurs, le bruit et l’écrêtage restent protégés.
+Les transformations de rectitude sont calculées par blocs pour borner les
+temporaires float64. Seuls les paramètres du meilleur essai sont conservés
+entre les validations ; son image est recalculée après sélection.
+En mode `auto`, la géométrie du FITS final permet de choisir le CPU avant
+calcul si le budget VRAM est insuffisant. Un manque de mémoire CUDA en cours
+de GHS déclenche aussi une reprise CPU unique depuis l'entrée linéaire, avec
+les étoiles déjà rendues, sans relancer StarNet. Voir la
+[politique CPU/GPU](compute-backend.md).
+Le niveau relatif de la queue est également
 recherché, par défaut à 0,25 de la hauteur logarithmique rouge vers 0,875.
 
 La [couleur finale adaptative](final-color.md), activée par défaut, renforce ensuite
@@ -89,13 +118,14 @@ de réexécuter la calibration, la photométrie ou la restauration.
 
 ## Sorties et publication
 
-Le dossier d'étapes habituel contient `05_autoghs.json` et le dossier visible
-`05_autoghs_work/`, sans suffixe aléatoire ni dossier temporaire. Le numéro 05
-reste fixe quand la restauration regroupe les étapes 03/04. Les transformations
-sont ordonnées dans les sous-dossiers suivants :
+Dans le plan numéroté de lightProcess, les produits sont directement dans
+`05_autoghs/`, à côté du rapport `autoghs.json`. En appel autonome postProcess,
+les cinq sous-étapes sont directement à côté de `05_autoghs.json`. Le niveau
+`autoghs_work/` n'est pas créé. Les transformations sont ordonnées ainsi :
 
 ```text
-05_autoghs_work/
+05_autoghs/
+  autoghs.json
   01_separation/separation_work/  # entrée, fond et étoiles linéaires, script et journal Siril
   02_stars/           # couche d’étoiles rendue commune
   03_ghs/             # fond étiré RANGE
@@ -105,6 +135,10 @@ sont ordonnées dans les sous-dossiers suivants :
 
 La séparation est une étape nommée `01_separation`, au même niveau que
 les autres traitements ; aucun répertoire nommé `001` n’est créé.
+À chaque relance, seuls les cinq dossiers de produits et l'ancienne enveloppe
+`<rapport>_work/` sont nettoyés. Les fichiers voisins, notamment les exports
+conservés et les rapports, restent en place. Une image d'entrée située dans
+un dossier à nettoyer est refusée avant toute suppression.
 
 Les fichiers sont répartis dans ces sous-dossiers :
 
@@ -117,8 +151,9 @@ Les fichiers sont répartis dans ces sous-dossiers :
 | `<image>_stars_render.jpg` | Couche d'étoiles entière en JPEG, dans `02_stars/` |
 | `<image>_stars_diagnostic.png` | Étoiles seules : extraits avant/après, histogrammes log et bilan d'adaptation dans `02_stars/` |
 | `<image>_ghs_report.json` | Rapport complet, paramètres, histogrammes et métriques |
-| `<image>_ghs_histograms.png` | Sans étoiles : entrée, étape intermédiaire et rendu final ; axes Y linéaire et logarithmique |
-| `<image>_ghs_histograms_with_stars.png` | Avec étoiles : rendu final recomposé seul ; axes Y linéaire et logarithmique |
+| `<image>_ghs_histograms.png` | Sans étoiles : entrée, étape intermédiaire et rendu final ; effectifs uniquement logarithmiques |
+| `<image>_ghs_histograms_with_stars.png` | Avec étoiles : rendu final recomposé seul ; effectifs uniquement logarithmiques |
+| `05_diagnostics/histogram_trials/` | PNG numérotés des essais majeurs, galerie `histograms.html` et manifeste `histograms.json` |
 | `separation_work/` | FITS linéaires, script, préférences isolées et journal StarNet |
 
 **RANGE est le seul traitement exécuté.** Son rendu fournit `output_image`,
@@ -143,6 +178,11 @@ flux linéaires. La source reste intacte. Les JPEG sont quantifiés sur 8 bits, 
 sont des figures de présentation et de diagnostic. Le rapport fournit
 leurs chemins dans `histogram_paths` (`starless` et `with_stars`) ;
 `histogram_path` conserve le chemin de la figure sans étoiles.
+La série complète est exposée dans `histogram_series`, avec ses paramètres,
+verdicts et indicateurs d'estimation. `histogram_gallery` ouvre la galerie et
+`histogram_series_manifest` son manifeste. Tous les panneaux d'effectifs sont
+logarithmiques ; l'intensité en abscisse reste linéaire. Voir
+[les étapes et essais enregistrés](ghs-histogram-shape.md#15-série-de-graphiques-exclusivement-logarithmiques).
 
 Les produits sont écrits directement dans cette arborescence visible. Au
 lancement suivant, le dossier de travail de l’étape est réinitialisé, comme
@@ -163,15 +203,23 @@ astronomique.
 | Option | Défaut | Rôle |
 |---|---|---|
 | `--compute-backend` | `auto` | Politique commune de postProcess ; NumPy/CuPy pour le GHS |
+| `--ghs-histogram-model` | `piecewise` | Profil par morceaux ou droite unique historique `line` ; [réglages de forme](ghs-histogram-shape.md) |
+| `--ghs-post-blackpoint` | `rise` | Recalage du BP après chaque courbe en mode `piecewise`, avant conformité ; `off` désactive |
+| `--ghs-save-trial-jpegs` | désactivé | Images JPEG des essais de la galerie, numérotées comme les histogrammes ; [détails](ghs-histogram-shape.md#151-images-jpeg-de-chaque-essai) |
+| `--ghs-regression-min-count` | `10` | Niveau minimal du profil à 0,8, en pixels par classe du graphique ; zéro désactive |
 | `--ghs-tail-height` | `0.25` | Hauteur log cible du canal à 0,875 ; `[0,1]`, zéro désactive le complément |
 | `--ghs-tail-channel` | `red` | Canal de référence `red`, `green` ou `blue`, normalisé par son propre pic |
-| `--ghs-linearity-tolerance` | `0.05` | RMS maximal en dex pour une droite log ; `[0.005,0.5]` |
+| `--ghs-linearity-tolerance` | `0.05` | RMS maximal par morceau, ou de la droite unique en mode `line`, en dex ; `[0.005,0.5]` |
+| `--ghs-quartile-block-pixels` | `262144` | Maximum de pixels par bloc GHS float64, de 1 à 4194304 ; limite les temporaires CUDA |
+| `--ghs-quartile-validations` | `12` | Budget de candidats diversifiés vérifiés sur tout le champ par passe, de 1 à 64 |
 | `--ghs-quartile-iterations` | `12` | Passes supplémentaires pour allonger la droite log, de 0 à 64 |
 | `--ghs-quartile-max-strength` | `10` | D maximal par passe supplémentaire, dans ]0,10] |
 | `--ghs-blackpoint-loss` | `0.001` | Fraction cumulée annulable pour un pic sombre isolé, de 0 à 0,01 |
 | `--ghs-max-iterations` | `8` | Limite de 1 à 32 recherches GHS |
 | `--ghs-final-strength` | `1.25` | D maximal en mode auto, force imposée en mode fixed ; 0 désactive |
 | `--ghs-final-mode` | `auto` | Recherche protégée ou courbe comparative `fixed` |
+| `--ghs-sparse-tail-fraction` | `0.001` | Fraction Y >= 0,8 du fond actif rétablissant la protection normale en rectitude ; 0 désactive |
+| `--ghs-sparse-highlight-retention` | `0.5` | Conservation minimale du contraste brillant pour une queue rare ; le cœur garde sa protection normale |
 | `--ghs-highlight-retention` | `0.9` | Conservation des indicateurs de contraste brillant, dans `]0,1]` |
 | `--ghs-log-rms-weight` | `2.0` | Poids de la réduction relative du RMS logarithmique ; `[0,10]`, zéro désactive ce terme |
 | `--ghs-dynamic-target` | `1.0` | Étendue RGB minimale du fond après GHS, dans `]0,1]` ; par exemple `0.8` |
@@ -243,13 +291,27 @@ avec avertissement et mesures dans `residual_compensation`. Ils n’interrompent
 pas le rendu. Les couches corrigées doivent rester finies et bornées ; voir
 la [politique de compensation](star-rendering.md#politique-des-residus-negatifs).
 
-Une panne StarNet, CUDA en cours de calcul, FITS, disque ou publication est
-**fatale**, sans reprise CPU ou substitution de rendu. La CLI retourne `1`.
+En mode `auto`, une saturation mémoire CUDA dans le moteur GHS déclenche
+une reprise CPU unique ; le budget initial peut aussi choisir le CPU avant
+calcul. StarNet n'est pas relancé. Une panne StarNet, une autre erreur CUDA,
+une erreur FITS, disque ou publication reste **fatale**, sans substitution de
+rendu. Une reprise CPU qui échoue reste fatale. La CLI retourne alors `1`.
 Le rapport d'étape porte `ERROR` si son écriture est possible et conserve le
 chemin du dossier de travail pour diagnostic. Un arrêt de recherche sans gain est
 normal : `NO_IMPROVEMENT`, avec recomposition malgré tout des branches valides.
-Le statut global `SUCCESS` signifie que RANGE a appliqué une transformation,
-pas qu'une expertise visuelle certifie la qualité astronomique.
+Lorsque la recherche finale de rectitude est active, ses objectifs sont
+recomptés sur tout le champ. S'ils restent incomplets, le statut global est
+`TARGETS_NOT_REACHED`, avec `targets_achieved=false`, la liste `unmet_targets`
+et un WARNING. Le meilleur rendu admissible est conservé et le pipeline
+continue. Le profil commence dès la sortie du pic principal, sans sauter une bosse.
+En mode `piecewise`, le score de qualité peut préférer une image dont les
+niveaux lumineux restent incomplets ; les écarts sont consignés séparément.
+Voir [les critères par morceaux](ghs-histogram-shape.md) et le
+[mode droite historique](ghs-quartiles.md).
+Une entrée sans aucune transformation conserve `NO_IMPROVEMENT`, avec ses
+objectifs mesurables ou incomplets consignés dans le rapport.
+`SUCCESS` indique une transformation appliquée avec les objectifs actifs
+atteints ; il ne remplace pas une expertise visuelle de la qualité astronomique.
 
 Le choix hérite de la [politique générale de calcul](README.md#choix-du-calcul-cpugpu).
 CPU seul a été exécuté sans CuPy. Le backend `auto` teste CUDA avant la

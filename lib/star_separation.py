@@ -8,6 +8,7 @@ Voir docs/scripts/postProcess/auto-ghs.md.
 
 from __future__ import annotations
 
+
 import argparse
 import configparser
 import json
@@ -24,6 +25,7 @@ from lib.processor import processor
 from lib.restoration_quality import normalized_planes
 from lib.siril import Siril
 from lib.type_defs import JSONReport
+from lib.siril_api import SirilCommand, command
 
 MAX_LINEAR_RECONSTRUCTION_ERROR = 1e-6  # Unités normalisées, marge d'arrondi float32.
 
@@ -241,25 +243,15 @@ class StarNetSeparator(processor):
         starless = work / "starless_linear.fits"
         stars = work / "stars_linear.fits"
         write_rgb(source, staged, data)
-        script = "\n".join(
-            [
-
-                f"cd {quote_siril(work)}",
-                "set32bits",
-                f"load {quote_siril(staged)}",
-                "starnet -stretch",
-                f"save {quote_siril(starless)}",
-                "close",
-                "",
-            ]
-        )
+        operations = [command('cd', work), command('set32bits'), command('load', staged),
+                      command('starnet', '-stretch'), command('save', starless), command('close')]
         siril = Siril(
             siril_path=getattr(args, "siril_path", None),
             siril_mode=getattr(args, "siril_mode", None),
         )
         started = time.monotonic()
-        if not siril.run_siril_script(
-            script, str(work), script_name="separate.sps", initfile=isolated
+        if not siril.run_commands(
+            operations, str(work), name="separate", initfile=isolated
         ):
             raise RuntimeError(
                 f"Séparation StarNet échouée ; consulter {work / 'separate.log'}"
@@ -325,7 +317,7 @@ class StarNetSeparator(processor):
             "negative_minimum": float(residual.min()),
             "reconstruction_max_abs": reconstruction_error,
             "duration_seconds": time.monotonic() - started,
-            "script_path": str(work / "separate.sps"),
+            "command_path": str(work / "separate.commands.json"),
             "log_path": str(log),
             "input_linear": True,
             "linearity_source": "pipeline contract + FITS flags",

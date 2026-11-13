@@ -7,6 +7,7 @@ explicitement demandés et les rapports optionnels sont écrits. Voir
 
 from __future__ import annotations
 
+
 import argparse
 from collections import Counter
 from collections.abc import Sequence
@@ -19,6 +20,7 @@ from scipy.spatial import cKDTree
 from lib.quality_processors import QualityContext, QualityProcessor
 from lib.siril import Siril
 from lib.type_defs import JSONReport, StarMeasurement
+from lib.siril_api import SirilCommand, command
 
 
 class ReferenceStarMeasurementProcessor(QualityProcessor):
@@ -309,34 +311,32 @@ class SirilStarDetectionProcessor(QualityProcessor):
     def __init__(
         self, context: QualityContext, images: Sequence[tuple[Path, Path]],
         work_dir: Path, layer: int, *, runner: Siril | None = None,
-        script_name: str = 'quality.sps', findstar_settings: str = '-gaussian',
+        name: str = 'quality', findstar_settings: str = '-gaussian',
     ) -> None:
         """Déclare les couples image/catalogue, le canal et le service Siril injectable."""
         super().__init__(context)
         self.images, self.work_dir, self.layer = tuple(images), Path(work_dir), layer
-        self.runner, self.script_name = runner, script_name
+        self.runner, self.command_name = runner, name
         self.findstar_settings = findstar_settings
 
     def _process(self, args: argparse.Namespace) -> JSONReport:
         """Exécute setfindstar/findstar sans modifier les FITS ni leurs métadonnées."""
         from lib.deconvolution import _quote
 
-        lines = [f'cd {_quote(self.work_dir)}', 'set32bits']
+        operations = [command('cd', self.work_dir), command('set32bits')]
         for image, catalog in self.images:
-            lines += [
-                f'load {_quote(image)}', 'setfindstar reset',
-                f'setfindstar {self.findstar_settings}',
-                f'findstar -layer={self.layer} -out={catalog.name}', 'close',
-            ]
+            operations += [command('load', image), command('setfindstar', 'reset'),
+                           SirilCommand.from_text('setfindstar ' + self.findstar_settings),
+                           command('findstar', f'-layer={self.layer}', f'-out={catalog.name}'), command('close')]
         runner = self.runner or Siril(
             siril_path=getattr(args, 'siril_path', None), siril_mode=getattr(args, 'siril_mode', None),
         )
-        if not runner.run_siril_script(
-            '\n'.join(lines) + '\n', str(self.work_dir), self.script_name,
+        if not runner.run_commands(
+            operations, str(self.work_dir), self.command_name,
         ):
-            raise RuntimeError(f'Échec Siril : {self.work_dir / self.script_name}')
+            raise RuntimeError(f'Échec Siril : {self.work_dir / self.command_name}')
         return dict(catalogs=[str(catalog) for _, catalog in self.images],
-                    script_path=str(self.work_dir / self.script_name))
+                    command_path=str(self.work_dir / (Path(self.command_name).stem + ".commands.json")))
 
 
 class StellarAssessmentProcessor(QualityProcessor):
@@ -388,7 +388,7 @@ class StellarAssessmentProcessor(QualityProcessor):
             siril_mode=getattr(args, 'siril_mode', None),
         )
         self.run_child(SirilStarDetectionProcessor(
-            self.context, images, work, layer, runner=service, script_name='final_quality.sps',
+            self.context, images, work, layer, runner=service, name='final_quality',
         ), args)
         if needs_reference:
             copyfile(staged_reference, before)

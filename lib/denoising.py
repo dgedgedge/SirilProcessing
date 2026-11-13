@@ -8,6 +8,7 @@ de chaînes est conservé, avec ses masques et son rapport.
 
 from __future__ import annotations
 
+
 import argparse
 import json
 import logging
@@ -26,6 +27,7 @@ from lib.logging_utils import log_duration
 from lib.processor import processor
 from lib.restoration import RestorationComparisonProcessor
 from lib.type_defs import JSONReport
+from lib.siril_api import SirilCommand, command
 
 
 class _DenoisingExecution:
@@ -84,7 +86,7 @@ class _DenoisingExecution:
             precision="float32",
             candidate_image_path=str(self.candidate),
             max_blur=self.max_blur,
-            script_path=str(self.work / "denoise.sps"),
+            command_path=str(self.work / "denoise.commands.json"),
             log_path=str(self.work / "denoise.log"),
         )
 
@@ -94,27 +96,20 @@ class _DenoisingExecution:
             json.dumps(self.result, indent=2, ensure_ascii=False), encoding="utf-8"
         )
 
-    def _build_script(self) -> str:
+    def _build_commands(self) -> list[SirilCommand]:
         """Construit uniquement le débruitage ; la détection est une étape distincte."""
-        return "\n".join(
-            [
-                f"cd {_quote(self.work)}",
-                "set32bits",
-                f"load {_quote(self.source)}",
-                f"denoise -vst -mod={self.modulation:g}",
-                "save candidate.fits",
-                "close",
-                "",
-            ]
-        )
+        return [command('cd', self.work), command('set32bits'), command('load', self.source),
+                command('denoise', '-vst', f'-mod={self.modulation:g}'),
+                command('save', self.candidate), command('close')]
+
 
     def _run_siril(self) -> None:
-        """Exécute le script du candidat ; un échec technique est propagé."""
+        """Exécute les appels API du candidat ; un échec technique est propagé."""
         if not Siril(
             siril_path=getattr(self.args, "siril_path", None),
             siril_mode=getattr(self.args, "siril_mode", None),
-        ).run_siril_script(
-            self._build_script(), str(self.work), script_name="denoise.sps"
+        ).run_commands(
+            self._build_commands(), str(self.work), name="denoise"
         ):
             raise RuntimeError(f"Échec Siril : {self.work / 'denoise.log'}")
 

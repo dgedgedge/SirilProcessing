@@ -7,6 +7,8 @@ import numpy as np
 from lib.star_rendering import VISIBILITY_LEVEL, stellar_peak_positions
 from lib.star_separation import validate_rgb
 from lib.type_defs import JSONReport
+from lib.diagnostic_style import DIAGNOSTIC_COLORS, apply_dark_diagnostic_style
+from lib.render_exports import siril_display_planes
 
 
 def write_star_diagnostic(
@@ -21,6 +23,9 @@ def write_star_diagnostic(
     Les zéros sont exclus des axes log et leur fraction est affichée. Le seuil
     de 0,03 est un indicateur de contraste, pas un décompte d'étoiles physiques.
     Une orientation inconnue ou une géométrie incompatible lève ValueError.
+    Le graphique utilise un fond noir et des textes clairs ; les niveaux
+    des extraits RGB restent ceux des données. Leur sens haut/bas suit
+    l'affichage natif Siril, indépendamment de la carte ROWORDER.
     """
     from matplotlib.backends.backend_agg import FigureCanvasAgg
     from matplotlib.figure import Figure
@@ -41,10 +46,10 @@ def write_star_diagnostic(
     )
     bins = np.geomspace(min(lower, 1e-7), 1, 100)
     for column, (data, label, color) in enumerate((
-        (before, "Avant — étoiles linéaires positives", "tab:blue"),
-        (after, "Après — étoiles étirées", "tab:orange"),
+        (before, "Avant — étoiles linéaires positives", DIAGNOSTIC_COLORS[0]),
+        (after, "Après — étoiles étirées", DIAGNOSTIC_COLORS[1]),
     )):
-        displayed = data[:, ::-1] if row_order == "BOTTOM-UP" else data
+        displayed = siril_display_planes(data)
         crop = np.moveaxis(displayed[:, y:y + 512, x:x + 512], 0, -1)
         axes[0, column].imshow(crop, vmin=0, vmax=1)
         axes[0, column].set_title(label + "\nMême extrait central, affichage direct [0,1]")
@@ -97,8 +102,10 @@ def write_star_diagnostic(
         ) + "."
     figure.suptitle("Diagnostic spécifique — image des étoiles seules", fontsize=16)
     figure.text(0.03, 0.025, annotation, fontsize=9, va="bottom",
-                bbox={"facecolor": "#f0f0f0", "edgecolor": "gray", "pad": 8})
+                bbox={"pad": 8})
     figure.subplots_adjust(top=0.9, bottom=0.23, hspace=0.35, wspace=0.22)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    figure.savefig(destination, dpi=120)
+    apply_dark_diagnostic_style(figure)
+    figure.savefig(destination, dpi=120, facecolor=figure.get_facecolor(),
+                   edgecolor=figure.get_edgecolor(), transparent=False)
     figure.clear()

@@ -10,6 +10,7 @@ formats de sortie sont décrites dans
 
 from __future__ import annotations
 
+
 import argparse
 import json
 import logging
@@ -24,6 +25,7 @@ from lib.processor import processor
 from lib.siril import SirilSequence
 from lib.siril import Siril
 from lib.type_defs import ConfigValue, JSONReport
+from lib.siril_api import SirilCommand, command
 
 
 class CalibrationProfile:
@@ -58,25 +60,28 @@ class CalibrationProfile:
         target_name = target.lower()
         if target_name not in {"flat", "light"}:
             raise ValueError(f"Cible de calibration inconnue: {target}")
-        if target_name == "flat":
+        arguments = [sequence_name]
+        if target_name == 'flat':
             if not self.use_dark:
-                return ""
+                return ''
             if dark_path is None:
-                raise ValueError("dark_path est requis pour la calibration des flats")
-            return f"calibrate {sequence_name} -dark={dark_path} -cc=dark -cfa"
-        if self.use_dark and dark_path is not None and self.use_flat and flat_path:
-            return (
-                f"calibrate {sequence_name} -dark={dark_path} -flat={flat_path} "
-                "-cc=dark -cfa -equalize_cfa -debayer"
-            )
-        if self.use_dark and dark_path is not None:
-            return f"calibrate {sequence_name} -dark={dark_path} -cc=dark -cfa -debayer"
-        if self.use_flat and flat_path:
-            return (
-                f"calibrate {sequence_name} -flat={flat_path} "
-                "-cfa -equalize_cfa -debayer"
-            )
-        return f"calibrate {sequence_name} -cfa -debayer"
+                raise ValueError('dark_path est requis pour la calibration des flats')
+            arguments += [f'-dark={dark_path}', '-cc=dark', '-cfa']
+        else:
+            has_dark = self.use_dark and dark_path is not None
+            has_flat = self.use_flat and bool(flat_path)
+            if has_dark:
+                arguments.append(f'-dark={dark_path}')
+            if has_flat:
+                arguments.append(f'-flat={flat_path}')
+            if has_dark:
+                arguments.append('-cc=dark')
+            arguments.append('-cfa')
+            if has_flat:
+                arguments.append('-equalize_cfa')
+            arguments.append('-debayer')
+        return command('calibrate', *arguments).render()
+
 
     def build_flat_calibration(
         self, sequence_name: str, dark_path: str | None = None
@@ -147,40 +152,27 @@ class MasterFlatProcessor(processor):
         """Déclare qu'un master flat n'a pas de traitement enfant."""
         return ()
 
-    def _generate_script(
+    def _generate_commands(
         self,
         sequence_name: str,
         output_base: Path,
         dark_path: str | None,
-    ) -> str:
-        """Génère le script Siril qui calibre les flats puis les empile."""
+    ) -> list[SirilCommand]:
+        """Construit les appels API qui calibrent les flats puis les empilent."""
         flat_process_dir = self.work_dir / "flat_process"
         sequence_dir = self.work_dir / sequence_name
-        bin_dir = Path(__file__).parent.parent / "bin"
-        pyecho_path = bin_dir / "pyecho.py"
-        pydir_path = bin_dir / "pydir.py"
-        calibration_message, calibration_command = (
-            self.calibration.build_flat_calibration(sequence_name, dark_path)
-        )
-        stack_input = f"pp_{sequence_name}" if self.calibration.use_dark else sequence_name
-        return f"""cd {sequence_dir}
-pyscript {pyecho_path} "====================================================================="
-pyscript {pyecho_path} "Prepare Flat Frames as .fits files"
-pyscript {pyecho_path} "cmd:========> convert {sequence_name} -out={flat_process_dir}"
-convert {sequence_name} -out={flat_process_dir}
-cd {flat_process_dir}
-pyscript {pydir_path}
-pyscript {pyecho_path} "====================================================================="
-pyscript {pyecho_path} "Prepare master flat"
-pyscript {pyecho_path} "{calibration_message}"
-{calibration_command}
-pyscript {pyecho_path} "cmd:========> stack {stack_input} median -norm=mul -out={output_base}"
-stack {stack_input} median -norm=mul -out={output_base}
-cd {self.work_dir}
-pyscript {pydir_path}
-pyscript {pyecho_path} "====================================================================="
+        calibration_message, calibration_command = self.calibration.build_flat_calibration(sequence_name, dark_path)
+        logging.info('%s', calibration_message)
+        stack_input = f'pp_{sequence_name}' if self.calibration.use_dark else sequence_name
+        operations = [command('cd', sequence_dir),
+                      command('convert', sequence_name, f'-out={flat_process_dir}'),
+                      command('cd', flat_process_dir)]
+        if calibration_command.strip():
+            operations.append(SirilCommand.from_text(calibration_command))
+        operations += [command('stack', stack_input, 'median', '-norm=mul', f'-out={output_base}'),
+                       command('cd', self.work_dir), command('close')]
+        return operations
 
-close"""
 
     def post_process(
         self,
@@ -251,11 +243,11 @@ close"""
                         "Impossible de nettoyer %s: %s", flat_process_dir, error
                     )
             flat_process_dir.mkdir(parents=True, exist_ok=True)
-            script = self._generate_script(sequence_name, output_path, dark_path)
-            if not self.siril.run_siril_script(
-                script,
+            operations = self._generate_commands(sequence_name, output_path, dark_path)
+            if not self.siril.run_commands(
+                operations,
                 str(self.work_dir),
-                script_name=f"master_flat_{group_key}.sps",
+                name=f"master_flat_{group_key}",
             ):
                 raise RuntimeError("Échec de la création du master flat")
             candidates = [expected, Path(f"{output_path}.fit")]
@@ -567,41 +559,28 @@ class SequenceCalibrationProcessor(processor):
             return False
         return isinstance(settings, dict) and settings.get("use_flat") is self.use_flat
 
-    def _generate_script(
+    def _generate_commands(
         self,
         sequence_name: str,
         dark_path: str | None,
         flat_path: str | None,
         stack_params: dict[str, ConfigValue],
-    ) -> str:
-        """Génère le script Siril de conversion et calibration de la séquence."""
+    ) -> list[SirilCommand]:
+        """Construit les appels API de conversion et calibration de la séquence."""
         process_dir = self.work_dir / "process"
         sequence_dir = self.work_dir / sequence_name
-        bin_dir = Path(__file__).parent.parent / "bin"
-        pyecho_path = bin_dir / "pyecho.py"
-        pydir_path = bin_dir / "pydir.py"
-        title, message, command = self.calibration.build_light_preprocess(
-            sequence_name, dark_path=dark_path, flat_path=flat_path
-        )
-        if stack_params.get("drizzle", "off") != "off":
-            command = command.replace(" -debayer", "")
-        return f"""cd {sequence_dir}
-pyscript {pyecho_path} "====================================================================="
-pyscript {pyecho_path} "Prepare Light Frames as .fits files"
-pyscript {pyecho_path} "Convert files to sequence."
-pyscript {pyecho_path} "cmd:========> convert {sequence_name} -out={process_dir}"
-convert {sequence_name} -out={process_dir}
-cd {process_dir}
-pyscript {pydir_path}
-pyscript {pyecho_path} "====================================================================="
-pyscript {pyecho_path} "{title}"
-pyscript {pyecho_path} "{message}"
-{command}
-cd {self.work_dir}
-pyscript {pydir_path}
-pyscript {pyecho_path} "====================================================================="
+        title, message, calibration_command = self.calibration.build_light_preprocess(
+            sequence_name, dark_path=dark_path, flat_path=flat_path)
+        logging.info('%s — %s', title, message)
+        calibration_call = SirilCommand.from_text(calibration_command)
+        if stack_params.get('drizzle', 'off') != 'off':
+            calibration_call = command(calibration_call.name,
+                                       *(argument for argument in calibration_call.arguments if argument != '-debayer'))
+        return [command('cd', sequence_dir),
+                command('convert', sequence_name, f'-out={process_dir}'),
+                command('cd', process_dir), calibration_call,
+                command('cd', self.work_dir), command('close')]
 
-close"""
 
     def post_process(
         self,
@@ -688,14 +667,13 @@ close"""
                 "(contiendra des fichiers .fit/.fits)",
                 output_path,
             )
-            script = self._generate_script(
+            operations = self._generate_commands(
                 sequence_name, str(dark_path) if dark_path else None,
                 str(flat_path) if flat_path else None, stack_params,
             )
-            logging.debug("[DRY-RUN] Script Siril qui serait généré:")
-            for index, line in enumerate(script.splitlines(), 1):
-                if line.strip():
-                    logging.debug("[DRY-RUN]   %2d: %s", index, line)
+            logging.debug("[DRY-RUN] Appels sirilpy prévus:")
+            for index, operation in enumerate(operations, 1):
+                logging.debug("[DRY-RUN]   %2d: %s", index, operation.render())
             return {
                 "status": "dry_run",
                 "input_image": str(input_path),
@@ -741,7 +719,7 @@ close"""
                         error,
                     )
             process_dir.mkdir(parents=True, exist_ok=True)
-            script = self._generate_script(
+            operations = self._generate_commands(
                 sequence_name,
                 str(dark_path) if dark_path else None,
                 str(flat_path) if flat_path else None,
@@ -752,10 +730,10 @@ close"""
                 logging.info("Master dark des lights : %s", dark_path)
             if flat_path:
                 logging.info("Master flat des lights : %s", flat_path)
-            if not self.siril.run_siril_script(
-                script,
+            if not self.siril.run_commands(
+                operations,
                 str(self.work_dir),
-                script_name=f"calibrate_light_{group_key}.sps",
+                name=f"calibrate_light_{group_key}",
             ):
                 raise RuntimeError(
                     f"Échec du traitement complet de la séquence {sequence_name}"

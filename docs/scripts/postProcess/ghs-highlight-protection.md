@@ -2,6 +2,19 @@
 
 [postProcess](README.md) › [AutoGHS](auto-ghs.md)
 
+Les scores de régression globale décrits ici concernent le mode `line`,
+sélectionnable explicitement. Avec le [mode par défaut `piecewise`](ghs-histogram-shape.md),
+la passe remplace les bonus de pente moins raide et de RMS global par un
+contrôle de forme figé sur son entrée : morceaux lissés, décroissance, ordre
+des variations de pente et déplacement du pic. Les protections de régions
+et le gain diffus restent évalués.
+
+La présentation protégée décrite ici garde ses gardes strictes. La
+[recherche finale par morceaux](ghs-histogram-shape.md#13-conservation-de-la-forme)
+qui suit utilise des pénalités progressives pour la forme et la compression
+brillante, en conservant les gardes du cœur, des couleurs, du bruit et des
+budgets de pixels. Son score ne maximise pas le gain diffus sans limite.
+
 ## 1. Objectif et interface
 
 La dernière passe AutoGHS cherche à améliorer le contraste du signal diffus sans

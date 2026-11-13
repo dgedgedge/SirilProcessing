@@ -31,22 +31,16 @@ def test_invalid_limit(limit):
         CpuConfig.configure(limit)
 
 
-@pytest.mark.parametrize('header', [
-    '',
-    'requires 1.2\n',
-    '# Script\n\nrequires 1.4\n',
-    'requires 1.2\n# legacy\nrequires 1.3\n',
-])
-def test_existing_siril_instance_uses_global_limit(tmp_path, monkeypatch, header):
-    monkeypatch.setattr(Siril, '_validate_configuration', lambda self: True)
+@pytest.mark.parametrize('initial', [[], ['1.2'], ['1.2', '1.3']])
+def test_existing_siril_instance_uses_global_limit(tmp_path, monkeypatch, initial):
+    """Chaque préparation de lot prend la limite CPU courante, sans état global de session."""
+    from lib.siril_api import command
     monkeypatch.setattr('lib.cpu_config.os.cpu_count', lambda: 16)
-    runner = Siril(siril_path='/bin/true', siril_mode='native')
-    runner._validated = True
     for limit in (8, 3):
         CpuConfig.configure(limit)
-        assert runner.run_siril_script(header + 'close\n', str(tmp_path), 'cpu.sps')
-        script = (tmp_path / 'cpu.sps').read_text()
-        assert script.count('requires ') == 1
-        assert 'requires 1.4\n' in script
-        assert f'setcpu {limit}\n' in script
-        assert script.rstrip().endswith('close')
+        operations = Siril.prepare_commands([*(command('requires', value) for value in initial),
+                                              command('close')])
+        assert sum(operation.name == 'requires' for operation in operations) == 1
+        assert operations[0].arguments == ('1.4.4',)
+        assert operations[1].arguments == (str(limit),)
+        assert operations[-1].name == 'close'

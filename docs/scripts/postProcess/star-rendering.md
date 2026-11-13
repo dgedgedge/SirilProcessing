@@ -5,7 +5,7 @@
 ## Modules et ordre des opérations
 
 [`StarNetSeparator`](../../../lib/star_separation.py) hérite de `processor` et
-réutilise le service `Siril.run_siril_script`, ses modes d'exécution et ses
+réutilise le service `Siril.run_commands`, ses modes d'exécution et ses
 journaux. [`ConservativeStarRenderer`](../../../lib/star_rendering.py), également
 un `processor`, possède une méthode de calcul indépendante `render`.
 `recompose` est une opération sans état du même module.
@@ -209,7 +209,7 @@ introduit un dépassement : il ne relance pas les traitements amont.
 
 ### Diagnostic spécifique des étoiles
 
-Dans `05_autoghs_work/02_stars/`, `<image>_stars_diagnostic.png` présente :
+Dans `05_autoghs/02_stars/` (ou `02_stars/` à côté du rapport autonome), `<image>_stars_diagnostic.png` présente :
 
 - les mêmes extraits centraux (512 pixels de côté au plus) avant/après, avec les
   intensités affichées directement sans auto-étirement ni gamma ;
@@ -221,6 +221,10 @@ Dans `05_autoghs_work/02_stars/`, `<image>_stars_diagnostic.png` présente :
   dépasse ce même seuil après fusion RANGE.
 
 Les zéros sont exclus des axes logarithmiques et leur fraction est affichée.
+Le graphique, ses légendes et son encart utilisent le thème sombre commun
+`lib.diagnostic_style` : fond noir et textes clairs. Les intensités des extraits
+RGB restent affichées directement, sans inversion des intensités. Leur sens
+haut/bas suit l'affichage Siril, même lorsque `ROWORDER=TOP-DOWN`.
 `<image>_stars_render.jpg` fournit aussi la couche entière en pleine résolution,
 à côté du FITS. Les chemins sont dans `stars.diagnostic_path` et
 `stars.output_jpeg`. Le processeur stellaire autonome produit les mêmes types

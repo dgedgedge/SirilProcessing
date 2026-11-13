@@ -1,4 +1,5 @@
 """Poids acquis à la demande, inférence native et contrôles communs sans réseau."""
+from lib.siril_api import format_commands as _format_commands, SirilCommand as _SirilCommand
 
 import argparse
 import hashlib
@@ -214,7 +215,7 @@ def test_processor_uses_native_engine_and_common_controls(
     )
     monkeypatch.setattr(
         "lib.graxpert.Siril",
-        lambda **kwargs: SimpleNamespace(run_siril_script=lambda *a, **k: True),
+        lambda **kwargs: SimpleNamespace(run_commands=lambda *a, **k: True),
     )
     comparison = dict(
         status="validated",

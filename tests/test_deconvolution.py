@@ -1,4 +1,5 @@
 """Audit PSF et comparaison appariée : aucune moyenne de populations différentes."""
+from lib.siril_api import format_commands as _format_commands, SirilCommand as _SirilCommand
 import argparse
 import csv
 import json
@@ -96,7 +97,8 @@ def simulated_siril(tmp_path, monkeypatch):
     image = tmp_path/'image.fit'
     fits.writeto(image, np.ones((3, 100, 100), dtype='float32'))
     runner = Mock()
-    def run(script, working_dir, script_name):
+    def run(script, working_dir, name):
+        script = _format_commands(script)
         work = Path(working_dir)
         loaded = image
         profile = 'Gaussian'
@@ -121,7 +123,7 @@ def simulated_siril(tmp_path, monkeypatch):
                 width = 3.5 if ('trial' in output or 'step_' in output) else 4
                 catalog(work/output, [(i, 10*i, width) for i in range(1, 11)], layer=layer, profile=profile)
         return True
-    runner.run_siril_script.side_effect = run
+    runner.run_commands.side_effect = run
     factory = Mock(return_value=runner)
     monkeypatch.setattr('lib.deconvolution.Siril', factory)
     monkeypatch.setattr('lib.cosmic_clarity.processors.Siril', factory)
@@ -149,20 +151,20 @@ def test_process_saves_psf_preview_audit_and_next_input(tmp_path, simulated_siri
     assert deconv['timings']['quality_seconds'] >= 0
     assert deconv['processing_duration_seconds'] >= 0
     factory.assert_called_once_with(siril_path='/test/siril', siril_mode='native')
-    scripts = '\n'.join(call.args[0] for call in runner.run_siril_script.call_args_list)
+    scripts = '\n'.join(_format_commands(call.args[0]) for call in runner.run_commands.call_args_list)
     assert 'findstar -layer=1 -out=01_deconvolution_siril_before_stars.tsv' in scripts
     assert 'makepsf save 01_deconvolution_siril_blind_psf.fits' in scripts
     assert 'makepsf blind -l0 -ks=15' in scripts
     assert '-iters=15 -gdstep=0.0003000 -tv -alpha=3000' in scripts
     assert 'save 01_deconvolution_siril_simple_trial.fits\nclose' in scripts
     detection_script = next(
-        call.args[0] for call in runner.run_siril_script.call_args_list
-        if 'simple_trial_measure.sps' in call.kwargs.get('script_name', call.args[-1])
+        _format_commands(call.args[0]) for call in runner.run_commands.call_args_list
+        if 'simple_trial_measure' in call.kwargs.get('name', call.args[-1])
     )
     assert 'findstar' in detection_script and 'rl "-loadpsf=' not in detection_script
     for key in ('psf_path', 'psf_preview_path', 'matched_stars_path', 'output_image'):
         assert Path(deconv[key]).is_file()
-    first_script = Path(deconv['scripts'][0]['script_path'])
+    first_script = Path(deconv['scripts'][0]['command_path'])
     assert first_script.parent.name == '01_deconvolution_siril_work'
     assert not (first_script.parent / '001').exists()
     assert deconv['comparison']['matched_count'] == 10
@@ -172,15 +174,15 @@ def test_process_saves_psf_preview_audit_and_next_input(tmp_path, simulated_siri
 
 def test_insufficient_matches_keeps_audit_without_publishing_image(tmp_path, simulated_siril):
     image, runner, _ = simulated_siril
-    real_run = runner.run_siril_script.side_effect
+    real_run = runner.run_commands.side_effect
     def fewer(*args, **kwargs):
         real_run(*args, **kwargs)
         import re
-        for name in re.findall(r'-out=(\S+)', args[0]):
+        for name in re.findall(r'-out=(\S+)', _format_commands(args[0])):
             if 'trial' in name or 'step_' in name:
                 catalog(Path(args[1])/name, [(1, 10, 3)], layer=1)
         return True
-    runner.run_siril_script.side_effect = fewer
+    runner.run_commands.side_effect = fewer
     destination = tmp_path/'existing.fit'
     destination.write_bytes(b'old result')
     report = tmp_path/'deconvolution.json'
@@ -242,7 +244,7 @@ def test_fallback_stops_at_artifacts_and_reuses_previous_step(tmp_path, simulate
     assert attempts[1]['psf_path'] == attempts[-1]['psf_path']
     assert result['psf_selections'][1]['profile'] == 'Moffat'
     assert result['attempts'][1]['comparison']['min_match_fraction'] == 0.7
-    scripts = '\n'.join(call.args[0] for call in runner.run_siril_script.call_args_list)
+    scripts = '\n'.join(_format_commands(call.args[0]) for call in runner.run_commands.call_args_list)
     assert '-minA=0.1 -maxA=0.7' in scripts
 
 
@@ -324,15 +326,16 @@ def test_failed_central_trial_continues_to_next_step(
 ) -> None:
     """Une erreur Siril locale laisse essayer le pas suivant et le champ entier."""
     image, runner, _ = simulated_siril
-    real_run = runner.run_siril_script.side_effect
+    real_run = runner.run_commands.side_effect
 
-    def run(script: str, working_dir: str, script_name: str) -> bool:
+    def run(script: str, working_dir: str, name: str) -> bool:
         """Simule l’échec d’un seul essai central."""
-        if 'central_step_04' in script_name:
+        script = _format_commands(script)
+        if 'central_step_04' in name:
             return False
-        return real_run(script, working_dir, script_name)
+        return real_run(script, working_dir, name)
 
-    runner.run_siril_script.side_effect = run
+    runner.run_commands.side_effect = run
     verdicts = iter([
         dict(accepted=False, artifact_failure=False, reasons=['insufficient_sharpening']),
         dict(accepted=True, artifact_failure=False, reasons=[]),

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+
 import json
 import logging
 import os
@@ -27,8 +28,9 @@ from lib.quality_filter import (
 from lib.siril import SequenceImage, SirilSequence
 from lib.siril import Siril
 from lib.type_defs import ConfigMap, JSONReport
+from lib.siril_api import SirilCommand, command
 
-QUALITY_PIPELINE_VERSION = 16
+QUALITY_PIPELINE_VERSION = 17
 
 
 def _registration_snapshot(images: Sequence[SequenceImage]) -> JSONReport:
@@ -36,7 +38,9 @@ def _registration_snapshot(images: Sequence[SequenceImage]) -> JSONReport:
 
     Les entrées sont des poses indépendantes. Le drapeau d'inclusion Siril et
     la validité des mesures sont conservés séparément ; aucun motif physique
-    d'échec d'alignement n'est déduit des mesures manquantes.
+    d'échec d'alignement n'est déduit des mesures manquantes. Le bilan Siril
+    compte uniquement ses drapeaux ; les mesures invalides sont un diagnostic
+    séparé, traité par le contrôle géométrique Python suivant.
     """
     frames: list[JSONReport] = []
     for index, image in enumerate(images):
@@ -58,14 +62,16 @@ def _registration_snapshot(images: Sequence[SequenceImage]) -> JSONReport:
         frames.append(dict(
             source=str(image.processing_path.resolve()), number=int(image.number),
             sequence_index=index, included=included, registration_valid=valid,
-            status='aligned' if included and valid else 'excluded',
+            status='aligned' if included else 'excluded',
             reasons=reasons, measurements=measurements,
         ))
-    aligned = sum(frame['status'] == 'aligned' for frame in frames)
+    aligned = sum(frame['included'] for frame in frames)
     return dict(
         schema_version=1, stage='registration', input_count=len(frames),
         aligned_count=aligned, remaining_count=aligned,
-        rejected_count=len(frames) - aligned, frames=frames,
+        rejected_count=len(frames) - aligned,
+        invalid_measurements_count=sum(frame['included'] and not frame['registration_valid'] for frame in frames),
+        frames=frames,
     )
 
 
@@ -639,7 +645,7 @@ def copy_stage_inputs(source: Path | str, destination: Path | str) -> None:
     for entry in Path(source).iterdir():
         if entry.resolve() == destination.resolve() or entry.name in STACK_STAGES:
             continue
-        if entry.suffix in (".sps", ".log", ".html"):
+        if entry.suffix in (".sps", ".log", ".html") or entry.name.endswith((".commands.json", ".registration.json")):
             continue
         target = destination / entry.name
         if entry.is_dir():
@@ -659,8 +665,8 @@ def run_stack(
     work_dir: Path | str,
     sequence: str,
     output_path: Path | str,
-    prepare: Sequence[str],
-    stack_line: str,
+    prepare: Sequence[SirilCommand],
+    stack_line: SirilCommand | str,
     framing: str,
     stack_report: JSONReport | None = None,
 ) -> bool:
@@ -680,8 +686,8 @@ def run_stack(
     separates the complete inventory from poses admissible after registration.
     """
     log_section("Stacking — Alignement initial des images")
-    if not siril.run_siril_script(
-        prepare + "\nclose", str(input_dir), script_name="01_registration.sps"
+    if not siril.run_commands(
+        [*prepare, command('close')], str(input_dir), name="01_registration"
     ):
         return False
     log_section("Stacking — Contrôle de qualité, sélection et pondération")
@@ -738,6 +744,10 @@ def run_stack(
         unique_indices = list(unique_by_source.values())
         independent_images = [images[i] for i in unique_indices]
         registration_report = _registration_snapshot(independent_images)
+        api_path = registration_dir / '01_registration.registration.json'
+        if api_path.is_file():
+            with api_path.open(encoding='utf-8') as stream:
+                registration_report['siril_api'] = json.load(stream)
         registration_path = registration_dir / 'registration.json'
         registration_temporary = registration_path.with_suffix('.json.tmp')
         registration_temporary.write_text(json.dumps(
@@ -934,10 +944,10 @@ def run_stack(
     if decision["enabled"]:
         log_section("Stacking — Vérification de la compatibilité Drizzle")
         capability_dir = capability_path
-        supported = siril.run_siril_script(
-            f"cd {capability_dir}\nclose",
+        supported = siril.run_commands(
+            [command('cd', capability_dir), command('close')],
             str(capability_dir),
-            script_name="04_drizzle.sps",
+            name="04_drizzle",
         )
         if not supported:
             raise RuntimeError(
@@ -1123,12 +1133,12 @@ def run_stack(
     processing_sequence.write()
     input_dir = stacking_dir
     prefix = sequence
-    def execute(lines: Sequence[str], script_name: str) -> bool:
+    def execute(lines: Sequence[SirilCommand | str], name: str) -> bool:
         """Exécute une étape Siril nommée et indique son succès."""
-        return siril.run_siril_script(
-            "\n".join([f"cd {stacking_dir}", *lines, "close"]),
+        return siril.run_commands(
+            [command('cd', stacking_dir), *(SirilCommand.from_text(line) if isinstance(line, str) else line for line in lines), command('close')],
             str(stacking_dir),
-            script_name=script_name,
+            name=name,
         )
 
     allowed = {image.number for image in image_sequence.images if image.included}
@@ -1202,7 +1212,7 @@ def run_stack(
                     f"calibrate {sequence} -debayer -prefix=debayer_",
                     f"register debayer_{sequence} -2pass -transf={cfg.get('align_transform', 'affine')}",
                 ],
-                "04_debayer_registration.sps",
+                "04_debayer_registration",
             ):
                 return failed_stage()
             prefix = f"debayer_{sequence}"
@@ -1215,7 +1225,7 @@ def run_stack(
                 f"seqapplyreg {prefix} -filter-included -framing={framing}",
                 f"register r_{prefix} -2pass -transf={cfg.get('align_transform', 'affine')}",
             ],
-            "04_realign.sps",
+            "04_realign",
         ):
             return failed_stage()
         prefix = f"r_{prefix}"
@@ -1227,7 +1237,7 @@ def run_stack(
     )
     if not execute(
         [f"seqapplyreg {prefix} -filter-included -framing={framing} {options}"],
-        "04_applyreg.sps",
+        "04_applyreg",
     ):
         return failed_stage()
     log_section("Stacking — Préparation des pondérations finales")
@@ -1255,11 +1265,10 @@ def run_stack(
             weighted_extra_entries=final_entries - len(final_sources),
         )
     save()
-    final_stack = (
-        re.sub(r"^stack \S+", f"stack r_{prefix}", stack_line) + " -filter-included"
-    )
+    stack_call = SirilCommand.from_text(stack_line) if isinstance(stack_line, str) else stack_line
+    final_stack = command(stack_call.name, f'r_{prefix}', *stack_call.arguments[1:], '-filter-included')
     log_section("Stacking — Empilement final")
-    success = execute([final_stack], "04_stacking.sps")
+    success = execute([final_stack], "04_stacking")
     success = success and any(
         Path(str(output_path) + ext).exists() for ext in (".fits", ".fit")
     )

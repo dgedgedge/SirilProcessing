@@ -244,6 +244,11 @@ réduite avec les réglages communs, textes conservés et aucun symbole superpos
 Le diagramme réel de calibration est aussi rendu : la sortie « Oui » du choix
 de reprise doit partir à droite du losange et la sortie « Non » à gauche,
 sans coordonnées fixes pour les symboles.
+Les pages contenant des blocs Mermaid sont également converties avec les
+extensions et formateurs réels de `mkdocs.yml`, puis rendues dans Chromium.
+Le test exige un SVG par bloc et aucun pictogramme d'erreur, pour les flux et
+les séquences. Il couvre notamment l'enveloppe HTML des blocs produite par
+SuperFences, qui n'est pas testée par un rendu des seules sources Mermaid.
 Tous les diagrammes réels sous `docs/` sont également rendus et contrôlés avec
 `fixtures/documentation_crossings.js` : les intersections transverses des
 flèches sont recherchées dans un repère SVG commun. Des cas synthétiques
@@ -635,8 +640,10 @@ Les tests des moteurs contrôlent les artefacts directs sans `001` ; ceux des
 chaînes vérifient aussi le regroupement `04_restoration`.
 
 Les tests du rendu GHS vérifient les étapes nommées `01_separation` à
-`05_diagnostics`, le nettoyage des anciens niveaux `001` lors des relances
-et la protection des sources. La couleur finale vérifie des produits directs
+`05_diagnostics` directement à côté du rapport, sans enveloppe `autoghs_work`.
+Ils couvrent le nettoyage des anciens produits et enveloppes lors des relances,
+la conservation des fichiers voisins, le retrait des liens sans suivre leur
+cible et le refus d'une source dans chaque dossier nettoyé avant toute suppression. La couleur finale vérifie des produits directs
 dans son dossier de travail, sans niveau `001`, avec des FITS synthétiques.
 
 La régression de transmission du stack (`.fit`/`.fits`) est couverte dans
@@ -704,3 +711,248 @@ présentation et la distinction des audits anciens sans décisions détaillées.
 Les seuils de profils sont testés avec plusieurs groupes comparables : stockage
 unique dans les références, identifiant par pose, groupe insuffisant sans seuil,
 lecture des anciens `limits` et affichage des limites avant les tableaux.
+
+`test_siril_api.py` couvre la factory avec un véritable transport local et le
+worker sirilpy : fermeture et erreurs, authentification, isolation des sessions,
+modèles et tableaux. Les tests des traitements utilisent des `SirilCommand`
+et vérifient les mêmes opérations et critères scientifiques. L’installateur
+vérifie aussi le module fourni par le moteur Siril choisi.
+
+`SIRIL_API_INTEGRATION=1 .venv/bin/python -m pytest -q tests/test_siril_api_integration.py`
+valide avec Siril réel un champ synthétique irrégulier : quatre poses décalées,
+registration, audit qualité et empilement. Les sources et les préférences sont
+préservées. Les produits sont temporaires sous `tmp/`, accessible au Flatpak.
+Le test est désactivé par défaut et accepte `SIRIL_API_MODE` / `SIRIL_API_PATH`.
+
+
+Les tests `test_registration_audit.py` vérifient l’audit structuré de chaque
+registration : compteurs d’appariement, référence, seuils explicites ou
+inconnus, collecte incomplète et capture avant fermeture. Les tests HTML
+vérifient les liens de définition et l’absence de téléchargement JSON.
+L’essai opt-in `SIRIL_API_INTEGRATION=1` couvre aussi une pose synthétique sans
+étoiles rejetée par Siril parmi quatre poses étoilées retenues ; il contrôle
+les effectifs, l’inclusion enregistrée, l’index et la conservation des sources.
+
+
+Les tableaux HTML de restauration sont vérifiés avec les mêmes conventions
+que la qualité : titres verticaux, groupes de critères, deux décimales,
+symboles et légendes. Les tests distinguent une chaîne rejetée d’une chaîne
+acceptée non retenue, conservent les drapeaux non bloquants, vérifient les
+contrôles locaux et laissent les autres étapes dans leur disposition actuelle.
+Les valeurs JSON restent inchangées.
+
+### Seuil de régression AutoGHS à 0,8
+
+`test_ghs_linear_histogram.py` vérifie la conversion de densité vers les
+classes du graphique, le seuil 10¹, la correction de population échantillonnée,
+la priorité du seuil, la progression intermédiaire, la désactivation et les
+entrées invalides. `test_ghs_quartiles.py` contrôle l'audit pleine résolution et
+les protections cumulatives. Ces tests synthétiques ne valident pas le rendu
+visuel de M31 ou M33 ; relancer AutoGHS sur ces images reste nécessaire.
+
+### Diversification de la recherche de rectitude AutoGHS
+
+`tests/test_ghs_quartiles.py` couvre les forces faibles, les raccords HP
+précoces, SP <= HP, l'absence de doublons de grille, l'alternance des familles,
+la poursuite après trois rejets complets simulés et l'acceptation d'un candidat
+suivant. Les tests contrôlent le budget configurable et l'audit des candidats
+restant à examiner. Le sondage ciblé est vérifié sur des régions brillantes
+absentes de la grille régulière, avec leurs voisins et une population bornée ;
+un rejet par ce sondage doit précéder toute validation complète. Les protections cumulatives restent vérifiées sur le fond
+et sa recomposition. Une validation sur un champ réel est distincte de ces
+tests synthétiques ; les résultats M31 doivent préciser le seuil atteint ou
+non, les rejets et le nombre de validations effectivement réalisées.
+
+### Contraste brillant et queue rare AutoGHS
+
+Les tests de `test_ghs_quartiles.py` vérifient le comptage du champ actif,
+l'exclusion des bordures nulles, l'interpolation de 50 % à 90 %, le retour à
+la protection normale à 0,1 %, la désactivation, les populations vides et
+les limites invalides. Le sondage ciblé doit encore rejeter une perte de
+contraste du cœur à Y >= 0,95 : l'adaptation brillante ne relâche pas cette
+garde. Les contraintes de bruit, couleur et écrêtage sont conservées.
+
+L'essai réel M31 de la phase de rectitude est décrit dans la section
+[Vérification](../docs/scripts/postProcess/ghs-quartiles.md#6-vérification).
+Il utilise les couches rendues existantes et ne remplace pas les tests
+Siril/StarNet ; les FITS, JPEG et rapports d'essai ne sont pas versionnés.
+
+### Mémoire de la rectitude AutoGHS
+
+`test_ghs_quartiles.py` compare exactement les transformations par blocs au
+calcul plein champ float64, pour deux modes de luminosité, avec/sans point
+noir et plusieurs tailles de bloc. Une vue non contiguë plus large que le
+budget vérifie la borne réelle des entrées du noyau. Des références faibles
+vérifient la destruction de chaque candidat avant le suivant, puis le
+recalcul exact du meilleur avec ses seuls paramètres. Les tailles invalides
+sont rejetées avant allocation. `test_auto_ghs.py` vérifie que le nettoyage du
+pool libre CUDA reste sans effet sur CPU et propage les erreurs de pilote.
+Ces tests CPU ne remplacent pas une mesure de mémoire sur un GPU réel.
+
+Les tests CUDA `test_cuda_quartile_parity_when_available` et
+`test_cuda_block_transform_limits_full_size_allocations` confrontent le
+résultat au CPU et observent les tailles réellement demandées au pool. Ils
+sont ignorés si CUDA est indisponible. Exécution ciblée utilisée :
+
+```bash
+.venv/bin/python -m pytest -q tests/test_ghs_quartiles.py -k 'cuda' --basetemp=/tmp/autoghs-cuda-pytest
+```
+
+### Prévision VRAM et reprise CPU AutoGHS
+
+`test_auto_ghs.py` vérifie le budget depuis la géométrie RGB finale, le choix
+CPU préventif avec une VRAM simulée insuffisante, puis une reprise CPU unique
+sur la seule erreur CUDA OutOfMemoryError en auto. Les tests contrôlent la
+libération des cadres interrompus, les entrées intactes, la provenance du
+backend et l'absence de reprise sur erreur de calcul, RAM hôte ou CUDA forcé.
+Une reprise CPU qui échoue reste fatale. Le test matériel suivant limite
+volontairement le pool CuPy à 4096 octets sur un petit tableau, restaure sa
+limite dans finally et confronte la reprise au résultat CPU direct :
+
+```bash
+.venv/bin/python -m pytest -q tests/test_auto_ghs.py -k cuda_pool_limit --basetemp=/tmp/autoghs-cuda-fallback-pytest
+```
+
+La validation réelle du GHS complet de M31 sur CUDA, avec mesure du pool,
+est décrite dans [la gestion mémoire](../docs/scripts/postProcess/ghs-quartiles.md#33-mémoire-cpu-et-cuda).
+Elle réutilise des couches StarNet existantes et ne valide pas à nouveau cette
+séparation. Les données et rapports de cet essai ne sont pas versionnés.
+
+### Régression de qualité M33 et sélection des moteurs GHS
+
+`test_ghs_linear_histogram.py` vérifie qu'une extrapolation haute depuis un
+segment qui s'arrête avant 0,8 ne valide pas le seuil, et qu'un segment peuplé
+couvrant 0,8 est recherché. `test_ghs_quartiles.py` reproduit la perte diffuse
+mesurée sur M33 et le cas de sept pixels brillants répétés dans des paires :
+le sondage ne doit pas inventer une région exploitable absente du champ entier.
+`test_ghs_log_render.py` contrôle les sorties indépendantes des moteurs de
+longueur et de niveau, le classement commun, le rejet d'une sortie assombrie,
+la préférence pour les objectifs réellement atteints et la conservation de
+l'entrée quand la sélection est désactivée. Les encarts doivent afficher une
+queue non atteinte, l'extrapolation éventuelle et les segments effectivement
+mesurés. Les essais matériels sur M33 et M31 restent distincts de ces tests.
+
+Les essais réels sont décrits dans
+[la vérification des recherches](../docs/scripts/postProcess/ghs-quartiles.md#6-vérification).
+Les jeux réels ne sont pas distribués avec les tests.
+
+### Rectitude depuis la sortie du pic et populations rares
+
+`test_ghs_linear_histogram.py` vérifie le bord droit du pic à 2 % des effectifs
+lissés, l'interdiction de contourner une bosse ou un trou et l'impossibilité
+de valider le niveau à 0,8 sur une droite isolée en fin de queue.
+`test_ghs_quartiles.py` vérifie la somme des poids de population, la conservation
+des classes rares et des pixels inactifs, la correspondance des coordonnées
+RGB et la fidélité de la prédiction pondérée pour une transformation connue.
+`test_ghs_log_render.py` exécute le moteur stratifié et vérifie que ses mesures
+finales sont recomptées sur tous les pixels, sans marque d'estimation.
+`test_final_render.py` vérifie la propagation du statut `TARGETS_NOT_REACHED`
+et de la liste des objectifs incomplets jusqu'au rapport exporté.
+
+### Profil GHS par morceaux et série logarithmique
+
+Le classement par objectifs puis déplacement du pic est testé avec des mesures
+synthétiques et une recherche complète à deux finalistes : un candidat au score
+secondaire plus fort ne doit pas remplacer un candidat conforme au pic plus
+proche. Les tests couvrent aussi la progression d'un rendu incomplet, le refus
+de forme, le déplacement inconnu et le maintien d'un seuil strict explicite.
+La recherche par branches couvre un cas où le premier meilleur parent est
+terminal mais où un parent initialement second atteint ensuite les objectifs.
+Les tests vérifient le budget partagé par profondeur, les gardes cumulées,
+les chemins composés sans tableaux d'image dans les rapports, la couverture
+de pics à gauche, au milieu et à droite, et la bissection des écarts de pic.
+La galerie conserve les alternatives admissibles et leur filiation sans les
+confondre avec le chemin finalement choisi.
+
+`piecewise` est le modèle par défaut ; les tests de configuration couvrent
+le maintien d'un choix explicite `line`. `test_ghs_blackpoint.py` vérifie
+le recalage affine après courbe, les poids, les minima liés et le budget
+cumulatif de canaux positifs, y compris les recalages préalables et l'expansion.
+Les essais M33 17/19 sont rejoués sur copies hors dépôt et proposés au sélecteur
+général après correction ; aucun numéro ni nom d'objet n'intervient dans le code.
+Les tests synthétiques conservent des cas d'aplatissement rejeté et acceptent
+un raccord terminal descendant. Le bruit est contrôlé par rapport au gain
+de contraste utile en mode par morceaux, et absolument en mode historique.
+
+Le contrôle local couvre aussi le plateau intermédiaire conservant pourtant
+la chute globale, la déformation relative des pentes voisines et une variation
+homogène acceptée. `test_auto_ghs.py` exécute la réduction de force de la CDF
+contre une référence fixe sur une population exponentielle et vérifie le
+cas sans référence mesurable.
+
+`test_ghs_histogram_shape.py` couvre trois pentes analytiques, les variations
+significatives après lissage d'une queue bruitée, la protection cumulative de
+la décroissance, la géométrie du pic et la vérification finale du sélecteur.
+Un candidat atteignant le niveau à 0,8 est rejeté s'il aplatit la forme.
+Les niveaux sont exprimés dans les mêmes classes que le graphique, sans
+extrapolation à travers une région absente. Le mode `piecewise` est le défaut ;
+`line` reste disponible explicitement pour les comparaisons historiques.
+
+`test_ghs_diagnostics.py` exécute l'export d'une série, inspecte les axes
+Matplotlib logarithmiques et leurs limites communes, et vérifie les verdicts,
+la galerie, le manifeste et la coexistence avec l'index HTML commun.
+Les dernières figures identifient l'essai retenu par son numéro, y compris
+lorsqu'une branche ultérieure a été explorée, quand un autre moteur est choisi
+ou lorsque l'entrée est conservée. Les histogrammes égaux ne servent pas à
+deviner la provenance ; un rapport incomplet garde une valeur non renseignée.
+Les encarts de série et les liens vers l'essai sont contrôlés dans les PNG et
+la galerie, avec et sans JPEG.
+`test_final_render.py` vérifie les synthèses sans panneau d'effectifs linéaires.
+Les fonds noirs, les encarts et textes contrastés, la visibilité de l'enveloppe
+et du repère à 0,8 sont contrôlés dans les figures et les PNG écrits. Le thème
+reste local à la figure, même si la configuration Matplotlib impose un export
+blanc. `test_star_diagnostics.py` vérifie le même thème et conserve les niveaux
+RGB et l'orientation des extraits stellaires ; la galerie HTML reste sombre.
+Les encarts de déplacement du pic sont vérifiés sur les essais estimés, les
+recomptages complets, les finalistes de présentation et la synthèse ; une mesure
+absente ou non finie ne doit pas devenir un déplacement nul.
+L'option `--ghs-save-trial-jpegs` est exercée par le pipeline complet dans
+les modes `line` et `piecewise`, avec une séparation StarNet simulée : les
+images gardent leur résolution et le JPEG final est identique à l'export
+principal. Les tests vérifient les correspondances de numéros, les refus,
+les estimations, les aperçus recomposés, l'orientation, la fermeture du cache
+après erreur d'écriture et la priorité CLI sur la configuration mémorisée.
+Les essais réels réutilisent les couches StarNet de M31, M33 et NGC7331 ;
+leurs PNG, FITS et rapports restent hors dépôt. Les calculs de comparaison
+utilisent `/tmp` ; les galeries peuvent être conservées dans les diagnostics
+des objets, distinctement des produits de traitement existants.
+
+`test_ghs_render_quality.py` vérifie le plafonnement du contraste/bruit et de
+la visibilité, les bonus lumineux bornés, les pénalités continues de forme,
+de bosse et de compression (fond et fusion), le départage par déplacement du
+pic, les mesures absentes et la priorité CLI > JSON > défauts des deux options.
+La mesure rapide est confrontée aux définitions spatiales du finaliseur sur
+les mêmes masques. `test_ghs_histogram_shape.py` exerce la sélection complète et
+les branches avec ce score ; `test_final_render.py` vérifie ses encarts.
+Ces tests synthétiques sont distincts des essais CUDA sur les entrées de phase
+figées de M31, M33 et NGC7331, dont les résultats restent dans `/tmp`.
+
+Les cas de régression du classement couvrent aussi le changement de pic dominant
+qui masque un creux à gauche, les bosses juste après le pic et une compression
+extrême du bruit du ciel par une courbe GHS. Les mesures natives de creux sont
+comparées à la référence, pas déclarées nulles quand elles manquent.
+Les sondages de cœur et de couleur sont exercés dans les moteurs `line` et
+`piecewise` : une pénalité brillante ne permet pas de contourner ces gardes.
+
+Le contrôle local du pic est testé indépendamment du lissage global : un
+second mode doit produire une pénalité même si la spline du corps décroît.
+Une bosse native reste admise et une référence absente n'est pas déclarée nulle.
+`test_ghs_blackpoint.py` vérifie le quantile affiné dans un bin contenant des
+pertes antérieures, les poids et la borne de tri à 65 536 valeurs. Le test
+`test_candidate_histograms_are_evaluated_after_the_actual_blackpoint` confronte
+les histogrammes évalués aux pixels réellement retournés après recalage, y
+compris pendant la validation complète. L'encart distingue luminosité Y,
+minimum RGB protégé, budget consommé et budget restant.
+
+Les tests du BP répété contrôlent la marge d'intensité de type machine en
+float32 et float64 : les canaux encore positifs ne doivent pas être érodés
+jusqu'aux valeurs sous-normales. La préparation CDF doit rejeter un dépassement
+de budget noir, même lorsque sa forme est admissible. Ces cas couvrent le
+blocage de tous les finalistes par une perte numérique d'un pixel.
+
+Les exports RGB sont contrôlés dans le sens natif de l'affichage Siril,
+première ligne FITS en bas, pour TOP-DOWN, BOTTOM-UP et une carte absente.
+Des coins colorés asymétriques comparent le JPEG final et la capture d'essai ;
+les positions et contours WCS doivent suivre les pixels du rendu après ce
+retournement. Une session Siril isolée et ses exports savepng servent de
+référence indépendante, sans utiliser de FITS personnels comme fixtures.

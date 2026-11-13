@@ -2,6 +2,8 @@
 
 [Documentation](../../README.md) › [Scripts](../README.md) › postProcess
 
+Présentation : [Principe du post-traitement et diagramme de séquence](principle.md).
+
 `bin/postProcess.py` traite une image FITS dans cet ordre :
 **correction du gradient → étalonnage spectrophotométrique → comparaison des chaînes complètes de restauration**.
 Chaque étape reçoit l’image retenue par la précédente et produit un rapport JSON.
@@ -33,9 +35,11 @@ il sépare les étoiles avec StarNet et produit une image finale étoilée RANGE
 en FITS et [JPEG](render-exports.md), avec ses histogrammes de diagnostic.
 Il est activé par défaut ; `--disable-autoghs` conserve la sortie linéaire.
 
-La [passe couleur finale adaptative](final-color.md) suit GHS par défaut avant
-la fusion et l'annotation : `--disable-final-color` la désactive et `--color-only`
-permet de la relancer seule sur les couches GHS existantes.
+La [passe couleur finale adaptative](final-color.md) renforce ensuite le fond
+sans étoiles étiré par GHS, puis le recompose avec les étoiles déjà rendues.
+`--disable-final-color` la désactive et `--color-only` permet de la relancer
+sur les couches existantes. Le [diagramme de séquence](principle.md#sequence-postprocessing-couleur)
+montre les deux couches, leurs recompositions et les exports de l'image complète.
 
 GraXpert est ajouté automatiquement à la comparaison lorsque des poids locaux
 valides sont présents, sauf désactivation explicite (`--no-enable-graxpert` ou
@@ -124,7 +128,7 @@ flowchart TD
     B --> U{"AutoGHS activé ?"}
     O --> U
     T --> U
-    U -->|Oui, par défaut| F["05 · Rendu AutoGHS et étoiles"]
+    U -->|Oui, par défaut| F["05 · Rendu AutoGHS et étoiles<br/>puis 06 · Couleur finale si activée"]
     U -->|Non| R["Exports FITS, JPEG si produit<br/>Diagnostics et rapport global"]
     F --> R
 ```
@@ -221,8 +225,10 @@ Les moteurs Siril organisent leur calcul en [phases d’exécution indépendante
 
 Le [rendu final AutoGHS](auto-ghs.md) termine cette séquence par défaut.
 Voir aussi son [moteur et ses histogrammes](auto-ghs-algorithm.md) et le
-[traitement séparé des étoiles](star-rendering.md). Une panne de cette phase
-est fatale, sans reprise automatique ni substitution de rendu.
+[traitement séparé des étoiles](star-rendering.md). En mode `auto`, une
+saturation mémoire CUDA dans le moteur GHS autorise une reprise CPU unique,
+sans relancer StarNet. Les autres pannes restent fatales, sans substitution
+de rendu ; voir la [politique CPU/GPU](compute-backend.md).
 
 <a id="options-et-configuration"></a>
 <a id="configuration-et-m-morisation"></a>
@@ -618,6 +624,16 @@ compatibles s'ils contiennent explicitement `autoghs.image_path`, sans pouvoir
 vérifier rétroactivement l'intégrité des fichiers. Si le traitement précédent
 n'a pas laissé de référence exploitable, refaire un traitement complet.
 
+Le [classement final par morceaux](ghs-histogram-shape.md#13-conservation-de-la-forme)
+plafonne le bonus contraste/bruit à 100 % et pénalise progressivement les bosses,
+les déformations et la compression brillante. Les objectifs lumineux restent
+secondaires ; le déplacement du pic départage les scores égaux. Les réglages
+`--ghs-quality-cnr-floor` (0,9) et `--ghs-quality-tail-bonus` (0,1) respectent la
+priorité CLI > configuration > défauts. Les encarts détaillent le score, y compris les bosses du pic mesurées
+indépendamment de la spline globale. Le recalage BP précède les évaluations ;
+son budget compte la perte d'un canal RGB par pixel, tandis que le graphique
+montre Y. Voir [les limites et la précision du BP](ghs-blackpoint.md).
+
 La [dernière passe protégée](ghs-highlight-protection.md) est active par défaut.
 `--ghs-highlight-retention 0.95` renforce la conservation des nuances brillantes ;
 `--ghs-final-mode fixed` permet de comparer l'ancienne courbe finale.
@@ -665,15 +681,14 @@ rapports/
     ├── 03_restoration_summary.txt
     ├── 03_restoration_work/
     ├── 05_autoghs.json
-    └── 05_autoghs_work/
-        ├── 01_separation/separation_work/
-        ├── 02_stars/
-        ├── 03_ghs/
-        │   └── 03_restoration_starless_ghs_range.fits
-        ├── 04_recomposition/
-        │   ├── 03_restoration_render_range.fits
-        │   └── 03_restoration_render_range.jpg
-        └── 05_diagnostics/
+    ├── 01_separation/separation_work/
+    ├── 02_stars/
+    ├── 03_ghs/
+    │   └── 03_restoration_starless_ghs_range.fits
+    ├── 04_recomposition/
+    │   ├── 03_restoration_render_range.fits
+    │   └── 03_restoration_render_range.jpg
+    └── 05_diagnostics/
 ```
 
 Cet arbre omet les copies FITS et audits propres à chaque moteur de restauration.
@@ -682,7 +697,7 @@ AutoGHS portent le nom de leur image amont ; ici `03_restoration` puisque la
 restauration a retenu un candidat. Le mode `--no-restoration-compare-chains`
 produit à la place les étapes séparées `03_deconvolution` et `04_denoise`.
 
-Les dossiers des moteurs conservent scripts `.sps`, journaux `.log`, catalogues
+Les dossiers des moteurs conservent plans d’appels `.commands.json`, journaux `.log`, catalogues
 stellaires et images candidates. Ils sont déterministes et recréés à chaque
 exécution ; pour la déconvolution Siril, ils contiennent aussi l’original de l’étape,
 les PSF et leurs aperçus, ainsi que `matched_stars.csv` préfixé par le nom de
@@ -727,13 +742,28 @@ argparse retourne `2` pour une ligne de commande invalide.
 ### 4.2. Ordre des produits AutoGHS
 
 AutoGHS conserve le numéro `05`, y compris lorsque `03_restoration` regroupe les
-étapes 03/04. Ses produits sont écrits dans `05_autoghs_work/`, avec des
-sous-dossiers numérotés pour la séparation, les étoiles, GHS, la recomposition et
-les diagnostics. La photométrie utilise `02_photometry_work/`. Ces dossiers
-visibles sont réinitialisés à chaque lancement ; voir [AutoGHS](auto-ghs.md).
+étapes 03/04. Les sous-dossiers de séparation, étoiles, GHS, recomposition et
+diagnostics sont placés directement à côté du rapport, sans `autoghs_work/`.
+Dans le plan lightProcess, ils se trouvent directement dans `05_autoghs/`.
+La photométrie utilise `02_photometry_work/`. Seuls les produits propres à chaque
+traitement sont nettoyés à la relance ; voir [AutoGHS](auto-ghs.md).
 
 La [recherche GHS par quartiles](ghs-quartiles.md) complète le rendu automatique
 par des passes successives, avec budget cumulé du point noir.
+Le [mode par défaut par morceaux](ghs-histogram-shape.md) utilise une spline
+de mesure et conserve l'ordre des variations de pente. La même page décrit
+les séries de graphiques des essais majeurs, uniquement logarithmiques.
+Les encarts indiquent le déplacement du pic depuis la référence de forme,
+son plafond connu et si la mesure est estimée sur échantillon.
+La recherche conserve plusieurs branches de familles et positions du pic
+différentes, avec affinage des intervalles ; elle utilise uniquement l'image
+courante. Les alternatives admissibles apparaissent aussi dans la galerie.
+Les encarts identifient le groupe et le numéro de chaque essai ; les dernières
+figures indiquent le numéro de l'essai effectivement retenu dans la série.
+Les graphiques AutoGHS et stellaires ainsi que la galerie d'essais utilisent
+un fond noir et des textes clairs pour leur consultation dans l'obscurité.
+Le [recalage du BP après chaque courbe](ghs-blackpoint.md) place les mesures
+et les tests de conformité après la correction du pied sombre.
 
 La [sélection des régions diffuses](diffuse-regions.md) limite leur nombre
 en conservant une représentation spatiale et par tailles sur la référence.
@@ -746,3 +776,6 @@ Les résultats sont également consultables dans les
 [index HTML hiérarchiques](../lightProcess/html-reports.md), avec aperçus
 JPEG/PNG, rapports et liens FITS. Le parent du rapport global porte l’accueil
 en mode autonome ; le plan numéroté conserve l’accueil à la racine de l’objet.
+
+Les traitements Siril utilisent la [factory de sessions sirilpy](../lightProcess/reference/SIRIL_API.md),
+avec démarrage automatique sans IHM, plans d’appels JSON et journaux de session.

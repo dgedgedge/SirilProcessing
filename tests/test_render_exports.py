@@ -11,22 +11,29 @@ from PIL import Image
 from lib.render_exports import (
     read_render_image,
     write_render_jpeg,
+    write_array_jpeg,
 )
 
 
-@pytest.mark.parametrize("order", ["TOP-DOWN", "BOTTOM-UP"])
-def test_render_image_orientation_and_direct_intensities(tmp_path: Path, order: str) -> None:
-    """Respecte ROWORDER sans gamma ajouté ni normalisation par les extrema."""
+@pytest.mark.parametrize("order", ["TOP-DOWN", "BOTTOM-UP", None])
+def test_render_image_orientation_and_direct_intensities(tmp_path: Path, order: str | None) -> None:
+    """Suit l'affichage natif Siril, même avec TOP-DOWN, sans altérer les niveaux."""
     data = np.full((3, 16, 20), 0.1, dtype=np.float32)
     data[:, 0, 0] = (1, 0, 0)
     data[:, -1, 0] = (0, 0, 1)
     source = tmp_path / "render.fits"
-    fits.writeto(source, data, fits.Header({"SPNLIN": True, "ROWORDER": order}))
+    header = fits.Header({"SPNLIN": True})
+    if order is not None:
+        header['ROWORDER'] = order
+    fits.writeto(source, data, header)
     before = source.read_bytes()
     with read_render_image(source) as image:
         assert image.size == (20, 16)
         assert image.getpixel((10, 8)) == (26, 26, 26)
-        assert image.getpixel((0, 0)) == ((255, 0, 0) if order == "TOP-DOWN" else (0, 0, 255))
+        # Vérifié contre savepng de Siril : la première ligne du FITS se
+        # trouve toujours en bas, indépendamment de la carte ROWORDER.
+        assert image.getpixel((0, 0)) == (0, 0, 255)
+        assert image.getpixel((0, 15)) == (255, 0, 0)
     assert source.read_bytes() == before
 
 
@@ -45,6 +52,23 @@ def test_final_jpeg_keeps_size_color_and_source(tmp_path: Path) -> None:
     assert source.read_bytes() == before
     with pytest.raises(ValueError, match="remplacer"):
         write_render_jpeg(source, source)
+
+
+@pytest.mark.parametrize('row_order', ['TOP-DOWN', 'BOTTOM-UP'])
+def test_array_jpeg_keeps_full_resolution_and_orientation(tmp_path: Path, row_order: str) -> None:
+    """Un instantané conserve le sens de l'export Siril pour les deux ROWORDER."""
+    data = np.full((3, 40, 64), .2, dtype='f4')
+    data[:, :20] = np.array([.6, .3, .1])[:, None, None]
+    original = data.copy()
+    path = tmp_path/'trial.jpg'
+    write_array_jpeg(data, path, row_order)
+    with Image.open(path) as image:
+        assert image.size == (64, 40)
+        np.testing.assert_allclose(image.getpixel((32, 5)), [51, 51, 51], atol=3)
+        np.testing.assert_allclose(image.getpixel((32, 35)), [153, 76, 26], atol=3)
+    np.testing.assert_array_equal(data, original)
+    with pytest.raises(ValueError, match='ROWORDER'):
+        write_array_jpeg(data, tmp_path/'bad.jpg', 'INVALID')
 
 
 @pytest.mark.parametrize("nonlinear,level", [(False, 0.2), (True, 1.1), (True, np.nan)])
@@ -107,3 +131,35 @@ def test_cli_copies_primary_jpeg_without_running_external_engines(
     assert exported.exists() is with_jpeg
     if with_jpeg:
         assert exported.read_bytes() == jpeg.read_bytes()
+
+
+@pytest.mark.parametrize('row_order', ['TOP-DOWN', 'BOTTOM-UP'])
+def test_trial_and_final_jpeg_follow_siril_corner_orientation(tmp_path: Path, row_order: str) -> None:
+    """La capture d'un essai et l'export du FITS placent les quatre coins comme Siril."""
+    from lib.auto_ghs import ComputeBackend
+    from lib.ghs_diagnostics import HistogramDiagnostics
+
+    data = np.zeros((3, 48, 64), dtype='f4')
+    data[:, :24, :32] = np.array([1., 0., 0.])[:, None, None]
+    data[:, :24, 32:] = np.array([1., 1., 0.])[:, None, None]
+    data[:, 24:, :32] = np.array([0., 0., 1.])[:, None, None]
+    data[:, 24:, 32:] = np.array([0., 1., 0.])[:, None, None]
+    source = tmp_path/'source.fits'
+    fits.writeto(source, data, fits.Header({'SPNLIN': True, 'ROWORDER': row_order}))
+    original = source.read_bytes()
+    final = tmp_path/'final.jpg'
+    write_render_jpeg(source, final)
+    recorder = HistogramDiagnostics(ComputeBackend('cpu'), row_order=row_order)
+    try:
+        record = {}
+        recorder.capture(record, data)
+        trial = recorder.publish(record['trial_image_id'], tmp_path/'trial.jpg')['image_jpeg']
+    finally:
+        recorder.close()
+    expected = {(8, 8): (0, 0, 255), (56, 8): (0, 255, 0),
+                (8, 40): (255, 0, 0), (56, 40): (255, 255, 0)}
+    for path in (final, trial):
+        with Image.open(path) as image:
+            for point, color in expected.items():
+                np.testing.assert_allclose(image.getpixel(point), color, atol=3)
+    assert source.read_bytes() == original

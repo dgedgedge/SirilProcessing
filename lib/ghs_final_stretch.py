@@ -18,12 +18,15 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from lib.ghs_diagnostics import HistogramDiagnostics
+from lib.ghs_blackpoint import HistogramBlackpointNormalizer
 from lib.ghs_log_histogram import (
     DEFAULT_LOG_RMS_WEIGHT, HISTOGRAM_BINS, HISTOGRAM_SLOPE_WEIGHT,
     RMS_REGULARIZER_DEX, TAIL_ENDPOINT,
     fit_log_tail_counts, log_tail_score,
 )
 from lib.processor import processor
+from lib.ghs_histogram_shape import piecewise_histogram_profile, compare_histogram_shapes
 from lib.star_separation import validate_rgb, write_rgb
 from lib.type_defs import JSONReport
 
@@ -73,7 +76,7 @@ class ProtectedGHSFinalizer(processor):
         )
         parser.add_argument(
             '--ghs-log-rms-weight', type=float, default=DEFAULT_LOG_RMS_WEIGHT,
-            help='Poids du gain relatif de régularité log ; 0 désactive, maximum 10',
+            help='Poids du RMS global en mode histogramme line ; 0 désactive, maximum 10',
         )
 
     @staticmethod
@@ -181,6 +184,7 @@ class ProtectedGHSFinalizer(processor):
         else:
             result['diffuse_visibility'] = None
         counts = xp.histogram(light[reference > 1e-6], bins=HISTOGRAM_BINS, range=(0, 1))[0]
+        result['histogram_counts'] = (counts if xp is np else xp.asnumpy(counts)).tolist()
         result['log_histogram'] = fit_log_tail_counts(
             counts if xp is np else xp.asnumpy(counts),
             window_end=tail_endpoint,
@@ -188,9 +192,46 @@ class ProtectedGHSFinalizer(processor):
         return result
 
     @staticmethod
+    def noise_assessment(
+        before: JSONReport, after: JSONReport, *, relative: bool = False,
+    ) -> JSONReport:
+        """Protège le bruit, relativement au contraste utile en mode piecewise.
+
+        Le gain de contraste est (diffus-ciel) final divisé par sa valeur
+        initiale, sur les mêmes régions. Un gain commun signal/bruit ne dégrade
+        pas ce rapport. Sans contraste mesurable, la garde reste absolue.
+        Une mesure initiale absente reste inconnue ; une mesure finale absente
+        lorsque l'initiale existe est rejetée. Les unités sont des rapports.
+        """
+        initial, final = before.get('noise'), after.get('noise')
+        audit: JSONReport = dict(noise_gain=None, contrast_gain=1., effective_gain=None,
+                                 relative_to_contrast=relative, limit=MAX_FINAL_NOISE_GAIN,
+                                 rejections=[])
+        if initial is None or initial <= 1e-8:
+            return audit
+        if final is None:
+            audit['rejections'] = ['unmeasurable background noise']
+            return audit
+        gain = final/initial
+        contrast_gain = 1.
+        if relative and all(item.get(key) is not None for item in (before, after)
+                            for key in ('sky_median', 'diffuse_median')):
+            first = before['diffuse_median']-before['sky_median']
+            last = after['diffuse_median']-after['sky_median']
+            if first > 1e-7:
+                contrast_gain = max(1., last/first)
+        effective = gain/contrast_gain
+        audit.update(noise_gain=gain, contrast_gain=contrast_gain, effective_gain=effective)
+        if effective > MAX_FINAL_NOISE_GAIN:
+            audit['rejections'] = ['background noise amplification']
+        return audit
+
+    @staticmethod
     def assess(
         before: JSONReport, after: JSONReport, retention: float,
         rms_weight: float = DEFAULT_LOG_RMS_WEIGHT,
+        *, histogram_score_enabled: bool = True,
+        relative_noise: bool = False,
     ) -> tuple[float, list[str]]:
         """Évalue le gain diffus et rejette bruit, perte de contraste et dérive RGB.
 
@@ -202,6 +243,10 @@ class ProtectedGHSFinalizer(processor):
         Une métrique brillante principale non mesurable empêche de certifier
         un candidat ; le contrôle du petit cœur s'ajoute lorsqu'il est mesurable.
         Les limites de luminosité ne tentent pas de réparer un défaut déjà présent.
+        histogram_score_enabled=False retire les seuls bonus globaux de pente
+        et de RMS ; search applique alors séparément sa référence de forme.
+        relative_noise=True rapporte le gain de bruit au gain de contraste
+        diffus-ciel, sur les mêmes régions, pour évaluer un étirement utile.
         """
         rejected = []
         for key in ('sky_median', 'diffuse_median', 'bright_median', 'highlight_contrast'):
@@ -232,14 +277,10 @@ class ProtectedGHSFinalizer(processor):
         if (after.get('core_chroma_change') is not None
                 and after['core_chroma_change'] < -MAX_CHROMA_LOSS):
             rejected.append('core chroma loss')
-        noise_gain = 1.0
-        if before.get('noise') is not None and before['noise'] > 1e-8:
-            if after.get('noise') is None:
-                rejected.append('unmeasurable background noise')
-            else:
-                noise_gain = after['noise'] / before['noise']
-                if noise_gain > MAX_FINAL_NOISE_GAIN:
-                    rejected.append('background noise amplification')
+        noise = ProtectedGHSFinalizer.noise_assessment(before, after, relative=relative_noise)
+        after['noise_assessment'] = noise
+        rejected.extend(noise['rejections'])
+        noise_gain = noise['effective_gain'] if noise['effective_gain'] is not None else 1.
         contrast = before['diffuse_median'] - before['sky_median']
         gain = (after['diffuse_median'] - after['sky_median']) / max(contrast, 1e-12)
         diffuse_score = math.log(max(gain, 1e-12)) - 0.2 * math.log(max(1, noise_gain))
@@ -253,7 +294,7 @@ class ProtectedGHSFinalizer(processor):
                 rejected.append('diffuse visibility regression')
         histogram_score = log_tail_score(
             before['log_histogram'], after['log_histogram'], rms_weight,
-        )
+        ) if histogram_score_enabled else 0.0
         score = diffuse_score + visibility_score + histogram_score
         if contrast <= 1e-7 or diffuse_score <= MIN_SCORE:
             rejected.append('no useful diffuse gain')
@@ -266,6 +307,10 @@ class ProtectedGHSFinalizer(processor):
         strength: float, mode: str = 'auto', retention: float = 0.9,
         stars: np.ndarray | None = None, headroom: float = 0.95,
         rms_weight: float = DEFAULT_LOG_RMS_WEIGHT,
+        shape_options: argparse.Namespace | None = None,
+        reference_shape: JSONReport | None = None,
+        trial_images: HistogramDiagnostics | None = None,
+        blackpoint_reference: np.ndarray | None = None,
     ) -> tuple[np.ndarray, JSONReport]:
         """Compare D/B/SP/HP, affine puis valide les meilleurs sur tout le champ.
 
@@ -290,6 +335,20 @@ class ProtectedGHSFinalizer(processor):
         rms_weight : float
             Poids de la réduction relative du RMS logarithmique, dans [0,10].
             Deux par défaut ; zéro désactive ce terme sans modifier les gardes.
+        shape_options : argparse.Namespace or None, optional
+            Options complètes résolues par GHSOptimizer.options. Si le modèle
+            est piecewise, remplace les bonus globaux par la conservation de
+            forme, avec des références fixes sur l'échantillon et le champ.
+            None conserve le classement historique.
+        reference_shape : JSONReport or None, optional
+            Forme du fond avant égalisation, fixée pour toutes les phases.
+            None utilise les références locales ; la fusion garde sa propre
+            référence locale car sa population comprend aussi les étoiles.
+        trial_images : HistogramDiagnostics or None, optional
+            Capture sur disque chaque finaliste entier, sans retenir ses pixels.
+        blackpoint_reference : numpy.ndarray or None, optional
+            Masque des canaux positifs initiaux, sur le backend. Il fixe le
+            budget cumulatif des pertes après le BP ; None utilise data.
 
         Returns
         -------
@@ -314,6 +373,45 @@ class ProtectedGHSFinalizer(processor):
         Le mode fixed conserve explicitement la courbe historique sans ces gardes.
         """
         from lib.auto_ghs import ghs_rgb
+
+        shape_enabled = shape_options is not None and shape_options.ghs_histogram_model == 'piecewise'
+        align_blackpoint = shape_enabled and shape_options.ghs_post_blackpoint == 'rise'
+        blackpoint_reference = data if blackpoint_reference is None else blackpoint_reference
+        shape_cache: dict[int, JSONReport] = {}
+
+        def assess_presentation(
+            first: JSONReport, last: JSONReport, keep: float,
+            *, composite: bool = False,
+        ) -> tuple[float, list[str]]:
+            """Remplace le bonus d'aplatissement par une référence de forme fixe."""
+            score, reasons = self.assess(first, last, keep, rms_weight,
+                                         histogram_score_enabled=not shape_enabled,
+                                         relative_noise=shape_enabled)
+            if shape_enabled:
+                if id(first) not in shape_cache:
+                    shape_cache[id(first)] = piecewise_histogram_profile(
+                        np.array(first['histogram_counts']), shape_options.ghs_linearity_tolerance,
+                        shape_options.ghs_shape_smoothing,
+                    )
+                candidate = piecewise_histogram_profile(
+                    np.array(last['histogram_counts']), shape_options.ghs_linearity_tolerance,
+                    shape_options.ghs_shape_smoothing,
+                )
+                reference = (reference_shape if reference_shape is not None and not composite
+                             else shape_cache[id(first)])
+                audit = compare_histogram_shapes(reference, candidate,
+                                                  shape_options.ghs_shape_retention,
+                                                  shape_options.ghs_shape_distance,
+                                                  shape_options.ghs_shape_peak_shift,
+                                                  shape_options.ghs_shape_stiffness,
+                                                  shape_options.ghs_shape_local_retention)
+                last['histogram_shape'] = candidate
+                last['shape_preservation'] = audit
+                reasons.extend(audit['rejections'])
+                score -= audit['penalty']
+                if score <= MIN_SCORE and 'no useful presentation gain' not in reasons:
+                    reasons.append('no useful presentation gain')
+            return score, reasons
 
         if (not math.isfinite(strength) or not 0 <= strength <= 10
                 or mode not in ('auto', 'fixed') or not math.isfinite(retention)
@@ -347,6 +445,11 @@ class ProtectedGHSFinalizer(processor):
                 'histogram_window_end': TAIL_ENDPOINT,
             },
         }
+        if shape_enabled:
+            report['objective'].update(name='diffuse visibility preserving piecewise log shape',
+                                       histogram_slope_weight=0., histogram_rms_weight=0.,
+                                       noise_reference='diffuse_contrast',
+                                       blackpoint_order='GHS, linear BP, compliance')
         if strength == 0 or before['range_width'] <= 1e-7:
             report['status'] = 'disabled' if strength == 0 else 'constant distribution'
             return data, report
@@ -362,6 +465,7 @@ class ProtectedGHSFinalizer(processor):
                > MAX_SAMPLE_PIXELS):
             stride += 1
         sample = backend.numpy(data[:, ::stride, ::stride])
+        sample_blackpoint_reference = backend.numpy(blackpoint_reference[:, ::stride, ::stride])
         sample_stars = stars[:, ::stride, ::stride] if stars is not None else None
         thresholds = self.thresholds(sample, analyzer.color_mode)
         report.update(sample_stride=stride, thresholds=thresholds, candidates=[],
@@ -402,12 +506,19 @@ class ProtectedGHSFinalizer(processor):
                 return
             parameters = {'D': d, 'B': b, 'SP': sp, 'LP': 0.0, 'HP': hp}
             result = ghs_rgb(sample, **parameters, color_mode=analyzer.color_mode)
+            post: JSONReport = {'BP': 0., 'status': 'disabled'}
+            if align_blackpoint:
+                result, post = HistogramBlackpointNormalizer.apply(
+                    result, shape_options.ghs_blackpoint_loss,
+                    reference=sample_blackpoint_reference,
+                )
             metrics = self.measure(sample, result, thresholds, analyzer.color_mode,
                                    tail_endpoint=tail_endpoint)
-            score, rejected = self.assess(
-                baseline, metrics, 1 - 0.8 * (1 - retention), rms_weight,
+            score, rejected = assess_presentation(
+                baseline, metrics, 1 - 0.8 * (1 - retention),
             )
             record: JSONReport = {'parameters': parameters, 'score': score,
+                                  'post_BP': post['BP'], 'post_blackpoint': post,
                                   'rejections': rejected, 'starless': metrics}
             if sample_stars is not None:
                 composite = headroom * result + sample_stars * (1 - headroom * result)
@@ -416,13 +527,27 @@ class ProtectedGHSFinalizer(processor):
                     mask_reference=sample,
                     tail_endpoint=fusion_tail_endpoint,
                 )
-                fusion_score, fusion_rejected = self.assess(
-                    fusion_before, metrics, 1 - 0.8 * (1 - retention), rms_weight,
+                fusion_score, fusion_rejected = assess_presentation(
+                    fusion_before, metrics, 1 - 0.8 * (1 - retention), composite=True,
                 )
                 record.update(composite=metrics, score=min(score, fusion_score),
                               rejections=rejected + [
                                   'composite: ' + reason for reason in fusion_rejected])
             tested[key] = record
+
+        def presentation_rank(record: JSONReport) -> tuple[float, float]:
+            """Départage les présentations admissibles par déplacement puis gain.
+
+            Les objectifs de queue sont traités par le moteur suivant. Ici,
+            forme, bruit et contraste ont déjà passé les gardes ; on évite
+            d'éclaircir davantage le ciel pour le seul score de gain diffus.
+            Le mode historique conserve son classement de score.
+            """
+            if not shape_enabled:
+                return record['score'], 0.
+            measured = record.get('starless', record.get('after', {}))
+            shift = measured.get('shape_preservation', {}).get('peak_shift')
+            return (-float(shift) if shift is not None else -math.inf, record['score'])
 
         for d, b, sp, hp in itertools.product(
             [strength * part for part in (0.15, 0.3, 0.5, 0.75, 1)],
@@ -431,7 +556,7 @@ class ProtectedGHSFinalizer(processor):
             evaluate(d, b, sp, hp)
         eligible = [item for item in tested.values() if not item['rejections']]
         if eligible:
-            best = max(eligible, key=lambda item: item['score'])['parameters']
+            best = max(eligible, key=presentation_rank)['parameters']
             index = hp_values.index(best['HP'])
             low, high = hp_values[max(0, index - 1)], hp_values[min(len(hp_values) - 1, index + 1)]
             sp_index = sp_values.index(best['SP'])
@@ -447,7 +572,7 @@ class ProtectedGHSFinalizer(processor):
                 evaluate(d, b, sp, hp)
         report['candidates'] = list(tested.values())
         ranked = sorted((item for item in tested.values() if not item['rejections']),
-                        key=lambda item: item['score'], reverse=True)
+                        key=presentation_rank, reverse=True)
         if not ranked:
             return data, report
         # Réserver une place à la meilleure régularité pour ne pas limiter la
@@ -468,7 +593,7 @@ class ProtectedGHSFinalizer(processor):
             return min(gains)
 
         finalists = ranked[:MAX_FULL_VALIDATIONS]
-        if rms_weight > 0:
+        if rms_weight > 0 and not shape_enabled:
             smoothest = max(ranked, key=rms_quality)
             if smoothest not in finalists:
                 finalists[-1] = smoothest
@@ -486,16 +611,30 @@ class ProtectedGHSFinalizer(processor):
                 tail_endpoint=fusion_tail_endpoint,
             )
         best_output = None
-        best_score = MIN_SCORE
+        best_rank: tuple[float, float] | None = None
         for record in finalists:
             parameters = record['parameters']
             output = ghs_rgb(data, **parameters, color_mode=analyzer.color_mode, xp=xp)
+            post: JSONReport = {'BP': 0., 'status': 'disabled'}
+            if align_blackpoint:
+                output, post = HistogramBlackpointNormalizer.apply(
+                    output, shape_options.ghs_blackpoint_loss, xp,
+                    reference=blackpoint_reference,
+                )
             validate_rgb(output)
             measured = self.measure(data, output, thresholds, analyzer.color_mode, xp,
                                     tail_endpoint=tail_endpoint)
-            score, rejected = self.assess(full_before, measured, retention, rms_weight)
+            score, rejected = assess_presentation(full_before, measured, retention)
+            if align_blackpoint and post['loss_fraction'] > shape_options.ghs_blackpoint_loss+1e-12:
+                rejected.append('cumulative blackpoint loss')
             audit: JSONReport = {'parameters': parameters, 'before': full_before,
+                                 'post_BP': post['BP'], 'post_blackpoint': post,
                                  'after': measured, 'score': score, 'rejections': rejected}
+            from lib.auto_ghs import luminance
+            light = luminance(output, analyzer.color_mode, xp=xp)
+            audit['histogram'] = {'counts': backend.numpy(
+                xp.histogram(light, bins=analyzer.bins, range=(0, 1))[0]).tolist()}
+            del light
             if full_stars is not None:
                 composed = headroom * output + full_stars * (1 - headroom * output)
                 fusion = self.measure(
@@ -503,17 +642,22 @@ class ProtectedGHSFinalizer(processor):
                     mask_reference=data,
                     tail_endpoint=fusion_tail_endpoint,
                 )
-                fusion_score, reasons = self.assess(
-                    composite_before, fusion, retention, rms_weight,
+                fusion_score, reasons = assess_presentation(
+                    composite_before, fusion, retention, composite=True,
                 )
                 score = min(score, fusion_score)
                 audit['score'] = score
                 rejected.extend('composite: ' + reason for reason in reasons)
                 audit.update(composite_before=composite_before, composite_after=fusion)
             report['full_validation'].append(audit)
-            if not rejected and score > best_score:
-                best_output, best_score = output, score
+            if trial_images is not None:
+                trial_images.capture(audit, output)
+            rank = presentation_rank(audit)
+            if not rejected and score > MIN_SCORE and (best_rank is None or rank > best_rank):
+                best_output = output
+                best_rank = rank
                 report.update(status='applied', parameters=parameters,
+                              post_BP=post['BP'], post_blackpoint=post,
                               selected_validation=len(report['full_validation']) - 1)
             del output
         if best_output is not None:

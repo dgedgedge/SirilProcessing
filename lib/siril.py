@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import json
 import os
 import re
 import shlex
@@ -22,11 +23,15 @@ import numpy as np
 
 from lib.cpu_config import CpuConfig
 from lib.parameterized_component import ParameterizedComponent
+from lib.siril_api import SirilCommand, SirilSession, command
+from lib.registration_audit import SirilRegistrationAudit
 
 
 class Siril(ParameterizedComponent):
-    """
-    Classe pour gérer l'exécution de Siril avec validation et mémorisation des configurations.
+    """Factory de sessions sirilpy autonomes et de lots de commandes typées.
+
+    La configuration du moteur est validée sans ouvrir de session. Les appels
+    possèdent ensuite leur processus, leurs préférences et leurs journaux.
     """
 
     CONFIG_DEFAULTS = {
@@ -271,162 +276,95 @@ class Siril(ParameterizedComponent):
             self._validated = False
             return False
 
-    @staticmethod
-    def prepare_script(siril_script_content: str) -> str:
-        """Ajoute l’en-tête commun de version, CPU et extension FITS.
-
-        Conserve les commentaires initiaux et le corps, remplace l’exigence de
-        version initiale par requires 1.4 et ajoute setext fits. Retourne le
-        script prêt à sauvegarder, sans accès au disque ni exécution de Siril.
-        """
-        lines = siril_script_content.splitlines(keepends=True)
-        header: list[str] = []
-        body_start = 0
-        for line in lines:
-            stripped = line.strip()
-            command = stripped.split(maxsplit=1)[0] if stripped else ""
-            if not stripped or stripped.startswith("#"):
-                header.append(line)
-                body_start += 1
-                continue
-            if command.lower() == "requires":
-                body_start += 1
-                continue
-            break
-        lines = lines[body_start:]
-        if header and not header[-1].endswith("\n"):
-            header[-1] += "\n"
-        script_lines = (
-            header
-            + ["requires 1.4\n", f"setcpu {CpuConfig.get_limit()}\n", "setext fits\n"]
-            + lines
-        )
-        return "".join(script_lines)
-
-    def run_siril_script(
-        self,
-        siril_script_content: str,
-        working_dir: str,
-        script_name: str | None = None,
-        *,
+    def session(
+        self, working_dir: Path | str, name: str = 'siril-api', *,
         initfile: Path | None = None,
-    ) -> bool:
-        """Exécute un script Siril avec l’exigence commune de version minimale.
+    ) -> SirilSession:
+        """Fournit une session API possédée, lancée automatiquement sans IHM.
 
-        La première commande du script sauvegardé est ``requires 1.4`` ; toute
-        exigence de version fournie dans son en-tête est remplacée. ``setcpu``
-        est ajouté juste après cette directive, suivi de ``setext fits`` pour
-        fixer l’extension des images indépendamment des préférences Siril.
-        La sortie standard et les erreurs
-        sont conservées dans le fichier journal associé.
-
-        Parameters
-        ----------
-        siril_script_content : str
-            Commandes Siril à exécuter, avec commentaires et espaces initiaux
-            éventuels.
-        working_dir : str
-            Répertoire de travail utilisé pour le script et son journal.
-        script_name : str, optional
-            Nom du script sauvegardé ; les caractères non sûrs sont remplacés.
-        initfile : Path, optional
-            Préférences isolées passées avec ``-i``, sans modifier les préférences
-            de l’utilisateur.
-
-        Returns
-        -------
-        bool
-            ``True`` si Siril termine avec le code zéro.
-
-        Raises
-        ------
-        RuntimeError
-            Configuration invalide, mode inconnu ou script Siril terminé avec
-            un code non nul. En cas d’échec du script, l’exception indique son
-            code de sortie et le chemin du journal.
-        OSError
-            Une erreur d’accès au répertoire, au script ou au journal empêche
-            l’exécution.
+        Le context manager démarre Siril et son Python officiel, expose api,
+        puis ferme la connexion et le processus. Les chemins et préférences
+        restent propres à cette instance ; aucun service global n'est créé.
         """
         if not self._validated:
-            raise RuntimeError(
-                "Configuration Siril non valide. Impossible d'exécuter le script."
-            )
-
-        working_path = Path(working_dir)
-        working_path.mkdir(parents=True, exist_ok=True)
-        if script_name:
-            safe_name = "".join(
-                ch if ch.isalnum() or ch in "._-" else "_" for ch in script_name
-            )
-            if not safe_name.endswith(".sps"):
-                safe_name = f"{safe_name}.sps"
+            raise RuntimeError('Configuration Siril non valide')
+        if self._siril_mode == 'flatpak':
+            launcher = ['flatpak', 'run', '--share=network', '--command=siril-cli', 'org.siril.Siril']
         else:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-            safe_name = f"siril_script_{timestamp}.sps"
+            launcher = [self._siril_path]
+        directory = Path(working_dir)
+        safe_name = ''.join(c if c.isalnum() or c in '._-' else '_' for c in Path(name).stem)
+        return SirilSession(launcher, directory, directory / f'{safe_name}.log', initfile=initfile,
+                            setup=self.prepare_commands([]))
 
-        script_path = working_path / safe_name
-        log_path = script_path.with_suffix(".log")
-        siril_script_content = self.prepare_script(siril_script_content)
-        logging.info(
-            "Exécution du script Siril %s dans %s", script_path, working_dir
-        )
-        script_path.write_text(siril_script_content, encoding="utf-8")
-        logging.debug(
-            "Contenu du script Siril %s :\n%s", script_path, siril_script_content
-        )
+    @staticmethod
+    def prepare_commands(operations: Sequence[SirilCommand]) -> list[SirilCommand]:
+        """Prépare l'en-tête API commun sans lancement ni accès aux fichiers."""
+        if not all(isinstance(operation, SirilCommand) for operation in operations):
+            raise TypeError('Un lot Siril doit contenir des SirilCommand')
+        return [command('requires', '1.4.4'), command('setcpu', CpuConfig.get_limit()),
+                command('setext', 'fits'),
+                *(operation for operation in operations if operation.name != 'requires')]
 
-        if self._siril_mode in ("native", "appimage"):
-            cmd = [self._siril_path, "-s", script_path]
-        elif self._siril_mode == "flatpak":
-            cmd = [
-                "flatpak",
-                "run",
-                "--command=siril-cli",
-                "org.siril.Siril",
-                "-s",
-                script_path,
-            ]
-        else:
-            raise RuntimeError(f"Mode Siril inconnu: {self._siril_mode}")
+    def run_commands(
+        self, commands: Sequence[SirilCommand], working_dir: Path | str,
+        name: str | None = None, *, initfile: Path | None = None,
+    ) -> bool:
+        """Exécute des appels sirilpy.cmd typés, sans produire de script Siril.
 
-        if initfile is not None:
-            cmd.extend(["-i", str(Path(initfile).resolve())])
-        with log_path.open("w", encoding="utf-8") as log_file:
-            result = subprocess.run(
-                cmd,
-                cwd=working_dir,
-                stdout=log_file,
-                stderr=subprocess.STDOUT,
-                check=False,
-            )
-        if result.returncode != 0:
-            logging.error(
-                "Le script Siril a échoué avec le code d'erreur %d.",
-                result.returncode,
-            )
-            if result.returncode < 0:
+        Sauvegarde le plan d'appels JSON et le journal de la session. La version
+        minimale, la limite CPU et l'extension FITS sont appliquées par l'API.
+        Une erreur d'appel ou de lancement lève RuntimeError et arrête le lot.
+        Les tableaux et méthodes de lecture sont disponibles via session().api.
+        Chaque register est audité avant close dans <nom>.registration.json,
+        y compris les réalignements et les commandes échouées encore lisibles.
+        """
+        operations = list(commands)
+        if not all(isinstance(operation, SirilCommand) for operation in operations):
+            raise TypeError('run_commands attend des SirilCommand, jamais du texte SSF')
+        name = name or 'siril_' + datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+        safe_name = ''.join(c if c.isalnum() or c in '._-' else '_' for c in Path(name).stem)
+        directory = Path(working_dir)
+        directory.mkdir(parents=True, exist_ok=True)
+        operations = self.prepare_commands(operations)
+        plan = directory / f'{safe_name}.commands.json'
+        plan.write_text(json.dumps([dict(method='cmd', command=operation.name,
+                                        arguments=list(operation.arguments)) for operation in operations],
+                                   indent=2, ensure_ascii=False) + '\n', encoding='utf-8')
+        logging.info('Appels sirilpy : %s', plan)
+        session = self.session(directory, safe_name, initfile=initfile)
+        audit = SirilRegistrationAudit(directory / f'{safe_name}.registration.json', session.api)
+        try:
+            with session:
+                for operation in operations[3:]:
+                    logging.debug('sirilpy.cmd : %s', operation.render())
+                    if operation.name == 'register':
+                        audit.prepare(operation)
+                    try:
+                        session.api.cmd(operation.name, *operation.arguments)
+                    except (OSError, RuntimeError, ValueError) as error:
+                        if operation.name == 'register':
+                            audit.capture(operation, command_error=str(error))
+                        raise
+                    if operation.name == 'register':
+                        audit.capture(operation)
+            if session.exit_code:
+                raise RuntimeError(f'Siril terminé avec le code {session.exit_code}')
+        except (OSError, RuntimeError, ValueError) as error:
+            if session.exit_code is not None and session.exit_code < 0:
                 try:
-                    name = signal.Signals(-result.returncode).name
+                    label = signal.Signals(-session.exit_code).name
                 except ValueError:
-                    name = str(-result.returncode)
-                logging.error(
-                    "Processus Siril interrompu par le signal %s (script %s).",
-                    name,
-                    script_path,
-                )
-                if result.returncode == -signal.SIGKILL:
-                    logging.error(
-                        "SIGKILL : vérifier les journaux système "
-                        "(OOM / pression mémoire ou arrêt externe)."
-                    )
-            output = log_path.read_text(encoding="utf-8", errors="replace")
-            logging.error("Sortie Siril (%s) :\n%s", log_path, output)
-            raise RuntimeError(
-                f"Échec fatal du script Siril {script_path} "
-                f"(code {result.returncode}); consulter {log_path}"
-            )
-        logging.info("Script Siril exécuté avec succès.")
+                    label = str(-session.exit_code)
+                logging.error('Processus Siril interrompu par %s', label)
+                if session.exit_code == -signal.SIGKILL:
+                    logging.error('SIGKILL : vérifier la pression mémoire et les journaux système')
+            if session.log_path.is_file():
+                with session.log_path.open('rb') as stream:
+                    stream.seek(max(0, session.log_path.stat().st_size - 64000))
+                    logging.error('Sortie Siril (%s) :\n%s', session.log_path,
+                                  stream.read().decode('utf-8', errors='replace'))
+            raise RuntimeError(f'Échec des appels sirilpy ; consulter {session.log_path} : {error}') from error
         return True
 
 

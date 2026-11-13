@@ -122,8 +122,6 @@ def test_live_siril_math_oracle(tmp_path: Path) -> None:
         "save oracle_bp.fits",
         "close",
     ]
-    script = tmp_path / "oracle.sps"
-    script.write_text("\n".join(lines) + "\n")
     background = data * 0.8
     stars = data[:, ::-1, ::-1] * 0.6
     fits.writeto(
@@ -137,18 +135,12 @@ def test_live_siril_math_oracle(tmp_path: Path) -> None:
         "save oracle_screen.fits",
         "close",
     ]
-    script.write_text("\n".join(lines) + "\n")
-    command = [
-        *siril_cli_command(),
-        "-i",
-        str(tmp_path / "siril.ini"),
-        "-s",
-        str(script),
-    ]
-    process = subprocess.run(
-        command, check=False, capture_output=True, text=True, timeout=60
-    )
-    assert process.returncode == 0, process.stdout + process.stderr
+    from lib.siril_api import SirilCommand, SirilSession
+    with SirilSession(siril_cli_command(), tmp_path, tmp_path/'oracle.log',
+                      initfile=tmp_path/'siril.ini') as session:
+        for line in lines:
+            operation = SirilCommand.from_text(line)
+            session.api.cmd(operation.name, *operation.arguments)
     errors = []
     for index, case in enumerate(reference["cases"]):
         oracle = fits.getdata(tmp_path / f"oracle_{index}.fits")

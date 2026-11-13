@@ -2,10 +2,13 @@
 
 import argparse
 import json
+import weakref
 from pathlib import Path
 
 import numpy as np
 import pytest
+
+from lib.type_defs import JSONReport
 
 from lib.auto_ghs import (
     ComputeBackend,
@@ -131,7 +134,8 @@ def test_optimizer_completes_dynamic_range(target: float) -> None:
     assert dynamic["stop_reason"] == "target reached"
     assert all(record["gain"] <= 2 for record in dynamic["iterations"])
     assert all(record["BP"] > 0 for record in dynamic["iterations"])
-    assert report["iterations"][0]["BP"] == float(data.min())
+    distance = float(data.min())-report["iterations"][0]["BP"]
+    assert np.finfo(data.dtype).eps <= distance <= 2*np.finfo(data.dtype).eps
 
 
 def test_dynamic_range_bound_and_already_wide_input() -> None:
@@ -254,7 +258,7 @@ def test_chroma_rgb_direction_and_gamut(policy: str) -> None:
         np.testing.assert_allclose(render_chroma(gray, policy), gray, atol=1e-7)
 
 
-def test_auto_cuda_selection_vram_guard_and_fatal_runtime(monkeypatch) -> None:
+def test_auto_cuda_selection_vram_guard_and_fatal_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
     """Un double CUDA valide la sélection et la panne sans prétendre tester le matériel."""
     from types import SimpleNamespace
 
@@ -292,6 +296,11 @@ def test_auto_cuda_selection_vram_guard_and_fatal_runtime(monkeypatch) -> None:
     monkeypatch.setattr(module.importlib, "import_module", importer)
     assert ComputeBackend("auto", 1000).name == "cuda"
     assert ComputeBackend("auto", 9000).name == "cpu"
+    fits_budget = GHSOptimizer.estimate_working_bytes((3, 4, 4), 262144)
+    mosaic_budget = GHSOptimizer.estimate_working_bytes((3, 5, 5), 262144)
+    assert ComputeBackend('auto', fits_budget).name == 'cuda'
+    oversized = ComputeBackend('auto', mosaic_budget)
+    assert oversized.name == 'cpu' and oversized.required_bytes == mosaic_budget
     with pytest.raises(RuntimeError, match="VRAM"):
         ComputeBackend("cuda", 9000)
     backend = ComputeBackend("cuda", 1000)
@@ -398,6 +407,49 @@ def test_histogram_balancing_preserves_colors_and_disable() -> None:
     np.testing.assert_array_equal(output, constant)
 
 
+def test_piecewise_balance_reduces_strength_against_a_fixed_reference() -> None:
+    """La CDF réduit sa force plutôt que de transformer une pente en plateau."""
+    centers = (np.arange(128)+.5)/128
+    counts = np.rint(1000*10**(-2*centers)).astype(int)
+    counts[4] = 20000
+    levels = np.concatenate([
+        (index+(np.arange(size)+.5)/size)/128 for index, size in enumerate(counts)
+    ]).astype('f4')
+    data = np.broadcast_to(levels, (3, 1, len(levels))).copy()
+    original = data.copy()
+    options = GHSOptimizer.options(argparse.Namespace(ghs_histogram_model='piecewise'))
+    output, report = GHSOptimizer().balance_histogram(
+        data, HistogramAnalyzer(), ComputeBackend('cpu'), .7, 4, options,
+    )
+    assert report['status'] == 'applied'
+    assert 0 < report['strength'] < .7
+    attempts = report['full_validation']
+    assert 'local histogram flattening' in attempts[0]['rejections']
+    assert not attempts[-1]['rejections']
+    for index, attempt in enumerate(attempts):
+        assert attempt['parameters']['strength'] == pytest.approx(.7/2**index)
+        assert attempt['profile']['shape_preservation']['drop_retention'] == pytest.approx(
+            attempt['profile']['shape']['drop_dex']/report['shape_reference']['shape']['drop_dex'],
+        )
+    assert report['shape_preservation']['achieved']
+    assert np.all(np.diff(output[0, 0]) >= 0)
+    np.testing.assert_array_equal(data, original)
+    np.testing.assert_array_equal(output[0], output[1])
+
+
+def test_piecewise_balance_preserves_input_without_a_measurable_reference() -> None:
+    """Une plage trop étroite ne fournit pas de certification de forme fictive."""
+    data = np.broadcast_to(np.linspace(.01, .02, 1000, dtype='f4'), (3, 1, 1000)).copy()
+    options = GHSOptimizer.options(argparse.Namespace(ghs_histogram_model='piecewise'))
+    output, report = GHSOptimizer().balance_histogram(
+        data, HistogramAnalyzer(), ComputeBackend('cpu'), .7, 4, options,
+    )
+    np.testing.assert_array_equal(output, data)
+    assert report['reason'] == 'unmeasurable histogram shape'
+    assert report['strength'] == 0
+    assert not report['full_validation']
+
+
 @pytest.mark.parametrize("option,value", [
     ("ghs_histogram_strength", -0.1), ("ghs_histogram_strength", 1.1),
     ("ghs_histogram_clip", 0.5), ("ghs_histogram_clip", float("nan")),
@@ -475,3 +527,210 @@ def test_final_stretch_is_after_chroma_and_before_publication(
     assert old["presentation_stretch"]["status"] == "disabled"
     assert new["presentation_stretch"]["status"] == "applied"
     assert GHSOptimizer.options(argparse.Namespace()).ghs_final_strength == 1.25
+
+
+def test_release_unused_gpu_pool_keeps_cpu_noop_and_propagates_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Le ménage ne touche que le pool libre CUDA, sans masquer une panne."""
+    from types import ModuleType, SimpleNamespace
+
+    calls = []
+    pool = SimpleNamespace(free_all_blocks=lambda: calls.append('free'))
+    device = ModuleType('test_cuda_pool')
+    device.get_default_memory_pool = lambda: pool
+    backend = ComputeBackend('cpu')
+    monkeypatch.setattr(backend, 'xp', device)
+    backend.release_unused_memory()
+    assert not calls
+    monkeypatch.setattr(backend, 'name', 'cuda')
+    backend.release_unused_memory()
+    assert calls == ['free']
+
+    def failure() -> None:
+        """Simule une panne de pilote pendant le nettoyage."""
+        raise RuntimeError('CUDA pool failure')
+
+    monkeypatch.setattr(pool, 'free_all_blocks', failure)
+    with pytest.raises(RuntimeError, match='CUDA pool failure'):
+        backend.release_unused_memory()
+
+
+@pytest.fixture
+def cuda_memory_backend(monkeypatch: pytest.MonkeyPatch) -> tuple[ComputeBackend, type[MemoryError], list[str]]:
+    """Fournit un backend CUDA simulé dont seule la saturation est récupérable."""
+    from types import ModuleType, SimpleNamespace
+
+    class DeviceMemoryError(MemoryError):
+        """Double de l'erreur précise OutOfMemoryError de CuPy."""
+
+    calls = []
+    pool = SimpleNamespace(free_all_blocks=lambda: calls.append('free'))
+    device = ModuleType('cuda_memory_test')
+    device.cuda = SimpleNamespace(memory=SimpleNamespace(OutOfMemoryError=DeviceMemoryError))
+    device.get_default_memory_pool = lambda: pool
+    backend = ComputeBackend('cpu')
+    monkeypatch.setattr(backend, 'xp', device)
+    monkeypatch.setattr(backend, 'name', 'cuda')
+    monkeypatch.setattr(backend, 'requested', 'auto')
+    return backend, DeviceMemoryError, calls
+
+
+def test_auto_cuda_oom_retries_from_original_after_releasing_failed_frames(
+    monkeypatch: pytest.MonkeyPatch, cuda_memory_backend: tuple[ComputeBackend, type[MemoryError], list[str]],
+) -> None:
+    """La reprise utilise les sources intactes, libère le GPU et consigne le CPU."""
+    backend, memory_error, calls = cuda_memory_backend
+    optimizer = GHSOptimizer()
+    source = np.full((3, 4, 4), .1, dtype='f4')
+    stars = source * .2
+    reference = source.copy()
+    released = []
+    pool = backend.xp.get_default_memory_pool()
+    free = pool.free_all_blocks
+
+    def release() -> None:
+        """Les tableaux de la pile interrompue sont déjà libérés avant le pool."""
+        assert released and released[0]() is None
+        free()
+
+    monkeypatch.setattr(pool, 'free_all_blocks', release)
+
+    def run(
+        data: np.ndarray, strategy: str, args: argparse.Namespace,
+        current_backend: ComputeBackend, rendered_stars: np.ndarray | None,
+        headroom: float,
+    ) -> tuple[np.ndarray, JSONReport]:
+        """Retient un temporaire dans la pile interrompue puis simule la reprise."""
+        calls.append(current_backend.name)
+        assert data is source and rendered_stars is stars and headroom == .95
+        if current_backend.name == 'cuda':
+            temporary = np.ones(1024)
+            released.append(weakref.ref(temporary))
+            raise memory_error('VRAM exhausted')
+        assert released[0]() is None
+        return data.copy(), {'status': 'SUCCESS'}
+
+    monkeypatch.setattr(optimizer, '_optimize_once', run)
+    result, report = optimizer.optimize(source, 'range', argparse.Namespace(), backend, stars)
+    np.testing.assert_array_equal(result, reference)
+    np.testing.assert_array_equal(source, reference)
+    assert calls == ['cuda', 'free', 'cpu']
+    assert backend.name == 'cpu' and backend.requested == 'auto'
+    assert backend.xp is np and backend.device['fallback_from'] == 'cuda'
+    assert report['backend_fallback']['reason'] == 'VRAM exhausted'
+
+
+@pytest.mark.parametrize('requested,error_kind', [('cuda','device'), ('auto','host'), ('auto','runtime')])
+def test_cuda_retry_does_not_mask_other_errors(
+    monkeypatch: pytest.MonkeyPatch, cuda_memory_backend: tuple[ComputeBackend, type[MemoryError], list[str]],
+    requested: str, error_kind: str,
+) -> None:
+    """CUDA forcé, RAM hôte et panne de calcul ne déclenchent aucune reprise."""
+    backend, device_error, calls = cuda_memory_backend
+    monkeypatch.setattr(backend, 'requested', requested)
+    error_type = device_error if error_kind == 'device' else (MemoryError if error_kind == 'host' else RuntimeError)
+    optimizer = GHSOptimizer()
+
+    def fail(*args: object, **kwargs: object) -> None:
+        """Échoue avant toute sélection d'un rendu."""
+        calls.append('cuda')
+        raise error_type('failure')
+
+    monkeypatch.setattr(optimizer, '_optimize_once', fail)
+    with pytest.raises(error_type, match='failure'):
+        optimizer.optimize(np.zeros((3, 2, 2)), 'range', argparse.Namespace(), backend)
+    assert calls == ['cuda'] and backend.name == 'cuda'
+
+
+def test_cpu_retry_failure_is_not_retried_again(
+    monkeypatch: pytest.MonkeyPatch, cuda_memory_backend: tuple[ComputeBackend, type[MemoryError], list[str]],
+) -> None:
+    """Une reprise CPU qui échoue reste une erreur, sans boucle de reprises."""
+    backend, device_error, calls = cuda_memory_backend
+    optimizer = GHSOptimizer()
+
+    def fail(
+        data: np.ndarray, strategy: str, args: argparse.Namespace,
+        current_backend: ComputeBackend, *rest: object,
+    ) -> None:
+        """Simule une saturation GPU suivie d'une RAM hôte insuffisante."""
+        calls.append(current_backend.name)
+        if current_backend.name == 'cuda':
+            raise device_error('VRAM')
+        raise MemoryError('host memory')
+
+    monkeypatch.setattr(optimizer, '_optimize_once', fail)
+    with pytest.raises(MemoryError, match='host memory'):
+        optimizer.optimize(np.zeros((3, 2, 2)), 'range', argparse.Namespace(), backend)
+    assert calls == ['cuda', 'free', 'cpu']
+
+
+@pytest.mark.parametrize('shape,block,expected', [((3, 1, 1), 262144, 480),
+                                               ((3, 2950, 7828), 262144, 4509276672)])
+def test_ghs_vram_estimate_uses_final_rgb_geometry(shape: tuple[int, int, int], block: int, expected: int) -> None:
+    """Les tailles réelles incluent le plein champ float32 et les blocs float64."""
+    assert GHSOptimizer.estimate_working_bytes(shape, block) == expected
+
+
+@pytest.mark.parametrize('shape,block', [((1, 10, 10), 256), ((3, 0, 10), 256),
+                                        ((3, 10, 10), 0), ((3, 10, 10), True)])
+def test_invalid_vram_geometry_or_block_is_rejected(shape: tuple[int, int, int], block: int) -> None:
+    """Une taille invalide ne peut sous-estimer silencieusement la mémoire."""
+    with pytest.raises(ValueError):
+        GHSOptimizer.estimate_working_bytes(shape, block)
+
+
+
+def test_cuda_pool_limit_triggers_automatic_cpu_retry() -> None:
+    """Une saturation réelle CuPy après sélection auto reproduit le résultat CPU."""
+    backend = ComputeBackend('auto')
+    if backend.name != 'cuda':
+        pytest.skip('CUDA indisponible pour limiter le pool réel')
+    pool = backend.xp.get_default_memory_pool()
+    previous_limit = pool.get_limit()
+    source = .01 + .1 * np.random.default_rng(5).random((3, 32, 32), dtype=np.float32)
+    reference = source.copy()
+    args = argparse.Namespace(
+        compute_backend='auto', ghs_max_iterations=1, ghs_quartile_iterations=0,
+        ghs_final_strength=0, ghs_histogram_strength=0, ghs_dynamic_max_iterations=1,
+    )
+    pool.free_all_blocks()
+    try:
+        pool.set_limit(size=4096)
+        output, report = GHSOptimizer().optimize(source, 'range', args, backend)
+    finally:
+        pool.set_limit(size=previous_limit)
+        pool.free_all_blocks()
+    expected, _ = GHSOptimizer().optimize(source, 'range', args, ComputeBackend('cpu'))
+    np.testing.assert_array_equal(output, expected)
+    np.testing.assert_array_equal(source, reference)
+    assert backend.name == 'cpu' and backend.requested == 'auto'
+    assert report['backend_fallback']['from'] == 'cuda'
+    assert report['backend_fallback']['to'] == 'cpu'
+
+
+def test_cdf_cannot_accept_a_blackpoint_budget_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Une forme admissible ne masque pas un dépassement cumulatif du BP en préparation."""
+    import lib.auto_ghs as module
+    from lib.ghs_blackpoint import HistogramBlackpointNormalizer
+
+    source = np.repeat(np.linspace(.01, .8, 1024, dtype='f4').reshape(1, 32, 32), 3, axis=0)
+
+    def exhausted(
+        image: np.ndarray, *args: object, **kwargs: object,
+    ) -> tuple[np.ndarray, JSONReport]:
+        """Isole la garde cumulée des statistiques de forme de la CDF."""
+        return image, dict(BP=0., loss_fraction=.002, status='budget exhausted')
+
+    monkeypatch.setattr(HistogramBlackpointNormalizer, 'apply', staticmethod(exhausted))
+    monkeypatch.setattr(module, 'piecewise_histogram_profile', lambda *args: {'measurable': True})
+    monkeypatch.setattr(module, 'compare_histogram_shapes', lambda *args: dict(achieved=True, rejections=[]))
+    args = GHSOptimizer.options(argparse.Namespace())
+    output, report = GHSOptimizer().balance_histogram(
+        source, HistogramAnalyzer(), ComputeBackend('cpu'), .35, 4., shape_options=args,
+    )
+    assert report['status'] == 'no admissible improvement'
+    assert report['full_validation']
+    assert all(r['rejections'] == ['cumulative blackpoint loss'] for r in report['full_validation'])
+    np.testing.assert_array_equal(output, source)

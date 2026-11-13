@@ -1,7 +1,8 @@
 """Recherche de droite semi-log et de niveau relatif à son extrémité.
 
 L'abscisse reste l'intensité linéaire ; l'ordonnée est log10(densité).
-Une pente descendante n'est pas pénalisée au profit d'un plateau. Voir
+Une pente descendante n'est pas pénalisée au profit d'un plateau. Un seuil
+d'effectif prédit à 0,8 complète le classement des étirements. Voir
 ``docs/scripts/postProcess/ghs-quartiles.md`` pour les critères et limites.
 """
 from __future__ import annotations
@@ -15,6 +16,9 @@ LINE_ENDPOINT = .875
 MIN_LINE_BINS = 20
 DEFAULT_LINEARITY_TOLERANCE = .05  # RMS en dex, soit environ 12 % de densité.
 MAX_RESIDUAL_FACTOR = 3.0
+# Sortie du pic et de son épaulement : 2 % du maximum des effectifs lissés.
+# Un profil gaussien atteint ce niveau à environ 2,8 sigma de son centre.
+PEAK_EXIT_FRACTION = .02
 # La régularité ne peut jamais compenser une seule classe de longueur perdue.
 REGULARITY_BONUS = .25 / HISTOGRAM_BINS
 INFLECTION_HALF_WIDTH = 8
@@ -27,6 +31,13 @@ DEFAULT_TAIL_HEIGHT = .25
 TAIL_HEIGHT_WEIGHT = .05
 TAIL_CHANNELS = ('red', 'green', 'blue')
 
+
+REGRESSION_REFERENCE_INTENSITY = .8
+DEFAULT_REGRESSION_MIN_COUNT = 10.0
+# Marge en dex couvrant les arrondis de la régression au seuil exact.
+REGRESSION_THRESHOLD_EPSILON = 1e-12
+# Départage secondaire ; les plages de score séparent les états d'atteinte.
+REGRESSION_SECONDARY_WEIGHT = .001
 
 
 def _validated_counts(counts: np.ndarray) -> np.ndarray:
@@ -45,15 +56,25 @@ def _peak(counts: np.ndarray) -> int:
 
 def linear_histogram_profile(
     counts: np.ndarray, tolerance: float = DEFAULT_LINEARITY_TOLERANCE,
+    reference_intensity: float | None = None,
 ) -> JSONReport:
     """Classe la longueur continue quasi rectiligne après le pic jusqu'à 0,875.
 
+    Le segment commence au bord droit à 2 % du pic principal, mesuré
+    sur les effectifs lissés [1,2,1]/4. Aucun intervalle ultérieur ne peut
+    contourner une bosse ou un trou entre cette sortie et la droite.
+    Si les vingt classes juste après le maximum satisfont déjà les mêmes
+    tolérances de droite, le départ reste immédiat : une décroissance sans
+    épaulement ne doit pas être coupée tardivement par le seuil relatif.
     Chaque classe du segment doit contenir au moins trois pixels. Les moindres
     carrés non pondérés doivent avoir un RMS <= tolerance dex et aucun écart
     supérieur à trois fois cette tolérance. La pente est librement négative ou
     nulle. Une droite exige au moins 20 classes contiguës. Les sommes préfixées
     évaluent les intervalles sans ajustements itératifs ni logarithme des zéros.
     À longueur égale seulement, le RMS départage les segments.
+    Si reference_intensity est fournie dans [0,0,875], les segments qui la
+    couvrent sont prioritaires ; à défaut, le meilleur segment non couvrant
+    reste mesuré sans prétendre valider ce point de référence.
 
     Le score d'un profil mesurable vaut longueur + bonus de régularité inférieur
     à un quart de classe. Sans droite mesurable, le score négatif ne décrit que
@@ -62,13 +83,34 @@ def linear_histogram_profile(
     values = _validated_counts(counts)
     if not np.isfinite(tolerance) or not .005 <= tolerance <= .5:
         raise ValueError('ghs-linearity-tolerance doit être dans [0.005,0.5] dex')
+    if reference_intensity is not None and (
+        not np.isfinite(reference_intensity) or not 0 <= reference_intensity <= LINE_ENDPOINT
+    ):
+        raise ValueError('Abscisse de référence hors de [0,0.875]')
     support = float(values.sum())
     centers = (np.arange(HISTOGRAM_BINS)+.5) / HISTOGRAM_BINS
     peak_index = _peak(values)
-    start, stop = peak_index+1, int(LINE_ENDPOINT * HISTOGRAM_BINS)
+    stop = int(LINE_ENDPOINT * HISTOGRAM_BINS)
+    smooth = np.convolve(values, [1/4, 1/2, 1/4], mode='same')
+    exits = (np.flatnonzero(smooth[peak_index+1:stop] <= PEAK_EXIT_FRACTION*smooth[peak_index])
+             if support > 0 else np.array([], dtype=np.int64))
+    start = peak_index+1+int(exits[0]) if exits.size else stop
+    exit_method = 'peak_fraction'
+    # Une décroissance déjà rectiligne n'a pas d'épaulement à exclure :
+    # le seuil relatif ne doit pas déplacer son début loin dans la queue.
+    first = peak_index+1
+    prefix = values[first:first+MIN_LINE_BINS]
+    if prefix.size == MIN_LINE_BINS and first+MIN_LINE_BINS <= stop and np.all(prefix >= MIN_BIN_COUNT):
+        coordinates = centers[first:first+MIN_LINE_BINS]
+        levels = np.log10(prefix)
+        a, b = np.polyfit(coordinates, levels, 1)
+        residual = levels-(a*coordinates+b)
+        if (a <= 1e-6 and np.sqrt(np.mean(residual**2)) <= tolerance
+                and np.max(abs(residual)) <= MAX_RESIDUAL_FACTOR*tolerance):
+            start, exit_method = first, 'already_linear'
     valid = values[start:stop] >= MIN_BIN_COUNT
-    edges = np.flatnonzero(np.diff(np.r_[False, valid, False]))
-    support_bins = int(np.max(edges[1::2]-edges[::2])) if edges.size else 0
+    missing = np.flatnonzero(~valid)
+    support_bins = int(missing[0]) if missing.size else int(valid.size)
     peak = float(centers[peak_index]) if support else None
     report: JSONReport = dict(
         peak=peak, bins=HISTOGRAM_BINS, support=int(support), window_end=LINE_ENDPOINT,
@@ -78,13 +120,28 @@ def linear_histogram_profile(
         support_span=support_bins/HISTOGRAM_BINS, measurable=False,
         tolerance_dex=tolerance, loss=None, score=-1+support_bins/HISTOGRAM_BINS,
         objective='longest_contiguous_log_linear_span',
+        reference_intensity=reference_intensity,
+        reference_covered=False if reference_intensity is not None else None,
+        peak_exit=start/HISTOGRAM_BINS if start < stop else None,
+        peak_exit_fraction=PEAK_EXIT_FRACTION, anchored_to_peak=True,
+        peak_exit_method=exit_method,
     )
     if support_bins < MIN_LINE_BINS:
         return report
     x = centers[start:stop]
     y = np.zeros(x.size)
     y[valid] = np.log10(values[start:stop][valid] * HISTOGRAM_BINS / support)
-    left, right = np.triu_indices(x.size, k=MIN_LINE_BINS-1)
+    # Avant une droite admissible, diminuer la courbure du début de queue
+    # fournit une direction de recherche sans certifier de linéarité.
+    initial_x, initial_y = x[:MIN_LINE_BINS], y[:MIN_LINE_BINS]
+    initial_slope, initial_intercept = np.polyfit(initial_x, initial_y, 1)
+    initial_rms = float(np.sqrt(np.mean((initial_y-initial_intercept-initial_slope*initial_x)**2)))
+    rise = max(0.0, float(initial_slope*(initial_x[-1]-initial_x[0])))
+    report.update(bootstrap_rms_dex=initial_rms, bootstrap_rise_dex=rise,
+                  score=-1+(support_bins/HISTOGRAM_BINS)/(1+initial_rms+rise))
+    # Seuls les préfixes issus de la sortie du pic sont admissibles.
+    right = np.arange(MIN_LINE_BINS-1, support_bins)
+    left = np.zeros_like(right)
     size = right-left+1
 
     def sums(array: np.ndarray) -> np.ndarray:
@@ -99,7 +156,12 @@ def linear_histogram_profile(
     rms = np.sqrt(np.maximum(0, syy-sy*sy/size-centered_xy**2/centered_xx)/size)
     eligible = (sums(valid.astype(float)) == size) & (rms <= tolerance) & (slope <= 1e-6)
     candidates = np.flatnonzero(eligible)
-    candidates = candidates[np.lexsort((left[candidates], rms[candidates], -size[candidates]))]
+    covers_reference = np.zeros(size.size, dtype=bool)
+    if reference_intensity is not None:
+        covers_reference = (((start + left) / HISTOGRAM_BINS <= reference_intensity)
+                            & ((start + right + 1) / HISTOGRAM_BINS >= reference_intensity))
+    candidates = candidates[np.lexsort((left[candidates], rms[candidates],
+                                       -size[candidates], ~covers_reference[candidates]))]
     for index in candidates:
         region = slice(left[index], right[index]+1)
         residual = y[region]-intercept[index]-slope[index]*x[region]
@@ -115,6 +177,7 @@ def linear_histogram_profile(
             fit_bins=int(size[index]), line_start=float((start+left[index])/HISTOGRAM_BINS),
             line_end=float((start+right[index]+1)/HISTOGRAM_BINS), line_span=span,
             score=score, loss=-score,
+            reference_covered=bool(covers_reference[index]) if reference_intensity is not None else None,
         )
         break
     return report
@@ -220,7 +283,108 @@ def add_tail_height_objective(
         line_score=line['score'], tail=dict(tail, channel=channel, target=target,
                                            achieved=achieved),
         tail_height_bonus=bonus, score=line['score']+bonus,
-        objective='longest_log_linear_span_with_tail_height' if target > 0 else line['objective'],
+        objective=(('piecewise_log_shape_with_tail_height' if line.get('model') == 'piecewise'
+                    else 'longest_log_linear_span_with_tail_height') if target > 0 else line['objective']),
     )
     report['loss'] = -report['score'] if report['measurable'] else None
     return report
+
+
+
+def add_regression_floor_objective(
+    profile: JSONReport, reference_bins: int, population_scale: float = 1.0,
+    minimum_count: float = DEFAULT_REGRESSION_MIN_COUNT,
+) -> JSONReport:
+    """Classe la droite par son effectif prédit à Y=0,8 puis sa longueur.
+
+    Parameters
+    ----------
+    profile : JSONReport
+        Profil de densité semi-log, avec le bonus de queue éventuel.
+    reference_bins : int
+        Nombre de classes du graphique diagnostique sur [0,1].
+    population_scale : float, optional
+        Population du champ divisée par celle de la grille échantillonnée.
+    minimum_count : float, optional
+        Effectif minimal prédit ; 10 désigne la graduation 10¹. Zéro désactive.
+
+    Returns
+    -------
+    JSONReport
+        Copie avec prédiction en dex, seuil, état d'atteinte et score.
+        Un seuil atteint prime sur les profils sous le seuil. Sous le seuil,
+        la progression logarithmique guide la recherche avec un faible bonus
+        de longueur. Sans droite, seul le support guide l'amorçage.
+
+    Raises
+    ------
+    ValueError
+        Si le nombre de classes, la population ou le seuil est invalide.
+
+    Notes
+    -----
+    La densité ajustée est convertie en pixels par classe du graphique.
+    Une extrapolation à 0,8 reste diagnostique : elle ne valide pas le seuil.
+    Le point doit appartenir au segment mesuré et peuplé. Les gardes cumulatives restent à la charge de
+    l'appelant. La désactivation conserve exactement le score précédent.
+    Pour model='piecewise', le niveau vient de reference_log_density dans le
+    support observé de la spline. Une enveloppe mesurable encore trop courte
+    est guidée vers 0,8 par sa borne de support, sans extrapolation de niveau.
+    """
+    if (not isinstance(reference_bins, (int, np.integer))
+            or isinstance(reference_bins, bool) or reference_bins <= 0):
+        raise ValueError('Nombre de classes de référence strictement positif requis')
+    if not np.isfinite(population_scale) or population_scale <= 0:
+        raise ValueError('Échelle de population strictement positive requise')
+    if not np.isfinite(minimum_count) or minimum_count < 0:
+        raise ValueError('Effectif minimal de régression fini et positif ou nul requis')
+    predicted = None
+    if profile.get('model') == 'piecewise':
+        density = profile.get('reference_log_density')
+        if profile['measurable'] and density is not None:
+            predicted = float(density+np.log10(profile['support'])
+                              + np.log10(population_scale)-np.log10(reference_bins))
+    elif profile['measurable']:
+        predicted = float(
+            profile['intercept'] + profile['slope'] * REGRESSION_REFERENCE_INTENSITY
+            + np.log10(profile['support']) + np.log10(population_scale)
+            - np.log10(reference_bins)
+        )
+    covered = (bool(profile.get('reference_covered')) if profile.get('model') == 'piecewise' else
+               bool(profile['line_start'] <= REGRESSION_REFERENCE_INTENSITY <= profile['line_end'])
+               if profile['measurable'] else False)
+    achieved = (bool(covered and predicted is not None and predicted >=
+                     float(np.log10(minimum_count)) - REGRESSION_THRESHOLD_EPSILON)
+                if minimum_count > 0 else None)
+    score = profile['score']
+    if minimum_count > 0:
+        if predicted is None:
+            if profile.get('model') == 'piecewise' and profile['measurable']:
+                # Une enveloppe mesurée mais encore trop courte peut progresser
+                # vers 0,8 sans inventer de niveau extrapolé. Les gardes de
+                # forme restent bloquantes, même pendant cet amorçage.
+                score = -3+min(REGRESSION_REFERENCE_INTENSITY, profile['line_end'])+.05*score
+            else:
+                score = -4 + REGRESSION_SECONDARY_WEIGHT * score
+        elif not covered:
+            # Une extrapolation haute ne doit pas guider le rendu : tant que
+            # 0,8 n'est pas couvert, garder l'objectif réel de longueur/queue.
+            score = -3 + score
+        elif not achieved:
+            deficit = max(0.0, float(np.log10(minimum_count) - predicted))
+            score = -2 + 1 / (1 + deficit) + REGRESSION_SECONDARY_WEIGHT * score
+    result = dict(profile)
+    result.update(
+        regression_floor=dict(
+            intensity=REGRESSION_REFERENCE_INTENSITY, minimum_count=minimum_count,
+            reference_bins=int(reference_bins), population_scale=float(population_scale),
+            estimated=population_scale != 1, predicted_log10_count=predicted,
+            achieved=achieved, reference_covered=covered,
+            extrapolated=predicted is not None and not covered,
+            method='smoothing_spline' if profile.get('model') == 'piecewise' else 'linear_regression',
+        ),
+        score=score, loss=-score if profile['measurable'] else None,
+        objective=(profile['objective'] + '_with_regression_floor'
+                   if minimum_count > 0 else profile['objective']),
+    )
+    return result

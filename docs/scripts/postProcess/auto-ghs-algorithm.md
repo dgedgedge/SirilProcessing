@@ -12,6 +12,11 @@ StarNet et de la publication. `ghs_transfer` traite une intensité scalaire,
 `GHSOptimizer(processor)` recherche une variante sans étoiles.
 `ComputeBackend` sélectionne NumPy/CuPy avant le traitement.
 
+Le mode par défaut est le [profil par morceaux](ghs-histogram-shape.md).
+Dans ce mode, chaque courbe est suivie d'un [recalage affine du point noir](ghs-blackpoint.md)
+avant la mesure des critères et le choix. Les descriptions de droite globale
+ci-dessous restent celles du mode historique `--ghs-histogram-model line`.
+
 `optimize(data, strategy, args, backend)` reçoit un tableau RGB CPU float32,
 normalisé, sans étoiles ; retourne le tableau étiré et son rapport. `strategy`
 vaut toujours `range`, seule recherche disponible. Le moteur
@@ -233,8 +238,10 @@ Les histogrammes et `final` portent sur le fond retenu après cette étape.
 ## CPU, CUDA et ressources
 
 Le choix du backend et la vérification VRAM ont lieu avant StarNet. Le budget
-est estimé à 16 fois la taille du RGB float32 pour les temporaires ; 20 % de la
-VRAM libre reste disponible. CuPy est facultatif et n'est pas ajouté aux
+est estimé à 16 tableaux RGB float32 plein champ plus 12 temporaires RGB
+float64 de bloc. Le budget du bloc vient de `--ghs-quartile-block-pixels`
+(262144 pixels par défaut). La géométrie réelle du FITS inclut les effets de
+mosaïque et de recadrage ; 20 % de la VRAM libre reste disponible. CuPy est facultatif et n'est pas ajouté aux
 dépendances CPU. Son installation doit correspondre au CUDA de la machine,
 selon la [documentation CuPy](https://docs.cupy.dev/en/stable/install.html).
 
@@ -242,8 +249,15 @@ Le moteur conserve ses états image sur GPU, transfère les histogrammes et
 résumés compacts pour la recherche, puis récupère le résultat accepté. Les
 calculs de séparation, de rendu stellaire, les E/S et les figures restent CPU
 ou dépendent de StarNet. `--compute-backend` ne force pas le moteur StarNet.
-`auto` choisit CPU seulement si le précontrôle CUDA échoue ; une panne après
-initialisation se propage sans reprise. CUDA forcé indisponible est une erreur.
+`auto` choisit CPU si le précontrôle CUDA échoue ou si le budget dépasse
+80 % de la VRAM libre. Si une allocation échoue ensuite avec l'erreur précise
+CuPy `OutOfMemoryError`, `GHSOptimizer.optimize` reprend une seule fois tout
+le moteur GHS sur CPU depuis son entrée linéaire et les mêmes étoiles rendues.
+Les images des essais interrompus sont libérées avant de vider le pool libre
+CUDA. StarNet n'est pas relancé et aucun candidat partiel n'est publié.
+Le backend effectif devient CPU et la cause est consignée dans
+`backend_fallback`. Les autres erreurs, le manque de RAM hôte et le choix
+interne CUDA forcé se propagent sans reprise.
 
 La mémoire CPU peut dépasser plusieurs copies du FITS et de ses extensions.
 Les mesures des finalistes impliquent des parcours complets de l'image ; le
@@ -254,19 +268,19 @@ Références : [étirements Siril](https://siril.readthedocs.io/en/stable/proces
 [tutoriel GHS](https://siril.org/fr/tutorials/ghs/),
 [guide de rendu final](auto-ghs.md), [étoiles et fusion](star-rendering.md).
 
-Les figures de diagnostic affichent les mêmes effectifs bruts sur deux axes Y :
-linéaire et logarithmique (graduations en puissances de 10). Les classes vides
-sont masquées dans la vue log, sans ajouter de pseudo-effectif ; X reste linéaire.
-Cette présentation est distincte du `log1p` interne utilisé pour analyser les pics.
+Les figures de diagnostic affichent les effectifs uniquement sur un axe Y
+logarithmique, avec graduations en puissances de 10. Les classes vides sont
+masquées sans pseudo-effectif ; X reste l'intensité linéaire. Le panneau des
+effectifs linéaires est supprimé. Cette présentation reste indépendante du
+`log1p` interne utilisé pour analyser les pics.
 
-Les deux panneaux RANGE sont numérotés : 1 = échelle linéaire à gauche,
-2 = échelle logarithmique à droite. Aucun panneau PEAK n’est calculé.
-Chaque titre indique son objectif et son échelle. Les populations sont séparées
-entre deux PNG : la figure sans étoiles montre l’entrée linéaire, une étape
-intermédiaire et le rendu final (au plus trois courbes par panneau) ; la figure
-avec étoiles montre uniquement le rendu final recomposé (une courbe par panneau).
-Chaque figure possède sa légende commune. Ces panneaux ne représentent pas les
-étoiles seules.
+La synthèse sans étoiles montre l'entrée, une étape intermédiaire et la sortie ;
+la synthèse avec étoiles montre le rendu recomposé. Une
+[série des essais majeurs](ghs-histogram-shape.md#15-série-de-graphiques-exclusivement-logarithmiques)
+ajoute les passages acceptés et les meilleurs rejets consignés, avec paramètres,
+verdicts, courbe lissée et morceaux lorsqu'ils sont disponibles. Les histogrammes
+estimés sont signalés. La galerie et son manifeste utilisent exclusivement des
+mesures CPU, sans conserver les images candidates sur GPU.
 
 Un encart rappelle l’objectif RANGE et résume la boucle GHS : recherches
 ayant évalué des candidats / limite configurée, GHS acceptés, recherches sans
@@ -281,10 +295,17 @@ pas comme une itération GHS. Les données absentes ne sont pas remplacées par 
 
 ## Étirements successifs de la droite logarithmique
 
-Après la recherche finale protégée, `QuartileGHSProcessor` cherche la plus
-longue portion continue quasi rectiligne de l’histogramme semi-log, après le pic
-et jusqu’à 0,875. Une pente descendante n’est pas pénalisée face à un plateau.
-Une cible de hauteur log à cette extrémité complète le classement, par défaut
-0,25 du maximum logarithmique du canal rouge, sous les mêmes gardes.
-Les [critères, options et budgets cumulés](ghs-quartiles.md) sont décrits
-séparément. Cette phase est désactivée en mode fixe et avec force finale nulle.
+Après la présentation protégée, `LogHistogramRenderer` utilise par défaut
+`ShapeGHSProcessor` pour explorer plusieurs chemins GHS avec une référence de
+forme fixe. La spline mesure l'enveloppe dès la sortie du pic, et les morceaux
+la couvrent sans sauter de bosse. Le score plafonne la récompense de
+contraste/bruit à 100 % et pénalise progressivement les déformations, les bosses
+intermédiaires et la compression brillante. Les objectifs à 0,8 et 0,875 sont
+des bonus bornés ; le déplacement du pic départage les qualités égales.
+Les [mesures, formules et options](ghs-histogram-shape.md) sont décrites séparément.
+
+Le mode explicite `--ghs-histogram-model line` compare les recherches de
+longueur et de niveau de `LogSpanGHSProcessor` et `QuartileGHSProcessor`, puis
+une reprise stratifiée si leurs objectifs restent incomplets. Il conserve
+ses [critères et budgets historiques](ghs-quartiles.md).
+Cette phase est désactivée en mode fixe et avec force finale nulle.

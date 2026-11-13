@@ -57,6 +57,11 @@ M31/
     09_denoise_graxpert_then_sharpen_siril/  # exemple d’essai enchaîné
   05_autoghs/
     autoghs.json
+    01_separation/
+    02_stars/
+    03_ghs/
+    04_recomposition/
+    05_diagnostics/
     render.fits                   # rendu GHS conservé avec la passe couleur
   06_color/
     color.json
@@ -71,8 +76,9 @@ M31/
 
 Les rapports d’étapes et la synthèse globale ont une synthèse `.txt` voisine ;
 les audits techniques internes peuvent rester uniquement en JSON. Les moteurs créent
-leurs sous-répertoires de travail dans l'étape correspondante ; leurs noms sont
-génériques, par exemple `autoghs_work/`. Les dossiers des étapes désactivées
+leurs sous-répertoires de travail dans l'étape correspondante. Les cinq
+sous-étapes AutoGHS sont directement dans `05_autoghs/`, sans enveloppe
+`autoghs_work/`. Les dossiers des étapes désactivées
 peuvent rester vides. Le JPEG et le PNG dépendent des étapes actives et de
 leurs prérequis ; ils ne sont pas inventés lorsqu'aucun rendu n'est disponible.
 

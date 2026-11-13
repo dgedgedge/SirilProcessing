@@ -304,7 +304,7 @@ class _CosmicClarityProcessor(processor):
             status='evaluating',
             candidate_image_path=str(candidate),
             layer=layer,
-            script_path=str(work / 'quality.sps'),
+            command_path=str(work / 'quality.commands.json'),
             log_path=str(work / 'quality.log'),
         )
 

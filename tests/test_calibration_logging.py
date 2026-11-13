@@ -1,6 +1,7 @@
 """Journal des étapes de calibration sur petits FITS, avec exécution Siril simulée."""
 
 from __future__ import annotations
+from lib.siril_api import format_commands as _format_commands, SirilCommand as _SirilCommand
 
 import logging
 from pathlib import Path
@@ -40,22 +41,23 @@ def calibration(
     write_frame(dark_library / "dark_flat.fit", "Dark", 0.1)
 
     def run_script(
-        content: str, working_dir: str, script_name: str,
+        content: str, working_dir: str, name: str,
     ) -> bool:
         """Produit les FITS attendus et vérifie les vrais arguments de calibration."""
+        content = _format_commands(content)
         directory = Path(working_dir)
-        if script_name.startswith("master_flat_"):
+        if name.startswith("master_flat_"):
             if "calibrate flat_" in content:
                 assert "stack pp_flat_" in content
                 assert str(dark_library / "dark_flat.fit") in content
             else:
                 assert "stack flat_" in content
             fits.writeto(
-                directory / script_name.replace(".sps", ".fit"),
+                directory / (name + ".fit"),
                 np.ones((12, 12), dtype=np.float32), overwrite=True,
             )
         else:
-            sequence = script_name.removeprefix("calibrate_").removesuffix(".sps")
+            sequence = name.removeprefix("calibrate_")
             for index in range(2):
                 fits.writeto(
                     directory / "process" / f"pp_{sequence}_{index:05d}.fit",
@@ -64,7 +66,7 @@ def calibration(
         return True
 
     siril = Mock()
-    siril.run_siril_script.side_effect = run_script
+    siril.run_commands.side_effect = run_script
     monkeypatch.setattr(Siril, "create_with_defaults", lambda: siril)
     processor = LightProcessor(
         session,
@@ -79,7 +81,7 @@ def calibration(
             dark_library_path=dark_library,
         ),
     )
-    return processor, siril.run_siril_script
+    return processor, siril.run_commands
 
 
 @pytest.mark.parametrize("use_dark, use_flat, expected", [
@@ -108,10 +110,10 @@ def test_calibration_stages_match_actual_masters(
     if use_flat:
         assert stages[0].startswith("=== Création du master flat : 2 flats")
         assert info.index(stages[0]) < info.index(stages[-1])
-        assert "-flat=" in run_script.call_args.args[0]
+        assert "-flat=" in _format_commands(run_script.call_args.args[0])
     else:
-        assert "-flat=" not in run_script.call_args.args[0]
-    assert ("-dark=" in run_script.call_args.args[0]) == use_dark
+        assert "-flat=" not in _format_commands(run_script.call_args.args[0])
+    assert ("-dark=" in _format_commands(run_script.call_args.args[0])) == use_dark
     assert any(message.startswith("Calibration terminée : 2 FITS") for message in info)
     details = ["Séquence préparée", "Séquence calibrée conservée"]
     if use_dark:
@@ -141,7 +143,7 @@ def test_calibration_reuse_does_not_announce_new_processing(
     assert ("[DRY-RUN] === Réutilisation" in caplog.text) == dry_run
 
 
-def test_dry_run_keeps_script_details_in_debug(
+def test_dry_run_keeps_api_call_details_in_debug(
     calibration: tuple[LightProcessor, Mock], caplog: pytest.LogCaptureFixture,
 ) -> None:
     """La simulation annonce les deux étapes sans noyer INFO dans le script."""
@@ -153,8 +155,8 @@ def test_dry_run_keeps_script_details_in_debug(
     info = [r.getMessage() for r in caplog.records if r.levelno == logging.INFO]
     assert any("[DRY-RUN] === Création du master flat" in message for message in info)
     assert any("[DRY-RUN] === Calibration des lights" in message for message in info)
-    assert not any("Script Siril qui serait généré" in message for message in info)
-    assert "Script Siril qui serait généré" in caplog.text
+    assert not any("Appels sirilpy prévus" in message for message in info)
+    assert "Appels sirilpy prévus" in caplog.text
 
 
 def test_failed_flat_does_not_announce_light_calibration(
@@ -216,7 +218,7 @@ def test_no_flat_ignores_existing_flats_and_their_dark(
     assert processor.process_session({'drizzle': 'off'})
     selection.assert_not_called()
     run_script.assert_called_once()
-    script = run_script.call_args.args[0]
+    script = _format_commands(run_script.call_args.args[0])
     assert '-flat=' not in script
     assert ('-dark=' in script) is not no_dark
     assert 'dark_flat.fit' not in script
@@ -241,5 +243,5 @@ def test_flat_toggle_invalidates_calibration_cache(
         assert processor.process_session({'drizzle': 'off'})
         assert run_script.call_count == expected_calls
         if expected_calls:
-            script = run_script.call_args.args[0]
+            script = _format_commands(run_script.call_args.args[0])
             assert ('-flat=' in script) is use_flat

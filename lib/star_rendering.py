@@ -421,7 +421,7 @@ class ConservativeStarRenderer(processor):
         """Écrit les étoiles FITS/JPEG, le diagnostic PNG et le rapport JSON.
 
         La source est préservée. Les pixels de l'aperçu sont affichés directement,
-        en respectant ROWORDER ; aucune correction gamma n'est ajoutée.
+        dans le sens de l'affichage natif Siril ; aucun gamma n'est ajouté.
         """
         from astropy.io import fits
 

@@ -77,6 +77,41 @@ class DocumentationSiteTests(unittest.TestCase):
         finally:
             page.close()
 
+    def _assert_mkdocs_mermaid_rendering(self, browser: "Browser", script: str) -> None:
+        """Rend les vrais Markdown avec la configuration MkDocs avant Mermaid.
+
+        Vérifie tous les schémas du site, y compris les séquences. Le formatage
+        des blocs doit conserver une entrée lisible par Mermaid, sans balise
+        de code parasite. Une erreur de syntaxe ou un SVG absent fait échouer
+        le test ; le rendu des sources brutes seul ne couvre pas ce contrat.
+        """
+        from markdown import Markdown
+        from mkdocs.config import load_config
+
+        root = SCRIPT.parents[1]
+        config = load_config(config_file=str(root / "mkdocs.yml"))
+        page = browser.new_page()
+        count = 0
+        try:
+            for source in sorted((root / "docs").rglob("*.md")):
+                text = source.read_text(encoding="utf-8")
+                expected = len(re.findall(r"```mermaid\s*\n(.*?)```", text, re.S))
+                if not expected:
+                    continue
+                markdown = Markdown(extensions=config["markdown_extensions"],
+                                    extension_configs=config["mdx_configs"])
+                page.set_content(markdown.convert(text))
+                page.add_script_tag(content=script)
+                with self.subTest(mkdocs_source=str(source.relative_to(root))):
+                    self.assertEqual(page.locator(".mermaid").count(), expected)
+                    page.evaluate(builder.DocumentationBuilder._diagram_renderer())
+                    self.assertEqual(page.locator(".mermaid svg").count(), expected)
+                    self.assertEqual(page.locator(".mermaid .error-icon").count(), 0)
+                count += expected
+            self.assertGreater(count, 0)
+        finally:
+            page.close()
+
     def _assert_calibration_branches(self, browser: "Browser", script: str) -> None:
         """Contrôle les sorties du choix de reprise dans le vrai diagramme.
 
@@ -193,6 +228,7 @@ class DocumentationSiteTests(unittest.TestCase):
                     self.skipTest(f"Chromium absent : {error}")
                 raise
             try:
+                self._assert_mkdocs_mermaid_rendering(browser, adapted)
                 self._assert_automatic_layout(browser, adapted)
                 self._assert_calibration_branches(browser, adapted)
                 self._assert_all_diagram_crossings(browser, adapted)

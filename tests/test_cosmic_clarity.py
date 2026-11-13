@@ -1,4 +1,5 @@
 """Sélection du moteur, installation vérifiée et audit des traitements neuronaux."""
+from lib.siril_api import format_commands as _format_commands, SirilCommand as _SirilCommand
 
 import argparse
 import hashlib
@@ -137,7 +138,7 @@ def test_processor_quality_and_source_preservation(
 
     monkeypatch.setitem(sys.modules, 'lib.cosmic_clarity.inference', SimpleNamespace(CosmicClarityEngine=FakeEngine))
     monkeypatch.setattr(processors, 'Siril', lambda **kwargs:
-                        SimpleNamespace(run_siril_script=lambda *a, **k: True))
+                        SimpleNamespace(run_commands=lambda *a, **k: True))
     monkeypatch.setattr(processors, 'compare_star_catalogs', lambda *a, **k: {
         'status': 'validated', 'pairs': [], 'before_fwhm_px': {'mean': 4},
         'after_fwhm_px': {'mean': 4 * width}, 'paired_ratio': {'median': width},
@@ -306,7 +307,7 @@ def test_sequence_continues_when_fallback_has_no_gain(
 
     monkeypatch.setitem(sys.modules, 'lib.cosmic_clarity.inference', SimpleNamespace(CosmicClarityEngine=FakeEngine))
     monkeypatch.setattr(processors, 'Siril', lambda **kwargs:
-                        SimpleNamespace(run_siril_script=lambda *a, **k: True))
+                        SimpleNamespace(run_commands=lambda *a, **k: True))
     monkeypatch.setattr(processors, 'compare_star_catalogs', lambda *a, **k: {'status': 'insufficient_matches'})
     monkeypatch.setattr('lib.deconvolution.SirilDeconvolutionProcessor._execute', lambda *a, **k: (_ for _ in ()).throw(
         RuntimeError('Aucune déconvolution efficace sans dégradation mesurée'),
@@ -355,7 +356,7 @@ def test_sharpen_uses_auto_matching_by_default(
 
     monkeypatch.setitem(sys.modules, 'lib.cosmic_clarity.inference', SimpleNamespace(CosmicClarityEngine=FakeEngine))
     monkeypatch.setattr(processors, 'Siril', lambda **kwargs:
-                        SimpleNamespace(run_siril_script=lambda *a, **k: True))
+                        SimpleNamespace(run_commands=lambda *a, **k: True))
     monkeypatch.setattr(processors, 'read_star_catalog', lambda path: ([
         {'id': idx, 'layer': 0, 'x': float(idx), 'y': 10.0, 'fwhm_x': 5.0,
          'fwhm_y': 5.0, 'fwhm': 5.0, 'amplitude': 1.0, 'beta': 2.0}
@@ -413,7 +414,7 @@ def test_sharpen_forced_manual_matching(
 
     monkeypatch.setitem(sys.modules, 'lib.cosmic_clarity.inference', SimpleNamespace(CosmicClarityEngine=FakeEngine))
     monkeypatch.setattr(processors, 'Siril', lambda **kwargs:
-                        SimpleNamespace(run_siril_script=lambda *a, **k: True))
+                        SimpleNamespace(run_commands=lambda *a, **k: True))
     monkeypatch.setattr(processors, 'read_star_catalog', lambda path: ([
         {'id': idx, 'layer': 0, 'x': float(idx), 'y': 10.0, 'fwhm_x': 5.0,
          'fwhm_y': 5.0, 'fwhm': 5.0, 'amplitude': 1.0, 'beta': 2.0}

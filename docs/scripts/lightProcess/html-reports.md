@@ -100,8 +100,8 @@ sortie standard. Les acquisitions, FITS, images, rapports et journaux sont
 préservés, ainsi que les dates de modification des dossiers pour ne pas
 invalider la reprise des calibrations. Les index de présentation sont ignorés
 dans le calcul d’ancienneté des données calibrées. Les liens relatifs entre pages et fichiers restent valides si
-l’arborescence complète est déplacée ; les chemins absolus présents dans les
-audits d’origine restent affichés tels quels.
+l’arborescence complète est déplacée. Dans les tableaux de poses, les fichiers
+sont affichés par leur basename avec un lien local lorsqu’ils sont retrouvés.
 
 ### 3.3. Exemples
 
@@ -167,10 +167,32 @@ visuelle dans tous les navigateurs.
 
 ### Présentation des décisions de restauration
 
+Le tableau des sous-traitements utilise aussi cette présentation et conserve
+les liens vers chaque dossier. Les noms de chaînes longs reviennent à la ligne.
+
 Les JSON sont des sources internes : les pages ne proposent ni téléchargement
 ni affichage brut de ces fichiers. La page de restauration présente la conclusion,
 la règle de sélection, le classement avec les scores et écarts, puis la décision
 pour chaque combinaison. Les audits techniques restent sur disque.
+
+Les tableaux de classement, de décision et des contrôles locaux reprennent la
+présentation des tableaux de qualité : titres verticaux à 90°, grille visible,
+colonnes de libellés compactes, flottants à deux décimales et « ? » pour les
+valeurs absentes. La légende des verdicts est affichée auprès des tableaux
+concernés, sous forme de symboles colorés.
+**✓ vert** indique une chaîne retenue/admissible ou un contrôle satisfait ;
+**✗ rouge**, un rejet ; un **tiret blanc**, un contrôle ignoré/désactivé, une
+référence ou une chaîne acceptée dont le score n’a pas été retenu. Le survol
+et les libellés accessibles précisent chaque cas. Le choix et l’admissibilité
+restent distincts : une chaîne acceptée mais non retenue n’est pas présentée
+comme rejetée pour sa qualité.
+
+Dans le bilan par combinaison, chaque critère possède ses colonnes Valeur,
+Seuil et Verdict, plus Bloquant lorsque ce drapeau est enregistré. Les critères
+non bloquants restent visibles même en cas d’échec et ne sont pas assimilés
+à un rejet global. Les contrôles locaux/finals propres à une image conservent
+un critère par ligne, avec la même présentation. Les scores, seuils et décisions
+sont ceux de l’audit : seuls leur format d’affichage et leur disposition changent.
 
 L’introduction du tableau des scores contient uniquement la formule enregistrée
 du calcul du score. La lecture du JSON de restauration volumineux se fait avec
@@ -191,13 +213,24 @@ Siril à partir de `registration.json`, avant tout contrôle Python. La page
 géométriques, filtres de mesures et profils stellaires. Le bilan global du
 rapport `*.drizzle.json` reste présenté au niveau de la calibration, avec les
 poses indépendantes et les entrées pondérées distinguées. Un motif individuel
-absent du JSON n’est pas reconstruit.
+absent du JSON n’est pas reconstruit. Les nouveaux traitements enregistrent
+également l’inclusion par pose, la référence, la FWHM, la rondeur et les étoiles
+détectées. Les paires appariées et inliers sont conservés lorsque l’API peut
+lire l’état en mémoire. Avec Siril 1.4.4 en console, l’audit utilise le `.seq`
+produit par Siril et marque ces deux compteurs inconnus. La source des données
+est indiquée. Les paramètres explicites sont
+présentés une fois avant le tableau ; les seuils internes non exposés restent
+inconnus. Les noms de critères renvoient au glossaire commun. Les réalignements
+ont leur propre audit dans leur dossier d’exécution. Voir les
+[critères et limites de l’audit de registration](filter/stacking/IMAGE_SELECTION.md#audit-de-la-registration-avec-sirilpy).
+Une régénération HTML seule ne récupère pas les compteurs absents des anciens
+rapports ; leur collecte demande de relancer le traitement.
 
 Les pages contenant `stellar_profiles.json`, notamment `03_quality`, présentent
 les décisions par pose, motifs, R80, allongement, limites et fractions hors seuil.
 Ces rejets constituent une partie du bilan global et ne s’y ajoutent pas.
 Les contrôles non concluants restent distincts des rejets ; les données absentes
-sont indiquées UNKNOWN. Les critères renvoient à leur définition commune.
+sont indiquées par « ? ». Les critères renvoient à leur définition commune.
 
 Les six réglages de sélection et de pondération sont aussi reliés à leurs
 définitions : plafond FWHM, pourcentage de rejet FWHM, contrôle des profils
@@ -207,7 +240,39 @@ la dispersion robuste et le cumul des participations à l’empilement.
 
 Les nouveaux traitements publient aussi les **décisions Python pour chaque
 image** : contrôles effectifs, mesures, seuils, rang de sélection proportionnelle,
-profils, motifs, pondération et sélection finale. Ces données sont lues depuis
+profils, pondération et sélection finale. Chaque critère occupe un groupe de
+colonnes : mesures utilisées, rang éventuel et verdict. La validité initiale
+est synthétisée dans une seule colonne **Validité**, avec les mêmes symboles
+que les autres verdicts : **✓ vert** pour PASS, **✗ rouge** pour FAIL, un tiret
+blanc pour un contrôle non exécuté ou désactivé et **?** pour un résultat absent. Les quatre conditions liées (mesures finies, FWHM positive, inclusion
+et transformation valide) sont expliquées dans le guide commun ; leurs entrées
+restent conservées dans l’audit interne. Les valeurs flottantes des tableaux
+de qualité et leurs seuils sont affichés avec exactement deux décimales ; les
+entiers restent entiers. Les données manquantes s’affichent « ? ». Les calculs
+conservent la précision des valeurs enregistrées ; l’indexeur ne les recalcule
+pas. Les contrôles géométriques successifs gardent des colonnes distinctes par
+étape.
+Les descriptions de règles et les motifs textuels ne sont pas répétés dans
+les lignes : les en-têtes pointent vers leur calcul dans le guide commun.
+Les seuils identiques sont affichés une fois avant le tableau ; s’ils varient
+selon la pose, ils disposent de colonnes propres. Une barre de défilement
+horizontale permet de lire les critères sans compresser les valeurs. Les titres
+de colonnes sont orientés à 90° pour une lecture verticale, y compris « Pose »
+et les noms des groupes de critères. Les liens de définition restent
+accessibles dans les titres verticaux. La grille reste visible dans les deux
+niveaux d’en-têtes ; des séparations plus marquées délimitent chaque groupe de
+critères et se prolongent dans les lignes de valeurs. La colonne des fichiers
+est limitée à 10 rem, avec retour à la ligne du nom complet. Les sélections
+qualité, finales et des profils sont représentées par **✓ vert** (retenue) ou
+**✗ rouge** (écartée). Le libellé reste disponible au survol et pour les lecteurs
+d’écran ; une sélection non enregistrée reste « ? ». Les verdicts de critères
+utilisent les mêmes symboles : **✓ vert** pour PASS et **✗ rouge** pour FAIL.
+Un contrôle SKIPPED ou DISABLED affiche un **tiret blanc** ; le libellé au
+survol distingue un contrôle non exécuté d’un contrôle désactivé. La colonne
+Validité utilise également ces symboles. Une légende textuelle illustrée par
+ces mêmes symboles colorés est placée immédiatement avant le tableau, après
+les seuils communs.
+Ces données sont lues depuis
 `selection_decisions` du rapport de stacking et depuis l’audit local
 `selection_decisions.json`. Les anciens rapports restent signalés comme dépourvus
 de cette traçabilité ; l’indexeur ne recalcule pas les rejets.

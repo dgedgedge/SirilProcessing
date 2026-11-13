@@ -8,6 +8,7 @@ de chaînes est conservé, avec ses masques et son rapport.
 
 from __future__ import annotations
 
+
 import argparse
 import csv
 import json
@@ -31,6 +32,7 @@ from lib.logging_utils import log_duration
 from lib.processor import processor
 from lib.restoration import RestorationComparisonProcessor
 from lib.type_defs import ConfigValue, JSONReport, StarMeasurement
+from lib.siril_api import SirilCommand, command
 
 
 # Fractions de chaque dimension : du tiers central au champ entier.
@@ -304,18 +306,11 @@ class _DeconvolutionExecution:
         RuntimeError signale un échec ; le temps passé reste compté et journalisé.
         """
         name = f"{self.tag}{name}"
-        script = "\n".join(
-            [
-                f"cd {_quote(self.work)}",
-                "set32bits",
-                *lines,
-                "close",
-                "",
-            ]
-        )
+        operations = [command('cd', self.work), command('set32bits'),
+                      *(SirilCommand.from_text(line) for line in lines), command('close')]
         self.result["scripts"].append(
             dict(
-                script_path=str(self.work / f"{name}.sps"),
+                command_path=str(self.work / f"{name}.commands.json"),
                 log_path=str(self.work / f"{name}.log"),
             )
         )
@@ -324,7 +319,7 @@ class _DeconvolutionExecution:
             f"Déconvolution Siril — {name}",
             self.result.setdefault("timings", {}), "siril_seconds",
         ):
-            if not self.runner.run_siril_script(script, str(self.work), script_name=f"{name}.sps"):
+            if not self.runner.run_commands(operations, str(self.work), name=f"{name}"):
                 raise RuntimeError(f"Échec Siril ; consulter {self.work / f'{name}.log'}")
 
     def _detect(
@@ -350,12 +345,12 @@ class _DeconvolutionExecution:
         context = QualityContext.for_catalogs(source)
         detection = SirilStarDetectionProcessor(
             context, [(Path(source), catalog)], self.work, self.layer,
-            runner=self.runner, script_name=f"{self.tag}{label}.sps",
+            runner=self.runner, name=f"{self.tag}{label}",
             findstar_settings=settings.removeprefix('setfindstar '),
         )
         self.result['scripts'].append(dict(
-            script_path=str(self.work / detection.script_name),
-            log_path=str(self.work / Path(detection.script_name).with_suffix('.log')),
+            command_path=str(self.work / (Path(detection.command_name).stem + ".commands.json")),
+            log_path=str(self.work / Path(detection.command_name).with_suffix('.log')),
         ))
         self._save_report()
         try:

@@ -13,6 +13,7 @@ import importlib
 import json
 import logging
 import platform
+import traceback
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
@@ -21,8 +22,12 @@ import numpy as np
 
 from lib.compute_config import ComputeConfig
 from lib.ghs_final_stretch import ProtectedGHSFinalizer
-from lib.ghs_quartiles import QuartileGHSProcessor
+from lib.ghs_quartiles import MAX_TRANSFORM_BLOCK_PIXELS, QuartileGHSProcessor
+from lib.ghs_log_render import LogHistogramRenderer
 from lib.ghs_log_histogram import DEFAULT_LOG_RMS_WEIGHT
+from lib.ghs_histogram_shape import piecewise_histogram_profile, compare_histogram_shapes
+from lib.ghs_diagnostics import HistogramDiagnostics
+from lib.ghs_blackpoint import HistogramBlackpointNormalizer
 from lib.processor import processor
 from lib.restoration_quality import normalized_planes
 from lib.star_rendering import color_drift
@@ -38,25 +43,36 @@ CONCENTRATION_SCHEDULE = (15.0, 5.0, 2.0, 0.0)
 MAX_BACKGROUND_MEDIAN = 0.45
 HIGHLIGHT_BOUNDARY = 0.995
 MIN_HIGHLIGHT_WIDTH_RATIO = 0.8
+# Force CDF initiale puis huit réductions par deux, depuis la même entrée.
+CDF_SHAPE_BACKTRACKS = 8
+CDF_MIN_LOCAL_RETENTION = .65
+CDF_MAX_STIFFNESS = .35
+CDF_MAX_PEAK_SHIFT = .05
+# Budget conservateur des tableaux plein champ et des temporaires par bloc.
+GHS_RESIDENT_FLOAT32_BUFFERS = 16
+GHS_TRANSFORM_FLOAT64_BUFFERS = 12
 LOG_PEAK_HEIGHT_FRACTION = 0.5
 LOG_PEAK_PROMINENCE_FRACTION = 0.12
 
 
 class ComputeBackend:
-    """Sélectionne le moteur avant calcul ; aucune reprise après son initialisation."""
+    """Sélectionne le moteur et conserve la politique demandée et le budget."""
 
     def __init__(self, requested: str = "auto", required_bytes: int = 0,
                  *, engine: str = 'AutoGHS') -> None:
         """Teste CUDA, réserve une marge VRAM et sinon choisit CPU seulement en auto.
 
         required_bytes estime les tableaux temporaires ; 20 % de la VRAM libre
-        reste disponible. Une panne ultérieure se propage à l'appelant.
+        reste disponible. Le moteur GHS peut reprendre une saturation CUDA sur
+        CPU en auto ; les autres erreurs se propagent normalement.
         engine nomme le traitement dans le journal. Un choix CPU automatique
         émet un warning ; sur macOS, ce moteur ne possède pas de backend Metal.
         cuda reste accepté pour les contrôles internes exigeant NVIDIA.
         """
         if requested not in ("auto", "cpu", "cuda"):
             raise ValueError("compute-backend doit être auto, cpu ou cuda")
+        self.requested = requested
+        self.required_bytes = required_bytes
         self.xp: ModuleType = np
         self.name = "cpu"
         self.reason = "CPU explicitly requested"
@@ -92,8 +108,19 @@ class ComputeBackend:
         LOGGER.info("%s : backend %s (%s)", engine, self.name, self.reason)
 
     def numpy(self, array: np.ndarray) -> np.ndarray:
-        """Transfère un résultat vers NumPy ; les appels CUDA échoués restent fatals."""
+        """Transfère vers NumPy et propage les erreurs au moteur appelant."""
         return np.asarray(array) if self.name == "cpu" else self.xp.asnumpy(array)
+
+    def release_unused_memory(self) -> None:
+        """Rend au pilote les blocs CUDA inutilisés à une frontière de phase.
+
+        Seul le cache libre du pool CuPy courant est vidé ; les tableaux encore
+        référencés restent alloués et les autres utilisateurs du GPU ne sont
+        pas modifiés. Sur CPU, cette méthode est sans effet. Les erreurs CUDA
+        remontent à l'appelant ; cette méthode ne choisit aucun autre backend.
+        """
+        if self.name == 'cuda':
+            self.xp.get_default_memory_pool().free_all_blocks()
 
 
 def ghs_transfer(
@@ -187,6 +214,8 @@ def ghs_rgb(
 
     RGBBlend utilise le plus grand gain de la version liée permettant à chaque
     canal de rester <=1, en mélangeant avec les canaux étirés indépendamment.
+    La projection finale sur [0,1] retire les erreurs d'arrondi du mélange
+    aux bornes, notamment les très faibles valeurs négatives en float32.
     """
     light = luminance(data, color_mode, xp=xp)
     stretched = ghs_transfer(light, D, B, SP, LP, HP, xp=xp)
@@ -196,7 +225,8 @@ def ghs_rgb(
     difference = linked - independent
     ratios = xp.where(linked > 1, (1 - independent) / xp.maximum(difference, 1e-30), 1)
     weight = xp.minimum(1, ratios.min(axis=0))
-    return weight[None] * linked + (1 - weight[None]) * independent
+    result = weight[None] * linked + (1 - weight[None]) * independent
+    return xp.clip(result, 0, 1)
 
 
 def linear_blackpoint(
@@ -404,7 +434,49 @@ class GHSOptimizer(processor):
     @classmethod
     def parameter_children(cls) -> tuple[type[processor], ...]:
         """Déclare les moteurs de présentation protégée et de passes par quartiles."""
-        return (ProtectedGHSFinalizer, QuartileGHSProcessor)
+        return (ProtectedGHSFinalizer, LogHistogramRenderer, HistogramBlackpointNormalizer)
+
+    @staticmethod
+    def estimate_working_bytes(shape: tuple[int, int, int], block_pixels: int) -> int:
+        """Estime la VRAM du GHS à partir du FITS RGB final et du bloc choisi.
+
+        Parameters
+        ----------
+        shape : tuple of int
+            Géométrie réelle (3, hauteur, largeur), strictement positive.
+        block_pixels : int
+            Budget de transformation validé de QuartileGHSProcessor.
+
+        Returns
+        -------
+        int
+            Octets pour 16 tableaux RGB float32 plein champ et 12 tableaux
+            RGB float64 de bloc. ComputeBackend garde en plus 20 % de marge
+            sur la VRAM libre. Ce budget prudent n'est pas une borne absolue
+            des allocations d'un pilote, d'un tri ou d'un autre processus.
+
+        Raises
+        ------
+        ValueError
+            Géométrie ou budget de bloc invalide.
+
+        Notes
+        -----
+        La taille réelle intègre panneaux, recouvrements et recadrages de la
+        mosaïque. Aucun produit nombre de panneaux × taille de session n'est
+        nécessaire. Voir docs/scripts/postProcess/compute-backend.md.
+        """
+        if (len(shape) != 3 or shape[0] != 3
+                or any(type(value) is not int or value <= 0 for value in shape)):
+            raise ValueError('Géométrie RGB invalide pour le budget mémoire')
+        if (type(block_pixels) is not int
+                or not 1 <= block_pixels <= MAX_TRANSFORM_BLOCK_PIXELS):
+            raise ValueError('Budget de bloc invalide pour la mémoire')
+        pixels = shape[1] * shape[2]
+        full_bytes = 3 * pixels * np.dtype(np.float32).itemsize
+        tile_bytes = 3 * min(pixels, block_pixels) * np.dtype(np.float64).itemsize
+        return (GHS_RESIDENT_FLOAT32_BUFFERS * full_bytes
+                + GHS_TRANSFORM_FLOAT64_BUFFERS * tile_bytes)
 
     @staticmethod
     def range_strategy(value: str) -> str:
@@ -534,6 +606,10 @@ class GHSOptimizer(processor):
         retention: float = 0.9, stars: np.ndarray | None = None,
         headroom: float = 0.95,
         rms_weight: float = DEFAULT_LOG_RMS_WEIGHT,
+        shape_options: argparse.Namespace | None = None,
+        reference_shape: JSONReport | None = None,
+        trial_images: HistogramDiagnostics | None = None,
+        blackpoint_reference: np.ndarray | None = None,
     ) -> tuple[np.ndarray, JSONReport]:
         """Délègue la dernière passe à la recherche D/B/SP/HP protégée.
 
@@ -542,6 +618,14 @@ class GHSOptimizer(processor):
         stars permet de vérifier aussi la recomposition screen à étoiles fixes.
         rms_weight pondère le gain relatif de régularité logarithmique ; dans
         [0,10], deux par défaut, zéro désactive sa contribution au classement.
+        shape_options contient les paramètres résolus du mode piecewise ;
+        dans ce cas le contrôle de forme remplace ce bonus global. None
+        conserve le comportement de comparaison historique.
+        reference_shape transmet la forme du fond avant égalisation pour
+        empêcher l'accumulation des tolérances entre phases.
+        trial_images capture les finalistes sur disque si l'export est activé.
+        blackpoint_reference transmet les canaux positifs initiaux, pour un
+        budget de perte commun aux phases du rendu.
         Le moteur conserve l'identité si aucun candidat n'améliore le signal
         diffus sous contraintes. Les erreurs de données/backend sont propagées.
         Voir docs/scripts/postProcess/ghs-highlight-protection.md.
@@ -550,6 +634,8 @@ class GHSOptimizer(processor):
             raise ValueError("ghs-final-strength doit être compris entre 0 et 10")
         output, report = ProtectedGHSFinalizer().search(
             data, analyzer, backend, strength, mode, retention, stars, headroom, rms_weight,
+            shape_options, reference_shape, trial_images=trial_images,
+            blackpoint_reference=blackpoint_reference,
         )
         parameters = report["parameters"]
         LOGGER.info(
@@ -562,6 +648,9 @@ class GHSOptimizer(processor):
     def balance_histogram(
         self, data: np.ndarray, analyzer: HistogramAnalyzer,
         backend: ComputeBackend, strength: float, clip_limit: float,
+        shape_options: argparse.Namespace | None = None,
+        trial_images: HistogramDiagnostics | None = None,
+        blackpoint_reference: np.ndarray | None = None,
     ) -> tuple[np.ndarray, JSONReport]:
         """Étale les intensités par une CDF plafonnée mélangée à l'identité.
 
@@ -571,6 +660,15 @@ class GHSOptimizer(processor):
         Le gain commun aux RGB préserve les rapports de couleur ; il est réduit
         si nécessaire pour garder le canal maximal <=1. Une image de luminance
         constante est préservée. Le rapport mesure aussi l'amplification du bruit.
+        En mode piecewise, shape_options impose une référence pleine résolution
+        fixe. Un refus de forme réduit la force de moitié, au plus huit fois,
+        depuis data. Aucun résultat intermédiaire ne devient la référence.
+        Sans référence mesurable ou sans essai admissible, data est conservé.
+        trial_images capture chaque essai complet, y compris les refus.
+        blackpoint_reference désigne le masque positif de l'entrée linéaire ;
+        None limite le budget à l'entrée de cette étape. La préparation CDF
+        conserve au moins 65 % des pentes locales et borne leur déformation
+        à 0,35, avant la recherche finale plus souple.
         """
         state = analyzer.analyze(data, backend)
         before = state.metrics
@@ -591,25 +689,83 @@ class GHSOptimizer(processor):
         mapped = xp.interp(
             light, xp.asarray(np.linspace(0, 1, len(cdf))), xp.asarray(cdf),
         ).astype(data.dtype)
-        target = (1 - strength) * light + strength * mapped
-        gain = target / xp.maximum(light, 1e-30)
         maximum = xp.max(data, axis=0)
-        gain = xp.minimum(gain, 1 / xp.maximum(maximum, 1e-30))
-        output = data * gain[None]
-        after = analyzer.analyze(output, backend).metrics
-        return output, {
-            "status": "applied", "method": "clipped global CDF mixed with identity",
-            "strength": strength, "clip_limit": clip_limit,
-            "maximum_curve_slope": (1 - strength) + strength * (clip_limit + 1),
-            "before": before, "after": after,
-            "gamut_limited_fraction": float(xp.mean(
-                target / xp.maximum(light, 1e-30) > 1 / xp.maximum(maximum, 1e-30)
-            ).item()),
-        }
+        shape_enabled = shape_options is not None and shape_options.ghs_histogram_model == 'piecewise'
+        align_blackpoint = shape_enabled and shape_options.ghs_post_blackpoint == 'rise'
+        reference = None
+        report: JSONReport = dict(status='no admissible improvement', strength=0.,
+                                  requested_strength=strength, clip_limit=clip_limit,
+                                  before=before, after=before, full_validation=[])
+        if shape_enabled:
+            report['before_histogram'] = state.report()
+            reference = piecewise_histogram_profile(
+                backend.numpy(xp.histogram(light, bins=128, range=(0, 1))[0]),
+                shape_options.ghs_linearity_tolerance, shape_options.ghs_shape_smoothing,
+            )
+            report['shape_reference'] = reference
+            if not reference['measurable']:
+                report['reason'] = 'unmeasurable histogram shape'
+                return data, report
+        for step in range(CDF_SHAPE_BACKTRACKS+1 if shape_enabled else 1):
+            effective = strength/2**step
+            target = (1-effective)*light+effective*mapped
+            gain = target/xp.maximum(light, 1e-30)
+            gain = xp.minimum(gain, 1/xp.maximum(maximum, 1e-30))
+            output = data*gain[None]
+            post: JSONReport = {'BP': 0., 'status': 'disabled'}
+            if align_blackpoint:
+                output, post = HistogramBlackpointNormalizer.apply(
+                    output, shape_options.ghs_blackpoint_loss, xp,
+                    reference=data if blackpoint_reference is None else blackpoint_reference,
+                )
+            measured = analyzer.analyze(output, backend)
+            if shape_enabled:
+                output_light = luminance(output, analyzer.color_mode, xp=xp)
+                profile = piecewise_histogram_profile(
+                    backend.numpy(xp.histogram(output_light, bins=128, range=(0, 1))[0]),
+                    shape_options.ghs_linearity_tolerance, shape_options.ghs_shape_smoothing,
+                )
+                del output_light
+                audit = compare_histogram_shapes(
+                    reference, profile, shape_options.ghs_shape_retention,
+                    shape_options.ghs_shape_distance,
+                    min(shape_options.ghs_shape_peak_shift, CDF_MAX_PEAK_SHIFT),
+                    min(shape_options.ghs_shape_stiffness, CDF_MAX_STIFFNESS),
+                    max(shape_options.ghs_shape_local_retention, CDF_MIN_LOCAL_RETENTION),
+                )
+                profile['shape_preservation'] = audit
+                rejections = list(audit['rejections'])
+                if (align_blackpoint and
+                        post['loss_fraction'] > shape_options.ghs_blackpoint_loss+1e-12):
+                    rejections.append('cumulative blackpoint loss')
+                report['full_validation'].append(dict(
+                    parameters={'strength': effective}, profile=profile,
+                    post_BP=post['BP'], post_blackpoint=post,
+                    rejections=rejections, histogram=measured.report(),
+                ))
+                if trial_images is not None:
+                    trial_images.capture(report['full_validation'][-1], output)
+                if audit['achieved'] is not True or rejections:
+                    del output
+                    continue
+                report['shape_preservation'] = audit
+            report.update(
+                status='applied', method='clipped global CDF mixed with identity',
+                strength=effective, after=measured.metrics,
+                post_BP=post['BP'], post_blackpoint=post,
+                maximum_curve_slope=(1-effective)+effective*(clip_limit+1),
+                gamut_limited_fraction=float(xp.mean(
+                    target/xp.maximum(light, 1e-30) > 1/xp.maximum(maximum, 1e-30),
+                ).item()),
+            )
+            return output, report
+        report['reason'] = 'no shape-preserving CDF strength'
+        return data, report
 
     def expand_dynamic_range(
         self, data: np.ndarray, analyzer: HistogramAnalyzer,
         backend: ComputeBackend, target: float, max_iterations: int,
+        protect_blackpoint: bool = False,
     ) -> tuple[np.ndarray, JSONReport, list[JSONReport]]:
         """Complète GHS par une expansion linéaire commune aux canaux RGB.
 
@@ -619,6 +775,8 @@ class GHSOptimizer(processor):
         La borne d'itérations et une tolérance float32 empêchent les rebouclages.
         Les gardes de bruit de la recherche GHS ne bloquent pas cette expansion
         demandée ; les métriques finales permettent d'en mesurer les effets.
+        protect_blackpoint place le seuil sous le premier flottant positif,
+        afin de préserver le budget global même lorsque les minima sont liés.
         Retourne l'image, le rapport de boucle et les histogrammes intermédiaires.
         Les données constantes restent intactes, sans dynamique inventée.
         """
@@ -638,6 +796,10 @@ class GHSOptimizer(processor):
                 reason = "constant distribution"
                 break
             bp, bp_reason = analyzer.blackpoint(current, backend)
+            if protect_blackpoint and bp > 0:
+                bp = HistogramBlackpointNormalizer.safe_threshold(bp, current.dtype)
+                if bp == 0:
+                    bp_reason = 'below useful intensity resolution'
             shifted = linear_blackpoint(current, bp, xp=xp) if bp > 0 else current
             maximum = float(xp.max(shifted).item())
             shifted_width = float((xp.max(shifted) - xp.min(shifted)).item())
@@ -679,8 +841,96 @@ class GHSOptimizer(processor):
         args: argparse.Namespace,
         backend: ComputeBackend,
         rendered_stars: np.ndarray | None = None, headroom: float = 0.95,
+        trial_images: HistogramDiagnostics | None = None,
+    ) -> tuple[np.ndarray, JSONReport]:
+        """Exécute le GHS, avec une reprise CPU unique après manque de VRAM en auto.
+
+        Les entrées CPU linéaires et les étoiles déjà rendues servent de point
+        de reprise ; aucun résultat GPU partiel n'est accepté. Seule l'erreur
+        CuPy OutOfMemoryError autorise la reprise, uniquement si le backend a
+        été demandé en auto. CUDA explicite, mémoire hôte épuisée et autres
+        erreurs restent fatals. Le backend partagé indique le périphérique
+        réellement utilisé et le rapport conserve le motif de reprise.
+        Les paramètres et critères du rendu sont identiques dans les deux cas.
+
+        Parameters
+        ----------
+        data : numpy.ndarray
+            Entrée RGB linéaire normalisée, conservée intacte pour une reprise.
+        strategy : str
+            Seule la valeur range est disponible.
+        args : argparse.Namespace
+            Paramètres GHS résolus par les mécanismes habituels de configuration.
+        backend : ComputeBackend
+            Moteur sélectionné. Son état effectif devient CPU après une reprise.
+        rendered_stars : numpy.ndarray or None, optional
+            Étoiles déjà rendues, de même géométrie, réutilisées sans StarNet.
+        headroom : float, optional
+            Réserve de fusion du fond, fraction dans ]0,1[.
+        trial_images : HistogramDiagnostics or None, optional
+            Cache JPEG facultatif partagé avec l'export de galerie. Le calcul
+            ne change pas de critères et ne conserve aucune image candidate.
+
+        Returns
+        -------
+        tuple of numpy.ndarray and JSONReport
+            Rendu CPU complet et audit ; backend_fallback décrit la reprise
+            éventuelle. Aucun résultat interrompu n'est accepté.
+
+        Raises
+        ------
+        ValueError
+            Entrée ou paramètres invalides.
+        MemoryError
+            RAM hôte insuffisante, ou saturation CUDA sans reprise autorisée.
+        RuntimeError
+            Autre panne de calcul, transmise sans reprise automatique.
+        """
+        try:
+            return self._optimize_once(data, strategy, args, backend, rendered_stars, headroom,
+                                      **({'trial_images': trial_images} if trial_images is not None else {}))
+        except MemoryError as error:
+            if (backend.name != 'cuda' or backend.requested != 'auto'
+                    or not isinstance(error, backend.xp.cuda.memory.OutOfMemoryError)):
+                raise
+            message = str(error)
+            gpu = backend.xp
+            cpu_data = data if isinstance(data, np.ndarray) else backend.numpy(data)
+            cpu_stars = rendered_stars
+            if cpu_stars is not None and not isinstance(cpu_stars, np.ndarray):
+                cpu_stars = backend.numpy(cpu_stars)
+            data, rendered_stars = cpu_data, cpu_stars
+            # Les cadres interrompus retenaient les grands tableaux CUDA.
+            # Vider leurs références avant le pool et la nouvelle exécution.
+            traceback.clear_frames(error.__traceback__)
+            gpu.get_default_memory_pool().free_all_blocks()
+            backend.xp, backend.name = np, 'cpu'
+            backend.reason = 'CPU retry after CUDA out of memory: ' + message
+            backend.device['fallback_from'] = 'cuda'
+            LOGGER.warning(
+                'AutoGHS : mémoire CUDA épuisée sous %s ; reprise unique '
+                'du rendu GHS sur CPU : %s', platform.system(), message,
+            )
+        output, report = self._optimize_once(
+            cpu_data, strategy, args, backend, cpu_stars, headroom,
+            **({'trial_images': trial_images} if trial_images is not None else {}),
+        )
+        report['backend_fallback'] = {'from': 'cuda', 'to': 'cpu', 'reason': message}
+        return output, report
+
+    def _optimize_once(
+        self,
+        data: np.ndarray,
+        strategy: str,
+        args: argparse.Namespace,
+        backend: ComputeBackend,
+        rendered_stars: np.ndarray | None = None, headroom: float = 0.95,
+        trial_images: HistogramDiagnostics | None = None,
     ) -> tuple[np.ndarray, JSONReport]:
         """Optimise l'étendue robuste RANGE par prédiction puis contrôle RGB.
+
+        Entrées et retour identiques à optimize ; cette exécution unique ne
+        traite aucune erreur de mémoire et ne change jamais de backend.
 
         strategy doit valoir range ; cet argument conserve la signature des
         appels internes existants, sans autre recherche disponible.
@@ -691,6 +941,9 @@ class GHSOptimizer(processor):
         dynamique et la chroma précèdent la recherche finale D/B/SP/HP protégée,
         appliquée au fond avant fusion stellaire. rendered_stars et headroom
         permettent d'en vérifier aussi la recomposition à étoiles fixes.
+        Après une transformation, une recherche finale active qui n'atteint
+        pas ses critères retourne TARGETS_NOT_REACHED avec le meilleur rendu
+        admissible. Sans transformation, NO_IMPROVEMENT reste conservé.
         Une exception backend n'est jamais
         assimilée à une convergence. Voir auto-ghs-algorithm.md.
         """
@@ -706,11 +959,16 @@ class GHSOptimizer(processor):
         )
         xp = backend.xp
         current = xp.asarray(data, dtype=xp.float32)
+        align_blackpoint = options.ghs_histogram_model == 'piecewise' and options.ghs_post_blackpoint == 'rise'
+        blackpoint_reference = current > 0 if align_blackpoint else None
         initial = analyzer.analyze(current, backend)
         state = initial
         records: list[JSONReport] = []
         blackpoint_records: list[JSONReport] = []
         histograms = [initial.report()]
+        histogram_stages = [dict(stage='Entrée linéaire', status='reference', histogram=initial.report())]
+        if trial_images is not None:
+            trial_images.capture(histogram_stages[-1], current)
         stop = "max_iterations"
         metric = "range_width"
         baseline_iqr = max(float(initial.metrics["iqr"]), 1e-12)
@@ -720,6 +978,10 @@ class GHSOptimizer(processor):
                 stop = "constant distribution"
                 break
             bp_used, bp_reason = analyzer.blackpoint(current, backend)
+            if align_blackpoint and bp_used > 0:
+                bp_used = HistogramBlackpointNormalizer.safe_threshold(bp_used, current.dtype)
+                if bp_used == 0:
+                    bp_reason = 'below useful intensity resolution'
             blackpoint_records.append({
                 "iteration": iteration + 1, "BP": bp_used, "reason": bp_reason,
             })
@@ -801,12 +1063,21 @@ class GHSOptimizer(processor):
                     color_mode=options.ghs_color_mode,
                     xp=xp,
                 )
+                post: JSONReport = {'BP': 0., 'status': 'disabled'}
+                if align_blackpoint:
+                    transformed, post = HistogramBlackpointNormalizer.apply(
+                        transformed, options.ghs_blackpoint_loss, xp,
+                        reference=blackpoint_reference,
+                    )
                 measured = analyzer.analyze(transformed, backend)
                 metrics = measured.metrics
                 rejection = None
                 if metrics["nonfinite_count"]:
                     raise RuntimeError("GHS a produit des pixels non finis")
-                if (
+                if (align_blackpoint and post.get('loss_fraction', 0.)
+                        > options.ghs_blackpoint_loss+1e-12):
+                    rejection = 'cumulative blackpoint loss'
+                elif (
                     max(metrics["white_fraction_rgb"])
                     > max(state.metrics["white_fraction_rgb"]) + options.ghs_max_clip
                 ):
@@ -835,6 +1106,7 @@ class GHSOptimizer(processor):
                 candidate.update(
                     {
                         "measured": metrics,
+                        "post_BP": post['BP'], "post_blackpoint": post,
                         "rejection": rejection,
                         "prediction_error": float(metrics[metric])
                         - candidate["predicted_width"],
@@ -845,6 +1117,7 @@ class GHSOptimizer(processor):
                     1 + options.ghs_min_gain
                 ):
                     best, best_width = (index, transformed, measured), width
+                del transformed
             if best is None:
                 records.append(
                     {
@@ -869,7 +1142,15 @@ class GHSOptimizer(processor):
                 }
             )
             current, state = transformed, measured
+            del transformed
             histograms.append(state.report())
+            histogram_stages.append(dict(stage=f'RANGE — passe {iteration+1}', status='accepted',
+                                          parameters={**{key: candidates[index][key] for key in ('D', 'B', 'SP', 'LP', 'HP')},
+                                                      'BP': bp_used},
+                                          histogram=state.report()))
+            histogram_stages[-1]['post_BP'] = candidates[index].get('post_BP', 0.)
+            if trial_images is not None:
+                trial_images.capture(histogram_stages[-1], current)
             LOGGER.info(
                 "AutoGHS %s : itération %d D=%.2f B=%.1f SP=%.6f BP=%.6f",
                 strategy,
@@ -879,47 +1160,98 @@ class GHSOptimizer(processor):
                 sp,
                 bp_used,
             )
+        # Le tuple de sélection RANGE ne doit pas retenir une ancienne image
+        # GPU pendant l'égalisation et les recherches finales.
+        best = None
         post_ghs_metrics = state.metrics
         current, histogram_balance = self.balance_histogram(
             current, analyzer, backend, options.ghs_histogram_strength,
             options.ghs_histogram_clip,
+            options if options.ghs_histogram_model == 'piecewise' else None,
+            trial_images=trial_images,
+            blackpoint_reference=blackpoint_reference,
         )
         if histogram_balance["status"] == "applied":
             histograms.append(analyzer.analyze(current, backend).report())
+            histogram_stages.append(dict(stage='Égalisation partielle', status='applied',
+                                          parameters={'strength': histogram_balance['strength']},
+                                          post_BP=histogram_balance.get('post_BP', 0.),
+                                          histogram=histograms[-1]))
+            if trial_images is not None:
+                trial_images.capture(histogram_stages[-1], current)
+        reference_shape = histogram_balance.get('shape_reference')
+        if reference_shape is None and options.ghs_histogram_model == 'piecewise':
+            # Même si la CDF est désactivée, les phases suivantes gardent la
+            # forme avant expansion plutôt que de redéfinir leur référence.
+            light = luminance(current, analyzer.color_mode, xp=xp)
+            reference_shape = piecewise_histogram_profile(
+                backend.numpy(xp.histogram(light, bins=128, range=(0, 1))[0]),
+                options.ghs_linearity_tolerance, options.ghs_shape_smoothing,
+            )
+            del light
         current, dynamic_report, dynamic_histograms = self.expand_dynamic_range(
             current, analyzer, backend, options.ghs_dynamic_target,
             options.ghs_dynamic_max_iterations,
+            protect_blackpoint=align_blackpoint,
         )
         histograms.extend(dynamic_histograms)
         state = analyzer.analyze(current, backend)
+        histogram_stages.append(dict(stage='Expansion de dynamique',
+                                      status='applied' if dynamic_report['iterations'] else 'unchanged',
+                                      histogram=state.report()))
+        if trial_images is not None:
+            trial_images.capture(histogram_stages[-1], current)
         before_chroma = backend.numpy(current).astype(np.float32)
         if options.ghs_chroma != "off":
             current = render_chroma(current, options.ghs_chroma, xp=xp)
             state = analyzer.analyze(current, backend)
             histograms.append(state.report())
+            histogram_stages.append(dict(stage='Chroma '+options.ghs_chroma, status='applied',
+                                          histogram=state.report()))
+            if trial_images is not None:
+                trial_images.capture(histogram_stages[-1], current)
         chroma_diagnostics = color_drift(before_chroma, backend.numpy(current))
+        presentation_entry_histogram = state.report()
         current, presentation_stretch = self.final_stretch(
             current, analyzer, backend, options.ghs_final_strength,
             options.ghs_final_mode, options.ghs_highlight_retention,
             rendered_stars, headroom,
             options.ghs_log_rms_weight,
+            options if options.ghs_histogram_model == 'piecewise' else None,
+            reference_shape,
+            trial_images=trial_images,
+            blackpoint_reference=blackpoint_reference,
         )
         if presentation_stretch["status"] == "applied":
             state = analyzer.analyze(current, backend)
             histograms.append(state.report())
+        histogram_stages.append(dict(stage='Présentation protégée', status=presentation_stretch['status'],
+                                      parameters=presentation_stretch['parameters'],
+                                      post_BP=presentation_stretch.get('post_BP', 0.),
+                                      histogram=state.report()))
+        if trial_images is not None:
+            trial_images.capture(histogram_stages[-1], current)
+        shape_entry_histogram = state.report()
         quartile_report: JSONReport = {'status': 'disabled', 'iterations': []}
         # Le mode fixe reste un témoin exact ; force finale nulle désactive les deux recherches.
         if options.ghs_final_mode == 'auto' and options.ghs_final_strength > 0:
-            current, quartile_report = QuartileGHSProcessor().search(
+            current, quartile_report = LogHistogramRenderer().search(
                 current, analyzer, backend, options, rendered_stars, headroom,
+                reference_shape=reference_shape,
+                **({'trial_images': trial_images} if trial_images is not None else {}),
+                **({'blackpoint_reference': blackpoint_reference}
+                   if blackpoint_reference is not None else {}),
             )
             if quartile_report['status'] == 'applied':
                 state = analyzer.analyze(current, backend)
                 histograms.append(state.report())
         output = backend.numpy(current).astype(np.float32)
         validate_rgb(output)
-        return output, {
-            "status": "SUCCESS" if len(histograms) > 1 else "NO_IMPROVEMENT",
+        report = {
+            "status": ("NO_IMPROVEMENT" if len(histograms) <= 1 else
+                       "TARGETS_NOT_REACHED" if quartile_report.get('targets_achieved') is False
+                       and quartile_report['status'] != 'disabled'
+                       else "SUCCESS"),
             "strategy": strategy,
             "stop_reason": stop,
             "iterations": records,
@@ -930,6 +1262,9 @@ class GHSOptimizer(processor):
             "blackpoint_iterations": blackpoint_records,
             "post_ghs": post_ghs_metrics,
             "histograms": histograms,
+            "histogram_stages": histogram_stages,
+            "shape_entry_histogram": shape_entry_histogram,
+            "presentation_entry_histogram": presentation_entry_histogram,
             "initial": initial.metrics,
             "final": state.metrics,
             "color_mode": options.ghs_color_mode,
@@ -943,6 +1278,9 @@ class GHSOptimizer(processor):
                 "IQR guard; both are proxies, not physical noise estimates"
             ),
         }
+        if trial_images is not None:
+            trial_images.capture(report, output)
+        return output, report
 
     def post_process(
         self,
@@ -953,7 +1291,10 @@ class GHSOptimizer(processor):
         """Traite un fond seul avec RANGE et écrit un FITS distinct de la source."""
         args = self.options(self._get_args(args))
         data = normalized_planes(input_path)
-        backend = ComputeBackend(args.compute_backend, data.nbytes * 16)
+        backend = ComputeBackend(
+            args.compute_backend,
+            self.estimate_working_bytes(data.shape, args.ghs_quartile_block_pixels),
+        )
         result, report = self.optimize(data, "range", args, backend)
         output = Path(output_path).with_suffix(".fits")
         if Path(input_path).resolve() in (

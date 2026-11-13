@@ -34,7 +34,14 @@ fournisseur annoncé mais non initialisable peut conduire au choix CPU pendant
 le chargement de la session, avant le premier appel d'inférence. Les erreurs de
 contrat de modèle ne sont pas traitées comme une absence d'accélérateur.
 
-Après démarrage du calcul, une panne ne déclenche pas de reprise automatique.
+Après démarrage, **AutoGHS en mode auto** peut reprendre une seule fois sur
+CPU si CuPy signale précisément un manque de mémoire CUDA. Il repart de
+l'entrée linéaire du moteur GHS avec les étoiles déjà rendues, sans relancer
+StarNet ni publier les essais partiels. Les autres erreurs CUDA, les erreurs
+de données et le manque de mémoire hôte restent des échecs. Le choix interne
+CUDA forcé interdit cette reprise.
+
+Pour les autres moteurs, une panne ne déclenche pas de reprise automatique.
 GraXpert conserve son option historique **explicite** `--graxpert-cpu-fallback` :
 seule son activation autorise à recommencer l'image sur CPU après une panne GPU.
 

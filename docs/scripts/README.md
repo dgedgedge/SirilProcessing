@@ -67,6 +67,9 @@ et [organisation des sessions](lightProcess/SESSIONS.md).
 
 ## 2.3. postProcess — post-traitement et rendu final
 
+Présentation : [Principe du post-traitement](postProcess/principle.md), avec
+le diagramme de séquence des traitements, des couches et de la recomposition.
+
 <a id="manuel-d-utilisation_2"></a>
 <a id="manuel-dutilisation_2"></a>
 

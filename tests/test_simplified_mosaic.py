@@ -1,3 +1,4 @@
+from lib.siril_api import format_commands as _format_commands, SirilCommand as _SirilCommand
 from lib.mosaic import Mosaic
 
 
@@ -17,7 +18,7 @@ def test_simplified_mosaic(tmp_path):
     )
 
     prepared_files = mosaic.prepare_input_files()
-    script_content = mosaic._generate_mosaic_script(prepared_files)
+    script_content = _format_commands(mosaic._generate_mosaic_commands(prepared_files))
 
     assert len(prepared_files) == 3
     assert all(prepared_file.exists() for prepared_file in prepared_files)

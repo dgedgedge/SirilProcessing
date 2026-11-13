@@ -1,11 +1,20 @@
+from lib.siril_api import format_commands as _format_commands, SirilCommand as _SirilCommand
 import json
 from collections.abc import Callable
 from pathlib import Path
 import numpy as np
 import pytest
 from astropy.io import fits
-from lib.drizzle import QUALITY_PIPELINE_VERSION, analyse, coverage, read_registration, run_stack, validate_settings
+from lib.drizzle import QUALITY_PIPELINE_VERSION, analyse, coverage, read_registration, run_stack as _run_stack, validate_settings
 from lib.siril import SirilSequence
+
+
+def run_stack(*args, **kwargs):
+    """Adapte les préparations atomiques historiques des fixtures au lot typé."""
+    args = list(args)
+    if len(args) > 7 and isinstance(args[7], str):
+        args[7] = [_SirilCommand.from_text(line) for line in args[7].splitlines() if line.strip()]
+    return _run_stack(*args, **kwargs)
 
 
 def metadata(n, cfa=False):
@@ -82,19 +91,20 @@ def test_pipeline_native_cfa_and_report(
     seq.write_text("S 'light_' 1 4 4 3 0 6 0 0 0\n"+''.join(f'I {i+1} 1\n' for i in range(4))+''.join(f'R0 1.7 1.8 .9 1 0 30 H 1 0 {i} 0 1 {i} 0 0 1\n' for i in range(4)))
     class FakeSiril:
         scripts=[]
-        def run_siril_script(self, script, *args, **kwargs):
+        def run_commands(self, script, *args, **kwargs):
+            script = _format_commands(script)
             self.scripts.append(script)
             directory = Path(args[0])
-            if kwargs.get('script_name') == '04_debayer_registration.sps':
+            if kwargs.get('name') == '04_debayer_registration':
                 overrides = {2: [[.951232,.0476758,114.759],[-.698402,-.0725698,2288.6],[0,0,1]]} if bad_alignment else None
                 simulated_registered_sequence(directory, 'light_', 'debayer_light_', overrides)
-            if kwargs.get('script_name') == '04_realign.sps':
+            if kwargs.get('name') == '04_realign':
                 from lib.siril import SirilSequence
                 checked = SirilSequence.read(directory/'debayer_light_.seq')
                 assert checked.images[1].included == (not bad_alignment)
                 assert '-filter-included' in script
                 simulated_registered_sequence(directory, 'debayer_light_', 'r_debayer_light_')
-            if kwargs.get('script_name') == '04_applyreg.sps':
+            if kwargs.get('name') == '04_applyreg':
                 prefix = next(line.split()[1] for line in script.splitlines() if line.startswith('seqapplyreg '))
                 simulated_registered_sequence(directory, prefix, f'r_{prefix}')
             if '\nstack ' in script:
@@ -193,9 +203,10 @@ def test_invalid_debayer_alignment_stops_before_any_resampling(
     sequence.write()
     scripts = []
     class FakeSiril:
-        def run_siril_script(self, script, working_dir, script_name=None):
+        def run_commands(self, script, working_dir, name=None):
+            script = _format_commands(script)
             scripts.append(script)
-            if script_name == '04_debayer_registration.sps':
+            if name == '04_debayer_registration':
                 mirrored = [[-1,0,19],[0,1,0],[0,0,1]]
                 simulated_registered_sequence(working_dir, 'light_', 'debayer_light_',
                                               {i: mirrored for i in range(1,4)})
@@ -258,9 +269,10 @@ def test_all_quality_controls_precede_drizzle(tmp_path, mode, weighted, abnormal
     cfg={'drizzle':mode,'roundness_filter':'.5','nbstars_filter':'10', 'max_fwhm': 6,
          'roundness_weighted':weighted,'robust_realign':False}
     class FakeSiril:
-        def run_siril_script(self, script, *args, **kwargs):
+        def run_commands(self, script, *args, **kwargs):
+            script = _format_commands(script)
             calls.append(Path(args[0]))
-            if kwargs.get('script_name') == '04_applyreg.sps':
+            if kwargs.get('name') == '04_applyreg':
                 original = SirilSequence.read(Path(args[0])/seq.name)
                 assert len(original.images) == 4
                 assert all(image.included for image in original.images)
@@ -351,7 +363,7 @@ def test_stage_transfer_isolates_metadata_and_references_fits(tmp_path):
     dest=tmp_path/'stacking';dest.mkdir()
     (source/'light_.seq').write_text('original')
     fits.writeto(source/'light_001.fits',np.ones((4,4)))
-    (source/'registration.sps').write_text('close')
+    (source/'registration.commands.json').write_text('[]')
     (source/'index.html').write_text('registration report')
     (source/'distortion').mkdir()
     (source/'distortion'/'map.txt').write_text('calibration')
@@ -361,7 +373,7 @@ def test_stage_transfer_isolates_metadata_and_references_fits(tmp_path):
     assert (dest/'light_001.fits').resolve()==source/'light_001.fits'
     (dest/'light_.seq').write_text('selection changed')
     assert (source/'light_.seq').read_text()=='original'
-    assert not (dest/'registration.sps').exists()
+    assert not (dest/'registration.commands.json').exists()
     assert not list(dest.rglob('*.html'))
     assert (source/'index.html').read_text() == 'registration report'
     assert (dest/'distortion'/'map.txt').read_text()=='calibration'
@@ -486,12 +498,13 @@ def test_registration_snapshot_and_quality_counts_are_separate(
     class FakeSiril:
         """Simule seulement les sorties de rééchantillonnage et d'empilement."""
 
-        def run_siril_script(self, script, directory, script_name=None):
+        def run_commands(self, script, directory, name=None):
             """Préserve la sélection produite par le code Python testé."""
+            script = _format_commands(script)
             directory = Path(directory)
-            if script_name == '04_applyreg.sps':
+            if name == '04_applyreg':
                 simulated_registered_sequence(directory, 'light_', 'r_light_')
-            if script_name == '04_stacking.sps':
+            if name == '04_stacking':
                 (tmp_path / 'final.fit').touch()
             return True
 
@@ -544,3 +557,20 @@ def test_initial_registration_snapshot_keeps_missing_measurements_unknown(tmp_pa
     assert failed['measurements']['fwhm'] is None
     assert failed['reasons'] == ['excluded_by_siril', 'invalid_registration']
     json.dumps(snapshot, allow_nan=False)
+
+
+def test_invalid_measurement_is_not_reported_as_a_siril_exclusion(tmp_path: Path) -> None:
+    """Une mesure invalide encore incluse relève du contrôle Python suivant."""
+    from lib.drizzle import _registration_snapshot
+    from lib.siril import RegistrationData, SirilSequence
+
+    source = tmp_path/'light_001.fits'
+    fits.writeto(source, np.ones((8, 8), dtype='float32'))
+    sequence = SirilSequence.from_files(tmp_path/'light_.seq', 'light_', [source])
+    sequence.images[0].registrations['R0'] = RegistrationData(0, 0, 0, 0, 0, 0, np.eye(3))
+    snapshot = _registration_snapshot(sequence.images)
+    assert snapshot['aligned_count'] == 1 and snapshot['rejected_count'] == 0
+    assert snapshot['invalid_measurements_count'] == 1
+    assert snapshot['frames'][0]['included'] is True
+    assert snapshot['frames'][0]['registration_valid'] is False
+    assert snapshot['frames'][0]['reasons'] == ['invalid_registration']

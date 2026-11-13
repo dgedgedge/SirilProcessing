@@ -10,6 +10,11 @@ exports et l'annotation. Il renforce la couleur du **fond sans étoiles déjà
 étiré**, puis le recompose avec la même couche stellaire rendue. Les étoiles
 ne reçoivent pas de nouvelle passe de saturation.
 
+Le [diagramme de séquence du post-traitement](principle.md#sequence-postprocessing-couleur)
+montre la séparation en deux couches et les deux recompositions : un premier
+rendu GHS complet est conservé, puis la couleur repart du fond GHS avec les
+mêmes étoiles pour produire l'image finale colorée.
+
 L'étape est **activée par défaut après AutoGHS**. Aucun réglage ne dépend du nom de la
 cible. La force est modulée par le signal, la cohérence chromatique, la couleur
 déjà présente, les hautes lumières et la marge disponible dans le gamut RGB.
@@ -117,7 +122,21 @@ avant réinitialisation du dossier couleur. Les anciens rapports contenant les
 couches explicites restent utilisables, sans pouvoir certifier rétroactivement
 leur provenance avant la première passe couleur.
 
-Le rapport `06_final_color.json` et `06_final_color_work/` contiennent le fond
+Dans le plan lightProcess, le rapport est `06_color/color.json` et les
+fichiers sont dans `06_color/color_work/`. Les champs permettent de distinguer
+les couches, même lorsque leurs noms de fichiers commencent tous par `starless` :
+
+| Champ du rapport | Image référencée dans le pipeline complet | Rôle FITS |
+|---|---|---|
+| `image_path` | Fond GHS sans étoiles, avant la couleur | `STARLESS` |
+| `output_starless_image` | Fond coloré sans étoiles | `STARLESS` |
+| `output_image` | Fond coloré recomposé avec les étoiles rendues | `WITHSTARS` |
+
+Le nom `*_starless_ghs_range_color_final.fits` conserve celui du fond d'entrée ;
+le suffixe `color_final` désigne ici la sortie recomposée avec étoiles. Le
+nom seul ne décrit donc pas le contenu de cette sortie.
+
+En appel autonome, le rapport `06_final_color.json` et `06_final_color_work/` contiennent le fond
 coloré, le FITS recomposé et son JPEG. Les sources GHS et stellaires ne sont pas
 modifiées. Les fichiers sont directement dans le dossier de travail, sans
 sous-dossier `001`. Le dossier est réinitialisé lors des relances, après

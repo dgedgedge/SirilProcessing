@@ -1,3 +1,4 @@
+from lib.siril_api import format_commands as _format_commands, SirilCommand as _SirilCommand
 from pathlib import Path
 
 import pytest
@@ -87,6 +88,7 @@ def test_mosaic_uses_parsed_options_and_cleans_operation(tmp_path, monkeypatch, 
     work = args.work_dir/'mosaic_panels'
 
     def run(script, directory):
+        script = _format_commands(script)
         assert Path(directory) == work
         assert 'panels_mosaic' in script
         import numpy as np
@@ -102,7 +104,7 @@ def test_mosaic_uses_parsed_options_and_cleans_operation(tmp_path, monkeypatch, 
         return success
 
     service = Mock()
-    service.run_siril_script.side_effect = run
+    service.run_commands.side_effect = run
     factory = Mock(return_value=service)
     monkeypatch.setattr(module, 'Siril', factory)
     report = tmp_path/'report.json'
@@ -285,7 +287,7 @@ def test_full_mosaic_survives_cleanup_and_crop_failure(tmp_path, monkeypatch, gr
         fits.writeto(work/'output/field_mosaic.fit', np.ones((5, 7)))
         return True
     service = Mock()
-    service.run_siril_script.side_effect = run
+    service.run_commands.side_effect = run
     monkeypatch.setattr(module, 'Siril', lambda **kwargs: service)
     def fail(*args, **kwargs):
         raise OSError('crop failed')
@@ -334,7 +336,7 @@ def test_excessive_crop_returns_full_mosaic_and_report_after_cleanup(tmp_path, m
             fits.writeto(work/f'output/r_mosaic_{i:05d}.fit', np.ones((10, 10)), panel_header)
         return True
     service = Mock()
-    service.run_siril_script.side_effect = run
+    service.run_commands.side_effect = run
     monkeypatch.setattr(module, 'Siril', lambda **kwargs: service)
     report = tmp_path/'report.json'
     result = mosaic.post_process(panels[0], report)
@@ -425,6 +427,7 @@ def test_numbered_mosaic_uses_generic_image_and_keeps_sources(
 
     def execute(script: str, directory: str) -> bool:
         """Simule uniquement Siril ; les copies et noms de sortie sont réels."""
+        script = _format_commands(script)
         assert Path(directory) == layout.mosaic
         assert '-out=image' in script
         assert '-out=M31_mosaic' not in script
@@ -432,7 +435,7 @@ def test_numbered_mosaic_uses_generic_image_and_keeps_sources(
         return True
 
     service = Mock()
-    service.run_siril_script.side_effect = execute
+    service.run_commands.side_effect = execute
     monkeypatch.setattr(module, 'Siril', lambda **kwargs: service)
     result = Mosaic().post_process(panels[0], layout.mosaic / 'mosaic.json', argparse.Namespace(
         mosaic_inputs=[panels[1]], mosaic_name='M31', mosaic_directory=layout.mosaic,

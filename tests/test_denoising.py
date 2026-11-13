@@ -1,4 +1,5 @@
 """Acceptation du débruitage et conservation de l'entrée en cas de flou."""
+from lib.siril_api import format_commands as _format_commands, SirilCommand as _SirilCommand
 from pathlib import Path
 import json
 from types import SimpleNamespace
@@ -27,8 +28,9 @@ def test_denoise_validation_and_handoff(
     stale_parent = tmp_path / '03_denoise_work'
     stale_parent.mkdir(parents=True, exist_ok=True)
     (stale_parent / 'stale.txt').write_text('stale')
-    def run(script, work, script_name):
-        if script_name == 'quality.sps':
+    def run(script, work, name):
+        script = _format_commands(script)
+        if name == 'quality':
             assert 'findstar' in script and 'denoise -vst' not in script
             return True
         assert 'findstar' not in script
@@ -38,7 +40,7 @@ def test_denoise_validation_and_handoff(
         fits.writeto(Path(work)/'candidate.fits', fits.getdata(source)*.99)
         return True
     monkeypatch.setattr('lib.denoising.Siril',
-                        lambda **kwargs: SimpleNamespace(run_siril_script=run))
+                        lambda **kwargs: SimpleNamespace(run_commands=run))
     monkeypatch.setattr('lib.denoising.compare_star_catalogs', lambda *args, **kwargs:
                         dict(status='validated', matched_count=20, pairs=[],
                              before_fwhm_px={'mean': 4}, after_fwhm_px={'mean': 4*width},
@@ -68,7 +70,7 @@ def test_failed_siril_is_reported(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     source = tmp_path/'input.fit'
     fits.writeto(source, np.ones((30, 30)))
     monkeypatch.setattr('lib.denoising.Siril',
-                        lambda **kwargs: SimpleNamespace(run_siril_script=Mock(return_value=False)))
+                        lambda **kwargs: SimpleNamespace(run_commands=Mock(return_value=False)))
     with pytest.raises(RuntimeError, match='Échec Siril'):
         SirilNoiseReductionProcessor().post_process(source, tmp_path/'report.json')
     assert '"status": "failed"' in (tmp_path/'report.json').read_text()
@@ -88,8 +90,8 @@ def test_execution_options_are_independent(tmp_path: Path) -> None:
     second = _DenoisingExecution(source, tmp_path / 'second.json', args)
     assert first.args.denoise_modulation == .25
     assert second.args.denoise_modulation == .75
-    assert '-mod=0.25' in first._build_script()
-    assert '-mod=0.75' in second._build_script()
+    assert '-mod=0.25' in _format_commands(first._build_commands())
+    assert '-mod=0.75' in _format_commands(second._build_commands())
     first.result['error'] = 'first only'
     assert 'error' not in second.result
     assert first.work != second.work
