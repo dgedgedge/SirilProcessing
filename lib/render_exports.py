@@ -17,6 +17,26 @@ from lib.star_separation import validate_rgb
 JPEG_QUALITY = 95
 
 
+def siril_display_planes(data: np.ndarray) -> np.ndarray:
+    """Expose les plans FITS dans le sens haut/bas de l'affichage natif Siril.
+
+    Parameters
+    ----------
+    data : numpy.ndarray
+        Plans RGB natifs du FITS, de forme (3, hauteur, largeur), dans [0,1].
+
+    Returns
+    -------
+    numpy.ndarray
+        Vue des plans avec les lignes inversées, sans copie ni modification
+        des intensités. Siril affiche la première ligne FITS en bas même
+        lorsque ROWORDER indique TOP-DOWN ; cette carte ne retourne donc
+        pas une seconde fois la présentation RGB. Voir render-exports.md.
+    """
+    validate_rgb(data)
+    return data[:, ::-1, :]
+
+
 def render_array_image(
     data: np.ndarray, row_order: str = 'BOTTOM-UP',
 ) -> Image.Image:
@@ -27,19 +47,17 @@ def render_array_image(
     data : numpy.ndarray
         Trois plans finis, dans l'ordre RGB, de forme (3, hauteur, largeur).
     row_order : str
-        Orientation FITS BOTTOM-UP ou TOP-DOWN ; la sortie est orientée écran.
+        Carte FITS BOTTOM-UP ou TOP-DOWN, validée pour compatibilité. Les deux
+        valeurs utilisent le même affichage natif de Siril, bas vers haut.
 
     Returns
     -------
     PIL.Image.Image
         Copie RGB quantifiée au plus proche, à fermer par l'appelant.
     """
-    validate_rgb(data)
     if row_order not in ('TOP-DOWN', 'BOTTOM-UP'):
         raise ValueError(f'ROWORDER inconnu : {row_order}')
-    if row_order == 'BOTTOM-UP':
-        data = data[:, ::-1, :]
-    pixels = np.rint(np.moveaxis(data, 0, -1)*255).astype(np.uint8)
+    pixels = np.rint(np.moveaxis(siril_display_planes(data), 0, -1)*255).astype(np.uint8)
     return Image.fromarray(pixels)
 
 
@@ -59,8 +77,9 @@ def write_array_jpeg(
 def read_render_image(source: Path) -> Image.Image:
     """Convertit un FITS RGB non linéaire en image RGB 8 bits orientée pour l'écran.
 
-    SPNLIN doit être vrai et les pixels finis dans [0,1]. ROWORDER est respecté,
-    avec BOTTOM-UP par défaut, comme Siril. Les arrondis se font au plus proche ;
+    SPNLIN doit être vrai et les pixels finis dans [0,1]. ROWORDER est validé,
+    avec BOTTOM-UP par défaut. L'orientation suit l'affichage natif Siril,
+    première ligne FITS en bas, y compris avec TOP-DOWN. Arrondi au plus proche ;
     aucune normalisation par les extrema ni conversion colorimétrique implicite
     n'est appliquée. Les erreurs de format ou de lecture sont propagées.
     """

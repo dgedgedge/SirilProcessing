@@ -43,8 +43,8 @@ def test_projection_rotation_wrap_and_orientation(
     assert len(selected) == 2
     assert selected[0][0].name == 'M031'
     actual = {obj.name: (x, y) for obj, x, y in selected}
-    assert np.allclose(actual['Test0'], (100, 70 if row_order == 'TOP-DOWN' else 329))
-    assert np.allclose(actual['M031'], (350, 300 if row_order == 'TOP-DOWN' else 99))
+    assert np.allclose(actual['Test0'], (100, 329))
+    assert np.allclose(actual['M031'], (350, 99))
 
 
 def test_bundled_catalog_identifications() -> None:
@@ -116,8 +116,7 @@ def test_catalog_extent_uses_diameters_rotation_and_screen_orientation(order: st
     assert len(outline) == 97
     for index, radius, angle in ((0, 30, 37), (24, 15, 127)):
         x, y = outline[index]
-        if order == 'BOTTOM-UP':
-            y = 399 - y
+        y = 399 - y
         point = pixel_to_skycoord(x, y, wcs)
         center = SkyCoord(obj.ra, obj.dec, unit=u.deg)
         assert center.separation(point).arcmin == pytest.approx(radius, abs=1e-7)
@@ -132,3 +131,28 @@ def test_catalog_contains_actual_object_sizes() -> None:
     assert objects['NGC0224'].major_arcmin > 100
     assert objects['NGC0221'].major_arcmin < 15
     assert objects['NGC0224'].position_angle_deg is not None
+
+
+@pytest.mark.parametrize('row_order', ['TOP-DOWN', 'BOTTOM-UP'])
+def test_catalog_position_matches_the_siril_oriented_rgb_export(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, row_order: str,
+) -> None:
+    """Le repère WCS et le pixel coloré coïncident après le retournement de présentation."""
+    from lib.render_exports import read_render_image
+
+    header = celestial_header(row_order)
+    ra, dec = WCS(header).all_pix2world(100, 70, 0)
+    obj = SkyObject('Target', float(ra), float(dec), 10., '')
+    monkeypatch.setattr(AnnotationCatalog, 'read', staticmethod(lambda: [obj]))
+    data = np.zeros((3, 400, 500), dtype='f4')
+    data[0, 70, 100] = 1.
+    header['SPNLIN'] = True
+    del header['NAXIS1'], header['NAXIS2']
+    source = tmp_path/'target.fits'
+    fits.writeto(source, data, header)
+    projected, audit = AnnotationCatalog.project(fits.getheader(source), 14.)
+    assert audit['status'] == 'SUCCESS'
+    _, x, y = projected[0]
+    assert (round(x), round(y)) == (100, 329)
+    with read_render_image(source) as image:
+        assert image.getpixel((round(x), round(y))) == (255, 0, 0)

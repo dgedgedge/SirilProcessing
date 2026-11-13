@@ -102,7 +102,8 @@ class AnnotationCatalog:
         pas d'inventer une emprise : retourne alors un contour vide.
         """
         major, minor, angle = obj.major_arcmin, obj.minor_arcmin, obj.position_angle_deg
-        if not major or not minor or (angle is None and major != minor):
+        if (row_order not in ('BOTTOM-UP', 'TOP-DOWN') or not major or not minor
+                or (angle is None and major != minor)):
             return ()
         theta = np.linspace(0, 2 * np.pi, 97)
         pa = np.deg2rad(angle or 0)
@@ -114,8 +115,9 @@ class AnnotationCatalog:
         x, y = skycoord_to_pixel(sky, wcs, origin=0, mode='all')
         if not (np.isfinite(x).all() and np.isfinite(y).all()):
             return ()
-        if row_order == 'BOTTOM-UP':
-            y = height - 1 - y
+        # Même convention que le fond RGB : première ligne FITS en bas dans
+        # Siril, indépendamment de ROWORDER. Le WCS source reste inchangé.
+        y = height - 1 - y
         return tuple(zip(map(float, x), map(float, y)))
 
     @classmethod
@@ -125,7 +127,8 @@ class AnnotationCatalog:
         """Projette les objets brillants sur les pixels écran du FITS final.
 
         Le WCS céleste (distorsion SIP comprise) et son référentiel sont respectés.
-        L'ordre BOTTOM-UP est inversé après projection. Un WCS absent ou invalide
+        L'axe Y est inversé après projection pour l'affichage natif Siril,
+        indépendamment de ROWORDER. Un WCS absent ou invalide
         est audité ; aucun placement fondé sur le seul nom de cible n'est tenté.
         Les objets sans magnitude sont retenus uniquement s'ils ont un alias Messier.
         """
@@ -167,8 +170,7 @@ class AnnotationCatalog:
             x, y = float(x), float(y)
             if not (np.isfinite(x) and np.isfinite(y) and 0 <= x < width and 0 <= y < height):
                 continue
-            if header.get('ROWORDER', 'BOTTOM-UP') == 'BOTTOM-UP':
-                y = height - 1 - y
+            y = height - 1 - y
             try:
                 outline = cls.project_outline(obj, wcs, height,
                                               header.get('ROWORDER', 'BOTTOM-UP'))

@@ -949,3 +949,10 @@ float32 et float64 : les canaux encore positifs ne doivent pas être érodés
 jusqu'aux valeurs sous-normales. La préparation CDF doit rejeter un dépassement
 de budget noir, même lorsque sa forme est admissible. Ces cas couvrent le
 blocage de tous les finalistes par une perte numérique d'un pixel.
+
+Les exports RGB sont contrôlés dans le sens natif de l'affichage Siril,
+première ligne FITS en bas, pour TOP-DOWN, BOTTOM-UP et une carte absente.
+Des coins colorés asymétriques comparent le JPEG final et la capture d'essai ;
+les positions et contours WCS doivent suivre les pixels du rendu après ce
+retournement. Une session Siril isolée et ses exports savepng servent de
+référence indépendante, sans utiliser de FITS personnels comme fixtures.

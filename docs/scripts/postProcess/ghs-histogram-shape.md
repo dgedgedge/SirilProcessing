@@ -419,7 +419,8 @@ Chaque carte de `histograms.html` donne ces liens. Le manifeste ajoute
 Le numéro identifie un essai **dans cette exécution** ; il peut changer entre
 deux traitements. Un essai rejeté conserve son verdict et ses motifs.
 
-Les JPEG gardent la pleine résolution, l'orientation FITS `ROWORDER`, les
+Les JPEG gardent la pleine résolution, l’orientation native d’affichage Siril
+(première ligne FITS en bas, même avec `ROWORDER=TOP-DOWN`), les
 intensités directes sur [0,1], la qualité 95 et les canaux RGB sans
 sous-échantillonnage couleur. Aucun gamma ni auto-étirement supplémentaire
 n'est appliqué. La quantification JPEG sur huit bits est destinée à l'examen

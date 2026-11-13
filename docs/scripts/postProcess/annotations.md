@@ -94,8 +94,8 @@ indéterminées. Sa [provenance et sa licence](../../../data/openngc/README.md)
 sont distinctes de la GPL du code. Aucun téléchargement n'est fait à l'exécution.
 
 Le WCS céleste du FITS final, y compris les distorsions SIP et son référentiel,
-projette les coordonnées sur l'image. L'ordre des lignes est ensuite appliqué
-comme pour le JPEG. Seuls les objets dont le centre est dans le champ sont
+projette les coordonnées sur l'image. L'axe Y est ensuite retourné comme pour
+le JPEG et l'affichage natif Siril, indépendamment de `ROWORDER`. Seuls les objets dont le centre est dans le champ sont
 éligibles. Les noms Messier sont prioritaires, puis les objets les plus brillants.
 Il s'agit de positions cataloguées, sans détection ni affirmation de visibilité.
 

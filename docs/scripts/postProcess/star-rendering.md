@@ -223,7 +223,8 @@ Dans `05_autoghs/02_stars/` (ou `02_stars/` à côté du rapport autonome), `<im
 Les zéros sont exclus des axes logarithmiques et leur fraction est affichée.
 Le graphique, ses légendes et son encart utilisent le thème sombre commun
 `lib.diagnostic_style` : fond noir et textes clairs. Les intensités des extraits
-RGB restent affichées directement, sans inversion des pixels.
+RGB restent affichées directement, sans inversion des intensités. Leur sens
+haut/bas suit l'affichage Siril, même lorsque `ROWORDER=TOP-DOWN`.
 `<image>_stars_render.jpg` fournit aussi la couche entière en pleine résolution,
 à côté du FITS. Les chemins sont dans `stars.diagnostic_path` et
 `stars.output_jpeg`. Le processeur stellaire autonome produit les mêmes types

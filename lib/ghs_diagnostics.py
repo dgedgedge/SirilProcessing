@@ -42,7 +42,8 @@ class HistogramDiagnostics(processor):
         headroom : float
             Fraction du fond dans la fusion, dans ]0,1[.
         row_order : str
-            Orientation FITS BOTTOM-UP ou TOP-DOWN.
+            Carte FITS BOTTOM-UP ou TOP-DOWN, validée. Les captures suivent
+            toujours l'affichage natif Siril, première ligne FITS en bas.
 
         Notes
         -----

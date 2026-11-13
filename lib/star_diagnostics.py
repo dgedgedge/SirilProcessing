@@ -8,6 +8,7 @@ from lib.star_rendering import VISIBILITY_LEVEL, stellar_peak_positions
 from lib.star_separation import validate_rgb
 from lib.type_defs import JSONReport
 from lib.diagnostic_style import DIAGNOSTIC_COLORS, apply_dark_diagnostic_style
+from lib.render_exports import siril_display_planes
 
 
 def write_star_diagnostic(
@@ -23,7 +24,8 @@ def write_star_diagnostic(
     de 0,03 est un indicateur de contraste, pas un décompte d'étoiles physiques.
     Une orientation inconnue ou une géométrie incompatible lève ValueError.
     Le graphique utilise un fond noir et des textes clairs ; les niveaux
-    des extraits RGB restent ceux des données, sans inversion des pixels.
+    des extraits RGB restent ceux des données. Leur sens haut/bas suit
+    l'affichage natif Siril, indépendamment de la carte ROWORDER.
     """
     from matplotlib.backends.backend_agg import FigureCanvasAgg
     from matplotlib.figure import Figure
@@ -47,7 +49,7 @@ def write_star_diagnostic(
         (before, "Avant — étoiles linéaires positives", DIAGNOSTIC_COLORS[0]),
         (after, "Après — étoiles étirées", DIAGNOSTIC_COLORS[1]),
     )):
-        displayed = data[:, ::-1] if row_order == "BOTTOM-UP" else data
+        displayed = siril_display_planes(data)
         crop = np.moveaxis(displayed[:, y:y + 512, x:x + 512], 0, -1)
         axes[0, column].imshow(crop, vmin=0, vmax=1)
         axes[0, column].set_title(label + "\nMême extrait central, affichage direct [0,1]")

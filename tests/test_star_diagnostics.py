@@ -34,7 +34,7 @@ def test_stellar_figure_scales_and_orientation(
         assert max(figure.texts[-1].get_bbox_patch().get_facecolor()[:3]) < .1
         for axis in axes[2:]:
             assert max(axis.get_legend().get_frame().get_facecolor()[:3]) < .1
-        expected = before[:, ::-1] if row_order == "BOTTOM-UP" else before
+        expected = before[:, ::-1]
         np.testing.assert_array_equal(
             axes[0].images[0].get_array(), expected.transpose(1, 2, 0),
         )
