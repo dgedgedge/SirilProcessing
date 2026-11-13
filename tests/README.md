@@ -404,6 +404,10 @@ restent distincts.
 `test_final_annotation.py` contrôle l’encart final de prise de vue : provenance
 des cartes FITS, placement automatique, conservation des pixels hors panneau,
 absence de totalisation supposée des mosaïques et options de configuration.
+Il contrôle aussi la restauration réellement retenue : ordre de la chaîne,
+moteurs publiés, exclusions des essais rejetés et informations manquantes.
+Les tests de reprise AutoGHS et couleur vérifient que ce choix est conservé
+dans l'encart après une relance partielle.
 
 `test_annotation_catalog.py` vérifie OpenNGC, la projection WCS avec rotation
 et passage RA=0, les orientations et les exclusions automatiques d’étiquettes.

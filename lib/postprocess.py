@@ -1987,6 +1987,7 @@ class PostProcessingProcessor(processor):
                 layout.root / '06_color' / 'annotation.json' if layout else report.with_name(report.stem + "_annotation.json"),
                 args=runtime,
                 acquisition_source=source,
+                treatments=results,
             )
             results["annotation"] = annotation
             if layout:

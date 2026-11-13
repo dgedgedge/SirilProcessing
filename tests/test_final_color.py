@@ -113,6 +113,9 @@ def test_color_only_skips_all_upstream_and_does_not_accumulate(
     write_render_jpeg(ghs, ghs_jpeg)
     previous = json.loads(report.read_text())
     previous['autoghs']['output_jpeg'] = str(ghs_jpeg)
+    previous['restoration'] = {
+        'status': 'accepted', 'selected_chain': ['denoise:graxpert', 'sharpen:siril'],
+    }
     report.write_text(json.dumps(previous))
     (tmp_path / 'prepared_linear.fits').unlink()
     originals = [path.read_bytes() for path in (source, background, stars)]
@@ -138,6 +141,8 @@ def test_color_only_skips_all_upstream_and_does_not_accumulate(
     assert Path(second['output_ghs_image']).read_bytes() == ghs_before
     assert [path.read_bytes() for path in (source, background, stars)] == originals
     assert 'gradient' in second['treatments'] and 'final_color' in second['treatments']
+    assert ('Restauration : Débruitage (GraXpert) → Déconvolution (Siril)'
+            in second['treatments']['annotation']['lines'])
     assert 'output_jpeg' in second
     args.final_color_strength = 0
     restored = pipeline.post_process(source, report, args)

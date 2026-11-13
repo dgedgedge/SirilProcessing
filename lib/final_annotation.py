@@ -2,7 +2,9 @@
 
 Les cartes de prise de vue viennent du FITS. Les comptes de poses/panneaux
 viennent des rapports de l'image scientifique d'origine, sans inventer une
-intégration totale de mosaïque. Voir docs/scripts/postProcess/annotations.md.
+intégration totale de mosaïque. La restauration affichée vient du résultat
+retenu, jamais des moteurs seulement essayés ou des options demandées.
+Voir docs/scripts/postProcess/annotations.md.
 """
 
 from __future__ import annotations
@@ -87,6 +89,75 @@ class FinalImageAnnotator(processor):
         if not lines:
             lines.append("Informations non renseignées")
         return lines
+
+    @staticmethod
+    def restoration_line(treatments: JSONReport | None) -> str:
+        """Décrit la restauration publiée dans les rapports du post-traitement.
+
+        Parameters
+        ----------
+        treatments : JSONReport, optional
+            Résultats complets, y compris ceux conservés lors d'une reprise.
+            La chaîne retenue prime sur les comparaisons par étape. Seules
+            les opérations acceptées sont affichées, dans leur ordre réel.
+
+        Returns
+        -------
+        str
+            Ligne française pour l'encart. Sans rapports fournis, le type
+            reste non renseigné ; un résultat complet sans restauration
+            appliquée indique « aucune ». Un rapport incomplet ne permet
+            pas de conclure à une absence de restauration.
+        """
+        unknown = "Restauration : non renseignée"
+        if treatments is None:
+            return unknown
+        operations = {"denoise": "Débruitage", "sharpen": "Déconvolution"}
+        engines = {
+            "siril": "Siril", "cosmic_clarity": "Cosmic Clarity",
+            "cosmic-clarity": "Cosmic Clarity", "graxpert": "GraXpert",
+        }
+        unchanged = {"no_safe_improvement", "rejected", "DISABLED", "disabled"}
+        selected: list[tuple[str, str]] = []
+        if "restoration" in treatments:
+            stage = treatments["restoration"]
+            if not isinstance(stage, dict):
+                return unknown
+            if stage.get("status") not in unchanged:
+                chain = stage.get("selected_chain")
+                if (stage.get("status") != "accepted" or not isinstance(chain, list)
+                        or not chain):
+                    return unknown
+                for step in chain:
+                    if not isinstance(step, str) or ":" not in step:
+                        return unknown
+                    operation, engine = step.split(":", 1)
+                    if operation not in operations or not engine.strip():
+                        return unknown
+                    selected.append((operation, engine))
+        else:
+            for name, stage in treatments.items():
+                if name not in ("deconvolution", "denoise"):
+                    continue
+                if not isinstance(stage, dict):
+                    return unknown
+                if stage.get("status") in unchanged:
+                    continue
+                if stage.get("status") != "accepted":
+                    return unknown
+                engine = stage.get("selected_engine") or stage.get("engine")
+                if not engine and ("selected_step" in stage or "secondary_algorithm" in stage):
+                    # Les rapports Siril historiques ne portaient pas de clé engine.
+                    engine = "siril"
+                if not isinstance(engine, str) or not engine.strip():
+                    engine = "moteur non renseigné"
+                operation = "sharpen" if name == "deconvolution" else "denoise"
+                selected.append((operation, engine))
+        description = " → ".join(
+            f"{operations[operation]} ({engines.get(engine, engine)})"
+            for operation, engine in selected
+        )
+        return "Restauration : " + (description or "aucune")
 
     @staticmethod
     def draw_panel(image: Image.Image, lines: list[str]) -> tuple[int, int, int, int]:
@@ -258,6 +329,7 @@ class FinalImageAnnotator(processor):
         self, input_path: Path, output_path: Path,
         args: argparse.Namespace | None = None,
         *, acquisition_source: Path | None = None,
+        treatments: JSONReport | None = None,
     ) -> JSONReport:
         """Annote un FITS rendu et écrit le PNG et son audit JSON.
 
@@ -272,6 +344,10 @@ class FinalImageAnnotator(processor):
         acquisition_source : Path, optional
             Stack/mosaïque d'origine pour les rapports de comptes de poses.
             Sans surcharge, consulter les rapports associés au FITS fourni.
+        treatments : JSONReport, optional
+            Résultats complets du post-traitement, après fusion des reprises,
+            pour afficher la restauration réellement appliquée. Sans ces
+            rapports, afficher « Restauration : non renseignée ».
 
         Returns
         -------
@@ -304,6 +380,7 @@ class FinalImageAnnotator(processor):
                     acquisition_source if acquisition_source is not None else source
                 )
                 lines.extend(stacking['lines'])
+                lines.append(self.restoration_line(treatments))
                 objects, sky_audit = [], {"status": "DISABLED"}
                 if getattr(runtime, "annotation_objects", True):
                     objects, sky_audit = AnnotationCatalog.project(header, limit)

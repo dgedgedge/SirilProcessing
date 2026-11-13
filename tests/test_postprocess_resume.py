@@ -20,7 +20,8 @@ def history(tmp_path: Path) -> tuple[Path, Path, Path, dict]:
     fits.writeto(source, np.full((3, 100, 120), .01, dtype='f4'))
     fits.writeto(prepared, np.full((3, 100, 120), .02, dtype='f4'))
     results = {'gradient': {'output_image': str(prepared)},
-               'restoration': {'output_image': str(prepared), 'audit': 'preserved'},
+               'restoration': {'output_image': str(prepared), 'audit': 'preserved',
+                               'status': 'accepted', 'selected_chain': ['denoise:graxpert']},
                'autoghs': {'image_path': str(prepared)}, 'annotation': {}}
     report.write_text(json.dumps(results))
     PostProcessResume.save(source, report, results)
@@ -53,6 +54,8 @@ def test_resume_same_input_and_arguments(tmp_path: Path, monkeypatch: pytest.Mon
         assert result['image_path'] == str(source)
         assert result['treatments']['restoration'] == previous['restoration']
         assert result['treatments']['autoghs']['image_path'] == str(prepared)
+        assert ('Restauration : Débruitage (GraXpert)'
+                in result['treatments']['annotation']['lines'])
     assert calls == [prepared, prepared]
     assert PostProcessResume.load(source, report)[0] == prepared
 
