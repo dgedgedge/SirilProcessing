@@ -34,6 +34,8 @@ from lib.star_rendering import color_drift
 from lib.star_separation import validate_rgb, write_rgb
 from lib.type_defs import JSONReport
 
+from lib.ghs_histogram_shape import shape_comparison_options
+
 LOGGER = logging.getLogger(__name__)
 
 # Maillage et gardes heuristiques décrits dans auto-ghs-algorithm.md.
@@ -45,8 +47,6 @@ HIGHLIGHT_BOUNDARY = 0.995
 MIN_HIGHLIGHT_WIDTH_RATIO = 0.8
 # Force CDF initiale puis huit réductions par deux, depuis la même entrée.
 CDF_SHAPE_BACKTRACKS = 8
-CDF_MIN_LOCAL_RETENTION = .65
-CDF_MAX_STIFFNESS = .35
 CDF_MAX_PEAK_SHIFT = .05
 # Budget conservateur des tableaux plein champ et des temporaires par bloc.
 GHS_RESIDENT_FLOAT32_BUFFERS = 16
@@ -695,6 +695,7 @@ class GHSOptimizer(processor):
         reference = None
         report: JSONReport = dict(status='no admissible improvement', strength=0.,
                                   requested_strength=strength, clip_limit=clip_limit,
+                                  transfer_cdf=cdf.tolist(),
                                   before=before, after=before, full_validation=[])
         if shape_enabled:
             report['before_histogram'] = state.report()
@@ -727,11 +728,9 @@ class GHSOptimizer(processor):
                 )
                 del output_light
                 audit = compare_histogram_shapes(
-                    reference, profile, shape_options.ghs_shape_retention,
-                    shape_options.ghs_shape_distance,
-                    min(shape_options.ghs_shape_peak_shift, CDF_MAX_PEAK_SHIFT),
-                    min(shape_options.ghs_shape_stiffness, CDF_MAX_STIFFNESS),
-                    max(shape_options.ghs_shape_local_retention, CDF_MIN_LOCAL_RETENTION),
+                    reference, profile,
+                    max_peak_shift=min(shape_options.ghs_shape_peak_shift, CDF_MAX_PEAK_SHIFT),
+                    **shape_comparison_options(shape_options),
                 )
                 profile['shape_preservation'] = audit
                 rejections = list(audit['rejections'])
@@ -864,9 +863,9 @@ class GHSOptimizer(processor):
         backend : ComputeBackend
             Moteur sélectionné. Son état effectif devient CPU après une reprise.
         rendered_stars : numpy.ndarray or None, optional
-            Étoiles déjà rendues, de même géométrie, réutilisées sans StarNet.
+            Argument conservé pour compatibilité, sans influence sur le fond.
         headroom : float, optional
-            Réserve de fusion du fond, fraction dans ]0,1[.
+            Argument conservé pour compatibilité, sans influence sur le fond.
         trial_images : HistogramDiagnostics or None, optional
             Cache JPEG facultatif partagé avec l'export de galerie. Le calcul
             ne change pas de critères et ne conserve aucune image candidate.
@@ -939,8 +938,8 @@ class GHSOptimizer(processor):
         et les meilleurs scores prédits sont vérifiés sur les vrais pixels RGB.
         BP est recalé avant chaque recherche. L’égalisation, l’expansion de
         dynamique et la chroma précèdent la recherche finale D/B/SP/HP protégée,
-        appliquée au fond avant fusion stellaire. rendered_stars et headroom
-        permettent d'en vérifier aussi la recomposition à étoiles fixes.
+        appliquée au fond seul avant fusion stellaire. rendered_stars et
+        headroom sont conservés pour compatibilité et ignorés par les recherches.
         Après une transformation, une recherche finale active qui n'atteint
         pas ses critères retourne TARGETS_NOT_REACHED avec le meilleur rendu
         admissible. Sans transformation, NO_IMPROVEMENT reste conservé.
@@ -1212,13 +1211,13 @@ class GHSOptimizer(processor):
                 trial_images.capture(histogram_stages[-1], current)
         chroma_diagnostics = color_drift(before_chroma, backend.numpy(current))
         presentation_entry_histogram = state.report()
+        # Les critères du fond restent indépendants des étoiles et de la fusion.
         current, presentation_stretch = self.final_stretch(
             current, analyzer, backend, options.ghs_final_strength,
             options.ghs_final_mode, options.ghs_highlight_retention,
-            rendered_stars, headroom,
-            options.ghs_log_rms_weight,
-            options if options.ghs_histogram_model == 'piecewise' else None,
-            reference_shape,
+            rms_weight=options.ghs_log_rms_weight,
+            shape_options=(options if options.ghs_histogram_model == 'piecewise' else None),
+            reference_shape=reference_shape,
             trial_images=trial_images,
             blackpoint_reference=blackpoint_reference,
         )
@@ -1236,7 +1235,7 @@ class GHSOptimizer(processor):
         # Le mode fixe reste un témoin exact ; force finale nulle désactive les deux recherches.
         if options.ghs_final_mode == 'auto' and options.ghs_final_strength > 0:
             current, quartile_report = LogHistogramRenderer().search(
-                current, analyzer, backend, options, rendered_stars, headroom,
+                current, analyzer, backend, options,
                 reference_shape=reference_shape,
                 **({'trial_images': trial_images} if trial_images is not None else {}),
                 **({'blackpoint_reference': blackpoint_reference}

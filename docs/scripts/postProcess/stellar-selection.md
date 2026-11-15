@@ -80,9 +80,8 @@ son effectif éligible mais ne recalcule pas ce dernier indicateur.
 `fraction_adaptation` et `histogram_balance` décrivent les essais du supplément ;
 `width_adaptation` garde l'historique indépendant du choix de la base.
 
-Le diagnostic stellaire affiche la fraction et les effectifs. Les recettes
-peuvent également être exportées directement avec l’API spécialisée. La recette RGB construite avec `stellar_operation`, puis exportée avec
-`CumulativeStretchTransform.export`, conserve la sélection : elle ne redétecte pas de pics et exige la
+Le diagnostic stellaire affiche la fraction et les effectifs. La recette RGB
+exportée conserve la sélection : elle ne redétecte pas de pics et exige la
 même géométrie native pour un mode spatial. La courbe scalaire représente
 explicitement **l'enveloppe neutre des pics sélectionnés**, avec w fixé à 1.
 Elle n'est pas une LUT universelle de l'image. Le JSON porte

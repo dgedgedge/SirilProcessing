@@ -264,3 +264,142 @@ class CumulativeStretchTransform:
                            transform_domain=list(self.domain), transform_points=len(curve['x']),
                            transform_observed_error=curve['observed_error'],
                            transform_precision_achieved=curve['precision_achieved'])
+
+
+class TrialTransformResolver:
+    """Reconstruit chaque chemin depuis l'entrée de branche, y compris ses BP."""
+
+    def __init__(self, report: JSONReport) -> None:
+        """Indexe les étapes retenues et les parents des essais de la recherche."""
+        self.report = report
+        self.mode = report.get('color_mode', 'human')
+        self.range_stages: dict[str, list[JSONReport]] = {}
+        operations: list[JSONReport] = []
+        for step in report.get('iterations', []):
+            operations = self.blackpoint(operations, step.get('BP', 0.))
+            accepted = step.get('accepted')
+            if accepted is not None:
+                operations = self.ghs_step(operations, accepted, float64=False, pre=False)
+                self.range_stages[f"RANGE — passe {step['iteration']}"] = operations
+        self.balance_entry = operations
+        balance = report.get('histogram_balance', {})
+        if balance.get('status') == 'applied':
+            operations = self.cdf_step(balance)
+        self.balance_output = operations
+        for step in report.get('dynamic_range', {}).get('iterations', []):
+            operations = self.blackpoint(operations, step.get('BP', 0.))
+            operations = [*operations, dict(kind='gain', value=step['gain'])]
+        self.dynamic_output = operations
+        chroma = report.get('chroma', 'off')
+        if chroma != 'off':
+            operations = [*operations, dict(kind='chroma', policy=chroma)]
+        self.presentation_entry = operations
+        presentation = report.get('presentation_stretch', {})
+        if presentation.get('status') == 'applied':
+            operations = self.ghs_step(operations, presentation, float64=False, pre=False)
+        self.search_entry = operations
+        self.search_reports = {name: item.get('report', {}) for name, item in
+                               report.get('quartile_stretch', {}).get('searches', {}).items()}
+        self.parents: dict[str, dict[str, JSONReport]] = {}
+        for name, search in self.search_reports.items():
+            self.parents[name] = {item['branch_id']: item for iteration in search.get('iterations', [])
+                                  for item in iteration.get('verified_candidates', [])
+                                  if item.get('branch_id')}
+
+    @staticmethod
+    def blackpoint(operations: list[JSONReport], value: float) -> list[JSONReport]:
+        """Ajoute un recalage non nul sans modifier le chemin parent."""
+        return [*operations, dict(kind='blackpoint', value=float(value))] if value else operations
+
+    def ghs_step(
+        self, operations: list[JSONReport], step: JSONReport, *, float64: bool, pre: bool = True,
+    ) -> list[JSONReport]:
+        """Compose BP initial, GHS et BP final dans l'ordre réellement appliqué."""
+        parameters = step.get('parameters', step)
+        if pre:
+            operations = self.blackpoint(operations, step.get('BP', 0.))
+        operations = [*operations, dict(kind='ghs', parameters={key: parameters[key] for key in GHS_KEYS},
+                                        color_mode=self.mode, float64=float64)]
+        return self.blackpoint(operations, step.get('post_BP', 0.))
+
+    def cdf_step(self, step: JSONReport) -> list[JSONReport]:
+        """Compose une CDF fixe depuis son entrée, pas depuis l'essai précédent."""
+        balance = self.report.get('histogram_balance', {})
+        table = balance.get('transfer_cdf')
+        if table is None:
+            raise ValueError('Table CDF manquante pour la transformation cumulée')
+        strength = step.get('parameters', {}).get('strength', step.get('strength'))
+        operations = [*self.balance_entry, dict(kind='cdf', table=table,
+                                               strength=strength, color_mode=self.mode)]
+        return self.blackpoint(operations, step.get('post_BP', 0.))
+
+    def branch(self, name: str, identifier: str) -> list[JSONReport]:
+        """Remonte les parents d'une branche ; un parent inconnu est une erreur."""
+        steps = []
+        seen = set()
+        while identifier != 'root':
+            if identifier in seen:
+                raise ValueError('Cycle dans le chemin de transformation')
+            seen.add(identifier)
+            item = self.parents[name][identifier]
+            steps.append(item)
+            identifier = item.get('parent_branch_id', 'root')
+        operations = self.search_entry
+        for item in reversed(steps):
+            operations = self.ghs_step(operations, item, float64=True)
+        return operations
+
+    def final(self) -> list[JSONReport]:
+        """Retourne le chemin choisi, ou l'entrée de recherche si elle est conservée."""
+        quartiles = self.report.get('quartile_stretch', {})
+        name = quartiles.get('selected_search')
+        search = self.search_reports.get(name, quartiles)
+        operations = self.search_entry
+        if name == 'unchanged' or search.get('status') != 'applied':
+            return operations
+        steps = search.get('selected_path')
+        if steps is None:
+            steps = [item['accepted'] for item in search.get('iterations', []) if item.get('accepted')]
+        for step in steps:
+            operations = self.ghs_step(operations, step, float64=True)
+        return operations
+
+    def for_trial(self, trial: JSONReport) -> list[JSONReport]:
+        """Résout l'identité, une étape, un finaliste ou un enfant admissible/rejeté."""
+        if self.report.get('diagnostic_subject') == 'stars':
+            if trial['stage'] == 'Étoiles retenues':
+                return self.report.get('histogram_stages', [])[-1]['transform_operations']
+            return trial['transform_operations']
+        stage = trial['stage']
+        if stage == 'Entrée linéaire':
+            return []
+        if stage in self.range_stages:
+            return self.range_stages[stage]
+        if stage.startswith('Égalisation — essai'):
+            return self.cdf_step(trial)
+        if stage == 'Égalisation partielle':
+            return self.balance_output
+        if stage == 'Expansion de dynamique':
+            return self.dynamic_output
+        if stage.startswith('Chroma '):
+            return self.presentation_entry
+        if stage.startswith('Présentation — finaliste'):
+            return self.ghs_step(self.presentation_entry, trial, float64=False, pre=False)
+        if stage == 'Présentation protégée':
+            return self.search_entry
+        if stage == 'Fond retenu':
+            return self.final()
+        name = trial.get('search_name')
+        if name:
+            parent = trial.get('parent_branch_id')
+            if parent is not None:
+                operations = self.branch(name, parent)
+            else:
+                operations = self.search_entry
+                for item in self.search_reports[name].get('iterations', []):
+                    if item['iteration'] >= trial['iteration']:
+                        break
+                    if item.get('accepted'):
+                        operations = self.ghs_step(operations, item['accepted'], float64=True)
+            return self.ghs_step(operations, trial, float64=True)
+        raise ValueError(f'Étape sans transformation cumulée : {stage}')

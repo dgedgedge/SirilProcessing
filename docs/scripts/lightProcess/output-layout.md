@@ -58,10 +58,13 @@ M31/
   05_autoghs/
     autoghs.json
     01_separation/
-    02_stars/
-    03_ghs/
+    03_ghs_stars/
+      stars.json
+      histogram_trials/
+    03_ghs_starless/
+      starless.json
+      histogram_trials/
     04_recomposition/
-    05_diagnostics/
     render.fits                   # rendu GHS conservé avec la passe couleur
   06_color/
     color.json

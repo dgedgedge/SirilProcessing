@@ -31,6 +31,7 @@ def pipeline(tmp_path, monkeypatch):
     spec = importlib.util.spec_from_file_location('light_process_cli', Path(__file__).parents[1] / 'bin/lightProcess.py')
     cli = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(cli)
+    monkeypatch.setattr(cli.CompletionSound, "play", Mock())
     monkeypatch.setattr(cli, 'PowerGuard', nullcontext)
     class TestConfig(Config):
         def __init__(self):
@@ -96,7 +97,11 @@ def pipeline(tmp_path, monkeypatch):
         """
         isolation = [] if use_postprocess_default else ["--no-postprocess"]
         monkeypatch.setattr(sys, 'argv', ['lightProcess.py', *map(str, roots), '--no-dark', '--output', str(tmp_path / 'out'), '--work-dir', str(tmp_path / 'work'), *isolation, *options])
-        return cli.main()
+        cli.CompletionSound.play.reset_mock()
+        status = cli.main()
+        simulated = "--dry-run" in options or "-D" in options
+        assert cli.CompletionSound.play.call_count == (1 if status == 0 and not simulated else 0)
+        return status
 
     return cli, run, stack_mock, mosaic_mock, calibrated
 

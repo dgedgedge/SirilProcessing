@@ -42,6 +42,8 @@ from lib.type_defs import JSONReport
 if TYPE_CHECKING:
     from lib.auto_ghs import ComputeBackend, HistogramAnalyzer
 
+from lib.ghs_histogram_shape import shape_comparison_options
+
 LOGGER = logging.getLogger(__name__)
 
 
@@ -59,6 +61,7 @@ class LogSpanGHSProcessor(QuartileGHSProcessor):
         'ghs_quartile_iterations', 'ghs_quartile_max_strength', 'ghs_quartile_validations',
         'ghs_quartile_block_pixels', 'ghs_linearity_tolerance', 'ghs_tail_height',
         'ghs_tail_channel', 'ghs_blackpoint_loss', 'ghs_regression_min_count',
+        'ghs_regression_log_level', 'ghs_quality_reference_weight',
         'ghs_sparse_tail_fraction', 'ghs_sparse_highlight_retention',
     }
 
@@ -105,6 +108,7 @@ class LogSpanGHSProcessor(QuartileGHSProcessor):
     ) -> tuple[np.ndarray, JSONReport]:
         """Cherche sa propre référence, puis contrôle son diffus final fond/fusion."""
         options = argparse.Namespace(**vars(args))
+        options.ghs_regression_log_level = None
         options.ghs_regression_min_count = 0.0
         options.ghs_sparse_tail_fraction = 0.0
         options.ghs_quartile_validations = min(3, args.ghs_quartile_validations)
@@ -163,10 +167,11 @@ class ShapeGHSProcessor(PopulationGHSProcessor):
     preserve_shape = True
     preserve_achieved_tail = False
     parameter_dependencies = LogSpanGHSProcessor.parameter_dependencies | {
-        'ghs_histogram_model', 'ghs_shape_smoothing', 'ghs_shape_retention',
-        'ghs_shape_distance', 'ghs_shape_peak_shift', 'ghs_shape_stiffness', 'ghs_tail_channel',
-        'ghs_shape_local_retention', 'ghs_post_blackpoint', 'ghs_shape_branches',
+        'ghs_histogram_model', 'ghs_shape_smoothing',
+        'ghs_shape_peak_shift', 'ghs_tail_channel',
+        'ghs_post_blackpoint', 'ghs_shape_branches',
         'ghs_quality_cnr_floor', 'ghs_quality_tail_bonus',
+        'ghs_shape_ratio_tolerance', 'ghs_shape_shoulder_advance', 'ghs_shape_terminal_weight',
     }
 
     @classmethod
@@ -303,9 +308,8 @@ class LogHistogramRenderer(processor):
         shape_reference = (reference_shape or before['longest_line']) if piecewise else None
         if piecewise:
             before['profile'] = protect_histogram_shape(before['profile'], shape_reference,
-                                                          args.ghs_shape_retention, args.ghs_shape_distance,
-                                                          args.ghs_shape_peak_shift, args.ghs_shape_stiffness,
-                                                          args.ghs_shape_local_retention)
+                                                          max_peak_shift=args.ghs_shape_peak_shift,
+                                                          **shape_comparison_options(args))
             if before['profile']['shape_preservation']['achieved'] is not True:
                 before['targets_achieved'] = False
                 before['unmet_targets'].append('histogram_shape')
@@ -337,6 +341,7 @@ class LogHistogramRenderer(processor):
                 before['profile'], baseline or {}, baseline or {}, shape_reference,
                 bright_retention=effective_retention, cnr_floor=args.ghs_quality_cnr_floor,
                 tail_bonus=args.ghs_quality_tail_bonus,
+                reference_weight=getattr(args, 'ghs_quality_reference_weight', 1.),
                 composite_before=fusion_baseline, composite_after=fusion_baseline,
             )
         best_image, best_name, best_assessment = original, 'unchanged', before
@@ -369,9 +374,8 @@ class LogHistogramRenderer(processor):
             shape_rejections = []
             if piecewise:
                 protected = protect_histogram_shape(assessment['profile'], shape_reference,
-                                                      args.ghs_shape_retention, args.ghs_shape_distance,
-                                                      args.ghs_shape_peak_shift, args.ghs_shape_stiffness,
-                                                      args.ghs_shape_local_retention)
+                                                      max_peak_shift=args.ghs_shape_peak_shift,
+                                                          **shape_comparison_options(args))
                 assessment['profile'] = protected
                 shape_rejections = HistogramRenderQuality.hard_shape_rejections(protected)
                 if protected['shape_preservation']['achieved'] is not True:
@@ -391,6 +395,7 @@ class LogHistogramRenderer(processor):
                     assessment['profile'], baseline, measured, shape_reference,
                     bright_retention=effective_retention, cnr_floor=args.ghs_quality_cnr_floor,
                     tail_bonus=args.ghs_quality_tail_bonus,
+                    reference_weight=getattr(args, 'ghs_quality_reference_weight', 1.),
                     composite_before=fusion_baseline, composite_after=fusion_measured,
                 )
                 if not assessment['profile']['render_quality']['available']:

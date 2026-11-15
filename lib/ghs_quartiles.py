@@ -39,10 +39,10 @@ from lib.ghs_blackpoint import HistogramBlackpointNormalizer
 from lib.ghs_render_quality import HistogramRenderQuality
 from lib.ghs_histogram_shape import (
     piecewise_histogram_profile, protect_histogram_shape,
-    DEFAULT_SMOOTHING, DEFAULT_SHAPE_RETENTION, DEFAULT_SHAPE_DISTANCE, DEFAULT_PEAK_SHIFT,
-    DEFAULT_SLOPE_STIFFNESS, DEFAULT_LOCAL_RETENTION,
+    DEFAULT_SMOOTHING, DEFAULT_PEAK_SHIFT,
     histogram_selection_key,
-    PIECEWISE_SELECTION_POLICY,
+    PIECEWISE_SELECTION_POLICY, shape_comparison_options,
+    DEFAULT_RATIO_TOLERANCE, DEFAULT_SHOULDER_ADVANCE, TERMINAL_RATIO_WEIGHT,
 )
 from lib.star_separation import validate_rgb
 from lib.type_defs import JSONReport
@@ -132,6 +132,21 @@ def isolated_blackpoint(data: np.ndarray, budget: float) -> float:
     return 0.0
 
 
+def regression_log_level(value: str | float | None) -> float | None:
+    """Lit une hauteur log10 dans [0,300] ; off désactive la cible à 0,8."""
+    if isinstance(value, (bool, np.bool_)):
+        raise argparse.ArgumentTypeError('Une hauteur log10 ne peut pas être booléenne')
+    if value is None or str(value).strip().lower() == 'off':
+        return None
+    try:
+        level = float(value)
+    except (TypeError, ValueError) as error:
+        raise argparse.ArgumentTypeError('Hauteur log10 numérique ou off attendue') from error
+    if not math.isfinite(level) or not 0 <= level <= 300:
+        raise argparse.ArgumentTypeError('Hauteur log10 attendue dans [0,300] ou off')
+    return level
+
+
 class QuartileGHSProcessor(processor):
     """Réévalue SP, point noir, seuil de droite et queue sous gardes cumulatives."""
 
@@ -202,22 +217,20 @@ class QuartileGHSProcessor(processor):
                             help='Profil par morceaux (piecewise, défaut) ou droite unique historique (line)')
         parser.add_argument('--ghs-shape-smoothing', type=float, default=DEFAULT_SMOOTHING,
                             help='Régularisation commune des splines de mesure (défaut 0,0001)')
-        parser.add_argument('--ghs-shape-retention', type=float, default=DEFAULT_SHAPE_RETENTION,
-                            help='Cible de conservation de décroissance logarithmique (défaut 0,65)')
-        parser.add_argument('--ghs-shape-local-retention', type=float, default=DEFAULT_LOCAL_RETENTION,
-                            help='Cible de conservation de chaque pente locale significative (défaut 0,1)')
-        parser.add_argument('--ghs-shape-distance', type=float, default=DEFAULT_SHAPE_DISTANCE,
-                            help='Seuil de pénalité de distance des formes normalisées (défaut 0,15)')
+        parser.add_argument('--ghs-shape-ratio-tolerance', type=float, default=DEFAULT_RATIO_TOLERANCE,
+                            help='Tolérance relative des ratios voisins (défaut 0,5 : facteur 1,5)')
+        parser.add_argument('--ghs-shape-shoulder-advance', type=float, default=DEFAULT_SHOULDER_ADVANCE,
+                            help='Avance maximale de l’épaulement en intensité (défaut 0,15)')
+        parser.add_argument('--ghs-shape-terminal-weight', type=float, default=TERMINAL_RATIO_WEIGHT,
+                            help='Poids du raidissement du dernier segment (défaut 0,2)')
         parser.add_argument('--ghs-shape-peak-shift', type=float, default=DEFAULT_PEAK_SHIFT,
-                            help='Limite du déplacement du pic après BP (défaut 0,25 ; départage des qualités égales)')
+                            help='Limite du déplacement du pic après BP (de 0 à 1 ; défaut 0,25 ; départage des qualités égales)')
         parser.add_argument('--ghs-shape-branches', type=int, default=DEFAULT_SHAPE_BRANCHES,
                             help='Chemins de familles et positions du pic distinctes en mode piecewise (défaut 3 ; 1 à 8)')
-        parser.add_argument('--ghs-shape-stiffness', type=float, default=DEFAULT_SLOPE_STIFFNESS,
-                            help='Déformation relative maximale des pentes intermédiaires (défaut 1,25)')
         parser.add_argument('--ghs-post-blackpoint', choices=('rise', 'off'), default='rise',
                             help='En mode piecewise, recaler le BP avant conformité (rise, défaut) ou désactiver (off)')
-        parser.add_argument('--ghs-quartile-iterations', type=int, default=12,
-                            help='Passes GHS de régularisation du profil logarithmique, de 0 (désactivé) à 64')
+        parser.add_argument('--ghs-quartile-iterations', type=int, default=32,
+                            help='Passes GHS de régularisation du profil logarithmique, de 0 (désactivé) à 64 ; défaut 32')
         parser.add_argument('--ghs-quartile-max-strength', type=float, default=10.0,
                             help='D maximal par passe de quartiles, dans ]0,10]')
         parser.add_argument(
@@ -242,9 +255,8 @@ class QuartileGHSProcessor(processor):
         )
         parser.add_argument('--ghs-linearity-tolerance', type=float, default=DEFAULT_LINEARITY_TOLERANCE,
                             help='RMS local maximal par morceau, ou de la droite en mode line, en dex (défaut 0,05)')
-        parser.add_argument('--ghs-regression-min-count', type=float,
-                            default=DEFAULT_REGRESSION_MIN_COUNT,
-                            help='Niveau minimal du profil à 0,8 sur le graphique (défaut 10 pixels/classe ; 0 désactive)')
+        parser.add_argument('--ghs-regression-log-level', type=regression_log_level, default=1.,
+                            help='Cible log10 à 0,8 : 1=10, 2=100, 1.5≈31.62 ; off désactive')
         parser.add_argument('--ghs-tail-height', type=float, default=DEFAULT_TAIL_HEIGHT,
                             help='Hauteur log cible à 0,875, relative au pic du canal [0,1] ; 0 désactive')
         parser.add_argument('--ghs-tail-channel', choices=TAIL_CHANNELS, default='red',
@@ -256,25 +268,28 @@ class QuartileGHSProcessor(processor):
     def validate_options(args: argparse.Namespace) -> None:
         """Refuse limites non finies, booléennes ou hors domaine avant calcul."""
         HistogramRenderQuality.validate_options(args)
+        log_level = getattr(args, 'ghs_regression_log_level', 1.)
+        if log_level is not None and (
+            isinstance(log_level, (bool, np.bool_)) or not np.isfinite(log_level) or not 0 <= log_level <= 300
+        ):
+            raise ValueError('ghs-regression-log-level doit être fini dans [0,300] ou off')
+        args.ghs_regression_min_count = 0. if log_level is None else 10.**log_level
+        comparison = shape_comparison_options(args)
+        for key, low, high in (('ratio_tolerance', 0., 4.),
+                               ('max_shoulder_advance', -1., 1.), ('terminal_weight', -1., 1.)):
+            value = comparison[key]
+            if (isinstance(value, bool) or not np.isfinite(value)
+                    or not (0 <= value <= high if low == -1 else low < value <= high)):
+                raise ValueError(f'Paramètre de forme invalide : {key}')
         if getattr(args, 'ghs_histogram_model', 'piecewise') not in ('piecewise', 'line'):
             raise ValueError('Modèle histogramme GHS invalide')
         if getattr(args, 'ghs_post_blackpoint', 'rise') not in ('rise', 'off'):
             raise ValueError('ghs-post-blackpoint doit valoir rise ou off')
-        if not 0 <= getattr(args, 'ghs_shape_peak_shift', DEFAULT_PEAK_SHIFT) <= .25:
-            raise ValueError('ghs-shape-peak-shift doit être dans [0,0.25]')
-        for name, low, high in (('ghs_shape_smoothing', 1e-8, .1),
-                                ('ghs_shape_retention', 0., 1.), ('ghs_shape_distance', 0., 1.),
-                                ('ghs_shape_stiffness', 0., 4.), ('ghs_shape_local_retention', 0., 1.)):
-            value = getattr(args, name, {'ghs_shape_smoothing': DEFAULT_SMOOTHING,
-                                        'ghs_shape_retention': DEFAULT_SHAPE_RETENTION,
-                                        'ghs_shape_distance': DEFAULT_SHAPE_DISTANCE,
-                                        'ghs_shape_stiffness': DEFAULT_SLOPE_STIFFNESS,
-                                        'ghs_shape_local_retention': DEFAULT_LOCAL_RETENTION}[name])
-            if ((name in ('ghs_shape_stiffness', 'ghs_shape_local_retention')
-                 and isinstance(value, (bool, np.bool_)))
-                    or not math.isfinite(value) or not low <= value <= high
-                    or (name != 'ghs_shape_smoothing' and value == 0)):
-                raise ValueError(name.replace('_', '-')+' hors domaine')
+        if not 0 <= getattr(args, 'ghs_shape_peak_shift', DEFAULT_PEAK_SHIFT) <= 1:
+            raise ValueError('ghs-shape-peak-shift doit être dans [0,1]')
+        smoothing = getattr(args, 'ghs_shape_smoothing', DEFAULT_SMOOTHING)
+        if isinstance(smoothing, bool) or not math.isfinite(smoothing) or not 1e-8 <= smoothing <= .1:
+            raise ValueError('ghs-shape-smoothing hors domaine')
         if (type(args.ghs_quartile_iterations) is not int
                 or not 0 <= args.ghs_quartile_iterations <= 64):
             raise ValueError('ghs-quartile-iterations doit être dans [0,64]')
@@ -964,9 +979,8 @@ class QuartileGHSProcessor(processor):
                     if self.preserve_shape else
                     quartile_profile(counts, args.ghs_linearity_tolerance, reference))
             if self.preserve_shape and shape_reference is not None:
-                line = protect_histogram_shape(line, shape_reference, args.ghs_shape_retention,
-                                               args.ghs_shape_distance, args.ghs_shape_peak_shift,
-                                               args.ghs_shape_stiffness, args.ghs_shape_local_retention)
+                line = protect_histogram_shape(line, shape_reference, max_peak_shift=args.ghs_shape_peak_shift,
+                                               **shape_comparison_options(args))
             tail = tail_profile(image, engine, args.ghs_tail_channel, weights, sampled_stars)
             combined = add_tail_height_objective(
                 line, tail, args.ghs_tail_height, args.ghs_tail_channel,
@@ -1006,6 +1020,7 @@ class QuartileGHSProcessor(processor):
                 measured_profile, sample_before if estimated else full_before, measured,
                 shape_reference, bright_retention=effective_retention,
                 cnr_floor=args.ghs_quality_cnr_floor, tail_bonus=args.ghs_quality_tail_bonus,
+                reference_weight=getattr(args, 'ghs_quality_reference_weight', 1.),
                 composite_before=sample_fused_before if estimated else fused_before,
                 composite_after=composite, estimated=estimated,
             )

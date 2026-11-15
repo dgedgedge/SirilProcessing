@@ -74,59 +74,84 @@ passage est comparé à cette même référence, sans autoriser une succession
 de petites dégradations cumulatives entre les phases. Un appel indépendant
 sans référence fournie utilise sa propre entrée.
 
-Les indicateurs de forme portent sur les propriétés suivantes. Leurs seuils
-restent obligatoires pendant la préparation CDF et la présentation. Dans la
-recherche finale `piecewise`, les déformations mesurées contribuent au score
-progressif ci-dessous ; seuls la mesurabilité et les plafonds de position du
-pic restent des limites de sécurité de forme.
+La comparaison conserve **l’épaulement et les rapports entre pentes**, sans
+imposer une conservation de la chute logarithmique globale ni une distance
+minimale à l’ancienne enveloppe. Un aplatissement homogène des pentes est libre.
 
-Les valeurs de référence sont :
+### 1.3.1. Épaulement
 
-- **L'ordre des variations de pente.** Six régions relatives au support
-  donnent des pentes ; leurs variations, divisées par la décroissance globale,
-  sont significatives à partir de 0,3. Les signes successifs identiques sont
-  regroupés. L'ordre significatif est conservé ; un raccord final descendant
-  supplémentaire est permis lorsque la dernière pente reste négative. Sans
-  variation significative dans la référence, une nouvelle courbure est admise
-  si toutes les pentes restent négatives et les autres protections passent.
-- **L'amplitude de décroissance.** La chute entre les trois premiers et les
-  trois derniers points lissés est mesurée en dex. La cible de conservation de la chute
-  initiale est de 65 % par défaut. Chaque pente régionale
-  significative vise séparément **10 %** de son amplitude
-  (`--ghs-shape-local-retention`). Cela admet un étirement visible des tons
-  moyens tout en pénalisant une région devenue horizontale ou croissante.
-  Le rejet « conservation de décroissance insuffisante » compare la chute
-  globale à son seuil ; il **ne signifie pas que la courbe est horizontale**.
-  Une droite descendante peut échouer à ce contrôle si sa chute reste sous
-  65 % de celle de la référence. L'encart donne le ratio et le minimum
-  enregistrés, par exemple 57,5 % < 65 %.
-- **L'évolution homogène des pentes.** Si `s_i` est la pente dans la région i
-  sur l'abscisse relative et `d` la chute globale en dex, on compare
-  `a_i = s_i / d` à la référence `a_i⁰`. La déformation relative est
-  `e_i = (a_i - a_i⁰) / max(|a_i⁰|, 0,2)`. Les maxima de `|e_i|` et de
-  `|e_(i+1) - e_i|` ont pour limites de référence
-  `--ghs-shape-stiffness` (1,25 par défaut), pour les cinq régions intermédiaires.
-  La dernière région peut devenir plus raide pour rejoindre le blanc ; son
-  aplatissement et une remontée relative de sa pente restent contrôlés.
-  La première borne protège les
-  proportions des pentes ; la seconde empêche une déformation concentrée
-  dans un coude. Une variation commune de l'amplitude reste possible, sous
-  la protection de décroissance. Le plancher 0,2 évite les divisions instables
-  dans une région initialement presque horizontale ; ces régions ne sont
-  pas soumises à un ratio de conservation de pente non mesurable.
-- **Les proportions.** La distance moyenne entre les profils normalisés en
-  abscisse et en décroissance a pour limite de référence 0,15. La largeur relative
-  de l'épaulement du pic doit respecter cette même limite de variation.
-- **La position du pic.** Le déplacement absolu depuis la référence est mesuré
-  après recalage du BP. Sa limite de sécurité vaut **0,25** par défaut, au lieu
-  de bloquer de petites différences autour de 0,05. Un réglage explicite de
-  `--ghs-shape-peak-shift` garde sa priorité. Le pic doit toujours rester sous
-  0,25 d'intensité et les gardes de luminosité du ciel restent actives.
+Une segmentation de mesure est recalculée sur la décroissance normalisée, avec
+une tolérance de 0,02. Elle ne dépend donc pas d’une multiplication commune des
+pentes. Parmi les raccords descendants des premiers 60 % du support présentant
+un aplatissement d’au moins 15 %, l’épaulement est celui qui débouche sur la
+pente la moins forte. Cette définition est une heuristique de mesure.
 
-Une chute inférieure à 0,2 dex ne fournit pas de référence informative :
-le contrôle est non mesurable, pas déclaré réussi. Les objectifs complets
-ne peuvent alors pas être certifiés. Les protections existantes de bruit,
-diffus, couleurs, contraste et écrêtage restent nécessaires.
+Un épaulement présent dans la référence doit rester détectable. Son avance
+vers la droite ne doit pas dépasser `--ghs-shape-shoulder-advance` : **0,15**
+d’intensité par défaut. Un recul n’est pas pénalisé. Une référence sans
+épaulement détectable ne permet pas de certifier sa conservation.
+
+Quatre régions égales mesurent le corps après l’épaulement. Une cinquième
+mesure le dernier morceau descendant plus raide ; faute d’un tel raccord,
+elle occupe les derniers 20 % du support. Les pentes sont ajustées sur cinq
+points interpolés par région. Le nombre des morceaux dessinés peut différer
+de ces cinq régions de comparaison.
+
+### 1.3.2. Signe, ordre et rapports
+
+Une pente initialement descendante ne peut devenir positive ou quasi nulle.
+Pour deux régions voisines, on calcule `r = pente_suivante / pente_précédente`.
+Les deux pentes descendantes donnent un rapport positif. On compare
+`e = log(r_candidat / r_référence)`.
+
+- `−1 / −2 → −2 / −1` inverse l’ordre des pentes : forte pénalité.
+- `−1 / −2 → −1 / −4` accentue trop leur déséquilibre : forte pénalité.
+- `−1 / −2 → −1 / −1,5` reste admis sans coût.
+- Une multiplication commune, comme `−1 / −2 → −0,2 / −0,4`, est libre.
+
+`--ghs-shape-ratio-tolerance` vaut **0,5** : la zone sans coût satisfait
+`|e| ≤ log(1,5)`. L’ordre est contrôlé de part et d’autre de 1 ; une marge de
+10 % évite de qualifier d’inversion une quasi-égalité bruitée. L’aplatissement
+d’un segment n’impose pas que son prédécesseur s’aplatisse lui aussi : cette
+condition ne fait pas partie de la politique.
+
+Une rupture isolée est mesurée par le plus grand écart à la médiane des `e`
+non terminaux, avec la même tolérance. La moyenne ne peut donc pas masquer
+un seul raccord très déformé.
+
+### 1.3.3. Dernier segment et pénalité
+
+Si le dernier segment devient plus raide tout en restant descendant, son
+écart est multiplié par `--ghs-shape-terminal-weight`, **0,2** par défaut.
+Il est exclu de la mesure de rupture interne et de l’inversion d’ordre dans
+ce cas seulement. Un aplatissement terminal reste soumis aux règles normales ;
+une pente terminale devenue croissante reste interdite.
+
+En posant `L = log(1+t)`, la pénalité vaut :
+
+`P = 8 × inversion_ordre + 10 × Σ max(0, erreur/L − 1)²`
+
+La somme inclut les erreurs des ratios (avec le poids terminal), ainsi que
+la rupture isolée mesurée autour de leur médiane. Le coût de forme dans le
+score final vaut `0,5 × P`. Une inversion coûte donc au moins **4 points**
+de score, et ne peut être compensée par les petits bonus de niveau lumineux.
+Un essai entièrement dans les tolérances n’a aucun coût de forme.
+
+L’absence d’épaulement requis, son avance excessive et une inversion de signe
+sont bloquantes. Les défauts de ratios sont fortement pénalisés dans la
+recherche finale ; ils restent bloquants pour l’égalisation et la présentation
+protégée. La référence avant égalisation reste commune à toutes ces phases.
+
+Le pic conserve ses contrôles distincts : déplacement maximal par
+`--ghs-shape-peak-shift` (défaut 0,25, plage [0,1]) et position absolue sous
+0,25. Les protections de bruit, de couleurs, de ciel et de diffus demeurent.
+
+La cible à 0,8 s’exprime exclusivement avec `--ghs-regression-log-level` :
+**1 → 10**, **2 → 100**, **1.5 → 31,62 pixels/classe**. Le défaut est 1,
+`off` désactive le critère, et 0 demande un pixel/classe. Les valeurs sont
+finies dans [0,300] pour éviter un dépassement numérique lors de la conversion.
+L’ancienne option en pixels/classe et les anciens paramètres de conservation
+globale, locale, distance et rigidité ne sont plus exposés.
 
 Le classement final est calculé par `lib.ghs_render_quality.HistogramRenderQuality`,
 un composant de mesure sans état dont les options appartiennent à sa classe. Il compare
@@ -146,18 +171,18 @@ Le score sans unité est la somme de trois bonus bornés, diminuée des pénalit
 
 - contraste/bruit : `min(1, max(0, R))`, plafonné dès 100 % ;
 - visibilité : `0,2 × min(1, log2(max(1, G)))`, plafonné dès un doublement de C ;
-- luminosité : au plus `--ghs-quality-tail-bonus` (**0,1** par défaut), partagé
-  également entre les progressions vers dix pixels/classe à 0,8 et vers la
-  hauteur cible à 0,875. Chaque progression est bornée à 1 ; dépasser les
-  niveaux n'apporte aucun gain supplémentaire. Un objectif désactivé ou non
-  mesurable n'apporte pas de bonus ;
+- niveau à 0,8 : poids `--ghs-quality-reference-weight`, **1** par défaut,
+  multiplié par `clip(hauteur_log10 / cible_log10, 0, 1)`. À cible 2,
+  une hauteur de 1 rapporte donc 0,5 point, et 1,5 rapporte 0,75 point.
+  Le profil doit réellement couvrir 0,8 ; une extrapolation ne rapporte rien.
+  Pour la cible 0, la contribution est entière dès que le niveau atteint 0.
+  Dépasser la cible n’apporte pas de bonus supplémentaire ;
+- queue à 0,875 : au plus `--ghs-quality-tail-bonus`, **0,1** par défaut,
+  selon la progression relative vers sa hauteur cible. Les deux bonus sont
+  séparés : le niveau à 0,8 conserve un poids fort, indépendant de la queue ;
 - perte de contraste/bruit : `2 × max(0, (r − R)/r)²`, où
   `r = --ghs-quality-cnr-floor` (**0,9** par défaut) ;
-- forme : la moitié de la pénalité continue déjà mesurée par l'audit, augmentée
-  de la moitié de la somme des déficits ou excès quadratiques aux seuils de
-  décroissance, pente locale, distance, épaulement et hétérogénéité. Chaque
-  écart est divisé par son seuil ; le diviseur de pente locale est au moins 1
-  pour éviter une amplification instable autour de zéro ;
+- forme : `0,5 × P`, selon les ratios et l’épaulement décrits ci-dessus ;
 - bosse nouvelle : `0,5 × (excès / 0,1 dex)²`. On mesure la remontée maximale
   de l'enveloppe **déjà lissée**, depuis la sortie du pic à 80 % du support relatif, après
   soustraction de la remontée présente dans la référence. La classe du pic et la queue
@@ -257,9 +282,7 @@ part du même fond RANGE ; il ne transforme pas l'essai précédent. Le premier
 essai admissible est retenu. Sans référence mesurable ou si tous les essais
 échouent, l'égalisation conserve son entrée. Les forces effectivement essayées,
 les profils et les motifs sont consignés dans `histogram_balance.full_validation`.
-Cette préparation reste plus conservative : elle conserve au moins 65 % de
-chaque pente locale et borne la déformation à 0,35, ou aux limites utilisateur
-si elles sont plus strictes. Son déplacement maximal de pic reste borné à 0,05,
+Cette préparation exige la conformité des rapports de pente et de l’épaulement. Son déplacement maximal de pic reste borné à 0,05,
 indépendamment de la marge plus souple de la recherche finale. Celle-ci ne reçoit ainsi pas une
 référence déjà aplatie par l'égalisation.
 
@@ -267,8 +290,8 @@ Dans la passe de présentation protégée qui précède la recherche finale, le 
 par morceaux remplace également les bonus de pente moins raide et de RMS
 global par ce contrôle de forme. Le gain
 diffus reste évalué. Cela évite d'aplatir systématiquement la référence avant
-la recherche suivante. La recomposition comprenant les étoiles conserve sa
-référence propre à cette passe. RANGE et l'expansion préparent le rendu ; la
+la recherche suivante. Dans AutoGHS, cette passe évalue uniquement le fond.
+RANGE et l'expansion préparent le rendu ; la
 forme du FITS linéaire brut n'est pas une cible à reproduire telle quelle.
 Dans la préparation de présentation, les candidats passant ses gardes de forme,
 de bruit et de contraste sont eux aussi départagés par le plus petit déplacement
@@ -289,7 +312,9 @@ La cible de dix pixels par classe du graphique demeure active par défaut.
 Il est mesuré sur l'enveloppe lissée **dans son support observé**, et non par
 projection d'une droite globale. La densité est ramenée aux unités de
 `--ghs-bins`, comme dans le mode droite. La hauteur rouge à 0,875 reste un
-objectif distinct, sur la recomposition lorsque les étoiles sont disponibles.
+objectif distinct, mesuré sur le fond seul dans le pipeline AutoGHS.
+Les interfaces de bas niveau conservent une évaluation facultative sur la
+recomposition pour les essais isolés avec étoiles.
 
 Les objectifs `targets_achieved` et les écarts stricts de forme restent exposés
 indépendamment du classement de qualité. Une image choisie peut donc garder
@@ -308,22 +333,23 @@ photométrique ni une qualification esthétique universelle.
 | Option | Défaut | Domaine |
 | --- | --- | --- |
 | `--ghs-quality-cnr-floor` | `0.9` | strictement positif, au plus 1 ; début de pénalité de perte contraste/bruit |
-| `--ghs-quality-tail-bonus` | `0.1` | de 0 à 1 ; bonus lumineux total maximal |
+| `--ghs-quality-tail-bonus` | `0.1` | de 0 à 1 ; bonus de la queue à 0,875 |
+| `--ghs-quality-reference-weight` | `1` | de 0 à 10 ; poids du niveau logarithmique à 0,8 |
+| `--ghs-regression-log-level` | `1` | de 0 à 300, ou off ; cible log10 à 0,8 |
 | `--ghs-histogram-model` | `piecewise` | `line` ou `piecewise` |
 | `--ghs-post-blackpoint` | `rise` | `rise` ou `off`, actif en mode `piecewise` |
+| `--ghs-shape-shoulder-advance` | `0.15` | de 0 à 1, avance positive maximale |
+| `--ghs-shape-ratio-tolerance` | `0.5` | strictement positif, au plus 4, facteur toléré 1+t |
+| `--ghs-shape-terminal-weight` | `0.2` | de 0 à 1, poids du raidissement terminal |
 | `--ghs-shape-smoothing` | `0.0001` | de 1e-8 à 0,1 |
-| `--ghs-shape-retention` | `0.65` | strictement positif, au plus 1 |
-| `--ghs-shape-local-retention` | `0.1` | strictement positif, au plus 1 |
-| `--ghs-shape-distance` | `0.15` | strictement positif, au plus 1 |
-| `--ghs-shape-peak-shift` | `0.25` | de 0 à 0,25 ; zéro fige la classe du pic |
+| `--ghs-shape-peak-shift` | `0.25` | de 0 à 1 ; zéro fige la classe du pic, 1 autorise toute l’étendue normalisée |
 | `--ghs-shape-branches` | `3` | de 1 à 8 chemins ; borné aussi par le budget complet |
-| `--ghs-shape-stiffness` | `1.25` | strictement positif, au plus 4 ; diminuer renforce la contrainte |
 | `--ghs-linearity-tolerance` | `0.05` dex | de 0,005 à 0,5, appliquée par morceau |
 
 ## 1.5. Série de graphiques exclusivement logarithmiques
 
 `lib.ghs_diagnostics.HistogramDiagnostics` exporte une série dans
-`05_diagnostics/histogram_trials/`, pour les deux modes d'évaluation :
+`03_ghs_starless/histogram_trials/`, pour les deux modes d'évaluation :
 
 - l'entrée, chaque passage RANGE accepté, l'égalisation et l'expansion ;
 - les essais complets d'égalisation et les finalistes de la présentation protégée ;
@@ -331,7 +357,12 @@ photométrique ni une qualification esthétique universelle.
   son meilleur rejet de forme estimé sur l'échantillon ;
 - en recherche par branches, tous les enfants vérifiés admissibles, y compris
   les alternatives non poursuivies, avec leur branche et leur parent ;
-- le fond retenu et le rendu final avec étoiles lorsqu'il est disponible.
+- le fond retenu.
+
+La branche stellaire dispose de sa série indépendante dans
+`03_ghs_stars/histogram_trials/` : entrée, courbes fixes, adaptations des pics
+éventuelles (acceptées ou rejetées), renforcements essayés et sortie retenue.
+Les histogrammes recomposés sont réservés à `04_recomposition/`.
 
 Chaque PNG possède **un seul panneau d'effectifs logarithmiques**. L'intensité
 en abscisse reste linéaire sur [0,1]. Les classes nulles sont masquées ; les
@@ -405,17 +436,16 @@ bin/postProcess.sh image_RGB_lineaire.fits rapports/ \
   --autoghs-only --ghs-save-trial-jpegs
 ```
 
-Dans `05_diagnostics/histogram_trials/`, les numéros correspondent :
+Dans `03_ghs_starless/histogram_trials/`, les numéros correspondent :
 
 | Graphique | Image correspondante |
 | --- | --- |
 | `histogram_014.png` du fond | `image_014.jpg`, fond sans étoiles |
-| Même essai, aperçu recomposé | `image_014_with_stars.jpg` |
-| Histogramme du rendu avec étoiles | `image_NNN.jpg`, déjà recomposée |
+| `histogram_014.png` dans la branche stellaire | `image_014.jpg`, étoiles seules |
 
 Chaque carte de `histograms.html` donne ces liens. Le manifeste ajoute
-`image_jpeg`, `with_stars_jpeg` lorsqu'il existe et
-`image_histogram_estimated`. Le rapport expose `trial_jpegs_enabled`.
+`image_jpeg` et `image_histogram_estimated`. Les deux galeries ont chacune
+leur propre numérotation et ne contiennent pas de variante `_with_stars`. Le rapport expose `trial_jpegs_enabled`.
 Le numéro identifie un essai **dans cette exécution** ; il peut changer entre
 deux traitements. Un essai rejeté conserve son verdict et ses motifs.
 
@@ -432,8 +462,8 @@ de l'essai et son point noir sont appliqués au **fond entier à l'entrée de
 la passe** pour produire le JPEG. L'histogramme reste identifié comme estimé ;
 cette reconstruction visuelle ne valide pas le candidat et ne change pas le
 classement. Les autres essais majeurs sont capturés depuis leurs pixels réels.
-L'aperçu avec étoiles réutilise les étoiles fixes et le même facteur de fusion,
-sans appliquer la correction finale des couleurs.
+Les galeries du pipeline ne contiennent aucun aperçu recomposé : chaque JPEG
+montre exclusivement la couche dont l'histogramme est présenté.
 
 Les captures passent par un cache JPEG temporaire sur disque. Seuls leurs
 identifiants et chemins restent en mémoire ; aucune collection d'images n'est

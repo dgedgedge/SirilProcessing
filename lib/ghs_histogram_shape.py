@@ -8,6 +8,10 @@ pendant la recherche. Voir docs/scripts/postProcess/ghs-histogram-shape.md.
 
 from __future__ import annotations
 
+import argparse
+from copy import deepcopy
+from functools import lru_cache
+
 import numpy as np
 
 from lib.ghs_linear_histogram import linear_histogram_profile
@@ -16,11 +20,18 @@ from lib.type_defs import JSONReport
 from lib.ghs_render_quality import HistogramRenderQuality, QUALITY_SELECTION_POLICY
 
 DEFAULT_SMOOTHING = 1e-4
-DEFAULT_SHAPE_RETENTION = .65
-DEFAULT_SHAPE_DISTANCE = .15
 DEFAULT_PEAK_SHIFT = .25
-DEFAULT_SLOPE_STIFFNESS = 1.25
-DEFAULT_LOCAL_RETENTION = .1
+DEFAULT_RATIO_TOLERANCE = .5
+DEFAULT_SHOULDER_ADVANCE = .15
+MAX_SHOULDER_RELATIVE_POSITION = .6
+SHOULDER_FIT_TOLERANCE = .02  # Résidu en décroissance normalisée, pas en dex.
+SHOULDER_MIN_FLATTENING = .15  # Réduction relative de pente définissant un épaulement.
+POST_SHOULDER_REGIONS = 5
+SLOPE_RELATIVE_EPSILON = 1e-6
+RATIO_ORDER_TOLERANCE = float(np.log(1.1))  # Ignorer les inversions dues aux quasi-égalités.
+RATIO_EXCESS_WEIGHT = 10.
+RATIO_INVERSION_PENALTY = 8.
+TERMINAL_RATIO_WEIGHT = .2  # Raidissement de queue moins influent que les raccords internes.
 # Une pente faible reste comparée avec ce plancher, en chute globale/support.
 SLOPE_SCALE_FLOOR = .2
 GROUP_POPULATION = 32
@@ -243,46 +254,194 @@ def piecewise_histogram_profile(
     return result
 
 
+def shape_comparison_options(args: argparse.Namespace) -> dict[str, float]:
+    """Résout les seules options de l'épaulement et des ratios pour les moteurs."""
+    return dict(
+        ratio_tolerance=getattr(args, 'ghs_shape_ratio_tolerance', DEFAULT_RATIO_TOLERANCE),
+        max_shoulder_advance=getattr(args, 'ghs_shape_shoulder_advance', DEFAULT_SHOULDER_ADVANCE),
+        terminal_weight=getattr(args, 'ghs_shape_terminal_weight', TERMINAL_RATIO_WEIGHT),
+    )
+
+
+def shoulder_slope_geometry(profile: JSONReport) -> JSONReport:
+    """Mesure l’épaulement initial et cinq pentes après celui-ci.
+
+    L'épaulement termine la descente initiale vers le corps moins pentu :
+    parmi les raccords descendants des premiers 60 % du support dont la pente
+    se réduit d'au moins 15 %, on retient celui débouchant sur la pente la
+    moins forte. La segmentation utilise la décroissance normalisée. Quatre régions égales
+    décrivent le corps après l’épaulement ; le dernier
+    morceau plus raide est isolé comme queue. Sans raccord terminal distinct,
+    la queue occupe les derniers 20 % du support. Chaque pente utilise cinq
+    points interpolés.
+    Les ratios sont indépendants d'une multiplication commune des pentes.
+    Une pente quasi nulle ou positive est signalée, jamais divisée par zéro.
+    """
+    shape = profile.get('shape') or {}
+    return deepcopy(_cached_shoulder_geometry(
+        tuple(shape.get('x', [])), tuple(shape.get('log_density', [])),
+        float(shape.get('drop_dex', 0.)),
+    ))
+
+
+@lru_cache(maxsize=512)
+def _cached_shoulder_geometry(
+    coordinates: tuple[float, ...], levels: tuple[float, ...], drop: float,
+) -> JSONReport:
+    """Mémorise au plus 512 petits profils, jamais des images ni des paramètres.
+
+    Les clés sont immuables et le résultat est copié par l'appelant : aucun
+    état d'exécution ne peut se transmettre entre moteurs ou entre couches.
+    """
+    x = np.asarray(coordinates, dtype=float)
+    y = np.asarray(levels, dtype=float)
+    result: JSONReport = dict(measurable=False, shoulder_present=False,
+                             shoulder_position=None, slopes=[], ratios=[])
+    if (x.size < 8 or x.shape != y.shape or not np.isfinite(x).all()
+            or not np.isfinite(y).all() or np.any(np.diff(x) <= 0)):
+        return result
+    # Une segmentation en décroissance normalisée ne disparaît pas lorsque
+    # toutes les pentes sont multipliées par le même facteur.
+    if drop <= 0:
+        return result
+    pieces = _pieces(x, (y-y[0])/drop, SHOULDER_FIT_TOLERANCE)
+    shoulder = float(x[0])
+    shoulders = []
+    for first, second in zip(pieces, pieces[1:]):
+        left, right = first['slope'], second['slope']
+        if (left < 0 and right < 0 and (right-left)/abs(left) >= SHOULDER_MIN_FLATTENING
+                and first['end'] <= x[0]+MAX_SHOULDER_RELATIVE_POSITION*(x[-1]-x[0])):
+            shoulders.append((abs(right), float(first['end'])))
+    if shoulders:
+        _, shoulder = min(shoulders)
+        result.update(shoulder_present=True, shoulder_position=shoulder)
+    if shoulder >= x[-1]:
+        return result
+    terminal_start = shoulder+.8*(x[-1]-shoulder)
+    if len(pieces) >= 2:
+        previous, terminal = pieces[-2], pieces[-1]
+        if (previous['slope'] < 0 and terminal['slope'] < previous['slope']*(1+SHOULDER_MIN_FLATTENING)
+                and terminal['start'] > shoulder):
+            terminal_start = float(terminal['start'])
+    boundaries = np.r_[np.linspace(shoulder, terminal_start, POST_SHOULDER_REGIONS), x[-1]]
+    slopes = []
+    for first, last in zip(boundaries, boundaries[1:]):
+        positions = np.linspace(first, last, MIN_PIECE_POINTS)
+        slopes.append(float(np.polyfit(positions, np.interp(positions, x, y), 1)[0]))
+    slopes = np.array(slopes)
+    floor = max(float(np.max(abs(slopes)))*SLOPE_RELATIVE_EPSILON, np.finfo(float).eps)
+    ratios = [float(last/first) if abs(first) > floor else None
+              for first, last in zip(slopes, slopes[1:])]
+    result.update(measurable=True, slopes=slopes.tolist(), ratios=ratios,
+                  slope_floor=floor, boundaries=boundaries.tolist())
+    return result
+
+
+def compare_shoulder_slope_ratios(
+    reference: JSONReport, candidate: JSONReport, max_advance: float,
+    ratio_tolerance: float, terminal_weight: float = TERMINAL_RATIO_WEIGHT,
+) -> JSONReport:
+    """Compare épaulement et rapports voisins sans conserver la chute globale.
+
+    max_advance est le déplacement positif autorisé de l'épaulement dans
+    [0,1]. ratio_tolerance borne les écarts logarithmiques par log(1+t).
+    Les rapports proches de 1 à 10 % près n'ont pas d'ordre significatif.
+    Un raidissement terminal descendant pèse 20 % et n'est pas éliminatoire ;
+    les inversions de signe des pentes restent interdites à toute position.
+    """
+    if not np.isfinite(max_advance) or not 0 <= max_advance <= 1:
+        raise ValueError('Limite d’avance de l’épaulement hors de [0,1]')
+    if isinstance(ratio_tolerance, (bool, np.bool_)) or not np.isfinite(ratio_tolerance) or not 0 < ratio_tolerance <= 4:
+        raise ValueError('Tolérance des ratios de pente hors de ]0,4]')
+    if not np.isfinite(terminal_weight) or not 0 <= terminal_weight <= 1:
+        raise ValueError('Poids terminal hors de [0,1]')
+    before, after = shoulder_slope_geometry(reference), shoulder_slope_geometry(candidate)
+    reasons = []
+    result: JSONReport = dict(policy='shoulder_and_slope_ratios', measurable=False,
+                             achieved=None, rejections=reasons, penalty=0.,
+                             reference_geometry=before, candidate_geometry=after,
+                             shoulder_advance=None, maximum_shoulder_advance=max_advance,
+                             ratio_errors=[], ratio_break=0., ratio_tolerance=ratio_tolerance,
+                             terminal_weight=terminal_weight)
+    if not before['measurable']:
+        return result
+    if not after['measurable']:
+        result.update(measurable=True, achieved=False, rejections=['unmeasurable histogram shape'])
+        return result
+    if before['shoulder_present']:
+        if not after['shoulder_present']:
+            reasons.append('histogram shoulder lost')
+        else:
+            advance = max(0., after['shoulder_position']-before['shoulder_position'])
+            result['shoulder_advance'] = advance
+            if advance > max_advance+1e-12:
+                reasons.append('histogram shoulder advance')
+    first = np.array(before['slopes'], dtype=float)
+    last = np.array(after['slopes'], dtype=float)
+    initial_floor, final_floor = before['slope_floor'], after['slope_floor']
+    if np.any((first < -initial_floor) & (last >= -final_floor)):
+        reasons.append('histogram slope sign inversion')
+    errors, normal_errors = [], []
+    inversion = False
+    bound = float(np.log1p(ratio_tolerance))
+    for index, (old, new) in enumerate(zip(before['ratios'], after['ratios'])):
+        if old is None or new is None or old <= 0 or new <= 0:
+            errors.append(None)
+            continue
+        change = float(np.log(new/old))
+        terminal_steepening = index == len(before['ratios'])-1 and new > 1 and change > 0
+        weight = terminal_weight if terminal_steepening else 1.
+        error = abs(change)*weight
+        errors.append(error)
+        if not terminal_steepening:
+            normal_errors.append(change)
+            if abs(np.log(old)) > RATIO_ORDER_TOLERANCE and abs(np.log(new)) > RATIO_ORDER_TOLERANCE:
+                inversion |= bool(np.sign(np.log(old)) != np.sign(np.log(new)))
+            if error > bound:
+                reasons.append('histogram slope ratio distortion')
+        result['penalty'] += RATIO_EXCESS_WEIGHT*(max(0., error-bound)/bound)**2
+    if inversion:
+        reasons.append('histogram slope ratio inversion')
+        result['penalty'] += RATIO_INVERSION_PENALTY
+    # Une rupture isolée ne doit pas être masquée par une moyenne des ratios.
+    ratio_break = (float(np.max(abs(np.asarray(normal_errors)-np.median(normal_errors))))
+                   if normal_errors else 0.)
+    if ratio_break > bound:
+        reasons.append('histogram slope ratio break')
+    result['penalty'] += RATIO_EXCESS_WEIGHT*(max(0., ratio_break-bound)/bound)**2
+    result.update(measurable=True, achieved=not reasons, rejections=list(dict.fromkeys(reasons)),
+                  ratio_errors=errors, ratio_break=ratio_break)
+    return result
+
+
 def compare_histogram_shapes(
     reference: JSONReport, candidate: JSONReport,
-    retention: float = DEFAULT_SHAPE_RETENTION,
-    max_distance: float = DEFAULT_SHAPE_DISTANCE,
     max_peak_shift: float = DEFAULT_PEAK_SHIFT,
-    max_stiffness: float = DEFAULT_SLOPE_STIFFNESS,
-    local_retention: float = DEFAULT_LOCAL_RETENTION,
+    *, ratio_tolerance: float = DEFAULT_RATIO_TOLERANCE,
+    max_shoulder_advance: float = DEFAULT_SHOULDER_ADVANCE,
+    terminal_weight: float = TERMINAL_RATIO_WEIGHT,
 ) -> JSONReport:
-    """Compare à une référence fixe les pentes locales et l'amplitude globale.
+    """Préserve l'épaulement et les rapports de pentes après celui-ci.
 
-    Les courbes sont échantillonnées sur une abscisse relative à leur support,
-    pour autoriser un étirement horizontal. La distance moyenne entre profils
-    normalisés contrôle les proportions ; la chute en dex reste protégée
-    séparément, pour ne pas accepter une copie arbitrairement aplatie.
-    Les pentes régionales sont aussi comparées après normalisation par cette
-    chute : leur déformation relative et ses différences voisines bornent
-    les plateaux locaux et les coudes intermédiaires. Un raidissement terminal
-    est permis pour rejoindre le blanc. Chaque pente significative conserve
-    au moins local_retention de son amplitude sur l'abscisse relative.
-    Une référence non mesurable ne certifie ni conformité ni rejet de forme.
+    L'aplatissement global homogène n'est plus pénalisé. Les anciennes mesures
+    d'amplitude et de distance restent informatives pour lire les diagnostics.
+    Le signe des pentes et les proportions de leurs rapports voisins
+    sont protégés ; un raidissement terminal bénéficie d'un poids réduit.
+    La référence reste fixe pendant toutes les phases.
 
     Parameters
     ----------
     reference, candidate : JSONReport
         Profils complets issus de piecewise_histogram_profile, avec le même
         réglage de lissage et les mêmes unités de densité.
-    retention : float
-        Fraction minimale de décroissance initiale, dans ]0,1].
-    max_distance : float
-        Distance moyenne maximale des profils normalisés et variation
-        maximale de largeur relative de l'épaulement, dans ]0,1].
     max_peak_shift : float
-        Déplacement absolu maximal du pic, en intensité [0,1], de 0 à 0,25.
-    max_stiffness : float
-        Déformation relative maximale des pentes normalisées et de son
-        évolution entre régions intermédiaires, dans ]0,4]. Une dilatation
-        commune est permise ; un plateau sous local_retention est refusé.
-    local_retention : float
-        Fraction minimale conservée par chaque pente significative, dans ]0,1].
-        Elle est distincte de la conservation de décroissance globale.
+        Déplacement absolu maximal du pic, en intensité normalisée, de 0 à 1.
+    ratio_tolerance : float
+        Tolérance t dans ]0,4] sur les rapports, avec borne log(1+t).
+    max_shoulder_advance : float
+        Déplacement positif maximal de l’épaulement, en intensité [0,1].
+    terminal_weight : float
+        Poids du raidissement terminal dans [0,1], 0,2 par défaut.
 
     Returns
     -------
@@ -295,21 +454,11 @@ def compare_histogram_shapes(
     ValueError
         Si un seuil est non fini ou hors de son domaine.
     """
-    if not np.isfinite(retention) or not 0 < retention <= 1:
-        raise ValueError('ghs-shape-retention doit être dans ]0,1]')
-    if not np.isfinite(max_distance) or not 0 < max_distance <= 1:
-        raise ValueError('ghs-shape-distance doit être dans ]0,1]')
-    if not np.isfinite(max_peak_shift) or not 0 <= max_peak_shift <= .25:
-        raise ValueError('ghs-shape-peak-shift doit être dans [0,0.25]')
-    if (isinstance(max_stiffness, (bool, np.bool_))
-            or not np.isfinite(max_stiffness) or not 0 < max_stiffness <= 4):
-        raise ValueError('ghs-shape-stiffness doit être dans ]0,4]')
-    if (isinstance(local_retention, (bool, np.bool_))
-            or not np.isfinite(local_retention) or not 0 < local_retention <= 1):
-        raise ValueError('ghs-shape-local-retention doit être dans ]0,1]')
+    if not np.isfinite(max_peak_shift) or not 0 <= max_peak_shift <= 1:
+        raise ValueError('ghs-shape-peak-shift doit être dans [0,1]')
     before, after = reference.get('shape'), candidate.get('shape')
     audit: JSONReport = dict(measurable=False, achieved=None, rejections=[],
-                             drop_retention=None, minimum_drop_retention=retention,
+                             drop_retention=None, minimum_drop_retention=None,
                              distance=None, penalty=0.0)
     if not before or before['drop_dex'] < MIN_SHAPE_DROP_DEX:
         return audit
@@ -344,54 +493,43 @@ def compare_histogram_shapes(
                      / max(candidate['line_end']-candidate['peak'], .1))
     shoulder_change = abs(float(last_shoulder-first_shoulder))
     peak_shift = abs(float(candidate['peak']-reference['peak']))
-    if ratio < retention:
-        reasons.append('global histogram flattening')
-    if local_ratio is not None and local_ratio < local_retention:
-        reasons.append('local histogram flattening')
-    if slope_deformation > max_stiffness:
-        reasons.append('histogram slope deformation')
-    if stiffness > max_stiffness:
-        reasons.append('histogram slope stiffness')
-    sequence_before, sequence_after = before['slope_sequence'], after['slope_sequence']
-    terminal_steepening = bool(sequence_after == sequence_before+[-1]
-                               and slopes_after[-1] < 0)
-    sequence_informative = bool(sequence_before)
-    unstructured_reference = not sequence_informative and bool(np.all(slopes_after < 0))
-    if sequence_before != sequence_after and not terminal_steepening and not unstructured_reference:
-        reasons.append('histogram slope sequence')
-    if distance > max_distance:
-        reasons.append('histogram shape distortion')
-    if shoulder_change > max_distance:
-        reasons.append('histogram peak shoulder distortion')
+    comparison = compare_shoulder_slope_ratios(
+        reference, candidate, max_shoulder_advance, ratio_tolerance, terminal_weight,
+    )
+    reasons = list(comparison['rejections'])
+    if not comparison['measurable']:
+        reasons.append('unmeasurable histogram shape')
     if peak_shift > max_peak_shift+1e-12:
         reasons.append('histogram peak displacement')
+    sequence_before, sequence_after = before['slope_sequence'], after['slope_sequence']
+    terminal_steepening = bool(slopes_after[-1] < slopes_before[-1])
+    sequence_informative = bool(sequence_before)
     audit.update(measurable=True, achieved=not reasons, rejections=reasons,
                  drop_retention=ratio, distance=distance,
-                 maximum_shape_distance=max_distance,
+                 maximum_shape_distance=None,
                  shoulder_change=shoulder_change,
                  peak_shift=peak_shift,
                  maximum_peak_shift=max_peak_shift,
                  local_slope_retention=local_ratio,
-                 minimum_local_retention=local_retention,
+                 minimum_local_retention=None,
                  terminal_steepening=terminal_steepening,
                  sequence_informative=sequence_informative,
                  slope_deformation=slope_deformation, slope_stiffness=stiffness,
                  slope_relative_deformation=deformation.tolist(),
-                 max_slope_stiffness=max_stiffness,
+                 max_slope_stiffness=None,
                  sequence_before=before['slope_sequence'], sequence_after=after['slope_sequence'],
-                 penalty=(.35*(distance+shoulder_change)
-                          +.15*abs(float(np.log(ratio)))
-                          +.05*(slope_deformation+stiffness)))
+                 penalty=comparison['penalty'])
+    audit.update({key: value for key, value in comparison.items()
+                  if key not in ('measurable', 'achieved', 'rejections')})
     return audit
 
 
 def protect_histogram_shape(
     profile: JSONReport, reference: JSONReport,
-    retention: float = DEFAULT_SHAPE_RETENTION,
-    max_distance: float = DEFAULT_SHAPE_DISTANCE,
     max_peak_shift: float = DEFAULT_PEAK_SHIFT,
-    max_stiffness: float = DEFAULT_SLOPE_STIFFNESS,
-    local_retention: float = DEFAULT_LOCAL_RETENTION,
+    *, ratio_tolerance: float = DEFAULT_RATIO_TOLERANCE,
+    max_shoulder_advance: float = DEFAULT_SHOULDER_ADVANCE,
+    terminal_weight: float = TERMINAL_RATIO_WEIGHT,
 ) -> JSONReport:
     """Ajoute l'audit et la pénalité de forme sans modifier les profils reçus.
 
@@ -399,7 +537,7 @@ def protect_histogram_shape(
     ----------
     profile, reference : JSONReport
         Profil candidat et référence immuable de la phase.
-    retention, max_distance, max_peak_shift, max_stiffness, local_retention : float
+    max_peak_shift, ratio_tolerance, max_shoulder_advance, terminal_weight : float
         Seuils et unités définis par compare_histogram_shapes.
 
     Returns
@@ -409,7 +547,9 @@ def protect_histogram_shape(
         Les refus restent à faire appliquer par le moteur ou le sélecteur.
     """
     result = dict(profile)
-    audit = compare_histogram_shapes(reference, profile, retention, max_distance,
-                                     max_peak_shift, max_stiffness, local_retention)
+    audit = compare_histogram_shapes(reference, profile, max_peak_shift=max_peak_shift,
+                                     ratio_tolerance=ratio_tolerance,
+                                     max_shoulder_advance=max_shoulder_advance,
+                                     terminal_weight=terminal_weight)
     result.update(shape_preservation=audit, score=profile['score']-audit['penalty'])
     return result

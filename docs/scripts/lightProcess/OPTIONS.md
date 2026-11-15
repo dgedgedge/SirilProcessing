@@ -67,6 +67,11 @@ Ce contexte unique reste actif entre les sous-sessions et les traitements,
 même avec `--no-postprocess`, et est libéré sur erreur ou interruption.
 La simulation `--dry-run` ne l’active pas.
 
+Un [dong de fin de traitement](../postProcess/completion-sound.md) est actif
+par défaut après succès de la commande entière, sans doublon pour le
+post-traitement. `--no-completion-sound` le désactive ; `--completion-sound`
+le réactive. Ce réglage est mémorisable avec `--save-config`.
+
 Le [post-traitement commun](../postProcess/pipeline.md) est activé par
 défaut dans lightProcess : les commandes habituelles l’enchaînent sans option.
 `--no-postprocess` le désactive. Il traite chaque stack final, ou uniquement

@@ -9,13 +9,18 @@ réutilise le service `Siril.run_commands`, ses modes d'exécution et ses
 journaux. [`ConservativeStarRenderer`](../../../lib/star_rendering.py), également
 un `processor`, possède une méthode de calcul indépendante `render`.
 `recompose` est une opération sans état du même module.
+Les [classes de branche](stretch-branches.md) `StarStretchProcessor` et
+`StarlessStretchProcessor` possèdent respectivement les exports et diagnostics
+des étoiles et du fond, avec une base commune pour le cycle de vie.
 [`star_diagnostics`](../../../lib/star_diagnostics.py) produit les vues et
 histogrammes de la couche d'étoiles, sans intervenir dans le calcul.
 [`AutoGHSFinalRenderer`](../../../lib/final_render.py) orchestre les enfants,
 contrôle et publie leurs sorties ; il ne contient pas le moteur GHS.
 
 L'ordre est strict : **une séparation → une couche d'étoiles étirée → un fond
-GHS RANGE → une fusion**. Les tests contractuels enregistrent ces appels et
+GHS RANGE → une fusion**. Les critères d’étirement du fond sont évalués sur
+le fond seul : changer un réglage stellaire ne modifie pas ce fond pour une
+même entrée linéaire et les mêmes paramètres GHS. Les tests contractuels enregistrent ces appels et
 vérifient sur disque la contribution non nulle des étoiles au rendu final.
 
 ## Adaptateur StarNet V2 / Siril 1.4
@@ -111,7 +116,8 @@ Le défaut applique désormais une [sélection à 25 %](stellar-selection.md) au
 renforcement adaptatif supplémentaire. La base asinh est d’abord rendue
 admissible, puis la fraction est sélectionnée sur la couche stellaire seule.
 Les étapes globales historiques décrites ci-dessous restent disponibles avec
-`--star-boost-fraction 1` .
+`--star-boost-fraction 1` ; les essais GHS présentés en fin de page restent
+des comparaisons hors pipeline.
 
 Le rendu `conservative` commence par une courbe monotone de référence :
 
@@ -278,7 +284,7 @@ introduit un dépassement : il ne relance pas les traitements amont.
 
 ### Diagnostic spécifique des étoiles
 
-Dans `05_autoghs/02_stars/` (ou `02_stars/` à côté du rapport autonome), `<image>_stars_diagnostic.png` présente :
+Dans `05_autoghs/03_ghs_stars/` (ou `03_ghs_stars/` à côté du rapport autonome), `<image>_stars_diagnostic.png` présente :
 
 - les mêmes extraits centraux (512 pixels de côté au plus) avant/après, avec les
   intensités affichées directement sans auto-étirement ni gamma ;
@@ -286,8 +292,7 @@ Dans `05_autoghs/02_stars/` (ou `02_stars/` à côté du rapport autonome), `<im
 - l'histogramme des amplitudes des pics aux mêmes positions, axes X et Y log ;
 - un encart : objectif, effectif candidat, dépassements du seuil 0,03 pour le
   linéaire/le gain fixe/le rendu adapté, essais, force retenue et FWHM.
-  Après recomposition, l'encart ajoute les effectifs dont le contraste réinséré
-  dépasse ce même seuil après fusion RANGE.
+  Ce diagnostic ne dépend pas du fond ni de la recomposition.
 
 Les zéros sont exclus des axes logarithmiques et leur fraction est affichée.
 Le graphique, ses légendes et son encart utilisent le thème sombre commun
@@ -298,6 +303,18 @@ haut/bas suit l'affichage Siril, même lorsque `ROWORDER=TOP-DOWN`.
 à côté du FITS. Les chemins sont dans `stars.diagnostic_path` et
 `stars.output_jpeg`. Le processeur stellaire autonome produit les mêmes types
 d'exports à côté de son rapport. Ces vues sont des diagnostics de présentation.
+
+Dans le pipeline AutoGHS, `stars.json` et `histogram_trials/` décrivent les
+essais sur la couche stellaire seule : entrée, courbes fixes, adaptations des
+pics si activées, renforcements rejetés et résultat retenu. Ces histogrammes d’essais utilisent la luminosité Y (proxy Rec.709), avec
+4096 classes uniformes sur [0,1], indépendamment des paramètres GHS du fond.
+Ils complètent les histogrammes en maximum RGB du diagnostic stellaire.
+Les classes isolées à un pixel sont affichées avec des marqueurs pour rester
+visibles sur les axes logarithmiques. Les PNG, la galerie
+`histograms.html` et le manifeste `histograms.json` sont toujours produits.
+`--ghs-save-trial-jpegs` ajoute les JPEG des mêmes essais dans chacune des deux
+branches, sans aperçu recomposé. Aucun réglage GHS du fond ne participe à ces
+essais stellaires.
 
 ## Deux recompositions screen contrôlées
 
@@ -337,3 +354,61 @@ Références : [StarNet Siril](https://siril.readthedocs.io/en/stable/processing
 [tutoriel séparation et recomposition](https://siril.org/fr/tutorials/integrated-starnet/),
 [recomposition graphique](https://siril.readthedocs.io/en/stable/processing/stars/star-recomp.html),
 [algorithme GHS](auto-ghs-algorithm.md), [guide et paramètres](auto-ghs.md).
+
+### Vérification sur les couches M33 et M31
+
+Un essai sur les couches StarNet déjà produites de M33 et M31 a comparé le
+rendu limité à un renforcement retenu de 1 avec une adaptation demandée de 1
+et une limite de largeur de 1,5. Le renforcement de base demandé reste 5.
+Les fonds GHS existants ont été réutilisés sans nouveau calcul.
+
+| Mesure | M33 | M31 |
+|---|---:|---:|
+| Pics de la couche au-dessus de 0,03, ancien rendu | 304 | 1 600 |
+| Pics de la couche au-dessus de 0,03, essai adaptatif | 11 492 | 34 284 |
+| Rapport FWHM médian de l'essai | 1,463 | 1,488 |
+| Pics de contribution après fusion au-dessus de 0,03 | 10 949 | 32 107 |
+
+Les mêmes positions candidates sont suivies ; ces nombres ne constituent pas
+un catalogue d'étoiles astrophysiques. Aucun pixel à 1 n'a été relevé dans les
+couches étirées ni dans les recompositions de cet essai. Cette vérification
+réutilise la séparation existante et ne valide pas une nouvelle exécution de
+StarNet ou de Siril. Les rapports et images d'origine sont préservés.
+
+Une configuration sauvegardée avec `star_histogram_strength: 0` continue de
+désactiver l'adaptation ; fournir `--star-histogram-strength 1` pour l'activer.
+De même, un `star_stretch_max_width_ratio: 1.2` sauvegardé reste explicite :
+le remplacer en CLI par `--star-stretch-max-width-ratio 1.5` pour cet essai.
+
+### Comparaison exploratoire avec une courbe GHS
+
+Une recherche hors pipeline a également évalué `lib.auto_ghs.ghs_transfer`
+sur les mêmes couches. La transformation est appliquée au maximum RGB,
+normalisée au plafond de 0,85, puis suivie de la même porte de bruit ; un gain
+commun conserve les rapports RGB. Le moteur stellaire de production reste
+l'asinh adaptatif : ces candidats GHS ne constituent pas une nouvelle option.
+
+La recherche a testé D dans `{2,3,4,5,6,7,8}`, B dans `{-1,0,2,5}` et HP dans
+`{0.001,0.01,0.05,0.2,1}`, avec LP=0 et SP égal à la médiane des pics candidats.
+Les candidats respectent une FWHM médiane ≤ 1,5 et les contrôles de
+rétrécissement à 50 % et 10 %. Les paramètres sélectionnés ont ensuite été
+réappliqués aux images complètes, puis fusionnés avec les fonds existants.
+
+| Mesure GHS | M33 | M31 |
+|---|---:|---:|
+| D / B / HP | 8 / 2 / 0,05 | 7 / 0 / 0,01 |
+| SP | 0,000138988 | 0,000304270 |
+| Pics de couche au-dessus de 0,03 | 17 021 | 32 843 |
+| Rapport FWHM médian, 63 profils | 1,384 | 1,039 |
+| Rapport médian à 10 % du pic, 62 profils | 1,431 | 1,015 |
+| Pics de contribution après fusion au-dessus de 0,03 | 16 734 | 31 798 |
+
+Aucun pixel à 1 n'est relevé dans ces couches ou leurs recompositions. Le
+compromis visibilité/largeur est favorable au GHS dans ces deux essais ; cette
+grille finie ne démontre pas un optimum universel. La sélection des profils
+reste dominée par les étoiles brillantes et les fenêtres de 15 pixels ne
+contrôlent pas les halos étendus.
+
+La [documentation Siril sur les étirements](https://siril.readthedocs.io/en/stable/processing/stretching.html)
+décrit SP et la protection linéaire au-delà de HP. Cette protection ne dispense
+pas de mesurer les profils après transformation et après fusion.

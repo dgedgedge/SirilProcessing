@@ -18,6 +18,7 @@ traitements peuvent donc être remplacés par une configuration sauvegardée.
 | `-S`, `--save-config` | Mémoriser les paramètres rémanents |
 | `-m`, `--siril-mode` | `flatpak` par défaut, ou `native`, `appimage` |
 | `-s`, `--siril-path` | `siril` par défaut ; chemin de l’exécutable en mode native/appimage |
+| `--completion-sound`, `--no-completion-sound` | Dong après succès, actif par défaut ; [compatibilité](completion-sound.md) |
 | `-l`, `--log-level` | `INFO` par défaut ; aussi `DEBUG`, `WARNING`, `ERROR`, `CRITICAL` |
 
 `-S` mémorise les paramètres Siril, les activations/désactivations et les réglages
@@ -77,7 +78,7 @@ AutoGHS recherche par défaut un renforcement final protégé
 (`--ghs-final-mode auto`), avec D borné par `--ghs-final-strength 1.25`,
 avant recomposition. La recherche de droite logarithmique vise également
 10 pixels par classe du graphique à l'intensité 0,8
-(`--ghs-regression-min-count 10` ; 0 désactive ce seuil), sous les gardes
+(`--ghs-regression-log-level 1` ; off désactive ce seuil), sous les gardes
 cumulatives. `--ghs-quartile-validations` fixe le budget de candidats
 diversifiés validés sur toute l’image par passe (12 par défaut, de 1 à 64).
 En mode `piecewise`, `--ghs-shape-branches` conserve jusqu'à trois chemins
@@ -94,10 +95,10 @@ la conservation normale selon la fraction du fond actif au-dessus de 0,8.
 protection normale.
 Voir [le critère de régression](ghs-quartiles.md#seuil-de-la-droite-à-08).
 `--ghs-histogram-model piecewise` sélectionne le profil par morceaux par défaut ;
-`line` conserve le mode historique sur demande explicite. Les réglages `--ghs-shape-smoothing`
-(0,0001), `--ghs-shape-retention` (0,65), `--ghs-shape-local-retention` (0,1),
-`--ghs-shape-distance` (0,15), `--ghs-shape-peak-shift` (0,25) et
-`--ghs-shape-stiffness` (1,25) sont décrits dans
+`line` conserve le mode historique sur demande explicite. Les réglages
+`--ghs-shape-smoothing` (0,0001), `--ghs-shape-shoulder-advance` (0,15),
+`--ghs-shape-ratio-tolerance` (0,5), `--ghs-shape-terminal-weight` (0,2) et
+`--ghs-shape-peak-shift` (défaut 0,25, plage de 0 à 1) sont décrits dans
 [la conservation de forme](ghs-histogram-shape.md). `--ghs-linearity-tolerance`
 s'applique alors à chaque morceau. Le poids global `--ghs-log-rms-weight`
 concerne seulement le mode `line`.
@@ -105,17 +106,20 @@ Le classement `piecewise` plafonne le bonus contraste/bruit à 100 %, pénalise
 progressivement les déformations, les bosses intermédiaires et la compression
 brillante, puis départage par le déplacement du pic. `--ghs-quality-cnr-floor`
 (0,9 ; ]0,1]) règle le début de pénalité de perte contraste/bruit ;
-`--ghs-quality-tail-bonus` (0,1 ; [0,1]) borne le bonus total des niveaux à
-0,8 et 0,875. Ces niveaux ne priment pas sur la qualité. Les seuils de forme
-et de contraste brillant sont des cibles progressives dans cette recherche
-finale ; écrêtage, cœur, couleurs et bruit restent des gardes obligatoires.
+`--ghs-quality-tail-bonus` (0,1 ; [0,1]) borne le bonus de la queue à 0,875. Le niveau à 0,8 dispose d’un poids dédié `--ghs-quality-reference-weight`
+(défaut 1, de 0 à 10) ; sa progression est mesurée sur la hauteur log10.
+Il guide fortement le classement sans contourner les gardes. Les seuils de forme
+et de contraste brillant sont mesurés séparément. Épaulement, signe des
+pentes, écrêtage, cœur, couleurs et bruit restent des gardes obligatoires.
+Les inversions d’ordre et déséquilibres excessifs des ratios coûtent fortement
+dans le classement final.
 `--ghs-post-blackpoint rise` recale le BP après chaque courbe, avant conformité,
 en mode `piecewise` ; `off` désactive ce recalage. Voir
 [le pied de montée et son budget cumulatif](ghs-blackpoint.md).
 Les graphiques sont uniquement logarithmiques et la série est exposée par
 `histogram_gallery`, `histogram_series_manifest` et `histogram_series`.
 `--ghs-save-trial-jpegs` ajoute les JPEG des essais de cette galerie, avec
-les mêmes numéros que les histogrammes et des aperçus avec étoiles.
+les mêmes numéros que les histogrammes, séparément pour les étoiles et le fond.
 Le défaut est désactivé ; `--no-ghs-save-trial-jpegs` permet de désactiver
 une valeur mémorisée. Voir [les images de chaque essai](ghs-histogram-shape.md#151-images-jpeg-de-chaque-essai).
 `--ghs-final-strength 0` désactive le renforcement et cette recherche.
@@ -150,7 +154,7 @@ Voir [le mode de relance](README.md#relance-autoghs-seul) et
 
 ### Étirements GHS successifs
 
-`--ghs-quartile-iterations` (12, entre 0 et 64),
+`--ghs-quartile-iterations` (32, entre 0 et 64),
 `--ghs-quartile-max-strength` (10, dans ]0,10]),
 `--ghs-linearity-tolerance` (0,05 dex, entre 0,005 et 0,5) et
 `--ghs-blackpoint-loss` (0,001, entre 0 et 0,01) contrôlent la

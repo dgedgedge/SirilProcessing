@@ -152,6 +152,6 @@ def test_piecewise_default_preserves_explicit_legacy_configuration(tmp_path: Pat
     args = config.parse_args(parser, ['--ghs-histogram-model', 'piecewise'])
     assert args.ghs_histogram_model == 'piecewise'
     assert args.ghs_post_blackpoint == 'rise'
-    assert args.ghs_shape_local_retention == .1
+    assert args.ghs_shape_ratio_tolerance == .5
     assert args.ghs_shape_peak_shift == .25
     assert args.ghs_sparse_highlight_retention == .45

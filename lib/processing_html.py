@@ -94,7 +94,9 @@ class ProcessingHtmlReport:
         '02_stars': ('Rendu des étoiles',
             'Rendu conservateur de la couche stellaire, avec contrôle des profils et des '
             'couleurs. Les diagnostics illustrent les paramètres et mesures obtenus.'),
-        '03_ghs': ('Étirement du fond',
+        '03_ghs_stars': ('Étirement des étoiles',
+            'Rendu stellaire indépendant, diagnostics et galerie des essais sur les étoiles seules.'),
+        '03_ghs_starless': ('Étirement du fond',
             'Optimisation GHS RANGE du fond sans étoiles, avec contrôles d’écrêtage et '
             'de préservation du signal. Le rapport indique les paramètres effectivement retenus.'),
         '04_recomposition': ('Recomposition du rendu',

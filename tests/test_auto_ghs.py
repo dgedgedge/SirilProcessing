@@ -424,7 +424,7 @@ def test_piecewise_balance_reduces_strength_against_a_fixed_reference() -> None:
     assert report['status'] == 'applied'
     assert 0 < report['strength'] < .7
     attempts = report['full_validation']
-    assert 'local histogram flattening' in attempts[0]['rejections']
+    assert any('slope ratio' in reason for reason in attempts[0]['rejections'])
     assert not attempts[-1]['rejections']
     for index, attempt in enumerate(attempts):
         assert attempt['parameters']['strength'] == pytest.approx(.7/2**index)
@@ -725,7 +725,7 @@ def test_cdf_cannot_accept_a_blackpoint_budget_failure(monkeypatch: pytest.Monke
 
     monkeypatch.setattr(HistogramBlackpointNormalizer, 'apply', staticmethod(exhausted))
     monkeypatch.setattr(module, 'piecewise_histogram_profile', lambda *args: {'measurable': True})
-    monkeypatch.setattr(module, 'compare_histogram_shapes', lambda *args: dict(achieved=True, rejections=[]))
+    monkeypatch.setattr(module, 'compare_histogram_shapes', lambda *args, **kwargs: dict(achieved=True, rejections=[]))
     args = GHSOptimizer.options(argparse.Namespace())
     output, report = GHSOptimizer().balance_histogram(
         source, HistogramAnalyzer(), ComputeBackend('cpu'), .35, 4., shape_options=args,
@@ -734,3 +734,55 @@ def test_cdf_cannot_accept_a_blackpoint_budget_failure(monkeypatch: pytest.Monke
     assert report['full_validation']
     assert all(r['rejections'] == ['cumulative blackpoint loss'] for r in report['full_validation'])
     np.testing.assert_array_equal(output, source)
+
+
+def test_background_optimization_is_independent_of_rendered_stars(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Deux couches stellaires et réserves distinctes donnent le même fond et audit."""
+    from lib.ghs_log_render import LogHistogramRenderer
+
+    rng = np.random.default_rng(74)
+    source = rng.uniform(0.01, 0.3, (3, 24, 24)).astype(np.float32)
+    reference = source.copy()
+    optimizer = GHSOptimizer()
+    original_final = optimizer.final_stretch
+    original_search = LogHistogramRenderer.search
+    calls = {"presentation": 0, "histogram": 0}
+
+    def check_final(*args: object, **kwargs: object) -> tuple[np.ndarray, JSONReport]:
+        """Vérifie l'absence d'étoiles tout en exécutant la recherche réelle."""
+        assert len(args) == 6
+        assert kwargs.get("stars") is None
+        calls["presentation"] += 1
+        return original_final(*args, **kwargs)
+
+    def check_search(
+        self: LogHistogramRenderer, data: np.ndarray, analyzer: HistogramAnalyzer,
+        backend: ComputeBackend, args: argparse.Namespace,
+        stars: np.ndarray | None = None, headroom: float = 0.95,
+        **kwargs: object,
+    ) -> tuple[np.ndarray, JSONReport]:
+        """Contrôle aussi la recherche histogramme réelle, sans recomposition."""
+        assert stars is None
+        calls["histogram"] += 1
+        return original_search(self, data, analyzer, backend, args, stars, headroom, **kwargs)
+
+    monkeypatch.setattr(optimizer, "final_stretch", check_final)
+    monkeypatch.setattr(LogHistogramRenderer, "search", check_search)
+    options = argparse.Namespace(
+        ghs_max_iterations=1, ghs_bins=256, ghs_quartile_iterations=1,
+        ghs_dynamic_max_iterations=1,
+    )
+    first, report = optimizer.optimize(
+        source, "range", options, ComputeBackend("cpu"),
+        rendered_stars=np.zeros_like(source), headroom=0.95,
+    )
+    second, again = optimizer.optimize(
+        source, "range", options, ComputeBackend("cpu"),
+        rendered_stars=np.full_like(source, 0.85), headroom=0.5,
+    )
+    np.testing.assert_array_equal(first, second)
+    np.testing.assert_array_equal(source, reference)
+    assert report == again
+    assert calls == {"presentation": 2, "histogram": 2}

@@ -91,3 +91,6 @@ ordre d’exécution :
 
 Les traitements Siril utilisent la [factory de sessions sirilpy](../lightProcess/reference/SIRIL_API.md),
 avec démarrage automatique sans IHM, plans d’appels JSON et journaux de session.
+
+Le [signal sonore de fin](../postProcess/completion-sound.md) annonce un succès
+par défaut ; `--no-completion-sound` permet de le désactiver.

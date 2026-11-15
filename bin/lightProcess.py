@@ -45,6 +45,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from lib.output_layout import OutputLayout
 from lib.config import Config
+from lib.completion_sound import CompletionSound
 from lib.power_guard import PowerGuard
 from lib.logging_utils import (
     add_session_file_logging,
@@ -279,6 +280,7 @@ Traitement Siril de mosaique (si --mosaic):
 
     config.register(Mosaic, parser)
     config.register(PostProcessingProcessor, parser)
+    config.register(CompletionSound, parser)
 
     config.add_arguments(parser)
 
@@ -348,7 +350,10 @@ Traitement Siril de mosaique (si --mosaic):
         config.bind_parameters(args)
 
     with (nullcontext() if args.dry_run else PowerGuard()):
-        return _process_sessions(args, config, mosaic_processor)
+        status = _process_sessions(args, config, mosaic_processor)
+    if status == 0 and not args.dry_run:
+        CompletionSound().play(args)
+    return status
 
 
 def _process_sessions(

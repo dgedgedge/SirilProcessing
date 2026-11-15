@@ -54,8 +54,8 @@ effectue une troisième recherche depuis la même entrée. Il représente les
 dans l'ordre spatial, avec un poids égal à leur population divisée par le
 nombre de représentants. Les pixels Y ≤ 1e-6 ont leur strate distincte.
 Les classes rares sont ainsi conservées dans les prédictions, au lieu de
-disparaître dans une grille spatiale clairsemée. Les mêmes étoiles aux mêmes
-positions servent à prédire le rendu recomposé. Ces histogrammes pondérés
+disparaître dans une grille spatiale clairsemée. Dans AutoGHS, ces prédictions
+portent uniquement sur le fond sans étoiles. Ces histogrammes pondérés
 restent des estimations : les gardes utilisent la grille spatiale et la sonde
 brillante, puis les finalistes sont vérifiés sur tous les pixels. Cette reprise
 ne relâche aucune protection et est omise si les deux premières recherches
@@ -71,8 +71,8 @@ leurs images sur le GPU ni produire deux sorties publiées.
 
 Le premier étirement RANGE rend le support plus exploitable. Chaque passage
 réévalue la droite et les changements de pente, dont un SP proche de 0,5 si
-une inflexion y est détectée. Les étoiles restent fixes. Les mêmes gardes
-cumulatives protègent le fond et sa recomposition screen ; elles peuvent
+une inflexion y est détectée. Dans AutoGHS, les gardes cumulatives protègent
+le fond seul ; elles peuvent
 limiter l'extension atteignable, même si une droite plus longue paraît possible.
 
 ## 2. Paramètres
@@ -83,12 +83,12 @@ CLI > JSON > défauts et sont sauvegardées uniquement sur demande explicite.
 
 | Option | Défaut | Domaine et effet |
 | --- | --- | --- |
-| `--ghs-quartile-iterations` | `12` | 0 à 64 passages ; 0 désactive cette phase |
+| `--ghs-quartile-iterations` | `32` | 0 à 64 passages ; 0 désactive cette phase |
 | `--ghs-quartile-block-pixels` | `262144` | Maximum de pixels spatiaux par bloc de transformation float64, de 1 à 4194304 |
 | `--ghs-quartile-validations` | `12` | Budget de validations du champ entier par passe, de 1 à 64 |
 | `--ghs-quartile-max-strength` | `10` | D maximal par passage, dans ]0,10] |
 | `--ghs-linearity-tolerance` | `0.05` | RMS maximal en dex autour de la droite ; de 0,005 à 0,5 |
-| `--ghs-regression-min-count` | `10` | Effectif minimal prédit par la droite à 0,8, par classe du graphique ; 0 désactive |
+| `--ghs-regression-log-level` | `1` | Niveau log10 à 0,8 : 1=10, 2=100, 1.5≈31,62 pixels/classe ; off désactive |
 | `--ghs-tail-height` | `0.25` | Hauteur log cible à 0,875, entre 0 et 1 ; 0 désactive ce complément |
 | `--ghs-tail-channel` | `red` | Canal de référence : `red`, `green` ou `blue` ; aucune égalisation des canaux |
 | `--ghs-sparse-tail-fraction` | `0.001` | Fraction du signal actif à Y >= 0,8 rétablissant la protection normale ; 0 désactive l’adaptation |
@@ -104,7 +104,7 @@ Pour autoriser jusqu'à 24 passes et limiter la perte noire à 0,05 % :
 
 ```bash
 .venv/bin/python bin/postProcess.py image_RGB_lineaire.fits rapports/ \
-  --enable-autoghs --ghs-quartile-iterations 24 --ghs-blackpoint-loss 0.0005
+  --enable-autoghs --ghs-quartile-iterations 32 --ghs-blackpoint-loss 0.0005
 ```
 
 Cet exemple décrit les options ; il nécessite une installation StarNet et une
@@ -152,7 +152,9 @@ en dex. Cette progression ne valide jamais la rectitude.
 
 La recherche demande également que la droite retenue passe au-dessus du
 repère **(0,8 ; 10¹ pixels par classe)**, égalité admise. L'option
-`--ghs-regression-min-count` vaut 10 ; zéro désactive ce critère.
+`--ghs-regression-log-level` vaut 1 ; `off` désactive ce critère.
+La cible est fournie directement en log10 : 1 donne 10 pixels/classe,
+2 donne 100, 1.5 donne environ 31,62. La valeur 0 demande un pixel/classe.
 Il porte sur la luminosité du fond sans étoiles, comme la régression.
 
 La régression utilise une densité normalisée sur 128 classes, tandis que le
@@ -210,7 +212,10 @@ les logarithmes. Ces profils portent `estimated=true` ; leur échantillon peut
 manquer une queue rare. Les finalistes et la mesure finale sont recomptés sur
 **tous** les pixels : seul ce résultat confirme `tail_height_achieved`.
 
-Si les étoiles rendues sont fournies, la hauteur porte sur la recomposition
+Dans le pipeline AutoGHS, la hauteur et les gardes portent toujours sur le
+fond seul, indépendamment du rendu stellaire. L’interface de bas niveau conserve
+une évaluation facultative avec étoiles pour les essais isolés :
+si les étoiles rendues sont fournies directement au moteur, la hauteur porte sur la recomposition
 screen visible avec ces mêmes étoiles ; sans étoiles, elle porte sur le fond
 seul. La longueur rectiligne reste mesurée sur le fond. Le canal choisi sert
 uniquement au classement d'un étirement RGB commun, jamais à lui appliquer

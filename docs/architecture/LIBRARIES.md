@@ -5,6 +5,7 @@
 | Module | Rôle général |
 |---|---|
 | [parameterized_component.py](../../lib/parameterized_component.py) | Partager la déclaration et la capture des paramètres entre services et traitements |
+| [completion_sound.py](../../lib/completion_sound.py) | Synthétiser et jouer le [signal sonore de succès](../scripts/postProcess/completion-sound.md), déclenché par les scripts principaux |
 | [processor.py](../../lib/processor.py) | Ajouter le contrat de traitement d’image aux composants configurables |
 | [postprocess.py](../../lib/postprocess.py) | Regrouper les moteurs, la séquence et le [pipeline complet de post-traitement](../scripts/postProcess/pipeline.md) commun à lightProcess et postProcess |
 | [annotation_catalog.py](../../lib/annotation_catalog.py) | Charger OpenNGC hors ligne et projeter les positions sur le WCS final pour les [annotations](../scripts/postProcess/annotations.md) |
@@ -22,6 +23,8 @@
 | gaia_spcc.py | Installer et vérifier les 48 régions spectrales SPCC ; [reprise et intégrité](../scripts/install_dependances/resources.md#31-catalogue-spectral-spcc-complet) |
 | [ghs_final_stretch.py](../../lib/ghs_final_stretch.py) | Rechercher le renforcement final D/B/SP/HP sous [contraintes de hautes lumières](../scripts/postProcess/ghs-highlight-protection.md) |
 | [ghs_log_histogram.py](../../lib/ghs_log_histogram.py) | Mesurer la décroissance semi-log robuste pour le [classement des essais GHS](../scripts/postProcess/ghs-highlight-protection.md#31-régression-de-la-décroissance-logarithmique) |
+| [stretch_transfer.py](../../lib/stretch_transfer.py) | Reconstituer les chemins et exporter les [transformations cumulées des essais](../scripts/postProcess/stretch-transfer.md) |
+| [stretch_branches.py](../../lib/stretch_branches.py) | Posséder les traitements et diagnostics des [deux couches indépendantes](../scripts/postProcess/stretch-branches.md) |
 | [final_render.py](../../lib/final_render.py) | Orchestrer et publier le [rendu final AutoGHS](../scripts/postProcess/auto-ghs.md) après les traitements linéaires |
 | [final_color.py](../../lib/final_color.py) | Renforcer la [couleur après GHS](../scripts/postProcess/final-color.md) et recomposer les étoiles, avec reprise indépendante |
 | [auto_ghs.py](../../lib/auto_ghs.py) | Calculer les étirements et rechercher leurs paramètres sur histogrammes |

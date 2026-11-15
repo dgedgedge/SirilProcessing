@@ -40,15 +40,15 @@ def test_curved_tail_is_regular_by_pieces_without_a_single_global_line() -> None
     json.dumps(profile, allow_nan=False)
 
 
-def test_same_slope_sequence_cannot_hide_global_flattening() -> None:
-    """Une copie cinq fois plus plate conserve l'ordre mais doit être rejetée."""
+def test_common_global_flattening_is_allowed() -> None:
+    """Une copie cinq fois plus plate conserve les rapports sans coût d’amplitude."""
     reference = piecewise_histogram_profile(curved_counts())
     flatter = piecewise_histogram_profile(curved_counts(.2))
     audit = compare_histogram_shapes(reference, flatter)
     assert audit['sequence_before'] == audit['sequence_after']
     assert audit['drop_retention'] == pytest.approx(.2, abs=.01)
-    assert not audit['achieved']
-    assert 'global histogram flattening' in audit['rejections']
+    assert audit['achieved']
+    assert 'global histogram flattening' not in audit['rejections']
     assert compare_histogram_shapes(reference, reference)['achieved']
 
 
@@ -67,7 +67,7 @@ def test_middle_plateau_is_rejected_despite_same_sequence_and_total_drop() -> No
     assert audit['drop_retention'] > .9
     assert audit['distance'] < .03
     assert not audit['achieved']
-    assert 'local histogram flattening' in audit['rejections']
+    assert 'histogram slope sign inversion' in audit['rejections']
     assert audit['local_slope_retention'] < .1
 
 
@@ -86,10 +86,10 @@ def test_common_slope_scaling_remains_homogeneous() -> None:
 def test_invalid_stiffness_is_rejected(stiffness: float) -> None:
     """La comparaison et la résolution des options refusent un seuil invalide."""
     profile = piecewise_histogram_profile(curved_counts())
-    with pytest.raises(ValueError, match='stiffness'):
-        compare_histogram_shapes(profile, profile, max_stiffness=stiffness)
-    with pytest.raises(ValueError, match='stiffness'):
-        GHSOptimizer.options(argparse.Namespace(ghs_shape_stiffness=stiffness))
+    with pytest.raises(ValueError, match='(ratios|ratio_tolerance)'):
+        compare_histogram_shapes(profile, profile, ratio_tolerance=stiffness)
+    with pytest.raises(ValueError, match='(ratios|ratio_tolerance)'):
+        GHSOptimizer.options(argparse.Namespace(ghs_shape_ratio_tolerance=stiffness))
 
 
 def test_shape_reference_is_neither_mutated_nor_replaced_by_the_previous_pass() -> None:
@@ -100,7 +100,7 @@ def test_shape_reference_is_neither_mutated_nor_replaced_by_the_previous_pass() 
     step = piecewise_histogram_profile(curved_counts(.75))
     assert compare_histogram_shapes(original, step)['achieved']
     assert compare_histogram_shapes(step, half)['achieved']
-    assert not protect_histogram_shape(half, original)['shape_preservation']['achieved']
+    assert protect_histogram_shape(half, original)['shape_preservation']['achieved']
     assert json.dumps(original, sort_keys=True) == saved
 
 
@@ -117,11 +117,14 @@ def test_noisy_tail_keeps_the_significant_slope_sequence_after_smoothing() -> No
 def test_same_tail_cannot_hide_an_excessively_widened_peak_shoulder() -> None:
     """La conservation porte aussi sur la géométrie du pic, pas seulement la queue."""
     reference = piecewise_histogram_profile(curved_counts())
-    widened = dict(reference, line_start=.4)
+    shape = dict(reference['shape'])
+    original_x = np.array(shape['x'])
+    shape['x'] = (.32+original_x*.5).tolist()
+    widened = dict(reference, shape=shape, line_start=.4)
     audit = compare_histogram_shapes(reference, widened)
     assert audit['distance'] == 0
     assert not audit['achieved']
-    assert 'histogram peak shoulder distortion' in audit['rejections']
+    assert 'histogram shoulder advance' in audit['rejections']
 
 
 def test_shape_preservation_also_bounds_peak_displacement() -> None:
@@ -167,7 +170,7 @@ def test_selector_cannot_certify_a_flat_image_without_measurable_quality(
     assert report['selected_search'] == 'unchanged'
     assert not report['targets_achieved']
     assessment = report['searches']['shape']['assessment']['profile']
-    assert 'global histogram flattening' in assessment['shape_preservation']['rejections']
+    assert 'global histogram flattening' not in assessment['shape_preservation']['rejections']
     assert 'unmeasurable render quality' in report['searches']['shape']['output_rejections']
 
 
@@ -219,7 +222,7 @@ def test_selector_keeps_the_pre_equalization_reference_across_phases(
     np.testing.assert_array_equal(output, source)
     assert report['shape_reference'] is reference
     assessment = report['searches']['shape']['assessment']['profile']
-    assert 'global histogram flattening' in assessment['shape_preservation']['rejections']
+    assert 'global histogram flattening' not in assessment['shape_preservation']['rejections']
     assert assessment['shape_preservation']['drop_retention'] == pytest.approx(.5, rel=.02)
 
 
@@ -488,6 +491,16 @@ def test_branch_search_can_continue_a_lesser_ranked_parent_towards_complete_targ
         delta = .02*curve['D'] if stage == 0 else .04 if stage == 1 and curve['D'] == 2 else 0.
         return image+np.float32(delta)
 
+    real_attach = module.HistogramRenderQuality.attach
+
+    def controlled_grade(*args: object, **kwargs: object) -> JSONReport:
+        """Fixe le classement de ce test structurel, indépendamment des poids produit."""
+        measured = real_attach(*args, **kwargs)
+        stage = measured['test_stage']
+        measured['render_quality']['score'] = [0., .4, .5, 1.][stage]
+        return measured
+
+    monkeypatch.setattr(module.HistogramRenderQuality, 'attach', staticmethod(controlled_grade))
     monkeypatch.setattr(module, 'piecewise_histogram_profile', profiles)
     monkeypatch.setattr(module, 'add_regression_floor_objective', floor)
     monkeypatch.setattr(ShapeGHSProcessor, 'candidate_parameters', staticmethod(parameters))
@@ -591,3 +604,31 @@ def test_candidate_histograms_are_evaluated_after_the_actual_blackpoint(
     assert evaluated >= 2 and not pending
     assert report['iterations'][0]['validations']
     assert report['blackpoint_order'] == 'GHS, linear BP, compliance'
+
+
+@pytest.mark.parametrize('limit', [0, .25, .3, .75, 1])
+def test_peak_shift_option_covers_full_normalized_range(limit: float) -> None:
+    """Le CLI et le moteur acceptent le déplacement sur toute l'étendue [0,1]."""
+    parser = argparse.ArgumentParser()
+    GHSOptimizer.add_arguments(parser)
+    args = GHSOptimizer.options(parser.parse_args(['--ghs-shape-peak-shift', str(limit)]))
+    assert args.ghs_shape_peak_shift == limit
+    reference = dict(piecewise_histogram_profile(curved_counts()), peak=0.)
+    candidate = dict(reference, peak=limit)
+    audit = compare_histogram_shapes(reference, candidate, max_peak_shift=limit)
+    assert audit['peak_shift'] == pytest.approx(limit)
+    assert audit['maximum_peak_shift'] == limit
+    assert 'histogram peak displacement' not in audit['rejections']
+    if limit > 0:
+        strict = compare_histogram_shapes(reference, candidate, max_peak_shift=limit/2)
+        assert 'histogram peak displacement' in strict['rejections']
+
+
+@pytest.mark.parametrize('limit', [-.001, 1.001, float('nan'), float('inf')])
+def test_peak_shift_rejects_values_outside_normalized_range(limit: float) -> None:
+    """Les deux validations refusent les déplacements non finis ou hors [0,1]."""
+    with pytest.raises(ValueError, match='ghs-shape-peak-shift'):
+        GHSOptimizer.options(argparse.Namespace(ghs_shape_peak_shift=limit))
+    reference = piecewise_histogram_profile(curved_counts())
+    with pytest.raises(ValueError, match='ghs-shape-peak-shift'):
+        compare_histogram_shapes(reference, reference, max_peak_shift=limit)
