@@ -79,6 +79,7 @@ def test_single_range_contract_and_published_artifacts(
     def stars(*args, **kwargs):
         """Compte le rendu commun des étoiles."""
         render_calls.append(1)
+        assert kwargs["boost_fraction"] == .4
         return real_render(*args, **kwargs)
 
     def optimize(self, data, strategy, *args, **kwargs):
@@ -98,9 +99,10 @@ def test_single_range_contract_and_published_artifacts(
         linear_rgb,
         tmp_path / "05_autoghs.json",
         argparse.Namespace(
-            compute_backend="cpu", ghs_bins=512, ghs_max_iterations=2, ghs_chroma=chroma
+            compute_backend="cpu", ghs_bins=512, ghs_max_iterations=2, ghs_chroma=chroma, star_boost_fraction=.4
         ),
     )
+    assert result["stars"]["boost_selection"]["fraction"] == .4
     assert len(fake_separation) == len(render_calls) == 1
     assert [call[0] for call in optimize_calls] == ["range"]
     assert len(fusion_calls) == 1
@@ -136,7 +138,7 @@ def test_single_range_contract_and_published_artifacts(
     assert Path(result["stars"]["diagnostic_path"]).parent == work / "02_stars"
     assert Path(result["stars"]["diagnostic_path"]).is_file()
     assert Path(result["stars"]["output_jpeg"]).is_file()
-    assert result["parameters"]["star_histogram_strength"] == 0.8
+    assert result["parameters"]["star_histogram_strength"] == 1.0
     assert result["parameters"]["ghs_final_strength"] == 1.25
     for strategy, path in result["output_images"].items():
         presentation = result["strategies"][strategy]["presentation_stretch"]

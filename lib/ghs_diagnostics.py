@@ -59,6 +59,53 @@ class HistogramDiagnostics(processor):
         self._cache = (tempfile.TemporaryDirectory(prefix='autoghs-trial-images-')
                        if backend is not None else None)
         self._images: dict[str, dict[str, Path]] = {}
+        self._stellar_trials: list[JSONReport] = []
+        self.source_domain: tuple[float, float] | None = None
+
+    def set_source(self, data: np.ndarray) -> None:
+        """Conserve uniquement le min/max RGB de l'entrée linéaire de cette branche."""
+        from lib.star_separation import validate_rgb
+
+        validate_rgb(data)
+        self.source_domain = float(data.min()), float(data.max())
+
+
+    def record_stellar_trial(
+        self, data: np.ndarray, stage: str, status: str,
+        parameters: JSONReport | None = None,
+        transform_operations: list[JSONReport] | None = None,
+    ) -> None:
+        """Mesure un essai sur les étoiles seules et capture son JPEG si activé.
+
+        data est un RGB normalisé de forme (3, hauteur, largeur). stage nomme
+        la courbe, status son verdict et parameters ses réglages sans unité.
+        Seuls les histogrammes et chemins sont conservés ; aucun tableau RGB
+        n'est retenu. Les mesures ne participent pas au choix du rendu.
+        """
+        from lib.auto_ghs import ComputeBackend, HistogramAnalyzer
+
+        if self.source_domain is None:
+            self.set_source(data)
+        record = dict(stage=stage, status=status, parameters=parameters or {},
+                      histogram=HistogramAnalyzer().analyze(data, ComputeBackend('cpu')).report())
+        if transform_operations is not None:
+            record['transform_operations'] = transform_operations
+        if status == 'rejected':
+            record['rejections'] = ['stellar width limit']
+        if self._cache is not None:
+            self.capture(record, data)
+        self._stellar_trials.append(record)
+
+
+    def stellar_histogram_report(self) -> JSONReport:
+        """Retourne les histogrammes stellaires enregistrés, sans image du fond."""
+        if not self._stellar_trials:
+            raise ValueError('Aucun essai stellaire enregistré')
+        return dict(histograms=[item['histogram'] for item in self._stellar_trials],
+                    histogram_stages=self._stellar_trials, diagnostic_subject='stars',
+                    transfer_source_domain=list(self.source_domain) if self.source_domain is not None else None,
+                    trial_image_id=self._stellar_trials[-1].get('trial_image_id'))
+
 
     def close(self) -> None:
         """Retire les JPEG temporaires, après leur publication ou après échec."""
@@ -66,6 +113,8 @@ class HistogramDiagnostics(processor):
             self._cache.cleanup()
             self._cache = None
         self._images.clear()
+        self._stellar_trials.clear()
+        self.source_domain = None
         self._stars = None
 
     def capture(

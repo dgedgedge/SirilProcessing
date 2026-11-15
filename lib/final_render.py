@@ -679,10 +679,7 @@ class AutoGHSFinalRenderer(processor):
                 positive,
                 getattr(args, "star_strength", 2.0),
                 getattr(args, "star_ceiling", 0.85),
-                getattr(
-                    args, "star_max_width_ratio",
-                    ConservativeStarRenderer.default_max_width_ratio,
-                ),
+                ConservativeStarRenderer.stretch_width_limit(args),
                 getattr(
                     args, "star_faint_boost", ConservativeStarRenderer.default_faint_boost
                 ),
@@ -690,6 +687,8 @@ class AutoGHSFinalRenderer(processor):
                     args, "star_histogram_strength",
                     ConservativeStarRenderer.default_histogram_strength,
                 ),
+                noise_sigma=getattr(args, "star_noise_sigma", ConservativeStarRenderer.default_noise_sigma),
+                boost_fraction=getattr(args, "star_boost_fraction", ConservativeStarRenderer.default_boost_fraction),
             )
             stars_path = stars_dir / f"{source.stem}_stars_render.fits"
             LOGGER.info(
@@ -862,6 +861,8 @@ class AutoGHSFinalRenderer(processor):
                         ConservativeStarRenderer.default_faint_boost,
                     ),
                     "star_ceiling": getattr(args, "star_ceiling", 0.85),
+                    "star_boost_fraction": getattr(args, "star_boost_fraction", ConservativeStarRenderer.default_boost_fraction),
+                    "star_noise_sigma": getattr(args, "star_noise_sigma", ConservativeStarRenderer.default_noise_sigma),
                     "star_histogram_strength": getattr(
                         args, "star_histogram_strength",
                         ConservativeStarRenderer.default_histogram_strength,

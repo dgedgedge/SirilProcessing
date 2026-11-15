@@ -237,7 +237,10 @@ astronomique.
 | `--star-render` | `conservative` | Rendu asinh commun des étoiles |
 | `--star-strength` | `2.0` | Force asinh, dans `]0,20]` |
 | `--star-faint-boost` | `5.0` | Renforcement demandé des étoiles faibles, de 1 à 10 ; réduit par pas de 1 jusqu'au premier rendu respectant la garde de largeur |
-| `--star-histogram-strength` | `0.8` | Répartition des amplitudes des pics en logarithme, de 0 (gain fixe) à 1 ; réduite si la garde FWHM le demande |
+| `--star-histogram-strength` | `1` | Répartition des amplitudes des pics en logarithme, de 0 (gain fixe) à 1 ; réduite si la garde FWHM le demande |
+| `--star-boost-fraction` | `0.25` | Budget de pics renforcés en plus, de 0 à 1 ; [sélection](stellar-selection.md) |
+| `--star-noise-sigma` | `6` | Seuil doux du bruit, de 0 à 20 ; zéro désactive |
+| `--star-stretch-max-width-ratio` | `None` | Limite propre aux étoiles ; sinon hérite de `--star-max-width-ratio` |
 | `--star-ceiling` | `0.85` | Plafond du maximum RGB des étoiles seules |
 | `--star-max-width-ratio` | `2.0` | Rapport FWHM médian maximal, si mesurable |
 | `--star-max-color-drift` | `0.08` | Dérive moyenne maximale de chromaticité RGB après fusion |
@@ -370,7 +373,7 @@ sont indépendants et persistants avec `--save-config`. Le premier égalise
 partiellement les intensités du fond, sous plafond de contraste ; le second
 renforce uniquement la couche stellaire extraite. Les valeurs 0 et 1,
 respectivement, désactivent ces deux ajouts. L'adaptation stellaire est pilotée
-séparément par `--star-histogram-strength` (défaut 0,8 ; 0 la désactive).
+séparément par `--star-histogram-strength` (défaut 1 ; 0 la désactive).
 Le diagnostic dédié et les exports des étoiles se trouvent dans `02_stars/`.
 Voir les pages
 [algorithme](auto-ghs-algorithm.md) et [étoiles](star-rendering.md).

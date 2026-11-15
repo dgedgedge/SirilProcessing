@@ -1,5 +1,8 @@
 # postProcess — post-traitement d’une image FITS
 
+Le [renforcement stellaire sélectif](stellar-selection.md) utilise une base
+asinh et réserve le supplément adaptatif à 25 % des pics éligibles.
+
 [Documentation](../../README.md) › [Scripts](../README.md) › postProcess
 
 Présentation : [Principe du post-traitement et diagramme de séquence](principle.md).

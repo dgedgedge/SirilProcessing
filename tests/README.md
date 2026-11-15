@@ -960,3 +960,15 @@ Des coins colorés asymétriques comparent le JPEG final et la capture d'essai ;
 les positions et contours WCS doivent suivre les pixels du rendu après ce
 retournement. Une session Siril isolée et ses exports savepng servent de
 référence indépendante, sans utiliser de FITS personnels comme fixtures.
+
+
+## Sélection stellaire à 25 %
+
+`test_stellar_selection.py` couvre budgets, ex aequo, modes constants, poids
+exacts aux sommets et coordonnées invalides. `test_star_rendering.py` vérifie
+la conservation des pics non sélectionnés, les profils à 50 et 10 %, le bruit,
+les couleurs, les bornes et les réglages CLI/JSON persistants. Les tests de
+recettes stellaires contrôlent la géométrie native et le rôle d’enveloppe.
+Le test du rendu final vérifie la transmission de la fraction à l’étape étoiles.
+Ces tests ne relancent ni StarNet ni Siril. Les essais réels sont décrits dans
+[la méthode](../docs/scripts/postProcess/stellar-selection.md).

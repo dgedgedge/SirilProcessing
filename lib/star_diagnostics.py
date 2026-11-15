@@ -26,6 +26,8 @@ def write_star_diagnostic(
     Le graphique utilise un fond noir et des textes clairs ; les niveaux
     des extraits RGB restent ceux des données. Leur sens haut/bas suit
     l'affichage natif Siril, indépendamment de la carte ROWORDER.
+    Une sélection stellaire éventuelle ajoute son budget et l'effectif des
+    pics effectivement renforcés, distincts du seuil de visibilité.
     """
     from matplotlib.backends.backend_agg import FigureCanvasAgg
     from matplotlib.figure import Figure
@@ -95,6 +97,13 @@ def write_star_diagnostic(
         "la visibilité finale dépend aussi du fond après recomposition."
     )
     recomposed = report.get("recomposed_visibility", {})
+    selection = report.get('boost_selection')
+    if selection is not None:
+        annotation += (
+            f"\nFraction demandée : {100 * selection['fraction']:.1f} % ; "
+            f"pics retenus : {selection['selected_count']} / {selection['eligible_count']} ; "
+            f"renforcés : {selection.get('actually_boosted_count', 'non mesuré')}."
+        )
     if recomposed:
         annotation += "\nContraste ajouté au fond ≥ 0,03 après fusion : " + "; ".join(
             f"{name.upper()} {metrics['above_threshold']} pics"
