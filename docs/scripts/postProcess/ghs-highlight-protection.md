@@ -5,7 +5,7 @@
 Les scores de régression globale décrits ici concernent le mode `line`,
 sélectionnable explicitement. Avec le [mode par défaut `piecewise`](ghs-histogram-shape.md),
 la passe remplace les bonus de pente moins raide et de RMS global par un
-contrôle de forme figé sur son entrée : morceaux lissés, décroissance, ordre
+contrôle de forme figé sur son entrée : épaulement, signe et rapports des pentes, ordre
 des variations de pente et déplacement du pic. Les protections de régions
 et le gain diffus restent évalués.
 
@@ -133,7 +133,9 @@ Pour réserver une marge aux écarts d'échantillonnage, le classement exige
 `1 − 0,8 × (1 − retention)` de conservation ; la validation complète utilise
 la tolérance demandée.
 
-Avec la couche d'étoiles, le moteur évalue également
+AutoGHS appelle ce moteur sur le fond seul, sans lui transmettre les étoiles :
+le rendu stellaire ne participe ni aux gardes ni au classement du fond.
+Pour les appels isolés de bas niveau avec une couche d'étoiles, le moteur évalue également
 `F = headroom × fond + étoiles × (1 − headroom × fond)`. Les gardes doivent
 passer sur le fond **et** la fusion. Le score le plus faible des deux sert au
 classement, les étoiles restant strictement identiques entre candidats.
@@ -233,7 +235,7 @@ l'extension conditionnelle à 0,875 et la priorité relative du RMS.
 contraste, les fusions, les bordures nulles, les paramètres invalides et le
 refus contrôlé, ainsi que la parité des mesures CPU/CUDA lorsque disponible.
 Les tests d'orchestration vérifient le seul traitement RANGE et le
-passage de la couche d'étoiles au moteur, le meilleur score complet et le maintien
+calcul du fond sans transmettre la couche d'étoiles, le meilleur score complet et le maintien
 de l'identité pour une nébuleuse déjà presque rectiligne. Les essais M31 et M33
 repartent chacun du même fond recalculé avant la dernière passe, à partir des
 couches linéaires StarNet existantes, avec les mêmes étoiles rendues. Ils

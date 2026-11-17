@@ -38,7 +38,7 @@ def reset_work_dir(
 
 
 def reset_autoghs_work_dir(report_path: Path | str, input_path: Path | str) -> Path:
-    """Prépare les cinq sous-étapes directement dans le parent du rapport.
+    """Prépare les branches indépendantes directement dans le parent du rapport.
 
     Nettoie uniquement les dossiers 01_separation à 05_diagnostics et
     l'ancienne enveloppe <rapport>_work. Les rapports, exports conservés et
@@ -50,7 +50,8 @@ def reset_autoghs_work_dir(report_path: Path | str, input_path: Path | str) -> P
     report, source = Path(report_path).resolve(), Path(input_path).resolve()
     work = report.parent
     products = [work / name for name in (
-        "01_separation", "02_stars", "03_ghs", "04_recomposition",
+        "01_separation", "02_stars", "03_ghs", "03_ghs_stars",
+        "03_ghs_starless", "04_recomposition",
         "05_diagnostics", f"{report.stem}_work",
     )]
     if any(source.is_relative_to(path.resolve()) for path in products):

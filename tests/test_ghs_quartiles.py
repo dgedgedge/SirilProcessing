@@ -119,8 +119,8 @@ def test_isolated_dark_peak_has_a_limited_blackpoint() -> None:
     ('ghs_sparse_tail_fraction', float('nan')),
     ('ghs_sparse_highlight_retention', 0), ('ghs_sparse_highlight_retention', 1.1),
     ('ghs_sparse_highlight_retention', float('inf')),
-    ('ghs_regression_min_count', -1), ('ghs_regression_min_count', float('nan')),
-    ('ghs_regression_min_count', float('inf')),
+    ('ghs_regression_log_level', -1), ('ghs_regression_log_level', float('nan')),
+    ('ghs_regression_log_level', float('inf')),
     ('ghs_tail_height', -.1), ('ghs_tail_height', 1.1),
     ('ghs_tail_height', float('nan')), ('ghs_tail_channel', 'yellow'),
 ])
@@ -133,6 +133,8 @@ def test_invalid_quartile_options_are_rejected(name: str, value: float) -> None:
 def test_options_are_collected_recursively_and_configurable(tmp_path: Path) -> None:
     """La classe feuille possède ses options ; JSON et CLI gardent leur priorité."""
     config = Config(tmp_path / 'settings.json')
+    defaults = GHSOptimizer.options(argparse.Namespace())
+    assert defaults.ghs_quartile_iterations == 32
     config.set('ghs_quartile_iterations', 20)
     parser = argparse.ArgumentParser()
     config.register(GHSOptimizer, parser)
@@ -238,7 +240,7 @@ def test_search_extends_the_log_linear_span() -> None:
     light = .01 - .15 * np.log(1 - uniform * (1 - np.exp(-.98/.15)))
     data = np.repeat(light[None].astype('f4'), 3, axis=0)
     args = GHSOptimizer.options(argparse.Namespace(ghs_quartile_iterations=4, ghs_tail_height=0,
-                                                      ghs_regression_min_count=0))
+                                                      ghs_regression_log_level=None))
     _, report = QuartileGHSProcessor().search(
         data, HistogramAnalyzer(), ComputeBackend('cpu'), args,
     )
@@ -350,14 +352,14 @@ def test_tail_estimation_is_remeasured_on_all_pixels(monkeypatch: pytest.MonkeyP
 
 
 def test_regression_floor_option_precedence(tmp_path: Path) -> None:
-    """Le seuil suit défauts, JSON et CLI, avec zéro comme désactivation."""
+    """Le seuil suit défauts, JSON et CLI, avec off comme désactivation."""
     path = tmp_path / 'config.json'
-    path.write_text(json.dumps({'ghs_regression_min_count': 20}))
+    path.write_text(json.dumps({'ghs_regression_log_level': 2}))
     config = Config(path)
     parser = argparse.ArgumentParser()
     config.register(GHSOptimizer, parser)
-    assert config.parse_args(parser, []).ghs_regression_min_count == 20
-    assert config.parse_args(parser, ['--ghs-regression-min-count', '0']).ghs_regression_min_count == 0
+    assert config.parse_args(parser, []).ghs_regression_log_level == 2
+    assert config.parse_args(parser, ['--ghs-regression-log-level', 'off']).ghs_regression_log_level is None
     assert GHSOptimizer.options(argparse.Namespace()).ghs_regression_min_count == 10
 
 

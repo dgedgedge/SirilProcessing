@@ -32,9 +32,22 @@ Le premier light du groupe sert de référence pour chercher les masters.
 
 `--dark-lib` indique la bibliothèque parcourue pour trouver les masters ; son
 chemin est un paramètre de `SequenceCalibrationProcessor`.
-Avec les darks activés, le script parcourt récursivement la bibliothèque à la
-recherche d’un FITS valide identifié comme dark et compatible avec la clé du
-light. Si les deux en-têtes portent une commande `STACKCMD`, leur compatibilité
+Avec les darks activés, le script examine d’abord le dossier `dark/` ou
+`Dark/` situé à côté de `light/` dans la sous-session. S’il contient exactement
+un fichier, et que celui-ci porte une extension `.fit`, `.fits`, `.FIT` ou
+`.FITS`, il constitue un candidat prioritaire. Les sous-dossiers sont ignorés ;
+un fichier supplémentaire, même non FITS, exclut ce candidat. Si les deux
+répertoires existent, `dark/` est prioritaire.
+
+Le candidat local doit satisfaire les mêmes contrôles de métadonnées que les
+darks de la bibliothèque. Il est utilisé tel quel, sans empilement ni modification
+du fichier source. Il permet de travailler sans bibliothèque existante. S’il
+est absent, invalide ou incompatible, la recherche continue dans la bibliothèque.
+
+Le script parcourt récursivement la bibliothèque à la recherche d’un FITS valide identifié comme dark et compatible avec la clé du
+light, avec une différence maximale de **1 entre les gains arrondis à
+l’entier**, pour les lights comme pour les flats. Cette tolérance ne change
+pas les groupes de lights ni ceux de la bibliothèque. Si les deux en-têtes portent une commande `STACKCMD`, leur compatibilité
 est aussi vérifiée. Le premier fichier compatible rencontré est utilisé ;
 aucun classement par date ou nombre de darks n’est appliqué à cette recherche.
 

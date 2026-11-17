@@ -84,6 +84,22 @@ Le sous-rapport `stacking` conserve les comptes, les rapports sources, les
 motifs d'indisponibilité et le statut `AVAILABLE`, `PARTIAL`, `UNAVAILABLE` ou
 `INVALID`. Les rapports de stacking/mosaïque doivent donc rester disponibles.
 
+L'encart affiche aussi le type de restauration réellement appliqué, par exemple :
+
+```text
+Restauration : Débruitage (GraXpert) → Déconvolution (Siril)
+```
+
+Cette ligne vient de `restoration.selected_chain` dans le rapport de traitement,
+dans l'ordre retenu. En comparaison par étape, elle décrit les opérations
+`deconvolution` et `denoise` acceptées et leur `selected_engine`. Les candidats
+seulement essayés ou rejetés ne sont pas affichés. Une restauration sans gain
+retenu, ou des étapes désactivées, donne `Restauration : aucune`.
+Les reprises `--autoghs-only` et `--color-only` conservent le choix du traitement
+d'origine, indépendamment des réglages actuels des moteurs.
+Un appel autonome sans rapports fournis, ou un rapport incomplet, indique
+`Restauration : non renseignée` plutôt que d'inventer le traitement appliqué.
+
 Les noms sont issus du catalogue local [OpenNGC](https://github.com/mattiaverga/OpenNGC)
 (Mattia Verga et contributeurs, CC BY-SA 4.0). L'encart affiche :
 « Catalogue des objets : OpenNGC — Mattia Verga et contributeurs (CC BY-SA 4.0) ».
@@ -119,9 +135,10 @@ les rectangles des textes, les omissions et les crédits du catalogue.
 ## 3. Module et présentation
 
 `lib.final_annotation.FinalImageAnnotator` implémente le contrat `processor`.
-`post_process(fits_final, rapport_json, args, acquisition_source=stack_initial)` est appelé en dernier par
+`post_process(fits_final, rapport_json, args, acquisition_source=stack_initial, treatments=resultats)` est appelé en dernier par
 `PostProcessingProcessor`, après les exports scientifiques. `acquisition_lines`
-isole la lecture des métadonnées ; `draw_panel` et `draw_objects` réalisent la
+isole la lecture des métadonnées ; `restoration_line` formate le choix publié
+depuis les résultats transmis ; `draw_panel` et `draw_objects` réalisent la
 composition Pillow. `lib.annotation_catalog.AnnotationCatalog` charge les
 coordonnées et les projette avec Astropy, indépendamment de la présentation.
 Un préfiltre sphérique autour du centre du champ réduit les projections WCS ;
@@ -151,7 +168,10 @@ sur disque. Les sources ne peuvent pas être remplacées par les sorties.
 `tests/test_final_annotation.py` vérifie le placement, les retours à la ligne,
 l'orientation, la conservation exacte des pixels extérieurs au panneau et du
 FITS source, les informations absentes, les poses de référence, les cas ignorés
-et les priorités de configuration. `tests/test_postprocessing.py` couvre
+et les priorités de configuration. Il contrôle aussi la restauration retenue,
+l'ordre de ses opérations, l'exclusion des essais rejetés et les rapports
+absents ou incomplets. Les tests de reprise AutoGHS et couleur vérifient que
+la ligne conserve le choix d'origine. `tests/test_postprocessing.py` couvre
 l'intégration commune aux deux points d'entrée.
 Il vérifie que les compteurs viennent du stack initial même lorsque le FITS
 rendu ne porte pas ces informations. `test_stacking_annotation.py` couvre les

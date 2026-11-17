@@ -833,3 +833,94 @@ def test_direct_stack_sequence_preserves_sources(
     assert result is None
     siril.run_commands.assert_called_once()
     assert {source: source.read_bytes() for source in sources} == before
+
+
+@pytest.mark.parametrize("directory_name", ["dark", "Dark"])
+def test_single_local_dark_without_library(tmp_path: Path, directory_name: str) -> None:
+    """Le fichier local compatible suffit sans bibliothèque et reste intact."""
+    from lib.fits_info import FitsInfo
+
+    (tmp_path / "light").mkdir()
+    light = tmp_path / "light" / "light.fit"
+    _write_fits_frame(light, "Light")
+    directory = tmp_path / directory_name
+    directory.mkdir()
+    dark = directory / "dark.FITS"
+    _write_fits_frame(dark, "Dark")
+    original = dark.read_bytes()
+    calibration = SequenceCalibrationProcessor(
+        Mock(), tmp_path / "work",
+        dark_library_path=str(tmp_path / "missing-library"),
+        args=Namespace(no_dark=False, temperature_precision=0.5),
+    )
+    treatment = LightProcessor(
+        tmp_path, tmp_path / "out", tmp_path / "work", siril=Mock(),
+        calibration_processor=calibration,
+    )
+    assert treatment.find_matching_master_dark(FitsInfo(str(light))) == dark
+    assert dark.read_bytes() == original
+
+
+@pytest.mark.parametrize(
+    "local_case", ["matching", "exposure", "temperature", "light", "invalid",
+                   "multiple", "empty", "non_fits", "disabled", "gain",
+                   "camera", "binning", "stackcmd", "gain_lower", "gain_higher"],
+)
+def test_local_dark_selection_and_library_fallback(
+    tmp_path: Path, local_case: str,
+) -> None:
+    """Le candidat local est prioritaire seulement s'il est unique et compatible."""
+    from lib.fits_info import FitsInfo
+
+    (tmp_path / "light").mkdir()
+    light = tmp_path / "light" / "light.fit"
+    _write_fits_frame(light, "Light")
+    directory = tmp_path / "dark"
+    directory.mkdir()
+    dark = directory / "dark.fit"
+    if local_case != "empty":
+        _write_fits_frame(
+            dark, "Light" if local_case == "light" else "Dark",
+            exptime=60.0 if local_case == "exposure" else 180.0,
+            temperature=0.0 if local_case == "temperature" else -10.0,
+        )
+    if local_case in ("gain", "camera", "binning", "stackcmd",
+                      "gain_lower", "gain_higher"):
+        key, value = {
+            "gain": ("GAIN", 200),
+            "gain_lower": ("GAIN", 124),
+            "gain_higher": ("GAIN", 126),
+            "camera": ("INSTRUME", "OtherCamera"),
+            "binning": ("XBINNING", 2),
+            "stackcmd": ("STACKCMD", "different"),
+        }[local_case]
+        with fits.open(dark, mode="update") as hdus:
+            hdus[0].header[key] = value
+        if local_case == "stackcmd":
+            with fits.open(light, mode="update") as hdus:
+                hdus[0].header["STACKCMD"] = "reference"
+    if local_case == "invalid":
+        dark.write_text("invalid FITS")
+    elif local_case == "multiple":
+        (directory / "notes.txt").write_text("second file")
+    elif local_case == "non_fits":
+        dark.rename(directory / "dark.txt")
+    library = tmp_path / "library"
+    library.mkdir()
+    master = library / "master.fit"
+    _write_fits_frame(master, "Dark")
+    calibration = SequenceCalibrationProcessor(
+        Mock(), tmp_path / "work", dark_library_path=str(library),
+        args=Namespace(no_dark=local_case == "disabled", temperature_precision=0.5),
+    )
+    treatment = LightProcessor(
+        tmp_path, tmp_path / "out", tmp_path / "work", siril=Mock(),
+        calibration_processor=calibration,
+    )
+    expected = (
+        dark if local_case in ("matching", "gain_lower", "gain_higher")
+        else master
+    )
+    if local_case == "disabled":
+        expected = None
+    assert treatment.find_matching_master_dark(FitsInfo(str(light))) == expected

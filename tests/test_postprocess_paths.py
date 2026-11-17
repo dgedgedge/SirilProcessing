@@ -132,7 +132,7 @@ def test_autoghs_stages_are_direct_and_preserve_neighboring_files(
     report.write_text('{}')
     neighbor = report.parent / 'render.fits'
     neighbor.write_bytes(b'render')
-    for name in ('01_separation', '02_stars', '03_ghs', '04_recomposition',
+    for name in ('01_separation', '02_stars', '03_ghs', '03_ghs_stars', '03_ghs_starless', '04_recomposition',
                  '05_diagnostics', f'{report.stem}_work'):
         old = report.parent / name
         old.mkdir()
@@ -151,7 +151,7 @@ def test_autoghs_stages_are_direct_and_preserve_neighboring_files(
 
 
 @pytest.mark.parametrize('subdirectory', [
-    '01_separation', '02_stars', '03_ghs', '04_recomposition', '05_diagnostics', 'autoghs_work',
+    '01_separation', '02_stars', '03_ghs', '03_ghs_stars', '03_ghs_starless', '04_recomposition', '05_diagnostics', 'autoghs_work',
 ])
 def test_autoghs_rejects_source_in_cleaned_products_before_any_removal(
     tmp_path: Path, subdirectory: str,

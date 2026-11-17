@@ -44,6 +44,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from lib.config import Config
+from lib.completion_sound import CompletionSound
 from lib.logging_utils import setup_logging
 from lib.postprocess import PostProcessingProcessor
 from lib.power_guard import PowerGuard
@@ -89,6 +90,7 @@ def main() -> int:
     config.add_arguments(parser)
 
     config.register(PostProcessingProcessor, parser)
+    config.register(CompletionSound, parser)
 
     args = config.parse_args(parser)
     setup_logging(args.log_level)
@@ -105,6 +107,7 @@ def main() -> int:
         report = treatment.report_path_for(input_file, args.output_file)
         with PowerGuard():
             treatment.post_process(input_file, report)
+        CompletionSound().play(args)
         return 0
     except KeyboardInterrupt:
         logging.warning("Traitement interrompu par l'utilisateur")

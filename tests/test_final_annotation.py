@@ -55,6 +55,46 @@ def test_metadata_does_not_invent_mosaic_integration() -> None:
     assert "Informations non renseignées" in FinalImageAnnotator.acquisition_lines(fits.Header())
 
 
+@pytest.mark.parametrize('treatments,expected', [
+    (None, 'non renseignée'),
+    ({}, 'aucune'),
+    ({'restoration': {'status': 'accepted', 'selected_chain': [
+        'denoise:graxpert', 'sharpen:siril',
+    ], 'operations': [{'engine': 'cosmic_clarity', 'status': 'accepted'}]}},
+     'Débruitage (GraXpert) → Déconvolution (Siril)'),
+    ({'restoration': {'status': 'accepted', 'selected_chain': [
+        'sharpen:cosmic_clarity', 'denoise:graxpert',
+    ]}}, 'Déconvolution (Cosmic Clarity) → Débruitage (GraXpert)'),
+    ({'restoration': {'status': 'no_safe_improvement', 'selected_chain': []}}, 'aucune'),
+    ({'deconvolution': {'status': 'rejected', 'selected_engine': 'siril'},
+      'denoise': {'status': 'accepted', 'selected_engine': 'cosmic_clarity'}},
+     'Débruitage (Cosmic Clarity)'),
+    ({'deconvolution': {'status': 'accepted', 'selected_step': 3},
+      'denoise': {'status': 'accepted', 'secondary_algorithm': 'Anscombe VST'}},
+     'Déconvolution (Siril) → Débruitage (Siril)'),
+    ({'deconvolution': {'status': 'DISABLED'},
+      'denoise': {'status': 'disabled'}}, 'aucune'),
+    ({'restoration': {'status': 'accepted'}}, 'non renseignée'),
+    ({'restoration': {'status': 'accepted', 'selected_chain': [None]}}, 'non renseignée'),
+])
+def test_panel_describes_only_applied_restoration(
+    tmp_path: Path, treatments: JSONReport | None, expected: str,
+) -> None:
+    """L'encart et son audit décrivent le choix publié, sans lister les simples essais."""
+    source = tmp_path / 'render.fits'
+    fits.writeto(source, np.full((3, 240, 400), .2, dtype='f4'),
+                 fits.Header({'SPNLIN': True}))
+    result = FinalImageAnnotator().post_process(
+        source, tmp_path / 'annotation.json',
+        argparse.Namespace(annotation_objects=False), treatments=treatments,
+    )
+    assert result['status'] == 'SUCCESS'
+    assert [line for line in result['lines'] if line.startswith('Restauration :')] == [
+        'Restauration : ' + expected,
+    ]
+    assert Path(result['output_annotated_image']).is_file()
+
+
 @pytest.mark.parametrize('enabled,nonlinear,size,status', [
     (False, True, 100, 'DISABLED'), (True, False, 100, 'SKIPPED'),
     (True, True, 20, 'SKIPPED'),
@@ -107,7 +147,10 @@ def test_last_stage_integration(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
         args: argparse.Namespace | None = None,
     ) -> JSONReport:
         """Fournit une sortie scientifique déterministe sans exécuter Siril."""
-        return {'autoghs': {'output_image': str(rendered)}}
+        return {
+            'restoration': {'status': 'accepted', 'selected_chain': ['denoise:graxpert']},
+            'autoghs': {'output_image': str(rendered)},
+        }
 
     monkeypatch.setattr(_PostProcessorSequence, 'post_process', sequence)
     monkeypatch.setattr(QualityMaskPreview, 'ensure_for_run', lambda *args: None)
@@ -125,6 +168,7 @@ def test_last_stage_integration(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     assert result['output_annotated_image'] == str(tmp_path / 'source_postprocess_annotated.png')
     assert result['treatments']['annotation']['status'] == 'SUCCESS'
     assert 'Images empilées (retenues/total) : 12/20' in result['treatments']['annotation']['lines']
+    assert 'Restauration : Débruitage (GraXpert)' in result['treatments']['annotation']['lines']
     assert json.loads(report.read_text()) == result['treatments']
     assert Path(result['output_image']).read_bytes() == rendered.read_bytes()
 

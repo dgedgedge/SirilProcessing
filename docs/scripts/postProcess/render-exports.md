@@ -46,11 +46,12 @@ Les JPEG portent le même nom que les FITS finaux dans `04_recomposition/`.
 Le CLI copie le JPEG principal sous `<image>_postprocess.jpg`, près de l’export
 FITS principal, lorsque la phase AutoGHS a fourni ce JPEG.
 
-Un seul rendu RANGE est exporté. `03_ghs/` conserve son fond sans étoiles ;
+Un seul rendu RANGE est exporté. `03_ghs_starless/` conserve son fond sans étoiles ;
 `04_recomposition/` contient le FITS et le JPEG étoilés. Aucun comparatif
 AutoGHS n'est généré et aucun ancien rendu n'est chargé en mémoire à cette fin.
-Les histogrammes du fond et de l'image étoilée restent dans `05_diagnostics/` ;
-ils sont distincts du diagnostic des étoiles seules dans `02_stars/`.
+Les histogrammes et essais du fond sont dans `03_ghs_starless/`, ceux des
+étoiles seules dans `03_ghs_stars/`. Chaque branche possède `histogram_trials/`,
+sa galerie et son rapport. L'histogramme recomposé reste dans `04_recomposition/`.
 
 ## Erreurs et vérification
 
@@ -68,3 +69,7 @@ PEAK et comparatifs du dossier de travail.
 
 Après ces exports, l’[annotation finale](annotations.md) ajoute un encart de
 prise de vue à une copie PNG du rendu principal.
+
+Chaque graphique d’essai comporte le [gain cumulé depuis l’entrée
+linéaire, en échelle linéaire](stretch-transfer.md), sur les min/max de sa branche, et des liens
+vers sa recette RGB JSON et ses échantillons float64 NPZ.

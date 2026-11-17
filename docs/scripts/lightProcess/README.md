@@ -69,7 +69,7 @@ le résultat avec la nouvelle extension. Voir [les sorties](treatments/OUTPUTS.m
 Le [parcours de traitement](treatments/README.md) relie les étapes dans leur
 ordre d’exécution :
 
-1. [Découverte, regroupement et calibration](treatments/CALIBRATION.md).
+1. [Découverte, regroupement et calibration](treatments/CALIBRATION.md), avec sélection du dark local unique (`dark/` ou `Dark/`) avant la bibliothèque.
 2. [Filtrage et stacking](filter/stacking/README.md), dont la
    [sélection des images](filter/stacking/IMAGE_SELECTION.md), les
    [profils stellaires](filter/stacking/STELLAR_PROFILE_FILTER.md) et le
@@ -91,3 +91,6 @@ ordre d’exécution :
 
 Les traitements Siril utilisent la [factory de sessions sirilpy](../lightProcess/reference/SIRIL_API.md),
 avec démarrage automatique sans IHM, plans d’appels JSON et journaux de session.
+
+Le [signal sonore de fin](../postProcess/completion-sound.md) annonce un succès
+par défaut ; `--no-completion-sound` permet de le désactiver.

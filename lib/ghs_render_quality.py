@@ -16,6 +16,7 @@ from lib.type_defs import JSONReport
 
 DEFAULT_CNR_FLOOR = .9
 DEFAULT_TAIL_BONUS = .1
+DEFAULT_REFERENCE_WEIGHT = 1.
 # Un doublement du contraste diffus suffit au bonus d'ouverture du rendu.
 VISIBILITY_WEIGHT = .2
 SHAPE_WEIGHT = .5
@@ -31,8 +32,12 @@ SKY_COMPRESSION_WEIGHT = .5
 # Prominence relative au sommet du pic, après lissage local des effectifs.
 INITIAL_PEAK_RISE_SCALE = .1
 INITIAL_PEAK_WEIGHT = .5
-HARD_SHAPE_REASONS = frozenset(('unmeasurable histogram shape', 'histogram peak displacement'))
-QUALITY_SELECTION_POLICY = 'capped_diffuse_cnr_soft_shape_and_bright_penalties'
+HARD_SHAPE_REASONS = frozenset((
+    'unmeasurable histogram shape', 'histogram peak displacement',
+    'histogram shoulder lost', 'histogram shoulder advance',
+    'histogram slope sign inversion',
+))
+QUALITY_SELECTION_POLICY = 'capped_diffuse_cnr_shoulder_slope_ratios'
 
 
 class HistogramRenderQuality(ParameterizedComponent):
@@ -49,13 +54,19 @@ class HistogramRenderQuality(ParameterizedComponent):
         parser.add_argument('--ghs-quality-cnr-floor', type=float, default=DEFAULT_CNR_FLOOR,
                             help='Début de pénalité contraste/bruit en piecewise '
                                  '(défaut 0,9 ; ]0,1])')
+        parser.add_argument('--ghs-quality-reference-weight', type=float, default=DEFAULT_REFERENCE_WEIGHT,
+                            help='Poids du niveau logarithmique à 0,8 (défaut 1 ; [0,10])')
         parser.add_argument('--ghs-quality-tail-bonus', type=float, default=DEFAULT_TAIL_BONUS,
-                            help='Bonus total maximal des objectifs à 0,8 et 0,875 '
+                            help='Bonus maximal de la queue à 0,875 '
                                  '(défaut 0,1 ; [0,1])')
 
     @staticmethod
     def validate_options(args: argparse.Namespace) -> None:
         """Refuse les réglages non finis, booléens ou hors de leur domaine."""
+        reference_weight = getattr(args, 'ghs_quality_reference_weight', DEFAULT_REFERENCE_WEIGHT)
+        if (isinstance(reference_weight, (bool, np.bool_)) or not math.isfinite(reference_weight)
+                or not 0 <= reference_weight <= 10):
+            raise ValueError('ghs-quality-reference-weight hors domaine')
         for name, default, lower_open in (
             ('ghs_quality_cnr_floor', DEFAULT_CNR_FLOOR, True),
             ('ghs_quality_tail_bonus', DEFAULT_TAIL_BONUS, False),
@@ -67,7 +78,7 @@ class HistogramRenderQuality(ParameterizedComponent):
 
     @staticmethod
     def hard_shape_rejections(profile: JSONReport) -> list[str]:
-        """Garde les limites de sécurité ; les déformations mesurées sont pénalisées."""
+        """Protège épaulement, signe et cohérence des ratios ; accepte les anciens audits."""
         return [reason for reason in profile.get('shape_preservation', {}).get('rejections', [])
                 if reason in HARD_SHAPE_REASONS]
 
@@ -153,7 +164,7 @@ class HistogramRenderQuality(ParameterizedComponent):
         reference_shape: JSONReport, *, bright_retention: float,
         cnr_floor: float = DEFAULT_CNR_FLOOR, tail_bonus: float = DEFAULT_TAIL_BONUS,
         composite_before: JSONReport | None = None, composite_after: JSONReport | None = None,
-        estimated: bool = False,
+        estimated: bool = False, reference_weight: float = DEFAULT_REFERENCE_WEIGHT,
     ) -> JSONReport:
         """Ajoute un score plafonné et ses composantes, sans modifier les mesures.
 
@@ -168,7 +179,9 @@ class HistogramRenderQuality(ParameterizedComponent):
         bright_retention : float
             Conservation brillante demandée, éventuellement adaptée à la population.
         cnr_floor, tail_bonus : float
-            Début de pénalité du contraste/bruit et bonus lumineux total maximal.
+            Début de pénalité du contraste/bruit et bonus maximal de la queue à 0,875.
+        reference_weight : float
+            Poids maximal du niveau à 0,8, de 0 à 10, 1 par défaut.
         composite_before, composite_after : JSONReport or None
             Mesures de fusion ; leur compression brillante est aussi pénalisée.
         estimated : bool
@@ -187,7 +200,8 @@ class HistogramRenderQuality(ParameterizedComponent):
             pénalisée relativement à celle de la même référence fixe.
         """
         cls.validate_options(argparse.Namespace(ghs_quality_cnr_floor=cnr_floor,
-                                              ghs_quality_tail_bonus=tail_bonus))
+                                              ghs_quality_tail_bonus=tail_bonus,
+                                              ghs_quality_reference_weight=reference_weight))
         if not math.isfinite(bright_retention) or not 0 < bright_retention <= 1:
             raise ValueError('Conservation brillante de qualité invalide')
         result = dict(profile)
@@ -227,6 +241,8 @@ class HistogramRenderQuality(ParameterizedComponent):
             if value is not None and limit is not None and limit > 0:
                 scale = max(1., limit) if value_key == 'local_slope_retention' else limit
                 deviations.append(max(0., (limit-value if lower else value-limit)/scale)**2)
+        if audit.get('policy') == 'shoulder_and_slope_ratios':
+            deviations = []
         shape_penalty = SHAPE_WEIGHT*(audit.get('penalty', 0.)+sum(deviations))
         rise, reference_rise = cls.middle_rise(profile), cls.middle_rise(reference_shape)
         excess_rise = (max(0., rise-reference_rise)
@@ -267,14 +283,18 @@ class HistogramRenderQuality(ParameterizedComponent):
         prediction = floor.get('predicted_log10_count')
         if prediction is not None and not math.isfinite(prediction):
             raise ValueError('Prédiction de niveau non finie')
-        level_progress = (min(1., 10**min(0., prediction-math.log10(target)))
-                          if target and prediction is not None
-                          and floor.get('reference_covered') else 0.)
+        target_log = math.log10(target) if target > 0 else None
+        level_progress = 0.
+        if target_log is not None and prediction is not None and floor.get('reference_covered'):
+            level_progress = (min(1., max(0., prediction/target_log)) if target_log > 0
+                              else float(prediction >= target_log))
         tail = profile.get('tail', {})
         tail_target, height = tail.get('target', 0.), tail.get('height')
         tail_progress = (min(1., max(0., height)/tail_target)
                          if tail_target and height is not None else 0.)
-        light_reward = tail_bonus*(level_progress+tail_progress)/2
+        reference_reward = reference_weight*level_progress
+        tail_reward = tail_bonus*tail_progress
+        light_reward = reference_reward+tail_reward
         score = (cnr_reward+visibility_reward+light_reward
                  - cnr_penalty-shape_penalty-rise_penalty-bright_penalty
                  - valley_penalty-sky_penalty-peak_penalty)
@@ -286,6 +306,9 @@ class HistogramRenderQuality(ParameterizedComponent):
                        sky_noise_gain=noise_gain, sky_noise_gain_floor=MIN_SKY_NOISE_GAIN,
                        sky_compression_penalty=sky_penalty,
                        visibility_reward=visibility_reward, light_reward=light_reward,
+                       reference_reward=reference_reward, reference_weight=reference_weight,
+                       reference_progress=level_progress, reference_target_log10=target_log,
+                       tail_reward=tail_reward,
                        shape_penalty=shape_penalty, middle_rise_dex=rise,
                        reference_middle_rise_dex=reference_rise, excess_middle_rise_dex=excess_rise,
                        rise_penalty=rise_penalty, prepeak_valley_dex=valley,

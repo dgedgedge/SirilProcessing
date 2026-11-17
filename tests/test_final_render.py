@@ -14,6 +14,7 @@ from lib.config import Config
 from lib.final_render import AutoGHSFinalRenderer
 from lib.postprocess import _PostProcessorSequence
 from lib.star_separation import StarNetSeparator
+from lib.type_defs import JSONReport
 
 
 @pytest.fixture
@@ -73,6 +74,26 @@ def test_single_range_contract_and_published_artifacts(
 
     original = linear_rgb.read_bytes()
     render_calls, optimize_calls, fusion_calls = [], [], []
+    branch_calls = []
+    real_star_branch = module.StarStretchProcessor.process
+    real_background_branch = module.StarlessStretchProcessor.process
+
+    def star_branch(
+        self: module.StarStretchProcessor, *args: object, **kwargs: object,
+    ) -> tuple[np.ndarray, JSONReport]:
+        """Vérifie que la branche stellaire possède réellement le traitement."""
+        branch_calls.append("stars")
+        return real_star_branch(self, *args, **kwargs)
+
+    def background_branch(
+        self: module.StarlessStretchProcessor, *args: object, **kwargs: object,
+    ) -> tuple[np.ndarray, JSONReport]:
+        """Vérifie la délégation du fond à sa propre classe de traitement."""
+        branch_calls.append("starless")
+        return real_background_branch(self, *args, **kwargs)
+
+    monkeypatch.setattr(module.StarStretchProcessor, "process", star_branch)
+    monkeypatch.setattr(module.StarlessStretchProcessor, "process", background_branch)
     real_render = module.ConservativeStarRenderer.render
     real_optimize, real_fusion = GHSOptimizer.optimize, module.recompose
 
@@ -83,6 +104,7 @@ def test_single_range_contract_and_published_artifacts(
 
     def optimize(self, data, strategy, *args, **kwargs):
         """Capture le seul appel d’optimisation du fond."""
+        assert kwargs.get("rendered_stars") is None
         optimize_calls.append((strategy, data.copy()))
         return real_optimize(self, data, strategy, *args, **kwargs)
 
@@ -101,6 +123,7 @@ def test_single_range_contract_and_published_artifacts(
             compute_backend="cpu", ghs_bins=512, ghs_max_iterations=2, ghs_chroma=chroma
         ),
     )
+    assert branch_calls == ["stars", "starless"]
     assert len(fake_separation) == len(render_calls) == 1
     assert [call[0] for call in optimize_calls] == ["range"]
     assert len(fusion_calls) == 1
@@ -108,7 +131,7 @@ def test_single_range_contract_and_published_artifacts(
     assert set(result["output_jpegs"]) == {"range"}
     assert result["output_jpeg"] == result["output_jpegs"]["range"]
     assert not result['trial_jpegs_enabled']
-    assert not list((tmp_path/'05_diagnostics/histogram_trials').glob('image_*.jpg'))
+    assert not list((tmp_path/'03_ghs_starless/histogram_trials').glob('image_*.jpg'))
     quality = result['strategies']['range']['quartile_stretch']
     assert result['targets_achieved'] == quality.get('targets_achieved')
     assert result['unmet_targets'] == quality.get('unmet_targets', [])
@@ -123,20 +146,35 @@ def test_single_range_contract_and_published_artifacts(
     assert not list(tmp_path.rglob("*comparison*"))
     assert not list(tmp_path.rglob("*peak*"))
     assert result["histogram_paths"]["starless"] == result["histogram_path"]
-    assert len(set(result["histogram_paths"].values())) == 2
+    assert len(set(result["histogram_paths"].values())) == 3
     assert all(Path(path).is_file() for path in result["histogram_paths"].values())
     work = tmp_path
     assert sorted(path.name for path in work.iterdir() if path.is_dir()) == [
-        "01_separation", "02_stars", "03_ghs", "04_recomposition", "05_diagnostics"
+        "01_separation", "03_ghs_starless", "03_ghs_stars", "04_recomposition"
     ]
     assert not any(path.name.startswith(".") for path in work.rglob("*"))
     assert all(Path(path).parent == work / "04_recomposition"
                for path in result["output_images"].values())
+    from lib.stretch_transfer import CumulativeStretchTransform
+    # Les recettes finales rejouent les deux branches depuis leurs vrais RGB.
+    for subject in ('stars', 'starless'):
+        audit = json.loads((work / f'03_ghs_{subject}' / f'{subject}.json').read_text())
+        trials = json.loads(Path(audit['histogram_series_manifest']).read_text())
+        recipe = json.loads(Path(trials[-1]['transform_recipe']).read_text())
+        source_rgb = fits.getdata(work / '01_separation' / f'{subject}.fits').astype('f4')
+        transform = CumulativeStretchTransform(tuple(recipe['domain']), recipe['operations'])
+        assert recipe['domain'] == [float(source_rgb.min()), float(source_rgb.max())]
+        np.testing.assert_allclose(transform.apply_rgb(source_rgb),
+                                   fits.getdata(audit['output_image']), atol=1e-7, rtol=0)
+        for trial in trials:
+            assert Path(trial['transform_recipe']).is_file()
+            assert Path(trial['transform_samples']).is_file()
+            assert trial['transform_precision_achieved']
     stars_on_disk = fits.getdata(result["stars"]["output_image"])
-    assert Path(result["stars"]["diagnostic_path"]).parent == work / "02_stars"
+    assert Path(result["stars"]["diagnostic_path"]).parent == work / "03_ghs_stars"
     assert Path(result["stars"]["diagnostic_path"]).is_file()
     assert Path(result["stars"]["output_jpeg"]).is_file()
-    assert result["parameters"]["star_histogram_strength"] == 0.8
+    assert result["parameters"]["star_histogram_strength"] == 1.0
     assert result["parameters"]["ghs_final_strength"] == 1.25
     for strategy, path in result["output_images"].items():
         presentation = result["strategies"][strategy]["presentation_stretch"]
@@ -184,7 +222,9 @@ def test_failure_publishes_nothing(
     elif failure == "fusion":
         monkeypatch.setattr(module, "recompose", fail)
     else:
-        replace = module.os.replace
+        from lib import ghs_diagnostics
+
+        replace = ghs_diagnostics.os.replace
 
         def fail_success(source: Path, target: Path) -> None:
             """Refuse la publication réussie mais autorise le rapport d’erreur."""
@@ -192,7 +232,7 @@ def test_failure_publishes_nothing(
                 fail()
             replace(source, target)
 
-        monkeypatch.setattr(module.os, "replace", fail_success)
+        monkeypatch.setattr(ghs_diagnostics.os, "replace", fail_success)
     with pytest.raises(RuntimeError, match="injected failure"):
         AutoGHSFinalRenderer().post_process(
             linear_rgb,
@@ -621,6 +661,7 @@ def test_ordered_autoghs_directory_is_reset_on_rerun(
     legacy_stage = legacy_work / "001"
     legacy_stage.mkdir()
     (legacy_stage / "obsolete.fits").write_bytes(b"obsolete")
+    (work / "03_ghs").mkdir()
     (work / "03_ghs/linear_starless_ghs_peak.fits").write_bytes(b"obsolete")
     (work / "03_ghs/linear_ghs_comparison_starless.png").write_bytes(b"obsolete")
     (work / "04_recomposition/linear_render_peak.fits").write_bytes(b"obsolete")
@@ -638,10 +679,10 @@ def test_ordered_autoghs_directory_is_reset_on_rerun(
     assert not list(work.rglob("001"))
     assert len(fake_separation) == 2
     assert sorted(path.name for path in tmp_path.iterdir()) == [
-        "01_separation", "02_stars", "03_ghs", "04_recomposition",
-        "05_autoghs.json", "05_diagnostics", "linear.fits"
+        "01_separation", "03_ghs_starless", "03_ghs_stars", "04_recomposition",
+        "05_autoghs.json", "linear.fits"
     ]
-    source = tmp_path / "03_ghs/linear_input.fits"
+    source = tmp_path / "03_ghs_stars/linear_input.fits"
     source.write_bytes(linear_rgb.read_bytes())
     before = source.read_bytes()
     with pytest.raises(ValueError, match="réinitialisé"):
@@ -763,10 +804,45 @@ def test_decline_retention_rejection_does_not_claim_the_curve_is_horizontal() ->
 @pytest.mark.parametrize('model', ['line', 'piecewise'])
 def test_optional_trial_jpegs_are_published_for_each_histogram(
     linear_rgb: Path, fake_separation: list[str], tmp_path: Path, model: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Le pipeline complet publie la galerie et les JPEG des mêmes pixels finaux."""
     from PIL import Image
 
+    from lib.ghs_diagnostics import HistogramDiagnostics
+    from lib.stretch_transfer import CumulativeStretchTransform
+
+    originals = {}
+    captured = {}
+    checked = []
+    real_source = HistogramDiagnostics.set_source
+    real_capture = HistogramDiagnostics.capture
+    real_publish = HistogramDiagnostics.publish
+
+    def source(self: HistogramDiagnostics, data: np.ndarray) -> None:
+        """Garde les petits RGB synthétiques de chaque branche pour vérifier les recettes."""
+        originals[id(self)] = data.copy()
+        real_source(self, data)
+
+    def capture(self: HistogramDiagnostics, record: JSONReport, data: np.ndarray,
+                *, with_stars: bool = False) -> None:
+        """Conserve les pixels de test avant compression JPEG."""
+        real_capture(self, record, data, with_stars=with_stars)
+        captured[id(self), record['trial_image_id']] = np.asarray(data).copy()
+
+    def publish(self: HistogramDiagnostics, identifier: str, destination: Path) -> dict[str, str]:
+        """Chaque recette exportée reproduit aussi les candidats et rejets intermédiaires."""
+        recipe_path = destination.with_name(destination.stem.replace('image_', 'transform_')+'.json')
+        recipe = json.loads(recipe_path.read_text())
+        transform = CumulativeStretchTransform(tuple(recipe['domain']), recipe['operations'])
+        np.testing.assert_allclose(transform.apply_rgb(originals[id(self)]),
+                                   captured[id(self), identifier], atol=2e-7, rtol=0)
+        checked.append(destination)
+        return real_publish(self, identifier, destination)
+
+    monkeypatch.setattr(HistogramDiagnostics, 'set_source', source)
+    monkeypatch.setattr(HistogramDiagnostics, 'capture', capture)
+    monkeypatch.setattr(HistogramDiagnostics, 'publish', publish)
     original = linear_rgb.read_bytes()
     result = AutoGHSFinalRenderer().post_process(
         linear_rgb, tmp_path/'trial_run.json', argparse.Namespace(
@@ -775,20 +851,25 @@ def test_optional_trial_jpegs_are_published_for_each_histogram(
             ghs_quartile_validations=1, ghs_save_trial_jpegs=True,
         ),
     )
+    assert checked
     assert result['trial_jpegs_enabled']
     assert result['parameters']['ghs_save_trial_jpegs']
     series = result['histogram_series']
-    assert series[-1]['population'] == 'with_stars'
+    assert all(item['population'] == 'starless' for item in series)
     selected = result['selected_trial_index']
-    assert selected is not None and 1 <= selected < len(series)-1
-    assert series[-1]['selected_trial_index'] == series[-2]['selected_trial_index'] == selected
+    assert selected is not None and 1 <= selected < len(series)
+    assert series[-1]['selected_trial_index'] == selected
     assert result['strategies']['range']['selected_trial_index'] == selected
-    assert Path(series[-1]['image_jpeg']).read_bytes() == Path(result['output_jpeg']).read_bytes()
+    assert Path(series[-1]['image_jpeg']).read_bytes() == Path(result['strategies']['range']['starless_image']).with_suffix('.jpg').read_bytes()
     for index, item in enumerate(series, 1):
         assert Path(item['image_jpeg']).name == f'image_{index:03d}.jpg'
         with Image.open(item['image_jpeg']) as image:
             assert image.format == 'JPEG' and image.size == (48, 48)
-        assert ('with_stars_jpeg' in item) == (item['population'] == 'starless')
+        assert 'with_stars_jpeg' not in item
+    stellar = result['stars']['histogram_series']
+    assert all(item['population'] == 'stars' for item in stellar)
+    assert Path(stellar[-1]['image_jpeg']).read_bytes() == Path(result['stars']['output_jpeg']).read_bytes()
+    assert all('with_stars_jpeg' not in item for item in stellar)
     assert linear_rgb.read_bytes() == original
 
 
@@ -853,3 +934,113 @@ def test_trial_annotation_explains_the_rgb_blackpoint_budget() -> None:
     assert 'Marge avant BP : 0.00066 %' in text
     assert 'Budget BP total : 0.10000 %' in text
     assert 'BP commun RGB' in text
+
+
+def test_independent_branch_products_and_diagnostics(
+    linear_rgb: Path, fake_separation: list[str], tmp_path: Path,
+) -> None:
+    """Changer un seul étirement laisse l'autre couche et ses diagnostics identiques."""
+    common = dict(compute_backend='cpu', ghs_bins=256, ghs_max_iterations=1,
+                  ghs_dynamic_max_iterations=1, ghs_final_strength=0,
+                  ghs_histogram_strength=0, star_max_width_ratio=3)
+    results = []
+    for name, changes in (
+        ('reference', {}),
+        ('stars_changed', dict(star_faint_boost=1, star_histogram_strength=.8)),
+        ('background_changed', dict(ghs_final_mode='fixed', ghs_final_strength=.5, ghs_bins=512)),
+    ):
+        root = tmp_path / name
+        result = AutoGHSFinalRenderer().post_process(
+            linear_rgb, root / 'autoghs.json', argparse.Namespace(**(common | changes)),
+        )
+        results.append(result)
+        assert not (root / '03_ghs').exists()
+        assert not (root / '02_stars').exists()
+        assert not (root / '05_diagnostics').exists()
+        for subject in ('stars', 'starless'):
+            branch_root = root / f'03_ghs_{subject}'
+            audit = json.loads((branch_root / f'{subject}.json').read_text())
+            assert 'recomposed_histogram' not in audit and 'recomposition' not in audit
+            manifest = json.loads(Path(audit['histogram_series_manifest']).read_text())
+            assert all(item['population'] == subject for item in manifest)
+            assert all(Path(item['path']).parent == branch_root / 'histogram_trials'
+                       for item in manifest)
+            assert all('with_stars_jpeg' not in item for item in manifest)
+            assert Path(audit['histogram_gallery']).is_file()
+    base, changed_stars, changed_background = results
+    backgrounds = [fits.getdata(result['strategies']['range']['starless_image'])
+                   for result in results]
+    stellar_images = [fits.getdata(result['stars']['output_image']) for result in results]
+    np.testing.assert_array_equal(backgrounds[0], backgrounds[1])
+    np.testing.assert_array_equal(stellar_images[0], stellar_images[2])
+    assert not np.array_equal(stellar_images[0], stellar_images[1])
+    assert not np.array_equal(backgrounds[0], backgrounds[2])
+    assert Path(base['stars']['diagnostic_path']).read_bytes() == Path(
+        changed_background['stars']['diagnostic_path']).read_bytes()
+    for result, subject in ((changed_stars, 'starless'), (changed_background, 'stars')):
+        first = Path(base['histogram_paths'][subject])
+        second = Path(result['histogram_paths'][subject])
+        assert first.read_bytes() == second.read_bytes()
+        first_trials = first.parent / 'histogram_trials'
+        second_trials = second.parent / 'histogram_trials'
+        assert [path.name for path in sorted(first_trials.glob('histogram_*.png'))] == [
+            path.name for path in sorted(second_trials.glob('histogram_*.png'))]
+        for path in first_trials.glob('histogram_*.png'):
+            assert path.read_bytes() == (second_trials / path.name).read_bytes()
+
+
+def test_stellar_histogram_displays_isolated_single_pixel_bins(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Les classes stellaires isolées à un pixel restent visibles sur l'axe log."""
+    from matplotlib.figure import Figure
+    from lib.final_render import histogram_figure
+
+    original = Figure.savefig
+    inspected = []
+
+    def inspect(figure: Figure, *args: object, **kwargs: object) -> None:
+        """Contrôle les marqueurs et la marge sous un effectif de un pixel."""
+        axis = figure.axes[0]
+        assert axis.get_yscale() == 'log'
+        assert 0 < axis.get_ylim()[0] < 1
+        assert axis.lines[0].get_marker() == '.'
+        assert 'étoiles seules' in figure._suptitle.get_text()
+        inspected.append(True)
+        original(figure, *args, **kwargs)
+
+    monkeypatch.setattr(Figure, 'savefig', inspect)
+    histogram_figure(dict(diagnostic_subject='stars', histograms=[
+        dict(counts=[0, 1, 0, 1, 0]),
+    ]), tmp_path / 'stars.png')
+    assert inspected == [True]
+
+
+def test_branch_diagnostics_are_published_before_recomposition(
+    linear_rgb: Path, fake_separation: list[str], tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Un refus de fusion laisse les deux couches et leurs diagnostics consultables."""
+    import lib.final_render as module
+    from lib.type_defs import JSONReport
+
+    def refuse(*args: object) -> tuple[np.ndarray, JSONReport]:
+        """Simule un rejet après la fin des deux étirements indépendants."""
+        raise ValueError('recomposition refused')
+
+    monkeypatch.setattr(module, 'recompose', refuse)
+    report_path = tmp_path / 'autoghs.json'
+    with pytest.raises(ValueError, match='recomposition refused'):
+        AutoGHSFinalRenderer().post_process(
+            linear_rgb, report_path, argparse.Namespace(
+                compute_backend='cpu', ghs_bins=256, ghs_max_iterations=1,
+                ghs_final_strength=0, ghs_histogram_strength=0,
+            ),
+        )
+    assert json.loads(report_path.read_text())['status'] == 'ERROR'
+    for subject in ('stars', 'starless'):
+        report = json.loads((tmp_path / f'03_ghs_{subject}' / f'{subject}.json').read_text())
+        assert Path(report['output_image']).is_file()
+        assert Path(report['histogram_path']).is_file()
+        assert Path(report['histogram_series_manifest']).is_file()
+        assert Path(report['histogram_gallery']).is_file()

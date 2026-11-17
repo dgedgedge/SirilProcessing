@@ -3,6 +3,7 @@
 [Documentation](../../README.md) › [Scripts](../README.md) › postProcess
 
 Présentation : [Principe du post-traitement et diagramme de séquence](principle.md).
+Un [signal sonore de fin](completion-sound.md), désactivable, annonce le succès de la commande.
 
 `bin/postProcess.py` traite une image FITS dans cet ordre :
 **correction du gradient → étalonnage spectrophotométrique → comparaison des chaînes complètes de restauration**.
@@ -34,6 +35,12 @@ la calibration des poses brutes, ni leur empilement. Le
 il sépare les étoiles avec StarNet et produit une image finale étoilée RANGE,
 en FITS et [JPEG](render-exports.md), avec ses histogrammes de diagnostic.
 Il est activé par défaut ; `--disable-autoghs` conserve la sortie linéaire.
+Les [deux classes de traitement indépendantes](stretch-branches.md) possèdent
+chacune leurs exports, diagnostics et galerie d’essais.
+La [sélection stellaire à 25 %](stellar-selection.md) réserve le supplément
+asinh à une fraction des pics, sans consulter le fond.
+La [courbe de transformation cumulée](stretch-transfer.md) accompagne chaque
+histogramme d’essai, avec ses échantillons float64 et sa recette RGB.
 
 La [passe couleur finale adaptative](final-color.md) renforce ensuite le fond
 sans étoiles étiré par GHS, puis le recompose avec les étoiles déjà rendues.
@@ -645,7 +652,8 @@ les noms des objets du champ et un encart de prise de vue en bas à gauche,
 après le rendu AutoGHS.
 Utiliser `--no-final-annotation` pour la désactiver.
 
-L’encart final affiche aussi les poses indépendantes retenues/total et, pour
+L’encart final indique le type de restauration appliqué et les moteurs retenus,
+dans leur ordre d'application. Il affiche aussi les poses indépendantes retenues/total et, pour
 une mosaïque, le nombre de panneaux et le détail par panneau. Voir la
 [provenance des compteurs](annotations.md#2-informations-affichees-et-limites).
 
@@ -682,13 +690,12 @@ rapports/
     ├── 03_restoration_work/
     ├── 05_autoghs.json
     ├── 01_separation/separation_work/
-    ├── 02_stars/
-    ├── 03_ghs/
+    ├── 03_ghs_stars/
+    ├── 03_ghs_starless/
     │   └── 03_restoration_starless_ghs_range.fits
-    ├── 04_recomposition/
-    │   ├── 03_restoration_render_range.fits
-    │   └── 03_restoration_render_range.jpg
-    └── 05_diagnostics/
+    └── 04_recomposition/
+        ├── 03_restoration_render_range.fits
+        └── 03_restoration_render_range.jpg
 ```
 
 Cet arbre omet les copies FITS et audits propres à chaque moteur de restauration.

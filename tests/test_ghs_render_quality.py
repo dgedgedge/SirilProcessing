@@ -61,16 +61,16 @@ def test_missing_noise_never_certifies_quality(
 def test_light_targets_do_not_override_useful_contrast(
     profile: JSONReport, measure: JSONReport,
 ) -> None:
-    """Atteindre les deux niveaux ne compense pas une conservation utile de 56 %."""
+    """Atteindre les deux niveaux ne compense pas une conservation utile de 20 %."""
     faint = Quality.attach(profile, measure, dict(measure, noise=.01/.96), profile,
                            bright_retention=.45)
     pushed = deepcopy(profile)
     pushed.update(regression_floor=dict(minimum_count=10., predicted_log10_count=3.,
                                         reference_covered=True, achieved=True),
                   tail=dict(target=.25, height=.9, achieved=True))
-    pushed = Quality.attach(pushed, measure, dict(measure, noise=.01/.56), profile,
+    pushed = Quality.attach(pushed, measure, dict(measure, noise=.01/.2), profile,
                             bright_retention=.45)
-    assert pushed['render_quality']['light_reward'] == pytest.approx(.1)
+    assert pushed['render_quality']['light_reward'] == pytest.approx(1.1)
     assert histogram_selection_key(faint) > histogram_selection_key(pushed)
     assert pushed['render_quality']['cnr_penalty'] > 0
 
@@ -158,6 +158,8 @@ def test_spatial_measure_matches_full_region_definitions() -> None:
     ('ghs_quality_cnr_floor', 0.), ('ghs_quality_cnr_floor', 1.1),
     ('ghs_quality_cnr_floor', True), ('ghs_quality_cnr_floor', float('nan')),
     ('ghs_quality_tail_bonus', -.1), ('ghs_quality_tail_bonus', float('inf')),
+    ('ghs_quality_reference_weight', -.1), ('ghs_quality_reference_weight', 10.1),
+    ('ghs_quality_reference_weight', True), ('ghs_quality_reference_weight', float('nan')),
 ])
 def test_invalid_quality_options_are_rejected(name: str, value: float | bool) -> None:
     """Les domaines et les valeurs non finies sont vérifiés pour CLI et configuration."""
@@ -173,6 +175,7 @@ def test_quality_options_follow_saved_and_cli_priority(tmp_path: Path) -> None:
     args = config.parse_args(parser, [])
     assert args.ghs_quality_cnr_floor == .9
     assert args.ghs_quality_tail_bonus == .1
+    assert args.ghs_quality_reference_weight == 1.
     config.set('ghs_quality_cnr_floor', .85)
     parser = argparse.ArgumentParser()
     config.register(GHSOptimizer, parser)
@@ -245,3 +248,68 @@ def test_a_double_initial_peak_is_penalized_even_when_the_body_spline_is_monoton
     unknown = Quality.attach(double, measure, measure, profile, bright_retention=.45)
     assert unknown['render_quality']['reference_initial_peak_rise_fraction'] is None
     assert unknown['render_quality']['excess_initial_peak_rise_fraction'] is None
+
+
+def test_new_ratio_policy_does_not_charge_obsolete_global_shape_metrics(
+    profile: JSONReport, measure: JSONReport,
+) -> None:
+    """Une variation globale conforme aux ratios ne reçoit aucun coût caché."""
+    candidate = deepcopy(profile)
+    candidate['shape_preservation'].update(
+        policy='shoulder_and_slope_ratios', penalty=0.,
+        drop_retention=.2, minimum_drop_retention=.65,
+        distance=.8, maximum_shape_distance=.15,
+    )
+    measured = Quality.attach(candidate, measure, measure, profile, bright_retention=.45)
+    assert measured['render_quality']['shape_penalty'] == 0
+
+
+@pytest.mark.parametrize('prediction,progress', [(0., 0.), (1., .5), (1.5, .75), (2., 1.), (3., 1.)])
+def test_reference_level_progress_is_logarithmic_and_has_high_weight(
+    prediction: float, progress: float, profile: JSONReport, measure: JSONReport,
+) -> None:
+    """À cible 2 dex, une hauteur de 1 dex rapporte la moitié du point dédié."""
+    candidate = deepcopy(profile)
+    candidate['regression_floor'] = dict(minimum_count=100., predicted_log10_count=prediction,
+                                         reference_covered=True)
+    result = Quality.attach(candidate, measure, measure, profile, bright_retention=.45)
+    quality = result['render_quality']
+    assert quality['reference_progress'] == pytest.approx(progress)
+    assert quality['reference_reward'] == pytest.approx(progress)
+    assert quality['reference_weight'] == 1.
+    assert quality['tail_reward'] == 0
+
+
+def test_reference_height_can_drive_selection_inside_ratio_tolerances(
+    profile: JSONReport, measure: JSONReport,
+) -> None:
+    """Deux rendus conformes aux ratios sont départagés fortement par le niveau à 0,8."""
+    low, high = deepcopy(profile), deepcopy(profile)
+    for candidate, prediction in ((low, 1.), (high, 1.5)):
+        candidate['shape_preservation'].update(policy='shoulder_and_slope_ratios', penalty=0.)
+        candidate['regression_floor'] = dict(minimum_count=100., predicted_log10_count=prediction,
+                                             reference_covered=True)
+    first = Quality.attach(low, measure, measure, profile, bright_retention=.45)
+    last = Quality.attach(high, measure, measure, profile, bright_retention=.45)
+    assert last['render_quality']['score']-first['render_quality']['score'] == pytest.approx(.25)
+    assert histogram_selection_key(last) > histogram_selection_key(first)
+
+
+@pytest.mark.parametrize('penalty,reason', [
+    (8., 'histogram slope ratio inversion'),
+    (10., 'histogram slope ratio distortion'),
+])
+def test_full_reference_bonus_cannot_hide_a_strong_ratio_penalty(
+    penalty: float, reason: str, profile: JSONReport, measure: JSONReport,
+) -> None:
+    """Le poids fort à 0,8 guide les rendus conformes sans sauver les ratios interdits."""
+    low, high = deepcopy(profile), deepcopy(profile)
+    low['shape_preservation'].update(policy='shoulder_and_slope_ratios', penalty=0.)
+    high['shape_preservation'].update(policy='shoulder_and_slope_ratios', penalty=penalty,
+                                      achieved=False, rejections=[reason])
+    low['regression_floor'] = dict(minimum_count=100., predicted_log10_count=1., reference_covered=True)
+    high['regression_floor'] = dict(minimum_count=100., predicted_log10_count=2., reference_covered=True)
+    first = Quality.attach(low, measure, measure, profile, bright_retention=.45)
+    last = Quality.attach(high, measure, measure, profile, bright_retention=.45)
+    assert last['render_quality']['reference_reward'] == 1.
+    assert histogram_selection_key(first) > histogram_selection_key(last)

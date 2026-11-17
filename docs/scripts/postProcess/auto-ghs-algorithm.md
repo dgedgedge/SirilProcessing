@@ -20,8 +20,15 @@ ci-dessous restent celles du mode historique `--ghs-histogram-model line`.
 `optimize(data, strategy, args, backend)` reçoit un tableau RGB CPU float32,
 normalisé, sans étoiles ; retourne le tableau étiré et son rapport. `strategy`
 vaut toujours `range`, seule recherche disponible. Le moteur
-ne relance ni StarNet ni le rendu stellaire. Les paramètres sont déclarés par
+ne relance ni StarNet ni le rendu stellaire. Tous ses critères et gardes
+portent sur le fond seul : les étoiles rendues et la réserve de fusion
+n’influencent ni les candidats, ni leur classement, ni les arrêts. Les aperçus
+recomposés de la galerie restent de simples diagnostics. Les paramètres sont déclarés par
 `add_arguments`, puis résolus par `Config` ; le point d'entrée reste postProcess.
+
+Le [traitement de branche](stretch-branches.md) `StarlessStretchProcessor`
+possède les exports et diagnostics du fond. Le rendu final orchestre cette
+classe et `StarStretchProcessor`, sans gérer leurs détails internes.
 
 ## Transformation conforme à Siril
 

@@ -26,12 +26,15 @@ from lib.ghs_log_histogram import (
     fit_log_tail_counts, log_tail_score,
 )
 from lib.processor import processor
-from lib.ghs_histogram_shape import piecewise_histogram_profile, compare_histogram_shapes
+from lib.ghs_histogram_shape import (
+    piecewise_histogram_profile, compare_histogram_shapes, shape_comparison_options,
+)
 from lib.star_separation import validate_rgb, write_rgb
 from lib.type_defs import JSONReport
 
 if TYPE_CHECKING:
     from lib.auto_ghs import ComputeBackend, HistogramAnalyzer
+
 
 # Limites déterministes : coût CPU borné et au plus trois validations complètes.
 MAX_SAMPLE_PIXELS = 65536
@@ -400,11 +403,8 @@ class ProtectedGHSFinalizer(processor):
                 reference = (reference_shape if reference_shape is not None and not composite
                              else shape_cache[id(first)])
                 audit = compare_histogram_shapes(reference, candidate,
-                                                  shape_options.ghs_shape_retention,
-                                                  shape_options.ghs_shape_distance,
-                                                  shape_options.ghs_shape_peak_shift,
-                                                  shape_options.ghs_shape_stiffness,
-                                                  shape_options.ghs_shape_local_retention)
+                                                  max_peak_shift=shape_options.ghs_shape_peak_shift,
+                                                  **shape_comparison_options(shape_options))
                 last['histogram_shape'] = candidate
                 last['shape_preservation'] = audit
                 reasons.extend(audit['rejections'])

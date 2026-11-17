@@ -210,6 +210,8 @@ def test_direct_and_cli_share_calculation_and_exports(
     spec = importlib.util.spec_from_file_location("common_postprocess_cli", entry)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    sound = Mock()
+    monkeypatch.setattr(module.CompletionSound, "play", sound)
     monkeypatch.setattr(module, "PowerGuard", nullcontext)
     monkeypatch.setattr(module, "setup_logging", lambda level: None)
     monkeypatch.setattr(sys, "argv", [str(entry), str(source), str(tmp_path / "cli"),
@@ -257,6 +259,8 @@ def test_postprocess_cli_owns_and_releases_power_guard(
     spec = importlib.util.spec_from_file_location("guard_postprocess_cli", entry)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    sound = Mock()
+    monkeypatch.setattr(module.CompletionSound, "play", sound)
     source = tmp_path / "source.fits"
     source.write_bytes(b"source preserved")
     events: list[str] = []
@@ -288,6 +292,7 @@ def test_postprocess_cli_owns_and_releases_power_guard(
                                       "--config", str(tmp_path / "settings.json")])
     assert module.main() == expected
     assert events == ["enter", "process", "exit"]
+    assert sound.call_count == (1 if expected == 0 else 0)
 
 
 def test_autoghs_only_skips_linear_steps_and_quality(
