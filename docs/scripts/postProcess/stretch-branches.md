@@ -26,6 +26,10 @@ les deux appels de traitement et la recomposition. Les rapports des deux
 branches sont écrits avant la fusion ; un refus de fusion les laisse disponibles.
 Les étoiles gardent leur traitement conservateur : cette organisation ne
 remplace pas leur asinh par l’optimisation RANGE du fond.
+Les deux branches héritent toutefois du même `--ghs-color-mode`. Par défaut,
+le fond GHS et la base asinh des étoiles utilisent donc tous deux la luminance
+pondérée `human`; la branche stellaire conserve son propre algorithme et ses
+propres gardes de largeur.
 
 ## 2. Interfaces et paramètres
 

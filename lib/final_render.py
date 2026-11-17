@@ -344,6 +344,8 @@ class AutoGHSFinalRenderer(processor):
                         "stretch_transfer.py",
                         "render_exports.py",
                         "star_rendering.py",
+                        "stellar_selection.py",
+                        "stellar_profiles.py",
                         "star_separation.py",
                     )
                 },

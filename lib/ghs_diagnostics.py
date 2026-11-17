@@ -932,7 +932,8 @@ def histogram_figure(
         note = (f"{len(x)} points float64 ; erreur F(x) {transfer['observed_error']:.2g} "
                 f"({status})\nÀ x=0 : gain indéfini ; RGB coloré : recette cumulée")
         if stellar_envelope:
-            note += '\nPoids spatial fixé à 1 ; reproduction exacte : recette et géométrie natives'
+            note += ('\nEnveloppe maximale ; reproduction exacte : '
+                     'recette et géométrie natives')
         curve_axis.text(.02, .96, note, transform=curve_axis.transAxes, va='top', fontsize=8)
     annotation = figure.add_subplot(grid[:, 1] if transfer is not None else grid[0, 1])
     annotation.set_axis_off()

@@ -242,14 +242,14 @@ astronomique.
 | `--ghs-plateau-fraction` | `0.2` | Fraction du meilleur gain marginal définissant un plateau |
 | `--ghs-max-clip` | `0.001` | Fraction maximale de nouveaux pixels écrêtés par contrôle |
 | `--ghs-max-noise-gain` | `30` | Limite cumulée des proxys bruit et IQR |
-| `--ghs-color-mode` | `human` | Luminosité pondérée human ou moyenne `even` |
+| `--ghs-color-mode` | `human` | Luminosité pondérée `human` ou moyenne `even`, partagée par le GHS du fond et l'asinh des étoiles |
 | `--ghs-chroma` | `off` | `off`, `balanced`, `enhanced` ; RGB expérimental |
 | `--star-render` | `conservative` | Rendu asinh commun des étoiles |
 | `--star-strength` | `2.0` | Force asinh, dans `]0,20]` |
 | `--star-faint-boost` | `5.0` | Renforcement demandé des étoiles faibles, de 1 à 10 ; réduit par pas de 1 jusqu'au premier rendu respectant la garde de largeur |
-| `--star-boost-fraction` | `0.25` | Budget de pics éligibles renforcés en plus, `[0,1]` ; 0 : base seule, 1 : adaptation globale historique ; [méthode](stellar-selection.md) |
+| `--star-boost-fraction` | `0.25` | Budget de pics éligibles renforcés par profil, avec protection des halos, `[0,1]` ; 0 : base seule, 1 : adaptation globale historique ; [méthode](stellar-selection.md) |
 | `--star-histogram-strength` | `1` | Répartition des amplitudes des pics en logarithme, de 0 (gain fixe) à 1 ; réduite si la garde FWHM le demande |
-| `--star-noise-sigma` | `6.0` | Seuil doux du bruit résiduel, dans `[0,20]` ; 0 désactive, seuil réduit si les profils se rétrécissent trop |
+| `--star-noise-sigma` | `8.0` | Seuil doux du bruit résiduel, dans `[0,20]` ; 0 désactive, seuil réduit si les profils se rétrécissent trop |
 | `--star-ceiling` | `0.85` | Plafond du maximum RGB des étoiles seules |
 | `--star-stretch-max-width-ratio` | `None` | Hérite de `--star-max-width-ratio` ; une valeur explicite ≥ 1 limite les étoiles seules |
 | `--star-max-width-ratio` | `2.0` | Rapport FWHM médian maximal après recomposition, si mesurable |

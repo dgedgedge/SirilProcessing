@@ -200,3 +200,22 @@ class TestFitsInfoErrorHandling:
         is_valid, reason = info.is_valid_dark()
         assert is_valid is False
         assert reason == "Not a dark frame"
+
+
+@pytest.mark.parametrize(
+    "gain, compatible", [(302, True), (304, True), (301, False),
+                          (305, False), (302.49, True), (301.49, False)],
+)
+def test_gain_tolerance_preserves_strict_groups(
+    valid_dark_fits: Path, gain: float, compatible: bool,
+) -> None:
+    """Tolérer une unité arrondie sans changer les sources ni le groupement."""
+    first = FitsInfo(str(valid_dark_fits))
+    second = FitsInfo(str(valid_dark_fits))
+    first.gain_value = 303
+    second.gain_value = gain
+    original_key = second.group_key()
+    assert first.is_equivalent(second, gain_tolerance=1) is compatible
+    assert not first.is_equivalent(second)
+    assert second.gain_value == gain
+    assert second.group_key() == original_key

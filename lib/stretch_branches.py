@@ -31,7 +31,7 @@ LOGGER = logging.getLogger(__name__)
 class LayerStretchProcessor(processor):
     """Partage le cycle de vie d'une couche, sans partager ses choix de rendu."""
 
-    parameter_dependencies = {'ghs_save_trial_jpegs'}
+    parameter_dependencies = {'ghs_save_trial_jpegs', 'ghs_color_mode'}
 
     @classmethod
     def add_arguments(cls, parser: argparse.ArgumentParser) -> None:
@@ -147,8 +147,8 @@ class StarStretchProcessor(LayerStretchProcessor):
         Les paramètres, unités et exceptions de ConservativeStarRenderer.render
         s'appliquent. star_stretch_max_width_ratio contrôle les étoiles seules ;
         None hérite de la garde commune star_max_width_ratio.
-        star_noise_sigma règle leur porte douce. Le fond et les réglages GHS
-        ne participent pas au calcul.
+        star_noise_sigma règle leur porte douce. Le seul réglage partagé avec
+        le fond est ghs_color_mode, qui choisit la luminance de la base asinh.
         """
         output, report = ConservativeStarRenderer.render(
             data, getattr(args, 'star_strength', 2.0), getattr(args, 'star_ceiling', .85),
@@ -163,6 +163,7 @@ class StarStretchProcessor(LayerStretchProcessor):
             noise_sigma=getattr(
                 args, 'star_noise_sigma', ConservativeStarRenderer.default_noise_sigma,
             ),
+            color_mode=getattr(args, 'ghs_color_mode', 'human'),
         )
         image, jpeg = self.write_layer(source, report_path, output, 'stars_render', 'STARS')
         diagnostic = report_path.parent / f'{source.stem}_stars_diagnostic.png'

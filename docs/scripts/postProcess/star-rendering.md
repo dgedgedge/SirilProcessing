@@ -112,26 +112,40 @@ fidélité des structures retirées par le réseau ; l’inspection reste néces
 
 ## Étirement propre aux étoiles
 
-Le défaut applique désormais une [sélection à 25 %](stellar-selection.md) au
+Le défaut applique un [calage fractionnaire à 25 %](stellar-selection.md) au
 renforcement adaptatif supplémentaire. La base asinh est d’abord rendue
-admissible, puis la fraction est sélectionnée sur la couche stellaire seule.
+admissible, puis le quantile supérieur des pics calibre une courbe ponctuelle
+log-log. Il n’existe ni masque d’étoiles sélectionnées, ni gain par profil, ni
+raccord spatial : deux pixels de même intensité reçoivent la même cible.
 Les étapes globales historiques décrites ci-dessous restent disponibles avec
 `--star-boost-fraction 1` ; les essais GHS présentés en fin de page restent
 des comparaisons hors pipeline.
 
-Le rendu `conservative` commence par une courbe monotone de référence :
+Le rendu `conservative` commence par une courbe monotone de référence. Comme
+la branche starless, il hérite de `--ghs-color-mode=human` par défaut :
 
 ```text
-L = max(R,G,B)
-base(L) = ceiling * asinh(strength*L) / asinh(strength)
-target(L) = faint_boost * base(L) / (1 + (faint_boost-1)*base(L)/ceiling)
-fixed_gain = target(L)/L si L>0, sinon 0
+Yhuman = 0,2126 R + 0,7152 G + 0,0722 B
+Yeven  = (R + G + B) / 3
+base(Y) = ceiling * asinh(strength*Y) / asinh(strength)
+target(Y) = faint_boost * base(Y) / (1 + (faint_boost-1)*base(Y)/ceiling)
 ```
 
-Le maximum RGB sert uniquement à contrôler le gamut, sans supposer les
-primaires colorimétriques de l'image. Un gain identique sur les trois canaux
-préserve leurs rapports. Le plafond de 0,85 ménage les hautes lumières, tandis
-que la force asinh 2 est complétée par `--star-faint-boost=5` par défaut.
+Le résultat lié applique `target(Y)/Y` aux trois canaux. Tant qu'il reste sous
+le plafond, ce gain commun préserve leurs rapports. S'il dépasse le plafond,
+RGBBlend le mélange avec les trois courbes asinh indépendantes, selon la même
+construction que le GHS du fond. Cela évite un écrêtage coloré tout en ne
+modifiant la chromaticité que dans la zone où le gamut doit être protégé.
+Le plafond de 0,85 ménage les hautes lumières, tandis que la force asinh 2 est
+complétée par `--star-faint-boost=5` par défaut.
+
+La résolution photométrique et SPCC/PCC sont effectuées avant StarNet : leur
+balance des canaux est donc déjà inscrite dans les pixels des deux couches.
+Le mode `human` l'exploite comme proxy perceptuel cohérent ; il ne remplace pas
+une matrice complète capteur → XYZ/sRGB, qui n'est pas fournie par le FITS.
+Le maximum RGB reste employé pour détecter les pics, contrôler les profils et
+piloter la porte de bruit. La courbe fractionnaire applique ensuite un gain RGB
+commun : elle ne recalcule ni la balance photométrique ni RGBBlend.
 La seconde courbe augmente surtout les faibles intensités et comprime doucement
 les fortes vers le même plafond. Avant atténuation du bruit, le gain à l'origine vaut
 `ceiling*strength*faint_boost/asinh(strength)`, soit environ 5,89 par défaut,
@@ -151,7 +165,7 @@ porte(L) = (1 + T^4) * L^4 / (L^4 + T^4)
 target_final(L) = target(L) * porte(L)
 ```
 
-`--star-noise-sigma=6` règle le seuil de transition en écarts robustes du
+`--star-noise-sigma=8` règle le seuil de transition en écarts robustes du
 **résidu positif**, et non du bruit signé de l'image d'origine. La dispersion
 est estimée par `1.4826 * MAD(différences voisines) / sqrt(2)` sur chaque axe ;
 le minimum des deux estimations limite la confusion avec un gradient axial.
@@ -217,7 +231,8 @@ une adaptation, active par défaut (`1`), pour rendre visibles les faibles
    largeur des profils ; si elle dépasse la garde, diviser la force par deux et
    réessayer, au plus huit fois. Retenir le premier essai admissible, ou conserver
    le gain fixe si aucun ne passe.
-4. Appliquer `gain = target(L)/L` aux trois canaux, avec un gain nul si `L=0`.
+4. Appliquer l'augmentation retenue comme gain commun aux trois canaux du
+   rendu asinh/RGBBlend, avec un gain nul si le niveau de référence est nul.
 
 Si le rendu obtenu dépasse encore la limite de largeur, réduire `faint_boost`
 d'une unité et recommencer ces étapes sur les mêmes étoiles linéaires.
@@ -240,8 +255,8 @@ demandée. Les cas constants ou insuffisamment peuplés conservent la courbe fix
 CLI > JSON > défaut et sont persistants avec `--save-config`.
 
 Il n'y a ni rééchantillonnage ni optimisation du fond sur cette branche.
-La sélection à 25 % emploie une pondération spatiale du supplément ; le mode
-historique global (`--star-boost-fraction 1`) reste une courbe ponctuelle. Une couleur déjà perdue dans un noyau
+La fraction de 25 % calibre une courbe ponctuelle ; le mode historique global
+(`--star-boost-fraction 1`) reste disponible. Une couleur déjà perdue dans un noyau
 saturé ne peut pas être rétablie.
 
 Aucun pixel stellaire nul n'est rendu positif par ce renforcement : il révèle

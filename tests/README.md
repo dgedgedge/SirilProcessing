@@ -295,15 +295,15 @@ ne contourne pas les gardes de forme ou de contraste. Les ratios après
 l'épaulement autorisent un aplatissement homogène mais signalent les inversions,
 les ruptures isolées et les déplacements de l'épaulement.
 
-### Sélection stellaire à 25 %
+### Calage stellaire à 25 %
 
-`test_stellar_selection.py` couvre le budget entier, les ex aequo exclus, les
-poids spatiaux exacts aux sommets, les modes constants et les coordonnées
-invalides. `test_star_rendering.py` vérifie les pics non sélectionnés, les rapports
-RGB, le bruit résiduel, les bornes et les profils à 50 % et 10 % du pic.
-Les options suivent CLI > JSON > défaut, avec instantanés indépendants par
-instance et sauvegarde explicite. Les tests de recette distinguent l'enveloppe
-neutre des pics sélectionnés de la reproduction RGB à géométrie native.
+`test_star_rendering.py` vérifie la courbe ponctuelle calée par le quantile des
+25 %, ses rapports RGB, le bruit résiduel, ses bornes et les profils à 50 % et
+10 % du pic. Les options suivent CLI > JSON > défaut, avec instantanés
+indépendants par instance et sauvegarde explicite. Les tests de recette
+contrôlent l’absence de coordonnées, la restriction neutre et la reproduction
+RGB exacte sur une image complète ou recadrée. `test_stellar_selection.py`
+conserve la compatibilité des anciennes recettes spatiales.
 
 Les [essais sur quatre couches réelles](../docs/scripts/postProcess/stellar-selection.md)
 réutilisent les séparations et fonds déjà produits. Ils ne relancent ni
@@ -325,3 +325,25 @@ Pour lancer les contrôles ciblés de ces ajouts :
 ```bash
 .venv/bin/python -m pytest -q tests/test_ghs_shape_ratios.py tests/test_completion_sound.py tests/test_stretch_branches.py tests/test_stretch_transfer.py
 ```
+
+La sélection des darks locaux est vérifiée dans
+`test_lightprocessor_calibration.py` : dossiers `dark` et `Dark`, priorité du
+FITS unique compatible, utilisation sans bibliothèque, conservation du fichier
+source, repli sur la bibliothèque (incompatibilité, fichier invalide, dossier
+vide ou plusieurs fichiers) et désactivation par `--no-dark`.
+
+La compatibilité des darks de calibration accepte un écart de gain arrondi de
+1, dans les deux sens, et rejette un écart de 2. Les tests vérifient aussi que
+la comparaison stricte par défaut et les métadonnées sources sont préservées.
+
+`test_stellar_profiles.py` conserve la couverture de compatibilité des anciennes
+recettes à profils : halos brillants, raccords, champs denses, profils tronqués
+et recettes invalides. Le défaut à 25 % est désormais une courbe ponctuelle
+`histogram_quantile` : les tests vérifient son calage à 0,08, l’absence de
+coordonnées, les gardes de largeur et sa reproduction exacte, y compris après
+recadrage. Les comparatifs réutilisent les séparations existantes sans relancer
+Siril ni StarNet.
+`test_stretch_transfer.py` vérifie en plus la luminance `human`, RGBBlend près
+du plafond, la différence avec le mode `even`, l'enregistrement du mode couleur
+et la reproduction bit à bit d'une recette stellaire. Les tests de branches
+contrôlent que `--ghs-color-mode` est partagé par le fond et les étoiles.

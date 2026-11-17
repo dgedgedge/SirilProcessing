@@ -10,16 +10,18 @@ from lib.star_rendering import (
 )
 
 
-def test_asinh_monotone_and_color_preserving() -> None:
-    """La courbe préserve les ratios RGB et les étoiles faibles, sans noyau blanc."""
+def test_asinh_human_is_monotone_and_uses_rgbblend() -> None:
+    """Le mode human reste monotone et RGBBlend protège le gamut des noyaux."""
     light = np.linspace(0, 1, 1024).reshape(32, 32)
     data = np.array([light, 0.6 * light, 0.3 * light], dtype="float32")
     result, report = ConservativeStarRenderer.render(data)
-    assert np.all(np.diff(result[0].ravel()) > 0)
+    assert np.all(np.diff(result[0].ravel()) >= 0)
     assert result.max() == pytest.approx(0.85)
     assert result[0, 0, 1] > data[0, 0, 1]
-    np.testing.assert_allclose(result[1], 0.6 * result[0], atol=1e-7)
-    assert report["color"]["chromaticity_mean_abs"] < 1e-6
+    linked = result[0] < .849
+    np.testing.assert_allclose(result[1][linked], 0.6 * result[0][linked], atol=1e-7)
+    assert report['color_mode'] == 'human'
+    assert result[1, -1, -1] > .6 * result[0, -1, -1]
     assert report["after"]["white_fraction_rgb"] == [0, 0, 0]
 
 
@@ -88,11 +90,12 @@ def test_faint_boost_reveals_weak_stars_and_preserves_support() -> None:
     assert enhanced.max() == pytest.approx(0.85)
     assert np.all(np.diff(enhanced[0, 0]) > 0)
     np.testing.assert_array_equal(enhanced > 0, data > 0)
-    np.testing.assert_allclose(enhanced[1], 0.6 * enhanced[0], atol=1e-7)
-    np.testing.assert_allclose(enhanced[2], 0.3 * enhanced[0], atol=1e-7)
+    linked = enhanced[0] < .849
+    np.testing.assert_allclose(enhanced[1][linked], 0.6 * enhanced[0][linked], atol=1e-7)
+    np.testing.assert_allclose(enhanced[2][linked], 0.3 * enhanced[0][linked], atol=1e-7)
     assert report["faint_intensity_gain"] > 3.5
-    expected = 0.85 * np.arcsinh(2 * values) / np.arcsinh(2)
-    np.testing.assert_allclose(previous[0], expected, atol=1e-7)
+    expected, _ = ConservativeStarRenderer.render(data, faint_boost=1)
+    np.testing.assert_array_equal(previous, expected)
 
 
 @pytest.mark.parametrize("boost", [0, 0.9, 10.1, float("nan")])
@@ -112,7 +115,7 @@ def test_default_faint_boost_is_stronger_and_configurable() -> None:
     assert parser.parse_args([]).star_max_width_ratio == 2
     assert parser.parse_args([]).star_stretch_max_width_ratio is None
     assert parser.parse_args([]).star_histogram_strength == 1
-    assert parser.parse_args([]).star_noise_sigma == 6
+    assert parser.parse_args([]).star_noise_sigma == 8
     assert parser.parse_args([]).star_boost_fraction == .25
     assert parser.parse_args(["--star-max-width-ratio", "1.5"]).star_max_width_ratio == 1.5
     assert parser.parse_args(["--star-faint-boost", "3"]).star_faint_boost == 3
@@ -122,7 +125,8 @@ def test_default_faint_boost_is_stronger_and_configurable() -> None:
     stronger, report = ConservativeStarRenderer.render(data)
     assert stronger[0, 0, 1] / previous[0, 0, 1] == pytest.approx(5 / 3, rel=0.001)
     np.testing.assert_array_equal(stronger > 0, data > 0)
-    np.testing.assert_allclose(stronger[1], 0.6 * stronger[0], atol=1e-7)
+    linked = stronger[0] < .849
+    np.testing.assert_allclose(stronger[1][linked], 0.6 * stronger[0][linked], atol=1e-7)
     assert stronger.max() == pytest.approx(0.85)
     assert report["faint_boost"] == 5
     assert report["max_width_ratio"] == 2
@@ -135,7 +139,7 @@ def test_adaptive_histogram_reveals_faint_peaks_with_bounded_width() -> None:
     light = np.zeros_like(x, dtype=np.float32)
     for (cy, cx), amplitude in zip(
         ((cy, cx) for cy in range(18, 130, 20) for cx in range(18, 130, 20)),
-        np.geomspace(1e-4, 0.7, 36),
+        np.geomspace(1e-4, 0.01, 36),
     ):
         light += amplitude * np.exp(-((x - cx) ** 2 + (y - cy) ** 2) / 2)
     data = np.array([light, 0.6 * light, 0.3 * light])
@@ -159,7 +163,13 @@ def test_adaptive_histogram_reveals_faint_peaks_with_bounded_width() -> None:
     order = np.argsort(light.ravel())
     assert np.all(np.diff(adapted[0].ravel()[order]) >= -1e-7)
     np.testing.assert_array_equal(adapted > 0, data > 0)
-    np.testing.assert_allclose(adapted[1], 0.6 * adapted[0], atol=1e-7)
+    fixed_sum = fixed.sum(axis=0)
+    adapted_sum = adapted.sum(axis=0)
+    active = (fixed_sum > 1e-7) & (adapted_sum > 1e-7)
+    np.testing.assert_allclose(
+        adapted[:, active] / adapted_sum[active],
+        fixed[:, active] / fixed_sum[active], atol=2e-7,
+    )
     assert report["faint_intensity_gain"] > report["fixed_curve_faint_intensity_gain"]
 
 
@@ -210,7 +220,7 @@ def test_first_admissible_base_boost_is_selected() -> None:
     assert [item['accepted'] for item in iterations] == [False, False, False, True]
     assert report['requested_faint_boost'] == 5
     assert report['faint_boost'] == 2
-    assert report['fwhm']['median_ratio'] == pytest.approx(1.31525, abs=1e-4)
+    assert report['fwhm']['median_ratio'] == pytest.approx(1.30794, abs=1e-4)
     assert report['width_adaptation']['stop_reason'] == 'width limited'
     reference, _ = ConservativeStarRenderer.render(
         data, faint_boost=2, max_width_ratio=1.4, histogram_strength=0,
@@ -218,7 +228,7 @@ def test_first_admissible_base_boost_is_selected() -> None:
     np.testing.assert_array_equal(rendered, reference)
     np.testing.assert_array_equal(data, original)
     np.testing.assert_array_equal(rendered > 0, data > 0)
-    np.testing.assert_allclose(rendered[1], 0.7 * rendered[0], atol=1e-7)
+    assert report['color_mode'] == 'human'
     assert rendered.max() <= 0.85
 
 
@@ -243,7 +253,7 @@ def test_no_admissible_boost_fails_with_bounded_diagnostics(
     message = str(failure.value)
     assert f'après {attempts} essai(s)' in message
     assert f'gain {boost:g} : ratio' in message
-    assert 'gain 1 : ratio 1.113038' in message
+    assert 'gain 1 : ratio 1.077613' in message
 
 
 def test_unmeasurable_width_remains_explicit() -> None:
@@ -262,7 +272,7 @@ def test_stellar_trial_recording_preserves_render_and_source() -> None:
     light = np.zeros_like(x, dtype=np.float32)
     for (cy, cx), amplitude in zip(
         ((cy, cx) for cy in range(18, 130, 20) for cx in range(18, 130, 20)),
-        np.geomspace(1e-4, 0.7, 36),
+        np.geomspace(1e-4, 0.01, 36),
     ):
         light += amplitude * np.exp(-((x - cx) ** 2 + (y - cy) ** 2) / 2)
     source = np.array([light, .6 * light, .3 * light])
@@ -277,7 +287,7 @@ def test_stellar_trial_recording_preserves_render_and_source() -> None:
         assert trials[0]['status'] == 'input'
         assert trials[-1]['status'] == 'selected'
         assert any(trial['stage'].startswith('Courbe fixe') for trial in trials)
-        assert any(trial['stage'].startswith('Adaptation') for trial in trials)
+        assert any(trial['stage'].startswith('Courbe quantile') for trial in trials)
         assert all('histogram' in trial for trial in trials)
         np.testing.assert_array_equal(actual, expected)
         np.testing.assert_array_equal(source, reference)
@@ -304,7 +314,7 @@ def test_noise_gate_reduces_residual_and_boosts_significant_stars(
     source = noisy_star_field.copy()
     rendered, report = ConservativeStarRenderer.render(source, max_width_ratio=1.2)
     noise = report['noise_suppression']
-    assert report['histogram_balance']['calibration_peak_count'] == 4
+    assert report['histogram_balance']['calibration_peak_count'] >= 4
     assert report['histogram_balance']['stop_reason'] == 'insufficient distinct peaks'
     assert noise['threshold'] > 0
     assert np.mean(rendered[0, 120:] ** 2) < np.mean(source[0, 120:] ** 2)
@@ -314,7 +324,8 @@ def test_noise_gate_reduces_residual_and_boosts_significant_stars(
     assert report['wings']['p10_ratio'] >= .9
     assert report['after']['white_fraction_rgb'] == [0, 0, 0]
     assert report['faint_intensity_gain'] == 0
-    np.testing.assert_allclose(rendered[1], .7 * rendered[0], atol=1e-7)
+    linked = rendered[0] < .849
+    np.testing.assert_allclose(rendered[1][linked], .7 * rendered[0][linked], atol=1e-7)
     np.testing.assert_array_equal(source, noisy_star_field)
     np.testing.assert_array_equal(rendered[source == 0], 0)
     from lib.stretch_transfer import CumulativeStretchTransform, stellar_operation
@@ -445,16 +456,16 @@ def fractional_star_field() -> np.ndarray:
     light = np.zeros_like(x, dtype='f4')
     for (cy, cx), amplitude in zip(
         ((cy, cx) for cy in range(18, 130, 20) for cx in range(18, 130, 20)),
-        np.geomspace(1e-4, .7, 36),
+        np.geomspace(1e-4, .01, 36),
     ):
         light += amplitude * np.exp(-((x - cx) ** 2 + (y - cy) ** 2) / 2)
     return np.array([light, .6 * light, .3 * light])
 
 
-def test_default_fraction_keeps_unselected_peaks_and_source(
+def test_default_fraction_builds_pointwise_quantile_curve(
     fractional_star_field: np.ndarray,
 ) -> None:
-    """Le budget de 25 % n'applique aucun supplément aux autres sommets."""
+    """Les 25 % calent une courbe globale sans coordonnées ni masque spatial."""
     source = fractional_star_field
     original = source.copy()
     base, _ = ConservativeStarRenderer.render(source, boost_fraction=0)
@@ -462,13 +473,18 @@ def test_default_fraction_keeps_unselected_peaks_and_source(
     selection = report['boost_selection']
     assert selection['fraction'] == .25
     assert selection['selected_count'] <= selection['budget'] == 9
-    others = np.asarray(selection['others'])
-    np.testing.assert_array_equal(rendered[:, others[:, 0], others[:, 1]],
-                                  base[:, others[:, 0], others[:, 1]])
-    assert selection['actually_boosted_count'] <= selection['selected_count']
+    assert selection['mode'] == 'histogram_quantile'
+    assert 'selected' not in selection and 'others' not in selection
+    assert selection['visible_target'] == pytest.approx(.08)
+    assert selection['actually_boosted_count'] > selection['selected_count']
     assert report['fwhm']['median_ratio'] <= 2
     assert report['after']['white_fraction_rgb'] == [0, 0, 0]
-    np.testing.assert_allclose(rendered[1], .6 * rendered[0], atol=1e-7)
+    from lib.stretch_transfer import CumulativeStretchTransform, stellar_operation
+    replay = CumulativeStretchTransform(
+        (float(source.min()), float(source.max())),
+        [stellar_operation(report, report['histogram_balance'])],
+    )
+    np.testing.assert_array_equal(replay.apply_rgb(source), rendered)
     np.testing.assert_array_equal(source, original)
     assert report['width_adaptation']['iterations'][-1]['histogram_balance']['requested_strength'] == 0
 

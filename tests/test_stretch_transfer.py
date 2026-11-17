@@ -7,7 +7,10 @@ import numpy as np
 import pytest
 
 from lib.auto_ghs import ghs_rgb, linear_blackpoint
-from lib.stretch_transfer import CumulativeStretchTransform, TrialTransformResolver, stellar_operation
+from lib.stretch_transfer import (
+    CumulativeStretchTransform, TrialTransformResolver, asinh_rgb,
+    stellar_luminance, stellar_operation,
+)
 from lib.star_rendering import ConservativeStarRenderer
 
 
@@ -82,6 +85,53 @@ def test_stellar_recipe_replays_the_accepted_peak_lookup_table() -> None:
     expected, report = ConservativeStarRenderer.render(source, histogram_strength=.8)
     operation = stellar_operation(report, report['histogram_balance'])
     replay = CumulativeStretchTransform((float(source.min()), float(source.max())), [operation])
+    np.testing.assert_array_equal(replay.apply_rgb(source), expected)
+
+
+def test_asinh_human_rgbblend_matches_linked_gamut_construction() -> None:
+    """L'asinh emploie Y human et RGBBlend uniquement pour protéger le plafond."""
+    source = np.array([
+        [[.02, .4, 1.]], [[.01, .2, .6]], [[.005, .1, .3]],
+    ], dtype='f4')
+    strength, ceiling, boost = 2., .85, 3.
+    light = stellar_luminance(source, 'human')
+
+    def transfer(values: np.ndarray) -> np.ndarray:
+        target = ceiling*np.arcsinh(strength*values)/np.arcsinh(strength)
+        return boost*target/(1+(boost-1)*target/ceiling)
+
+    linked = source * (transfer(light)/light)[None]
+    independent = transfer(source)
+    difference = linked-independent
+    ratios = np.where(
+        linked > ceiling,
+        (ceiling-independent)/np.maximum(difference, 1e-30), 1,
+    )
+    weight = np.clip(ratios.min(axis=0), 0, 1)
+    expected = weight[None]*linked+(1-weight[None])*independent
+    actual = asinh_rgb(source, strength, ceiling, boost, 'human')
+    np.testing.assert_allclose(actual, expected, atol=2e-7)
+    np.testing.assert_allclose(actual[:, :, :1], linked[:, :, :1], atol=1e-7)
+    assert actual.max() <= ceiling
+    assert not np.array_equal(actual, asinh_rgb(
+        source, strength, ceiling, boost, 'even',
+    ))
+    with pytest.raises(ValueError, match='Mode couleur'):
+        asinh_rgb(source, strength, ceiling, boost, 'unknown')
+
+
+def test_human_stellar_recipe_records_mode_and_replays_exactly() -> None:
+    """La recette conserve human et ne réestime ni luminance ni RGBBlend."""
+    y, x = np.indices((96, 96))
+    light = np.zeros_like(x, dtype='f4')
+    for cy in range(12, 90, 18):
+        for cx in range(12, 90, 18):
+            light += .02*np.exp(-((x-cx)**2+(y-cy)**2)/3)
+    source = np.array([light, .7*light, .25*light])
+    expected, report = ConservativeStarRenderer.render(source, color_mode='human')
+    operation = stellar_operation(report, report['histogram_balance'])
+    assert operation['color_mode'] == 'human'
+    replay = CumulativeStretchTransform((0., float(source.max())), [operation])
     np.testing.assert_array_equal(replay.apply_rgb(source), expected)
 
 
@@ -311,7 +361,7 @@ def test_spatial_recipe_replays_selection_and_labels_envelope(
         """L'enveloppe spatiale doit être annoncée dans la figure réellement produite."""
         axis = figure.axes[1]
         assert 'Enveloppe' in axis.get_title()
-        assert 'Poids spatial fixé à 1' in axis.texts[0].get_text()
+        assert 'Enveloppe maximale' in axis.texts[0].get_text()
         captured.append(True)
         original_save(figure, *args, **kwargs)
 

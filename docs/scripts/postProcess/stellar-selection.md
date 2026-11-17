@@ -1,117 +1,90 @@
-# 1. Sélection d'une fraction des étoiles
+# 1. Calage fractionnaire de l’histogramme stellaire
 
 [postProcess](README.md) · [Rendu stellaire](star-rendering.md) · [Recettes](stretch-transfer.md)
 
-## 1.1. Objectif et paramètres
+## 1.1. Objectif et paramètre
 
-Le rendu asinh conserve une base commune à toutes les étoiles, puis réserve
-son renforcement adaptatif supplémentaire à **25 % au maximum des pics
-éligibles les plus marqués**. La règle utilise uniquement la couche d'étoiles
-positive après compensation des résidus ; elle ne consulte ni fond, ni galaxie,
-ni nom d'objet. Les mêmes options s'appliquent aux différentes cibles.
+`--star-boost-fraction=0.25` ne désigne pas un masque spatial. Il indique la
+fraction supérieure des pics éligibles utilisée pour caler une courbe
+ponctuelle unique. Le traitement ne consulte ni le fond, ni l’image originale,
+ni le nom de l’objet. Deux pixels de même intensité reçoivent la même cible,
+quelle que soit leur position.
 
-`--star-boost-fraction` vaut `0.25` par défaut, dans `[0,1]` :
+Zéro conserve la base asinh. Un conserve le mode global historique à quantiles.
+Entre les deux, le quantile `1-fraction` fixe le point d’inflexion de la nouvelle
+courbe. Les options suivent CLI > JSON > défaut et sont persistantes avec `-S`.
 
-- `0` conserve la base asinh sans supplément adaptatif ;
-- `0.25` sélectionne au plus un quart des pics éligibles ;
-- `1` retrouve le moteur adaptatif historique global ;
-- `--star-histogram-strength 0` désactive également le supplément.
+## 1.2. Construction de la courbe
 
-La fraction suit CLI > JSON > défaut et se mémorise avec `-S`. Une ancienne
-configuration ne contenant pas cette clé adopte 0,25 ; une valeur sauvegardée
-explicite reste prioritaire. La force du mélange reste contrôlée séparément
-par `--star-histogram-strength`. Il ne s'agit pas de mettre 25 % de gain sur
-toutes les étoiles, ni de garantir que 25 % seront perceptibles après fusion.
+Le moteur travaille sur le maximum RGB pour repérer les pics et sur la base
+asinh/RGBBlend déjà calculée pour produire le résultat :
 
-## 1.2. Étapes et formules
+1. détecter les maxima locaux dans une fenêtre de 7 pixels ;
+2. conserver les pics au-dessus du seuil robuste de bruit déjà enregistré ;
+3. calculer `q`, quantile `1-fraction` de leurs amplitudes ;
+4. fixer le début de transition à `max(seuil_bruit, q/2)` ;
+5. viser 0,08 au niveau `q`, pour un plafond de référence 0,85 ;
+6. rejoindre 0,15 au percentile 95 des pics, puis le plafond à l’entrée 1 ;
+7. conserver exactement la base sous le début de transition et dès que la
+   base atteint 0,15.
 
-`ConservativeStarRenderer.render` de `lib/star_rendering.py` réalise le rendu ;
-`lib/stellar_selection.py` fournit la sélection déterministe et la reconstruction
-des poids spatiaux. Les fonctions `select_stellar_peaks` et
-`stellar_selection_weights` utilisent des coordonnées natives FITS `(y,x)`.
+Les niveaux 0,08 et 0,15 suivent proportionnellement `--star-ceiling`. Entre
+les points, l’interpolation est linéaire en coordonnées logarithmiques. La
+cible finale est le maximum de cette proposition et de la base : la courbe ne
+diminue aucun pixel. Son gain est commun aux trois canaux après l’asinh/RGBBlend.
 
-1. Produire une base asinh et son renforcement fixe admissible. La garde de
-   FWHM peut réduire le renforcement demandé ; le seuil de bruit retenu est
-   ensuite fixé pour tous les essais de fraction.
-2. Détecter les pics sur le maximum RGB, puis réserver le calage aux amplitudes
-   strictement supérieures à `max(1e-5, médiane + 12*sigma)`. Le sigma robuste,
-   en intensités normalisées, est celui décrit dans le rendu stellaire.
-3. Pour n pics éligibles et une fraction f, autoriser `k = floor(f*n)` pics.
-   La coupure est le plus grand pic exclu du budget ; les amplitudes égales à
-   cette coupure sont toutes exclues. Ainsi les ex aequo ne conduisent pas à
-   dépasser le budget et leur ordre de parcours ne décide pas de la sélection.
-4. Calculer, pour chaque pixel, les distances euclidiennes en pixels aux pics
-   sélectionnés et aux autres candidats. Le poids float32 est :
+Pour une intensité source `x`, une base `B(x)` et la courbe log-log `H(x)` :
 
-   ```text
-   w = d_autres^4 / (d_sélection^4 + d_autres^4)
-   ```
+```text
+T(x) = B(x)                                      si x <= q/2
+T(x) = max(B(x), H(x))                           dans la transition
+T(x) = B(x)                                      si B(x) >= 0,15
+sortie = base_RGB * T(x) / max_RGB(base_RGB)
+```
 
-   Les ensembles sont distincts : w vaut exactement 1 aux sommets sélectionnés
-   et 0 aux autres. Entre ces sommets, le supplément est réparti doucement.
-5. Construire la table logarithmique des quantiles des pics comme dans le moteur
-   historique. Avec `base` la courbe fixe et `adapté = max(base, table)`, essayer :
+Il n’y a ni coordonnées sauvegardées, ni profil radial, ni raccord spatial.
+La courbe peut donc être rejouée sur une autre géométrie. La détection des pics
+sert uniquement au calage statistique initial.
 
-   ```text
-   cible = (base + mélange * w * (adapté - base)) * porte_bruit
-   gain = cible / max(R,G,B), ou zéro lorsque le maximum est nul
-   sortie_RGB = entrée_RGB * gain
-   ```
+## 1.3. Gardes de largeur et de bruit
 
-   Le gain est commun aux trois canaux. Le plafond reste 0,85 par défaut.
-6. Essayer le mélange demandé puis ses moitiés, jusqu'à huit essais, avec un
-   dernier essai nul. La FWHM médiane après/avant doit respecter la limite
-   configurée ; les percentiles 10 des rapports des largeurs à 50 % et à 10 %
-   doivent rester au moins à 0,9. Sans essai mesurable admissible, conserver la
-   base et signaler le motif. Aucune mesure absente n'est remplacée par zéro.
+La porte quartique de bruit appartient à la base et est appliquée avant la
+courbe fractionnaire. La zone située sous le début de transition reste donc
+inchangée. Un résidu et une étoile de même intensité ne peuvent toutefois pas
+être distingués par une transformation d’histogramme.
 
-Sans budget, sans assez de pics (huit et quatre amplitudes distinctes), ou si
-les ex aequo éliminent toute la sélection, conserver la base. Une fraction non
-finie ou hors domaine est refusée. Des coordonnées sauvegardées non entières,
-hors image, partagées ou dupliquées sont également refusées à la réapplication.
+Après chaque proposition, le moteur mesure les profils à 50 % et 10 % du pic.
+Le rapport FWHM médian ne doit pas dépasser la garde configurée et le percentile
+10 des rapports ne doit pas descendre sous 0,90. Si nécessaire, la force de la
+courbe est divisée par deux, au plus huit fois ; un dernier essai nul conserve
+la base. Ce contrôle mesure des profils, mais la transformation elle-même reste
+strictement ponctuelle.
 
-## 1.3. Rapports, diagnostics et reproduction
+## 1.4. Rapport et recette
 
-`boost_selection` conserve la fraction demandée, l'effectif éligible, le budget,
-la coupure, le nombre retenu, les coordonnées et `actually_boosted_count`.
-Ce dernier compte les pics dont le maximum RGB dépasse la base de plus de
-`1e-7`, pas le nombre d'étoiles physiques. Le mode historique global conserve
-son effectif éligible mais ne recalcule pas ce dernier indicateur.
-`fraction_adaptation` et `histogram_balance` décrivent les essais du supplément ;
-`width_adaptation` garde l'historique indépendant du choix de la base.
+`boost_selection.mode` vaut `histogram_quantile`. Le rapport conserve la
+fraction, les effectifs, `cutoff`, `transition_start`, `visible_target`,
+`bright_protection`, les points de la courbe et la force retenue.
+`actually_boosted_count` compte les pics dont le sommet a augmenté ; ce n’est
+pas un dénombrement astrophysique.
 
-Le diagnostic stellaire affiche la fraction et les effectifs. La recette RGB
-exportée conserve la sélection : elle ne redétecte pas de pics et exige la
-même géométrie native pour un mode spatial. La courbe scalaire représente
-explicitement **l'enveloppe neutre des pics sélectionnés**, avec w fixé à 1.
-Elle n'est pas une LUT universelle de l'image. Le JSON porte
-`scalar_role: selected_star_neutral_envelope` ; la recette RGB complète reste
-celle à utiliser pour reproduire tous les pixels, y compris les étoiles voisines.
+La recette RGB rejoue les points et le seuil de bruit enregistrés, sans
+redétecter les étoiles ni recalculer les quantiles. Les anciennes recettes
+`profiles` et `spatial` restent lisibles pour reproduire les traitements déjà
+enregistrés ; elles ne sont plus produites par le défaut à 25 %.
 
-## 1.4. Limites et ressources
+La courbe scalaire porte `scalar_role: neutral_rgb_restriction`. RGBBlend reste
+dépendant du triplet RGB : la recette RGB est la référence de reproduction.
 
-Les pics candidats peuvent inclure des résidus compacts de séparation. Un budget
-sur leurs amplitudes ne constitue ni un catalogue ni une classification physique.
-Seul le niveau au sommet des pics non sélectionnés reste strictement identique
-à la base ; leurs ailes peuvent recevoir une partie du supplément des voisines.
-La pondération ne réalise pas de séparation des sources superposées. Les contrôles
-locaux sur 64 profils au plus et des fenêtres de 15 pixels ne garantissent pas
-la conservation de tous les halos ni de toutes les étoiles faibles.
+## 1.5. Limites et vérifications
 
-Deux transformées de distance SciPy sont calculées pour une sélection spatiale.
-Le coût et les tableaux temporaires croissent avec le nombre de pixels. Les
-coordonnées enregistrées croissent avec le nombre de pics. Le mode 0 ou 1
-évite ces transformées. Le fond GHS et la recomposition ne sont pas réoptimisés.
+Le seuil 0,08 est un niveau de présentation pour un affichage direct normalisé,
+pas une grandeur photométrique ni une garantie de perception après fusion. Les
+pics peuvent contenir des résidus StarNet. Une transformation ponctuelle peut
+renforcer tout pixel de même intensité ; la porte de bruit et le début de
+transition limitent ce risque sans le supprimer.
 
-## 1.5. Vérifications
-
-Les tests couvrent budgets, ex aequo, modes constants, coordonnées invalides,
-poids exacts aux sommets, conservation des pics non sélectionnés, rapports RGB,
-recettes spatiales et distinction entre enveloppe et reproduction exacte.
-Les options sont vérifiées en CLI/JSON, sauvegarde et instantanés d'instances.
-
-Les essais sur les couches existantes de M33, M31, NGC 7380 et NGC 7331 ont été
-retenus à 25 %. Le contrôle de non-régression compare la recomposition obtenue
-avec les fichiers de ces essais, à paramètres identiques. Cette vérification
-réutilise les séparations et fonds déjà produits ; elle ne relance ni StarNet
-ni Siril et ne valide pas une nouvelle chaîne scientifique complète.
+Les tests couvrent les fractions limites, les champs vides ou constants, la
+monotonie, le plafond, les couleurs, les gardes FWHM, l’absence de coordonnées
+et la reproduction exacte sur la géométrie native ou recadrée. Les recettes
+historiques à profils possèdent leurs tests de compatibilité séparés.

@@ -41,6 +41,7 @@ def test_standalone_branch_publishes_its_own_subject(
         compute_backend='cpu', ghs_max_iterations=1, ghs_dynamic_max_iterations=1,
         ghs_final_strength=0, ghs_histogram_strength=0, star_faint_boost=1,
         star_noise_sigma=8, star_stretch_max_width_ratio=1.4, star_boost_fraction=.5,
+        ghs_color_mode='human',
     )
     result = cls().post_process(layer_source, path, args)
     data = fits.getdata(layer_source).astype(np.float32)
@@ -133,3 +134,5 @@ def test_configuration_binds_disjoint_independent_branch_snapshots(tmp_path: Pat
     assert first_star._get_args().ghs_save_trial_jpegs
     assert first_background._get_args().ghs_save_trial_jpegs
     assert not second_star._get_args().ghs_save_trial_jpegs
+    assert first_star._get_args().ghs_color_mode == 'human'
+    assert first_background._get_args().ghs_color_mode == 'human'

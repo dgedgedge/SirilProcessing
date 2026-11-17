@@ -633,6 +633,7 @@ class LightProcessor(ParameterizedComponent):
             self.calibration_processor.use_dark
             and self.calibration_processor.dark_library_path
             and not Path(self.calibration_processor.dark_library_path).exists()
+            and self._find_local_dark() is None
         ):
             raise ValueError(
                 "La librairie de darks n'existe pas: "
@@ -845,38 +846,66 @@ class LightProcessor(ParameterizedComponent):
 
         return groups
 
+    def _find_local_dark(self) -> Path | None:
+        """Retourne l'unique fichier FITS du dossier dark ou Dark local.
+
+        Les sous-dossiers sont ignorés, mais tout fichier supplémentaire
+        exclut le candidat. Si les deux dossiers existent, dark est prioritaire.
+        Les métadonnées sont contrôlées ensuite comme celles de la bibliothèque.
+        """
+        for name in ("dark", "Dark"):
+            directory = self.session_dir / name
+            if not directory.is_dir():
+                continue
+            try:
+                files = [path for path in directory.iterdir() if path.is_file()]
+            except OSError as error:
+                logging.warning("Lecture du dossier dark impossible %s: %s",
+                                directory, error)
+                return None
+            if len(files) == 1 and files[0].suffix in (
+                ".fit", ".fits", ".FIT", ".FITS"
+            ):
+                return files[0]
+            return None
+        return None
+
     def find_matching_master_dark(self, light_info: FitsInfo) -> Path | None:
         """
-        Trouve le master dark correspondant aux caractéristiques du light.
+        Sélectionne un dark local compatible, puis cherche en bibliothèque.
 
-        Args:
-            light_info: Information du fichier light
+        Parameters
+        ----------
+        light_info : FitsInfo
+            Métadonnées du light ou du flat à calibrer.
 
-        Returns:
-            Chemin vers le master dark correspondant ou None si non trouvé
+        Returns
+        -------
+        Path or None
+            Premier dark valide de même caméra, température, exposition,
+            binning et gain arrondi à une unité près, avec STACKCMD compatible
+            si présent des deux côtés.
+            Le fichier local est utilisé tel quel, sans empilement préalable.
         """
         if not self.calibration_processor.use_dark:
             logging.debug("Mode sans dark: recherche de master dark ignorée")
             return None
 
+        local_dark = self._find_local_dark()
+        master_dark_files: list[str] = (
+            [str(local_dark)] if local_dark is not None else []
+        )
         dark_library_path = self.calibration_processor.dark_library_path
-        if not dark_library_path:
+        if dark_library_path:
+            dark_lib_path = Path(dark_library_path)
+            if dark_lib_path.is_dir():
+                for extension in ("*.fit", "*.fits", "*.FIT", "*.FITS"):
+                    pattern = str(dark_lib_path / "**" / extension)
+                    master_dark_files.extend(glob.glob(pattern, recursive=True))
+            else:
+                logging.warning("Librairie de darks introuvable: %s", dark_lib_path)
+        elif local_dark is None:
             logging.warning("Aucune librairie de darks spécifiée")
-            return None
-
-        dark_lib_path = Path(dark_library_path)
-        if not dark_lib_path.exists():
-            logging.error(f"Librairie de darks introuvable: {dark_lib_path}")
-            return None
-
-        # Extensions FITS supportées
-        extensions = ["*.fit", "*.fits", "*.FIT", "*.FITS"]
-
-        # Chercher tous les fichiers FITS dans la librairie
-        master_dark_files = []
-        for ext in extensions:
-            pattern = str(dark_lib_path / "**" / ext)
-            master_dark_files.extend(glob.glob(pattern, recursive=True))
 
         # Analyser chaque master dark pour trouver une correspondance
         for dark_file in master_dark_files:
@@ -891,7 +920,8 @@ class LightProcessor(ParameterizedComponent):
 
                 # Vérifier la correspondance des caractéristiques
                 if light_info.is_equivalent(
-                    dark_info, self.calibration_processor.temp_precision
+                    dark_info, self.calibration_processor.temp_precision,
+                    gain_tolerance=1,
                 ):
                     logging.debug(f"Master dark trouvé: {dark_file}")
                     logging.debug(

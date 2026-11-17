@@ -15,12 +15,84 @@ import numpy as np
 
 from lib.type_defs import JSONReport
 from lib.stellar_selection import stellar_selection_weights
+from lib.stellar_profiles import profile_gain_map
 
 CURVE_TOLERANCE = 1e-7  # Erreur absolue observée aux sondes d'interpolation.
 INITIAL_CURVE_POINTS = 2049
 MAX_CURVE_POINTS = 262145
 MAX_CURVE_REFINEMENTS = 24  # Évite de subdiviser au-delà de la résolution float64.
 GHS_KEYS = ('D', 'B', 'SP', 'LP', 'HP')
+
+
+def asinh_rgb(
+    data: np.ndarray, strength: float, ceiling: float, faint_boost: float,
+    color_mode: str = 'human',
+) -> np.ndarray:
+    """Applique un asinh lié à la luminance avec RGBBlend sous le plafond.
+
+    ``human`` emploie le proxy Rec.709 déjà utilisé par GHS ; ``even`` emploie
+    la moyenne RGB. Le gain lié préserve les rapports des canaux tant qu'aucun
+    ne dépasse ``ceiling``. Dans ce cas seulement, RGBBlend mélange avec les
+    trois courbes indépendantes, selon la même construction que ``ghs_rgb``.
+    La balance SPCC/PCC doit donc être appliquée aux pixels avant cet appel.
+
+    Parameters
+    ----------
+    data : np.ndarray
+        RGB non négatif de forme ``(3, ...)``, normalement borné dans [0, 1].
+    strength : float
+        Force asinh strictement positive.
+    ceiling : float
+        Plafond RGB strictement compris entre zéro et un.
+    faint_boost : float
+        Renforcement rationnel des faibles intensités, au moins égal à un.
+    color_mode : str, optional
+        ``human`` ou ``even``.
+
+    Returns
+    -------
+    np.ndarray
+        RGB de même dtype, fini et borné dans ``[0, ceiling]``.
+    """
+    values = np.asarray(data)
+    light = stellar_luminance(values, color_mode)
+
+    def transfer(levels: np.ndarray) -> np.ndarray:
+        """Évalue la courbe scalaire avec le dtype du tableau appelant."""
+        target = ceiling * np.arcsinh(strength * levels) / np.arcsinh(strength)
+        return faint_boost * target / (
+            1 + (faint_boost - 1) * target / ceiling
+        )
+
+    linked_target = transfer(light)
+    linked_gain = np.divide(
+        linked_target, light, out=np.zeros_like(light), where=light > 0,
+    )
+    linked = values * linked_gain[None]
+    independent = transfer(values)
+    difference = linked - independent
+    ratios = np.where(
+        linked > ceiling,
+        (ceiling - independent) / np.maximum(difference, 1e-30),
+        1,
+    )
+    weight = np.clip(ratios.min(axis=0), 0, 1)
+    result = weight[None] * linked + (1 - weight[None]) * independent
+    result = np.where((values > 0) & (result == 0), values, result)
+    return np.clip(result, 0, ceiling).astype(values.dtype, copy=False)
+
+
+def stellar_luminance(data: np.ndarray, color_mode: str = 'human') -> np.ndarray:
+    """Calcule la luminosité ``human`` ou ``even`` partagée avec le GHS.
+
+    Les coefficients ``human`` sont le proxy Rec.709 appliqué aux pixels déjà
+    équilibrés par SPCC/PCC. Ils ne remplacent pas une matrice colorimétrique.
+    """
+    if color_mode == 'human':
+        return 0.2126 * data[0] + 0.7152 * data[1] + 0.0722 * data[2]
+    if color_mode == 'even':
+        return data.mean(axis=0)
+    raise ValueError('Mode couleur stellaire inconnu')
 
 
 def stellar_noise_gate(light: np.ndarray, threshold: float) -> np.ndarray:
@@ -83,6 +155,7 @@ def stellar_operation(parameters: JSONReport, balance: JSONReport | None = None)
                     parameters.get('noise_suppression', {}).get('threshold', 0.)),
                 histogram_strength=float(parameters.get('histogram_strength',
                     balance.get('accepted_strength', 0.))),
+                color_mode=parameters.get('color_mode'),
                 knots=deepcopy(balance.get('input_knots', [])),
                 levels=deepcopy(balance.get('target_knots', [])),
                 boost_selection=deepcopy(parameters.get('boost_selection', {'mode': 'all'})))
@@ -103,7 +176,7 @@ class CumulativeStretchTransform:
         self.domain = float(low), float(high)
         self.operations = deepcopy(operations)
         spatial = any(op.get('kind') == 'stars' and op.get('histogram_strength', 0) > 0
-                      and op.get('boost_selection', {}).get('mode') == 'spatial'
+                      and op.get('boost_selection', {}).get('mode') in ('spatial', 'profiles')
                       for op in self.operations)
         self.scalar_role = ('selected_star_neutral_envelope' if spatial
                             else 'neutral_rgb_restriction')
@@ -118,8 +191,9 @@ class CumulativeStretchTransform:
         des étapes du moteur sont reproduites ; l'arrondi CUDA peut différer.
         Aucun histogramme, quantile ou point noir n'est réestimé. La sélection
         stellaire est figée par coordonnées et impose sa géométrie native.
-        stellar_envelope=True réserve le poids 1 aux seules sondes de courbe :
-        il représente l'enveloppe neutre des pics sélectionnés, pas une LUT RGB.
+        stellar_envelope=True réserve aux sondes de courbe l'enveloppe neutre :
+        poids 1 pour les anciennes sélections spatiales, plus grand supplément
+        enregistré pour les profils individuels. Ce n'est pas une LUT RGB.
         En mode idéal, les intermédiaires neutres sont bornés à [0,1] :
         leur gamut peut différer de celui des pixels colorés de référence.
         """
@@ -157,12 +231,28 @@ class CumulativeStretchTransform:
                 light = output.max(axis=0)
                 ceiling, strength = operation['ceiling'], operation['strength']
                 boost = operation['faint_boost']
-                target = ceiling*np.arcsinh(strength*light)/np.arcsinh(strength)
-                target = boost*target/(1+(boost-1)*target/ceiling)
+                color_mode = operation.get('color_mode')
+                legacy = color_mode is None
+                if legacy:
+                    target = ceiling*np.arcsinh(strength*light)/np.arcsinh(strength)
+                    target = boost*target/(1+(boost-1)*target/ceiling)
+                    base = None
+                else:
+                    base = asinh_rgb(output, strength, ceiling, boost, color_mode)
+                    target = base.max(axis=0)
                 fraction = operation.get('histogram_strength', 0.)
                 knots = np.asarray(operation.get('knots', []), dtype=np.float64)
                 levels = np.asarray(operation.get('levels', []), dtype=np.float64)
-                if fraction and knots.size:
+                selection = operation.get('boost_selection', {'mode': 'all'})
+                profile_mode = selection.get('mode') == 'profiles'
+                quantile_mode = selection.get('mode') == 'histogram_quantile'
+                if quantile_mode and not legacy:
+                    noise_light = output.max(axis=0)
+                    base = base * stellar_noise_gate(
+                        noise_light, operation.get('noise_threshold', 0.),
+                    )[None]
+                    target = base.max(axis=0)
+                if fraction and knots.size and not profile_mode:
                     balanced = np.exp(np.interp(
                         np.log(np.maximum(light, np.finfo(np.float32).tiny)),
                         np.log(knots), np.log(levels),
@@ -170,13 +260,64 @@ class CumulativeStretchTransform:
                     below = light < knots[0]
                     balanced[below] = light[below]*levels[0]/knots[0]
                     balanced = np.maximum(target, balanced).astype(output.dtype)
-                    selection = operation.get('boost_selection', {'mode': 'all'})
-                    weights = (1. if stellar_envelope and selection.get('mode') == 'spatial'
-                               else stellar_selection_weights(selection, light.shape))
+                    if quantile_mode:
+                        balanced[light <= knots[0]] = target[light <= knots[0]]
+                        protected = target >= selection.get('bright_protection', 1.)
+                        balanced[protected] = target[protected]
+                        weights = 1.
+                    else:
+                        weights = (1. if stellar_envelope and selection.get('mode') == 'spatial'
+                                   else stellar_selection_weights(selection, light.shape))
                     target = target+fraction*weights*(balanced-target)
-                target = target * stellar_noise_gate(light, operation.get('noise_threshold', 0.))
-                gain = np.divide(target, light, out=np.zeros_like(light), where=light > 0)
-                output = output*gain[None]
+                    if not legacy:
+                        base_light = base.max(axis=0)
+                        gain = np.divide(
+                            target, base_light, out=np.zeros_like(target),
+                            where=base_light > 0,
+                        )
+                        base = base * gain[None]
+                if legacy:
+                    target = target * stellar_noise_gate(
+                        light, operation.get('noise_threshold', 0.),
+                    )
+                    if fraction and profile_mode:
+                        if stellar_envelope:
+                            extra = max(
+                                (p[4] for p in selection.get('profiles', [])),
+                                default=1.,
+                            )
+                            target = np.minimum(
+                                target * (1 + fraction * (extra - 1)), ceiling,
+                            )
+                        else:
+                            gains = profile_gain_map(selection, light.shape)
+                            target = target * (1 + fraction * (gains - 1))
+                    gain = np.divide(
+                        target, light, out=np.zeros_like(light), where=light > 0,
+                    )
+                    output = output * gain[None]
+                else:
+                    # La recette reproduit la porte du moteur, calée sur le
+                    # maximum RGB afin de ne pas sous-estimer un résidu isolé
+                    # dans un seul canal.
+                    if not quantile_mode:
+                        noise_light = output.max(axis=0)
+                        base = base * stellar_noise_gate(
+                            noise_light, operation.get('noise_threshold', 0.),
+                        )[None]
+                    if fraction and profile_mode:
+                        if stellar_envelope:
+                            extra = max(
+                                (p[4] for p in selection.get('profiles', [])),
+                                default=1.,
+                            )
+                            base = np.minimum(
+                                base * (1 + fraction * (extra - 1)), ceiling,
+                            )
+                        else:
+                            gains = profile_gain_map(selection, light.shape)
+                            base = base * (1 + fraction * (gains - 1))[None]
+                    output = base
             else:
                 raise ValueError(f'Opération cumulée inconnue : {kind}')
             if ideal:
@@ -188,7 +329,7 @@ class CumulativeStretchTransform:
         return output
 
     def evaluate(self, levels: np.ndarray) -> np.ndarray:
-        """Évalue la courbe neutre ; une sélection spatiale fournit son enveloppe à poids 1."""
+        """Évalue la courbe neutre ou l’enveloppe maximale des suppléments stellaires."""
         values = np.asarray(levels, dtype=np.float64)
         ramp = np.repeat(values.reshape(1, 1, -1), 3, axis=0)
         return self.apply_rgb(ramp, ideal=True, stellar_envelope=True)[0, 0].reshape(values.shape)
@@ -211,7 +352,7 @@ class CumulativeStretchTransform:
         signalées explicitement, avec 24 raffinements maximum. L'abscisse
         reste exactement le min/max source. Retourne aussi gain=F(x)/x,
         indéfini (NaN) à x=0 ; le seuil de précision porte sur F(x).
-        scalar_role distingue la courbe neutre de l’enveloppe stellaire à poids 1.
+        scalar_role distingue la courbe neutre de l’enveloppe maximale stellaire.
         """
         low, high = self.domain
         if low == high:

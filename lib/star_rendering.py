@@ -18,13 +18,16 @@ from scipy.ndimage import label, maximum_filter
 
 from lib.processor import processor
 from lib.ghs_diagnostics import HistogramDiagnostics
-from lib.stretch_transfer import stellar_noise_gate, stellar_operation
-from lib.stellar_selection import select_stellar_peaks, stellar_selection_weights
+from lib.stretch_transfer import (
+    asinh_rgb, stellar_noise_gate, stellar_operation,
+)
 from lib.restoration_quality import normalized_planes
 from lib.star_separation import validate_rgb, write_rgb
 from lib.type_defs import JSONReport
 
 VISIBILITY_LEVEL = 0.03  # Contribution normalisée, indicateur d'affichage seulement.
+FRACTION_VISIBLE_TARGET = 0.08  # Sommet visé au quantile retenu, affichage direct.
+FRACTION_BRIGHT_TARGET = 0.15  # Au-delà, conserver la base et les hautes lumières.
 PEAK_QUANTILE_COUNT = 17
 PEAK_QUANTILE_RANGE = (0.05, 0.95)  # Exclure les extrêmes du calage des pics.
 PEAK_OUTPUT_RANGE = (0.04, 0.65)  # Niveaux visés pour un plafond de référence 0,85.
@@ -32,7 +35,7 @@ REFERENCE_STAR_CEILING = 0.85
 MAX_BALANCE_ATTEMPTS = 8  # Réductions par moitiés avant de conserver le gain fixe.
 FAINT_BOOST_STEP = 1.0  # Décrément du renforcement de base, jusqu'au minimum 1.
 LOGGER = logging.getLogger(__name__)
-NOISE_SIGMA_FACTOR = 6.0  # Écarts robustes du résidu positif, pas du bruit signé initial.
+NOISE_SIGMA_FACTOR = 8.0  # Écarts robustes du résidu positif, pas du bruit signé initial.
 NOISE_PRECISION_FLOOR = 1e-7  # Intensité normalisée ; éviter d'interpréter les queues numériques.
 MIN_PROFILE_RATIO = 0.90  # Rétrécissement maximal admis à 50 % et à 10 % du pic.
 MAX_NOISE_ATTEMPTS = 8
@@ -249,7 +252,7 @@ class ConservativeStarRenderer(processor):
         )
         parser.add_argument(
             "--star-noise-sigma", type=float, default=NOISE_SIGMA_FACTOR,
-            help="Seuil doux en écarts robustes du résidu positif ; 0 désactive (défaut 6)",
+            help="Seuil doux en écarts robustes du résidu positif ; 0 désactive (défaut 8)",
         )
         parser.add_argument(
             "--star-max-width-ratio", type=float, default=cls.default_max_width_ratio,
@@ -281,8 +284,9 @@ class ConservativeStarRenderer(processor):
         diagnostics: HistogramDiagnostics | None = None,
         noise_sigma: float = NOISE_SIGMA_FACTOR,
         boost_fraction: float = default_boost_fraction,
+        color_mode: str = 'human',
     ) -> tuple[np.ndarray, JSONReport]:
-        """Renforce au plus une fraction des pics, depuis une base asinh admissible.
+        """Calibre une courbe ponctuelle sur une fraction des pics éligibles.
 
         Parameters
         ----------
@@ -300,17 +304,18 @@ class ConservativeStarRenderer(processor):
             Seuil doux de bruit dans [0,20], celui retenu pour la base est fixé
             pendant les essais sélectifs.
         boost_fraction : float
-            Budget de pics éligibles dans [0,1], 0,25 par défaut. Zéro conserve
-            la base, un retrouve le moteur historique global. Les autres valeurs
-            sélectionnent les pics les plus marqués sur la couche seule, sans
-            fond ni paramètre propre à un objet. Les ex aequo limites sont exclus.
+            Fraction de pics éligibles dans [0,1], 0,25 par défaut. Zéro
+            conserve la base et un retrouve le moteur historique global. Entre
+            les deux, son quantile fixe le point d'inflexion d'une courbe unique.
+        color_mode : str
+            ``human`` utilise la luminosité pondérée du GHS ; ``even`` utilise
+            la moyenne RGB. La balance SPCC/PCC est déjà intégrée aux pixels.
 
         Returns
         -------
         tuple[np.ndarray, JSONReport]
-            RGB float32 et mesures : sélection figée, essais, FWHM, ailes,
-            fraction réellement renforcée. Les sommets non sélectionnés restent
-            identiques à la base ; leurs ailes peuvent interagir avec les voisines.
+            RGB float32 et mesures de la courbe ponctuelle, de la FWHM et des
+            ailes. Aucun masque ni raccord spatial n'est appliqué.
 
         Raises
         ------
@@ -321,9 +326,8 @@ class ConservativeStarRenderer(processor):
 
         Notes
         -----
-        Voir docs/scripts/postProcess/star-rendering.md. Le gain RGB est commun,
-        mais sa pondération est spatiale : la courbe exportée est une enveloppe,
-        la recette complète utilise les coordonnées natives enregistrées.
+        Voir docs/scripts/postProcess/star-rendering.md. Deux pixels ayant la
+        même intensité reçoivent la même cible, indépendamment de leur position.
         """
         if not np.isfinite(boost_fraction) or not 0 <= boost_fraction <= 1:
             raise ValueError('Fraction stellaire hors de [0,1]')
@@ -332,7 +336,7 @@ class ConservativeStarRenderer(processor):
         if boost_fraction == 1:
             rendered, report = ConservativeStarRenderer._render_unrestricted(
                 data, strength, ceiling, max_width_ratio, faint_boost,
-                histogram_strength, diagnostics, noise_sigma,
+                histogram_strength, diagnostics, noise_sigma, color_mode,
             )
             count = report['histogram_balance']['calibration_peak_count']
             report['boost_selection'] = dict(
@@ -341,7 +345,8 @@ class ConservativeStarRenderer(processor):
             )
             return rendered, report
         baseline, report = ConservativeStarRenderer._render_unrestricted(
-            data, strength, ceiling, max_width_ratio, faint_boost, 0., None, noise_sigma,
+            data, strength, ceiling, max_width_ratio, faint_boost, 0., None,
+            noise_sigma, color_mode,
         )
         light = data.max(axis=0)
         positions = stellar_peak_positions(data)
@@ -351,8 +356,11 @@ class ConservativeStarRenderer(processor):
         report['histogram_balance'] = balance
         eligible = amplitudes > balance['calibration_peak_threshold']
         peaks = amplitudes[eligible]
-        selection = select_stellar_peaks(
-            light.shape, positions, amplitudes, eligible, boost_fraction,
+        budget = int(np.floor(boost_fraction * peaks.size))
+        selection: JSONReport = dict(
+            mode='histogram_quantile', fraction=float(boost_fraction),
+            eligible_count=int(peaks.size), budget=budget,
+            selected_count=budget, shape=list(light.shape),
         )
         balance.update(requested_strength=histogram_strength, accepted_strength=0.)
         report['boost_selection'] = selection
@@ -366,39 +374,45 @@ class ConservativeStarRenderer(processor):
                 'candidate', transform_operations=[stellar_operation(report, balance)],
             )
         rendered = baseline
-        if histogram_strength and selection['mode'] != 'none':
-            quantiles = np.linspace(*PEAK_QUANTILE_RANGE, PEAK_QUANTILE_COUNT)
-            anchors = np.quantile(peaks, quantiles) if peaks.size >= 8 else np.array([])
-            anchors, unique = np.unique(anchors, return_index=True)
-            balance['stop_reason'] = 'insufficient distinct peaks'
-            if anchors.size >= 4:
-                levels = np.geomspace(*PEAK_OUTPUT_RANGE, PEAK_QUANTILE_COUNT)[unique]
-                levels *= ceiling / REFERENCE_STAR_CEILING
-                inside = anchors < 1
-                knots, levels = np.r_[anchors[inside], 1.], np.r_[levels[inside], ceiling]
-                balance['input_knots'], balance['target_knots'] = knots.tolist(), levels.tolist()
-                balanced = np.exp(np.interp(
+        balance['stop_reason'] = 'insufficient distinct peaks'
+        if histogram_strength and budget and peaks.size >= 8:
+            cutoff = float(np.quantile(peaks, 1 - boost_fraction))
+            transition = max(float(balance['calibration_peak_threshold']), cutoff / 2)
+            bright_input = max(cutoff * (1 + 1e-6), float(np.quantile(peaks, .95)))
+            bright_input = min(bright_input, 1.)
+            fixed = ceiling * np.arcsinh(strength * transition) / np.arcsinh(strength)
+            fixed = faint_boost * fixed / (1 + (faint_boost - 1) * fixed / ceiling)
+            fixed *= float(stellar_noise_gate(
+                np.asarray(transition), report['noise_suppression']['threshold'],
+            ))
+            visible = FRACTION_VISIBLE_TARGET * ceiling / REFERENCE_STAR_CEILING
+            bright = FRACTION_BRIGHT_TARGET * ceiling / REFERENCE_STAR_CEILING
+            knots = np.asarray([transition, cutoff, bright_input, 1.], dtype=np.float64)
+            levels = np.asarray([fixed, visible, bright, ceiling], dtype=np.float64)
+            if np.all(np.diff(knots) > 0) and np.all(np.diff(levels) > 0):
+                balance['input_knots'], balance['target_knots'] = (
+                    knots.tolist(), levels.tolist()
+                )
+                selection.update(
+                    cutoff=cutoff, transition_start=transition,
+                    visible_target=visible, bright_protection=bright,
+                )
+                base_light = baseline.max(axis=0)
+                mapped = np.exp(np.interp(
                     np.log(np.maximum(light, np.finfo(np.float32).tiny)),
                     np.log(knots), np.log(levels),
                 ))
-                below = light < knots[0]
-                balanced[below] = light[below] * levels[0] / knots[0]
-                base = ceiling * np.arcsinh(strength * light) / np.arcsinh(strength)
-                boost = report['faint_boost']
-                base = boost * base / (1 + (boost - 1) * base / ceiling)
-                delta = np.maximum(base, balanced).astype(np.float32) - base
-                del balanced
-                weights = stellar_selection_weights(selection, light.shape)
-                gate = stellar_noise_gate(light, report['noise_suppression']['threshold'])
+                mapped[light <= transition] = base_light[light <= transition]
+                mapped[base_light >= bright] = base_light[base_light >= bright]
+                mapped = np.maximum(base_light, mapped).astype(np.float32)
                 balance['stop_reason'] = 'width limit'
                 for index in range(MAX_BALANCE_ATTEMPTS + 1):
-                    blend = (
-                        0. if index == MAX_BALANCE_ATTEMPTS
-                        else histogram_strength / 2 ** index
+                    blend = 0. if index == MAX_BALANCE_ATTEMPTS else histogram_strength / 2 ** index
+                    target = base_light + blend * (mapped - base_light)
+                    gain = np.divide(
+                        target, base_light, out=np.zeros_like(target), where=base_light > 0,
                     )
-                    target = (base + blend * weights * delta) * gate
-                    gain = np.divide(target, light, out=np.zeros_like(light), where=light > 0)
-                    candidate = data * gain[None]
+                    candidate = baseline * gain[None]
                     widths = profile_widths(data, candidate)
                     wings = profile_widths(data, candidate, .1)
                     ratio = widths['median_ratio']
@@ -414,7 +428,7 @@ class ConservativeStarRenderer(processor):
                     if diagnostics is not None:
                         trial_balance = dict(balance, accepted_strength=blend)
                         diagnostics.record_stellar_trial(
-                            candidate, f'Adaptation {blend:g} — fraction {boost_fraction:g}',
+                            candidate, f'Courbe quantile {blend:g} — fraction {boost_fraction:g}',
                             'admissible' if accepted else 'rejected',
                             transform_operations=[stellar_operation(report, trial_balance)],
                         )
@@ -425,14 +439,12 @@ class ConservativeStarRenderer(processor):
                         balance['stop_reason'] = (
                             'requested strength' if index == 0 else 'width limited'
                         )
-                        if not report['noise_suppression']['threshold']:
-                            fixed = report['fixed_curve_faint_intensity_gain']
-                            report['faint_intensity_gain'] = fixed + blend * (
-                                max(fixed, float(levels[0] / knots[0])) - fixed
-                            )
                         break
         validate_rgb(rendered)
-        report['method'] = 'asinh + fractional spatial peak boost + soft noise gate'
+        report['method'] = (
+            'luminance-linked asinh + RGBBlend + quantile histogram curve '
+            '+ soft noise gate'
+        )
         report['after'] = clipping_metrics(rendered)
         report['color'] = color_drift(data, rendered)
         report['visibility'] = peak_visibility(rendered, positions)
@@ -440,7 +452,7 @@ class ConservativeStarRenderer(processor):
             rendered[:, positions[0], positions[1]].max(axis=0)
             > baseline[:, positions[0], positions[1]].max(axis=0) + 1e-7
         ))
-        report['faint_gain_role'] = 'selected_star_envelope'
+        report['faint_gain_role'] = 'quantile_histogram_curve'
         if diagnostics is not None:
             diagnostics.record_stellar_trial(
                 rendered, 'Renforcement sélectif retenu', 'selected',
@@ -458,6 +470,7 @@ class ConservativeStarRenderer(processor):
         histogram_strength: float = default_histogram_strength,
         diagnostics: HistogramDiagnostics | None = None,
         noise_sigma: float = NOISE_SIGMA_FACTOR,
+        color_mode: str = 'human',
     ) -> tuple[np.ndarray, JSONReport]:
         """Retient le premier rendu stellaire respectant la limite de largeur.
 
@@ -514,6 +527,7 @@ class ConservativeStarRenderer(processor):
                 histogram_strength,
                 diagnostics,
                 noise_sigma,
+                color_mode,
             )
             ratio = report["fwhm"]["median_ratio"]
             accepted = ratio is None or ratio <= max_width_ratio
@@ -577,6 +591,7 @@ class ConservativeStarRenderer(processor):
         histogram_strength: float,
         diagnostics: HistogramDiagnostics | None = None,
         noise_sigma: float = NOISE_SIGMA_FACTOR,
+        color_mode: str = 'human',
     ) -> tuple[np.ndarray, JSONReport]:
         """Retourne un rendu monotone borné et ses mesures sur les étoiles seules.
 
@@ -586,8 +601,9 @@ class ConservativeStarRenderer(processor):
         histogram_strength=0 désactive cette adaptation ; avec faint_boost=1
         et noise_sigma=0 cela reproduit l'ancien asinh. Une porte quartique
         atténue les résidus proches du bruit ; son seuil est réduit si les
-        profils à 50 % ou 10 % se rétrécissent trop. Les rapports RGB et zéros
-        sont conservés, aux arrondis et sous-flux float32 près.
+        profils à 50 % ou 10 % se rétrécissent trop. Les zéros sont conservés.
+        Les rapports RGB le sont sous le plafond lié ; RGBBlend peut les
+        modifier près du gamut protégé.
         Les résidus négatifs doivent être compensés explicitement par l'appelant.
         Les paramètres et unités sont ceux de ``render``. Les valeurs non finies
         ou hors limites lèvent ValueError. Un dépassement de largeur est retourné
@@ -608,12 +624,18 @@ class ConservativeStarRenderer(processor):
             or not 0 <= noise_sigma <= 20
         ):
             raise ValueError("Paramètres stellaires hors limites")
+        if color_mode not in ('human', 'even'):
+            raise ValueError('Mode couleur stellaire inconnu')
         light = data.max(axis=0)
-        target = ceiling * np.arcsinh(strength * light) / np.arcsinh(strength)
-        target = faint_boost * target / (1 + (faint_boost - 1) * target / ceiling)
+        # La porte de bruit reste calée sur le maximum RGB : elle doit supprimer
+        # un résidu présent dans un seul canal aussi efficacement qu'un résidu
+        # neutre. Le mode couleur ne pilote que la courbe asinh/RGBBlend.
+        noise_light = light
+        base = asinh_rgb(data, strength, ceiling, faint_boost, color_mode)
+        target = base.max(axis=0)
         positions = stellar_peak_positions(data)
         peaks = light[positions]
-        floor, sigma = stellar_noise_estimate(light)
+        floor, sigma = stellar_noise_estimate(noise_light)
         # Un résidu écrêté à zéro peut rendre la MAD des niveaux presque nulle.
         # Écarter ses pics de bruit du calage adaptatif, avant les quantiles.
         balance_threshold = max(1e-5, floor + 12 * sigma)
@@ -627,14 +649,18 @@ class ConservativeStarRenderer(processor):
             "calibration_peak_count": int(peaks.size),
             "calibration_peak_threshold": balance_threshold,
         }
-        base_gain = np.divide(target, light, out=np.zeros_like(light), where=light > 0)
-        balance["fixed_gain"] = peak_visibility(data * base_gain[None], positions)
+        balance["fixed_gain"] = peak_visibility(base, positions)
         if diagnostics is not None:
             diagnostics.record_stellar_trial(
-                data * base_gain[None], f'Courbe fixe — renforcement {faint_boost:g}',
-                'candidate', dict(strength=strength, ceiling=ceiling, faint_boost=faint_boost),
+                base, f'Courbe fixe — renforcement {faint_boost:g}',
+                'candidate', dict(
+                    strength=strength, ceiling=ceiling,
+                    faint_boost=faint_boost, color_mode=color_mode,
+                ),
                 transform_operations=[stellar_operation(dict(
-                    strength=strength, ceiling=ceiling, faint_boost=faint_boost))],
+                    strength=strength, ceiling=ceiling, faint_boost=faint_boost,
+                    color_mode=color_mode,
+                ))],
             )
         if histogram_strength > 0:
             balance["stop_reason"] = "insufficient distinct peaks"
@@ -661,29 +687,33 @@ class ConservativeStarRenderer(processor):
                 balance["stop_reason"] = "width limit"
                 for iteration in range(MAX_BALANCE_ATTEMPTS):
                     fraction = histogram_strength / 2 ** iteration
-                    candidate = target + fraction * (balanced - target)
+                    candidate_target = target + fraction * (balanced - target)
                     gain = np.divide(
-                        candidate, light, out=np.zeros_like(light), where=light > 0
+                        candidate_target, target, out=np.zeros_like(target),
+                        where=target > 0,
                     )
-                    widths = profile_widths(data, data * gain[None])
+                    candidate = base * gain[None]
+                    widths = profile_widths(data, candidate)
                     ratio = widths["median_ratio"]
                     accepted = ratio is None or ratio <= max_width_ratio
                     if diagnostics is not None:
                         diagnostics.record_stellar_trial(
-                            data * gain[None],
+                            candidate,
                             f'Adaptation {fraction:g} — renforcement {faint_boost:g}',
                             'admissible' if accepted else 'rejected',
                             dict(faint_boost=faint_boost, histogram_strength=fraction),
                             transform_operations=[stellar_operation(dict(
                                 strength=strength, ceiling=ceiling, faint_boost=faint_boost,
-                                histogram_strength=fraction), balance)],
+                                histogram_strength=fraction, color_mode=color_mode,
+                            ), balance)],
                         )
                     balance["iterations"].append({
                         "strength": fraction, "median_width_ratio": ratio,
                         "accepted": accepted,
                     })
                     if accepted:
-                        target = candidate
+                        target = candidate_target
+                        base = candidate
                         balance["accepted_strength"] = fraction
                         origin_gain += fraction * (
                             max(fixed_origin_gain, float(levels[0] / knots[0]))
@@ -702,11 +732,7 @@ class ConservativeStarRenderer(processor):
             # Le dernier essai désactive la porte si les ailes ne sont pas préservées.
             if attempt == MAX_NOISE_ATTEMPTS:
                 threshold = 0.0
-            candidate_target = target * stellar_noise_gate(light, threshold)
-            candidate_gain = np.divide(
-                candidate_target, light, out=np.zeros_like(light), where=light > 0,
-            )
-            candidate = data * candidate_gain[None]
+            candidate = base * stellar_noise_gate(noise_light, threshold)[None]
             half_widths = profile_widths(data, candidate)
             wing_widths = profile_widths(data, candidate, relative_height=0.1)
             measured = [item['p10_ratio'] for item in (half_widths, wing_widths)]
@@ -725,13 +751,17 @@ class ConservativeStarRenderer(processor):
         widths = half_widths
         return rendered.astype(np.float32), {
             "method": (
-                "asinh + faint boost + log peak quantiles + soft noise gate, shared RGB gain"
+                "luminance-linked asinh + RGBBlend + faint boost + log peak "
+                "quantiles + soft noise gate"
             ),
             "strength": strength,
+            "color_mode": color_mode,
             "faint_boost": faint_boost,
             "faint_intensity_gain": 0.0 if threshold else origin_gain,
             "noise_suppression": {
-                "method": "neighbor-difference MAD + quartic soft gate",
+                "method": (
+                    "max-RGB neighbor-difference MAD + quartic soft gate"
+                ),
                 "floor": floor, "sigma": sigma,
                 "sigma_factor": noise_sigma,
                 "requested_threshold": requested_threshold, "threshold": threshold,
@@ -801,6 +831,7 @@ class ConservativeStarRenderer(processor):
             getattr(args, "star_histogram_strength", self.default_histogram_strength),
             noise_sigma=getattr(args, "star_noise_sigma", NOISE_SIGMA_FACTOR),
             boost_fraction=getattr(args, "star_boost_fraction", self.default_boost_fraction),
+            color_mode=getattr(args, "ghs_color_mode", "human"),
         )
         report.parent.mkdir(parents=True, exist_ok=True)
         write_rgb(source, destination, data, nonlinear=True, role="STARS")

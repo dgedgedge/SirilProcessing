@@ -23,12 +23,10 @@ Le mélange RGBBlend et les limitations de gamut dépendent du triplet RGB :
 une seule courbe scalaire ne reproduit donc pas tous les pixels colorés.
 Pour ceux-ci, utiliser la recette RGB exportée avec le graphique.
 
-Avec la [sélection stellaire](stellar-selection.md), le panneau est
-l’enveloppe neutre des pics sélectionnés (poids spatial égal à 1), explicitement
-identifiée comme telle. Le JSON indique
-`scalar_role: selected_star_neutral_envelope`. La recette RGB conserve les
-coordonnées de sélection, sans redétection ; elle impose la géométrie native.
-Cette enveloppe ne représente pas une loi ponctuelle exacte pour toute l’image.
+Avec le [calage fractionnaire stellaire](stellar-selection.md), le panneau est
+la restriction aux gris neutres de la courbe ponctuelle. Le JSON indique
+`scalar_role: neutral_rgb_restriction`. Aucune coordonnée n’est enregistrée et
+la recette n’impose pas la géométrie native.
 
 ## 1.2. Composition depuis l’origine
 
@@ -39,7 +37,10 @@ F(x) = fₙ(…f₂(f₁(x))…). Elle inclut les recalages de point noir avant 
 après GHS, les GHS, la CDF fixe d’égalisation éventuelle, les gains de dynamique
 et la chroma. Pour les étoiles, elle compose la courbe stellaire et sa table
 fixe de quantiles éventuelle, puis la porte douce de bruit au seuil retenu
-par le moteur stellaire.
+par le moteur stellaire. Les nouvelles recettes enregistrent aussi
+`color_mode` et rejouent l'asinh lié à la luminance avec RGBBlend. L'absence
+de ce champ identifie une recette historique, qui conserve son calcul au
+maximum RGB pour rester reproductible.
 
 Chaque candidat repart de son propre parent, y compris les essais rejetés
 et les chemins alternatifs. La recette utilise les paramètres enregistrés :
@@ -103,3 +104,8 @@ Les anciens rapports sans domaine initial ne permettent pas d’ajouter ce
 panneau rétroactivement. Une nouvelle exécution produit les informations
 nécessaires. Le calcul emploie NumPy, sans dépendance supplémentaire ; le coût
 croît avec le nombre de candidats, d’opérations et de points à affiner.
+
+Le mode courant `histogram_quantile` enregistre ses points de courbe et se
+réapplique sans redétection. Les anciennes recettes `profiles` conservent leurs
+rayons et gains individuels et exigent encore la géométrie native ; les recettes
+historiques `spatial` continuent d’utiliser les distances enregistrées.

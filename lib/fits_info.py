@@ -261,20 +261,40 @@ class FitsInfo:
             return None
 
     def is_equivalent(
-        self, other: FitsInfo, temperature_precision: float = 0.5
+        self, other: FitsInfo, temperature_precision: float = 0.5,
+        gain_tolerance: int = 0,
     ) -> bool:
-        """
-        Compare tous les attributs (sauf le nom de fichier) avec un autre FitsInfo.
-        Retourne True si tous les champs sont égaux, y compris la commande de stacking si disponible.
+        """Compare les groupes de calibration avec une tolérance de gain.
 
-        Args:
-            temperature_precision: Pas d'arrondi de la température en °C (défaut : 0.5)
+        Parameters
+        ----------
+        other : FitsInfo
+            Métadonnées à comparer. Deux entrées invalides ne sont pas équivalentes.
+        temperature_precision : float, optional
+            Pas d'arrondi de la température en °C, par défaut 0,5.
+        gain_tolerance : int, optional
+            Écart maximal entre gains arrondis à l'entier, par défaut zéro.
+            La recherche de darks pour la calibration utilise une unité ;
+            le regroupement et la mise à jour de bibliothèque restent stricts.
+
+        Returns
+        -------
+        bool
+            Compatibilité de caméra, température, exposition, gain, binning
+            et STACKCMD lorsque cette commande est présente des deux côtés.
         """
         if not isinstance(other, FitsInfo):
             return False
+        if not self.validData() or not other.validData():
+            return False
+        if abs(round(self.gain()) - round(other.gain())) > gain_tolerance:
+            return False
 
-        # Vérification de base par group_key
-        if self.group_key(temperature_precision) != other.group_key(
+        # Normaliser uniquement la copie de comparaison, sans modifier les
+        # métadonnées sources ni la définition des groupes de bibliothèque.
+        comparison = copy.copy(other)
+        comparison.gain_value = self.gain_value
+        if self.group_key(temperature_precision) != comparison.group_key(
             temperature_precision
         ):
             return False
