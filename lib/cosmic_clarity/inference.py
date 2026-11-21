@@ -158,8 +158,13 @@ class CosmicClarityEngine:
         Normalise dans [0,1] puis applique les modes couleur de l’auteur :
         luminance YCbCr par défaut, canaux séparés en option ; « full » débruite
         Y par réseau et Cb/Cr par filtre guidé. L’intensité de chrominance omise
-        reprend denoise_amount. Étirement temporaire global avec médianes par
-        canal, puis retour à l’échelle des flottants ou Siril pour les entiers.
+        reprend denoise_amount. Le débruitage calcule sa prédiction complète,
+        inverse l'étirement temporaire et restaure les unités avant de mélanger
+        avec l'entrée effective. Une intensité nulle conserve exactement les
+        plans float32 d'entrée (normalisés pour les entiers), sans réseau.
+        En full, une intensité couleur distincte pondère séparément le résidu
+        de chrominance après inversion ; le filtre guidé fournit son résultat
+        complet. La netteté conserve ses mélanges internes successifs.
         Une image constante est refusée. Les écrêtages et l’étirement ne
         garantissent pas la conservation photométrique des couleurs.
         """
@@ -218,7 +223,7 @@ class CosmicClarityEngine:
                 prepared = luminance[None]
             restored = prepared.copy()
             if operation == 'denoise' and denoise_amount > 0:
-                restored += denoise_amount * (self._apply(prepared, DENOISE_MODEL) - prepared)
+                restored = self._apply(prepared, DENOISE_MODEL)
             elif operation == 'sharpen':
                 if stellar_amount > 0:
                     restored += stellar_amount * (self._apply(restored, STELLAR_MODEL) - restored)
@@ -232,25 +237,59 @@ class CosmicClarityEngine:
                         prediction = ((1 - weight) * prediction
                                       + weight * self._apply(restored, NONSTELLAR_MODELS[high]))
                     restored += nonstellar_amount * (prediction - restored)
+            # Un second résultat n'est nécessaire que pour une force couleur
+            # explicitement différente : le cas standard garde un seul endpoint.
+            without_chroma = None
             if chroma is not None:
                 cb, cr = chroma
-                if operation == 'denoise' and mode == 'full':
-                    cb = guided_chroma(prepared[0], cb, color_amount)
-                    cr = guided_chroma(prepared[0], cr, color_amount)
+                if operation == 'denoise' and mode == 'full' and color_amount > 0:
+                    if color_amount != denoise_amount:
+                        without_chroma = merge_luminance(restored[0], cb, cr)
+                    cb = guided_chroma(prepared[0], cb, 1.0)
+                    cr = guided_chroma(prepared[0], cr, 1.0)
                 restored = merge_luminance(restored[0], cb, cr)
-            for i, (enabled, minimum, median) in enumerate(stretches):
-                if enabled:
-                    restored[i] = midtone(
-                        restored[i], float(np.median(restored[i])), median,
-                    )
-            if stretch_needed:
-                restored = np.clip(restored + minimum, 0, 1)
-            restored = (restored * scale + offset).astype(np.float32)
+
+            def restore_units(image: FloatImage) -> FloatImage:
+                """Inverse le préétirement d'un endpoint sans modifier ses plans.
+
+                Chaque canal retrouve sa médiane initiale, puis le minimum,
+                l'échelle et le décalage communs de l'entrée sont réintroduits.
+                Le résultat est en unités float32 de l'entrée scientifique,
+                normalisées selon Siril pour un fichier entier.
+                """
+                result = image.copy()
+                for i, (enabled, minimum, median) in enumerate(stretches):
+                    if enabled:
+                        result[i] = midtone(
+                            result[i], float(np.median(result[i])), median,
+                        )
+                if stretch_needed:
+                    result = np.clip(result + minimum, 0, 1)
+                return (result * scale + offset).astype(np.float32)
+
+            restored = restore_units(restored)
+            if operation == 'denoise':
+                if without_chroma is not None:
+                    luminance_only = restore_units(without_chroma)
+                    restored = (
+                        planes + denoise_amount * (luminance_only - planes)
+                        + color_amount * (restored - luminance_only)
+                    ).astype(np.float32)
+                elif denoise_amount == 0:
+                    restored = planes.copy()
+                elif denoise_amount != 1:
+                    restored = (
+                        (1 - denoise_amount) * planes + denoise_amount * restored
+                    ).astype(np.float32)
             if not np.isfinite(restored).all():
                 raise ValueError('Pixels non finis après restauration des unités')
             hdul[0].data = restored[0] if data.ndim == 2 else restored
             hdul[0].header.pop('BLANK', None)
             hdul[0].header.add_history(f'Cosmic Clarity {operation}; {self.device}; float32')
+            if operation == 'denoise':
+                hdul[0].header.add_history(
+                    f'Denoise blend after inverse stretch; amount={denoise_amount:g}'
+                )
             hdul.writeto(destination, overwrite=False)
         logging.info(
             'Cosmic Clarity %s, mode %s, sur %s : %s',
@@ -267,4 +306,6 @@ class CosmicClarityEngine:
             stellar_amount=stellar_amount, nonstellar_amount=nonstellar_amount,
             nonstellar_radius=radius, denoise_amount=denoise_amount,
             color_denoise_amount=color_amount,
+            blend_domain=('linear_input_units' if operation == 'denoise'
+                          else 'prepared_normalized_units'),
         )

@@ -16,6 +16,14 @@ class RestorationSummary:
 
     PARAMETER_NAMES = (
         "quality_mode",
+        "restoration_previews",
+        "restoration_early_stop",
+        "restoration_early_stop_fwhm_gain",
+        "restoration_early_stop_noise_gain",
+        "aberration_model",
+        "aberration_strength",
+        "aberration_dark_ringing",
+        "aberration_protect_background",
         "deconvolution_min_stars",
         "deconvolution_min_match_fraction",
         "deconvolution_match_radius",
@@ -330,7 +338,7 @@ class RestorationSummary:
         formula = next((row['score_details'].get('formula') for row in rows
                         if row['score_details'].get('formula')), None)
         return dict(
-            policy='Parmi les chaînes acceptées, retenir le meilleur score strictement '
+            policy='Parmi les chaînes évaluées et acceptées, retenir le meilleur score strictement '
                    'positif ; à égalité, garder la première évaluée. Sinon conserver '
                    'l’image initiale (score zéro).',
             formula=formula, rows=rows, accepted_count=len(accepted),
@@ -430,8 +438,9 @@ class RestorationSummary:
         comparés sur l’entrée de l’étape ; aucune comparaison globale n’est
         annoncée. Un candidat accepté mais moins bien classé n’est pas présenté
         comme un échec scientifique. Les états UNKNOWN restent explicitement
-        distincts des erreurs et des FAIL. Les détails par région diffuse sont
-        journalisés en DEBUG ; le texte et le JSON conservent tous les détails.
+        distincts des erreurs et des FAIL. Les synthèses par région diffuse sont
+        journalisées en DEBUG ; les populations brutes restent dans les audits
+        référencés, sans être recopiées dans le rapport global.
         """
         rows = []
         if mode == "chains":
@@ -464,6 +473,7 @@ class RestorationSummary:
                         steps=audit.get("steps", []),
                         rejection_stage=audit.get("rejection_stage"),
                         verification_path=audit.get("verification_path"),
+                        audit_path=audit.get("audit_path"),
                     )
                 )
         else:
@@ -507,6 +517,7 @@ class RestorationSummary:
         }
         if mode == "chains":
             summary["operation_count"] = result.get("operation_count")
+            summary["early_stop"] = result.get("early_stop")
             summary["reference"] = result.get("image_path")
             summary["accepted_ranking"] = cls.accepted_ranking(result)
         result["summary"] = summary
@@ -525,6 +536,15 @@ class RestorationSummary:
         else:
             lines.append(
                 "Pas de classement global des chaînes. Activer --restoration-compare-chains pour les comparer."
+            )
+        early = cls._mapping(result.get('early_stop'))
+        if early.get('triggered'):
+            lines.append(
+                "ARRÊT ANTICIPÉ : qualité suffisante après AR → GraXpert ; "
+                f"{early.get('evaluated_variant_count')} variantes évaluées sur "
+                f"{early.get('planned_variant_count')} ; "
+                f"{early.get('skipped_variant_count')} variantes non exécutées. "
+                "Le meilleur résultat des variantes non exécutées est inconnu."
             )
         lines.append(
             "Paramètres configurés (les critères des moteurs indiquent leurs seuils effectifs) :"
@@ -562,6 +582,8 @@ class RestorationSummary:
                 if detail.get("verification_path"):
                     lines.append(f"        Compte rendu local : {detail['verification_path']}")
                 lines.extend(cls._attempt_lines(detail))
+            if row.get("audit_path"):
+                lines.append(f"    Audit JSON détaillé : {row['audit_path']}")
             if row.get("verification_path"):
                 lines.append(f"    Compte rendu final : {row['verification_path']}")
             if row.get("criteria"):

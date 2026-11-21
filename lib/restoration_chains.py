@@ -1,4 +1,4 @@
-"""Comparaison exhaustive des chaînes, avec cache par entrée effective."""
+"""Comparaison des chaînes, priorité conditionnelle et cache par entrée effective."""
 
 from __future__ import annotations
 
@@ -17,16 +17,21 @@ import time
 
 from lib.logging_utils import log_duration, log_section
 from lib.processor import processor
+from lib.parameterized_component import ParameterizedComponent
 from lib.restoration import RestorationComparisonProcessor
 from lib.restoration_quality import QualityReference
 from lib.type_defs import JSONReport
 from lib.postprocess_paths import reset_restoration_work_dir, reset_work_dir
 from lib.restoration_summary import RestorationSummary
+from lib.restoration_preview import RestorationPreviewProcessor
+from lib.restoration_report_storage import RestorationReportStorage
+from lib.restoration_early_stop import RestorationEarlyStop
 
 
 class RestorationChainProcessor(processor):
     """Compare identité, moteurs seuls et associations ; ordre inverse explicite.
 
+    Les titres et durées des calculs nomment la séquence jusqu’au moteur courant.
     Le cache est limité à cet appel. Chaque étape passe ses propres contrôles ;
     tous les finalistes sont réévalués sur la référence commune, jamais par somme
     de scores locaux. Les appels GPU restent séquentiels.
@@ -38,14 +43,14 @@ class RestorationChainProcessor(processor):
     )
 
     @classmethod
-    def parameter_children(cls) -> tuple[type[processor], ...]:
+    def parameter_children(cls) -> tuple[type[ParameterizedComponent], ...]:
         """Déclare les orchestrateurs enfants avant leurs moteurs tardifs."""
         from lib.denoising import NoiseReductionProcessor
         from lib.deconvolution import DeconvolutionProcessor
 
         from lib.quality_processors import ReferencePreparationProcessor, RestorationEvaluationProcessor
 
-        return (NoiseReductionProcessor, DeconvolutionProcessor,
+        return (NoiseReductionProcessor, DeconvolutionProcessor, RestorationEarlyStop,
                 ReferencePreparationProcessor, RestorationEvaluationProcessor)
 
     @classmethod
@@ -70,7 +75,14 @@ class RestorationChainProcessor(processor):
     def variants(
         args: argparse.Namespace,
     ) -> list[tuple[tuple[str, str, type[processor]], ...]]:
-        """Énumère 12/18 variantes avec tous les moteurs, sans plafond arbitraire."""
+        """Compare au plus une netteté et un débruitage, sur deux étapes maximum.
+
+        Aberration Remover est un moteur de netteté à part entière : il peut
+        précéder un débruitage, mais jamais être associé à une autre netteté.
+        L'ordre inverse concerne uniquement les autres moteurs de netteté.
+        Les moteurs seuls et l'identité sont planifiés sur la même référence.
+        post_process peut interrompre ce plan si le premier candidat suffit.
+        """
         from lib.denoising import NoiseReductionProcessor
         from lib.deconvolution import DeconvolutionProcessor
 
@@ -90,6 +102,8 @@ class RestorationChainProcessor(processor):
             if getattr(args, "enable_deconvolution", True)
             else []
         )
+        aberration = [engine for engine in sharpeners if engine[1] == "aberration_remover"]
+        sharpeners = [engine for engine in sharpeners if engine[1] != "aberration_remover"]
         variants = [(), *((engine,) for engine in denoisers + sharpeners)]
         variants += [
             (denoise, sharpen) for denoise in denoisers for sharpen in sharpeners
@@ -98,6 +112,10 @@ class RestorationChainProcessor(processor):
             variants += [
                 (sharpen, denoise) for sharpen in sharpeners for denoise in denoisers
             ]
+        variants += [(correction,) for correction in aberration]
+        variants += [
+            (correction, denoise) for correction in aberration for denoise in denoisers
+        ]
         return variants
 
     @staticmethod
@@ -151,8 +169,16 @@ class RestorationChainProcessor(processor):
         ).expanduser()
         for model in sorted(native_models.glob("*/model.onnx")):
             files[str(model.resolve())] = self._fingerprint(model)
+        aberration_model = getattr(args, "aberration_model", None)
+        if aberration_model and Path(aberration_model).expanduser().is_file():
+            model = Path(aberration_model).expanduser().resolve()
+            files[str(model)] = self._fingerprint(model)
         for module in (
+            "lib.aberration",
             "lib.restoration_chains",
+            "lib.restoration_preview",
+            "lib.restoration_report_storage",
+            "lib.restoration_early_stop",
             "lib.restoration_quality",
             "lib.quality_processors",
             "lib.noise_tiles",
@@ -353,6 +379,12 @@ class RestorationChainProcessor(processor):
         échecs et moteurs indisponibles ne produisent aucun résultat artificiel.
         Les moteurs n’ajoutent aucun niveau 001.
 
+        Par défaut AR → GraXpert est essayé avant les autres chaînes. Si tous
+        ses critères finaux sont PASS, avec un gain médian de FWHM > 30 % et
+        de bruit utile > 35 %, les autres essais ne sont pas lancés. Sinon le
+        plan complet continue avec le même cache. Les variantes non exécutées
+        sont comptées dans early_stop, jamais présentées comme rejetées.
+
         Les contrôles finaux sont sous verification_finale dans le dossier
         producteur, avec comptes rendus texte locaux et finaux. La synthèse
         globale au niveau du rapport rassemble leurs résultats et leurs liens.
@@ -369,6 +401,7 @@ class RestorationChainProcessor(processor):
         écriture JSON ; cache_hits distingue les réutilisations sans nouveau coût.
         """
         args = copy(self._get_args(args))
+        RestorationEarlyStop.thresholds(args)
         if getattr(args, "quality_mode", "reliable") == "legacy":
             raise ValueError(
                 "La comparaison des chaînes exige quality-mode reliable ; "
@@ -407,6 +440,8 @@ class RestorationChainProcessor(processor):
         intermediate_reference: QualityReference | None = None
         result = dict(
             engine="chains",
+            report_schema_version=RestorationReportStorage.SCHEMA_VERSION,
+            report_detail="summary",
             image_path=str(source),
             quality_reference=reference.audit(),
             quality_preview_path=str(preview),
@@ -423,11 +458,32 @@ class RestorationChainProcessor(processor):
             status="no_safe_improvement",
             selection_score=0.0,
         )
+        preview_session = RestorationPreviewProcessor(source)
+        result['input_preview'] = preview_session.optional(
+            source, report.with_name(report.stem + '_input_autostretch.jpg'), args,
+        )
         best = 0.0
         variants = self.variants(args)
+        early_enabled = getattr(args, "restoration_early_stop", True)
+        preferred = next((chain for chain in variants if tuple(
+            f"{operation}:{name}" for operation, name, _ in chain
+        ) == RestorationEarlyStop.PREFERRED_CHAIN), None)
+        if early_enabled and preferred is not None:
+            # La référence ne lance aucun moteur ; le premier calcul est AR → GraXpert.
+            variants = [(), preferred] + [chain for chain in variants if chain and chain != preferred]
+        result['early_stop'] = dict(
+            enabled=early_enabled, triggered=False,
+            preferred_chain=list(RestorationEarlyStop.PREFERRED_CHAIN),
+            planned_variant_count=len(variants), evaluated_variant_count=0,
+            skipped_variant_count=0,
+            reason='pending' if early_enabled and preferred is not None else (
+                'preferred_chain_unavailable' if early_enabled else 'disabled'
+            ),
+        )
         operation_labels = {"denoise": "Débruitage", "sharpen": "Netteté"}
         engine_labels = {
             "siril": "Siril", "cosmic_clarity": "Cosmic Clarity", "graxpert": "GraXpert",
+            "aberration_remover": "Aberration Remover",
         }
         logging.info(
             "Comparaison des chaînes complètes : %d variantes ; contrôles locaux puis finaux sur %s ; ordre inverse=%s",
@@ -458,14 +514,23 @@ class RestorationChainProcessor(processor):
                 )
                 reused = key in cache
                 if not reused:
+                    sequence_steps = [
+                        (step["operation"], step["engine"]) for step in steps
+                    ] + [(operation, name)]
+                    sequence_label = " → ".join(
+                        f"{operation_labels[step_operation]} avec "
+                        f"{engine_labels.get(step_engine, step_engine)}"
+                        for step_operation, step_engine in sequence_steps
+                    )
                     log_section(
                         f"Restauration — Calcul {len(cache) + 1:02d} : "
-                        f"{operation_labels[operation]} avec {engine_labels.get(name, name)}",
+                        f"{sequence_label}",
                         separator="-",
                     )
                     operation_number = len(cache) + 1
                     with log_duration(
-                        f"Restauration — préparation du calcul #{operation_number:02d} {operation}/{name}",
+                        f"Restauration — préparation du calcul #{operation_number:02d} : "
+                        f"{sequence_label}",
                         durations, f"operation_{operation_number:02d}_preparation_seconds",
                     ):
                         call_args = copy(args)
@@ -498,7 +563,8 @@ class RestorationChainProcessor(processor):
                     start = time.monotonic()
                     try:
                         with log_duration(
-                            f"Restauration — calcul #{operation_number:02d} {operation}/{name}",
+                            f"Restauration — calcul #{operation_number:02d} : "
+                            f"{sequence_label}",
                             durations, f"operation_{operation_number:02d}_processing_seconds",
                         ):
                             entry = cls().post_process(current, child_report, call_args)
@@ -552,6 +618,7 @@ class RestorationChainProcessor(processor):
                             entry["result_image_role"] = (
                                 "accepted_output" if accepted else "retained_input"
                             )
+                    preview_session.attach(entry, child_report, call_args)
                     local_checks = operation_dir / "verifications_locales.txt"
                     entry["verification_path"] = str(local_checks)
                     RestorationSummary.write_checks(
@@ -559,11 +626,13 @@ class RestorationChainProcessor(processor):
                         candidate=Path(entry.get("candidate_image_path") or entry.get("output_image") or current),
                         label="VÉRIFICATIONS LOCALES DU TRAITEMENT",
                     )
-                    child_report.write_text(
-                        json.dumps(entry, indent=2, allow_nan=False), encoding="utf-8",
+                    RestorationReportStorage.write(
+                        child_report, RestorationReportStorage.detailed(entry),
                     )
                     cache[key] = entry
-                    result["operations"].append(entry)
+                    result["operations"].append(
+                        RestorationReportStorage.summary(entry, child_report)
+                    )
                 entry = cache[key]
                 if reused:
                     result["cache_hits"]["operations"] += 1
@@ -646,8 +715,10 @@ class RestorationChainProcessor(processor):
                     final_audit["duration_seconds"] = durations[
                         f"final_{index + 1:02d}_seconds"
                     ]
-                    (verification_dir / "verification.json").write_text(
-                        json.dumps(final_audit, indent=2, allow_nan=False), encoding="utf-8",
+                    final_audit["audit_path"] = str(verification_dir / "verification.json")
+                    RestorationReportStorage.write(
+                        verification_dir / "verification.json",
+                        RestorationReportStorage.detailed(final_audit),
                     )
                 else:
                     result["cache_hits"]["final_evaluations"] += 1
@@ -666,11 +737,33 @@ class RestorationChainProcessor(processor):
                         status="accepted",
                         selection_score=best,
                     )
-            result["variants"].append(variant)
+            result["variants"].append(RestorationReportStorage.summary(variant))
+            early_stop = result['early_stop']
+            early_stop['evaluated_variant_count'] = len(result['variants'])
+            stop_now = False
+            if early_enabled and tuple(names) == RestorationEarlyStop.PREFERRED_CHAIN:
+                verdict = RestorationEarlyStop.assess(variant, args)
+                early_stop['assessment'] = verdict
+                stop_now = verdict['eligible'] is True
+                early_stop['triggered'] = stop_now
+                early_stop['reason'] = 'sufficient_quality' if stop_now else 'full_search_required'
+                if stop_now:
+                    early_stop['skipped_variant_count'] = len(variants) - len(result['variants'])
+                    logging.info(
+                        "Restauration — arrêt anticipé : tous les critères PASS ; "
+                        "gain FWHM médiane=%.2f %% ; gain bruit utile=%.2f %% ; "
+                        "%d variantes non exécutées",
+                        100 * verdict['fwhm_gain'], 100 * verdict['useful_noise_gain'],
+                        early_stop['skipped_variant_count'],
+                    )
+                else:
+                    logging.info(
+                        "Restauration — poursuite de tous les essais : %s", verdict,
+                    )
             result["duration_seconds"] = time.monotonic() - started
-            report.write_text(
-                json.dumps(result, indent=2, allow_nan=False), encoding="utf-8"
-            )
+            RestorationReportStorage.write(report, result)
+            if stop_now:
+                break
         log_section(
             "Restauration — Classement et publication du résultat", separator="-",
         )
@@ -697,12 +790,11 @@ class RestorationChainProcessor(processor):
                 len(cache),
                 result["selected_chain"] or "image inchangée",
             )
+            preview_session.attach(result, report, args)
             RestorationSummary.write(result, report, mode="chains", args=args)
         result["duration_seconds"] = time.monotonic() - started
         logging.info("Durée — Restauration totale : %.3f s", result["duration_seconds"])
-        report.write_text(
-            json.dumps(result, indent=2, allow_nan=False), encoding="utf-8"
-        )
+        RestorationReportStorage.write(report, result)
         from lib.processing_html import ProcessingHtmlReport
         ProcessingHtmlReport.publish(report.parent)
         return result

@@ -512,6 +512,15 @@ def _render_quality_annotation(profile: JSONReport) -> list[str]:
                        ('bright_penalty', 'Compression brillante')):
         if key in quality:
             lines.append(f"Pénalité {label.lower()} : {quality[key]:.3f}")
+    mode_guard = profile.get('low_light_mode_guard', {})
+    if mode_guard.get('measurable'):
+        lines.append(
+            f"Excès de seconde bosse sombre : "
+            f"{100*mode_guard['excess_prominence_fraction']:.1f} % "
+            f"(maximum {100*mode_guard['maximum_excess']:.1f} %)"
+        )
+        if mode_guard.get('rejections'):
+            lines.append('REJET : nouvelle bosse dans les faibles intensités')
     warnings = profile.get('shape_preservation', {}).get('rejections', [])
     if warnings:
         lines.append('Écarts de forme consignés dans l’audit')

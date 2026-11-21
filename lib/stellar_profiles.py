@@ -21,6 +21,9 @@ NEIGHBOUR_RADIUS_FRACTION = .49  # Supports disjoints, même pour deux pics proc
 MIN_TAPER_RATIO = 1.1  # Réserver au moins 10 % au raccord radial.
 CROWDED_CORE_FRACTION = .55  # Raccord plus large si les ailes se confondent.
 SAMPLED_PROFILE_RATIO = .92  # Marge de 0,02 pour l'interpolation des rayons.
+CONTRAST_VISIBLE_TARGET = .25  # Pic au quantile faible, affichage direct [0,1].
+CONTRAST_PEAK_EXPONENT = .25  # Compression des amplitudes entre sources, pas de leurs profils.
+CONTRAST_OUTPUT_RANGE = (.08, .65)  # Présentation, pas une photométrie.
 MIN_PROFILE_RATIO = .9  # Rétrécissement maximal du profil normalisé : 10 %.
 MAX_PROFILE_REDUCTIONS = 24  # Divisions par deux du supplément individuel.
 BRIGHT_PEAK = 0.15  # Maximum RGB de la base ; protéger les étoiles déjà brillantes.
@@ -287,4 +290,202 @@ class StellarProfileBoost:
             'crowded fields supported'
         )
         plan['bright_peak_threshold'] = BRIGHT_PEAK
+        return plan
+
+
+def apply_contrast_profiles(
+    data: np.ndarray, selection: JSONReport, strength: float = 1.,
+) -> np.ndarray:
+    """Rejoue les suppléments locaux au-dessus du piédestal, sans le renforcer.
+
+    Parameters
+    ----------
+    data : np.ndarray
+        Base RGB CHW normalisée, finie. La source reste intacte.
+    selection : JSONReport
+        Géométrie native et profils [y,x,rayon_constant,rayon_externe,gain,fond].
+        Les recouvrements prennent le maximum des suppléments, jamais leur somme.
+    strength : float
+        Mélange dans [0,1]. Les rapports RGB restent ceux de la base.
+
+    Returns
+    -------
+    np.ndarray
+        RGB du même dtype ; les fonds sous le piédestal ne sont pas amplifiés.
+
+    Raises
+    ------
+    ValueError
+        Géométrie, profils, intensités ou force invalides.
+    """
+    if (data.dtype.kind != 'f' or data.ndim != 3 or data.shape[0] != 3
+            or list(data.shape[1:]) != selection.get('shape')
+            or not data.size or not np.isfinite(data).all()
+            or data.min() < 0 or data.max() > 1
+            or not np.isfinite(strength) or not 0 <= strength <= 1):
+        raise ValueError('Géométrie ou intensités de contraste stellaire invalides')
+    light = data.max(axis=0)
+    extra = np.zeros_like(light)
+    seen: set[tuple[int, int]] = set()
+    for entry in selection.get('profiles', []):
+        if len(entry) != 6 or not np.isfinite(entry).all():
+            raise ValueError('Profil de contraste stellaire invalide')
+        y, x, core, outer, gain, floor = entry
+        if (int(y) != y or int(x) != x or not 0 <= y < light.shape[0]
+                or not 0 <= x < light.shape[1] or not 0 < core < outer <= PROFILE_LIMIT_PX
+                or not 1 <= gain <= np.finfo(np.float32).max or not 0 <= floor <= 1
+                or (int(y), int(x)) in seen):
+            raise ValueError('Profil de contraste stellaire hors domaine ou dupliqué')
+        y, x = int(y), int(x)
+        seen.add((y, x))
+        radius = int(np.ceil(outer))
+        y0, y1 = max(0, y-radius), min(light.shape[0], y+radius+1)
+        x0, x1 = max(0, x-radius), min(light.shape[1], x+radius+1)
+        yy, xx = np.ogrid[y0:y1, x0:x1]
+        distance = np.hypot(yy-y, xx-x)
+        transition = np.clip((distance-core)/(outer-core), 0, 1)
+        envelope = (1+np.cos(np.pi*transition))/2
+        patch = np.maximum(light[y0:y1, x0:x1]-floor, 0)*(gain-1)*envelope
+        np.maximum(extra[y0:y1, x0:x1], patch, out=extra[y0:y1, x0:x1])
+    target = light+strength*extra
+    if not np.isfinite(target).all() or target.max() > 1+1e-6:
+        raise ValueError('Contraste stellaire hors gamut')
+    factor = np.divide(target, light, out=np.ones_like(light), where=light > 0)
+    return data*factor[None]
+
+
+class StellarContrastBoost:
+    """Calibre le contraste des étoiles résolues sans amplifier leur piédestal."""
+
+    @staticmethod
+    def build(
+        source: np.ndarray, baseline: np.ndarray,
+        positions: tuple[np.ndarray, np.ndarray], threshold: float,
+        fraction: float, max_width_ratio: float, ceiling: float,
+    ) -> JSONReport:
+        """Construit des profils à gain constant jusqu'aux ailes à 10 %.
+
+        Parameters
+        ----------
+        source, baseline : np.ndarray
+            Maxima RGB 2D linéaire et de base, mêmes dimensions et valeurs [0,1].
+        positions : tuple[np.ndarray, np.ndarray]
+            Pics détectés dans la couche stellaire, sans catalogue externe.
+        threshold : float
+            Seuil de calibration normalisé, issu de l'estimation de bruit.
+        fraction : float
+            Quantile faible de calibration dans ]0,1[ ; 0,25 par défaut.
+        max_width_ratio : float
+            Garde de largeur à 50 et 10 %, après soustraction du fond local.
+        ceiling : float
+            Plafond de la base RGB dans ]0,1[.
+
+        Returns
+        -------
+        JSONReport
+            Recette indépendante avec profils, quantile et motifs des exclusions.
+            Le contraste visé vaut 0,25 au quantile faible. Les profils ambigus,
+            tronqués, noyés dans un halo brillant ou hors garde restent à la base.
+            Le fond local est la médiane du bord d'une fenêtre de 15 pixels ;
+            seuls les écarts positifs au-dessus sont renforcés. Le raccord
+            cosinus commence après les ailes mesurées à 10 %.
+
+        Raises
+        ------
+        ValueError
+            Géométrie, intensités ou paramètres invalides.
+        """
+        if (source.dtype.kind != 'f' or baseline.dtype.kind != 'f'
+                or source.ndim != 2 or source.shape != baseline.shape or not source.size
+                or not np.isfinite(source).all() or not np.isfinite(baseline).all()
+                or min(float(source.min()), float(baseline.min())) < 0
+                or max(float(source.max()), float(baseline.max())) > 1
+                or not np.isfinite([threshold, fraction, max_width_ratio, ceiling]).all()
+                or not 0 <= threshold <= 1 or not 0 < fraction < 1
+                or max_width_ratio < 1 or not 0 < ceiling < 1):
+            raise ValueError('Entrées de contraste stellaire invalides')
+        ys, xs = positions
+        if (ys.dtype.kind not in 'iu' or xs.dtype.kind not in 'iu'
+                or ys.shape != xs.shape or ys.ndim != 1
+                or np.any(ys < 0) or np.any(ys >= source.shape[0])
+                or np.any(xs < 0) or np.any(xs >= source.shape[1])):
+            raise ValueError('Positions de contraste stellaire invalides')
+        if len(set(zip(ys.tolist(), xs.tolist()))) != len(ys):
+            raise ValueError('Positions de contraste stellaire dupliquées')
+        amplitudes = source[ys, xs]
+        eligible = amplitudes > threshold
+        peaks = amplitudes[eligible]
+        plan: JSONReport = dict(
+            mode='contrast_profiles', fraction=fraction, shape=list(source.shape),
+            profiles=[], profile_checks=[], eligible_count=int(peaks.size),
+            calibration_quantile=fraction, calibration_peak=None, budget=int(peaks.size),
+            visible_target=CONTRAST_VISIBLE_TARGET*ceiling/.85, selected_count=0,
+            pedestal_policy='local_border_median', profile_window_px=15,
+        )
+        if peaks.size == 0:
+            return plan
+        q = float(np.quantile(peaks, fraction))
+        plan['calibration_peak'] = q
+        radius = 7
+        radii = np.arange(0, radius+.25, .5)
+        for y, x in zip(ys[eligible].tolist(), xs[eligible].tolist()):
+            check: JSONReport = dict(y=y, x=x, accepted=False)
+            plan['profile_checks'].append(check)
+            if min(y, x, source.shape[0]-1-y, source.shape[1]-1-x) < radius:
+                check['reason'] = 'truncated profile'
+                continue
+            patch = baseline[y-radius:y+radius+1, x-radius:x+radius+1]
+            original = source[y-radius:y+radius+1, x-radius:x+radius+1]
+            floor = float(np.median(np.r_[patch[0], patch[-1], patch[:, 0], patch[:, -1]]))
+            original_floor = float(np.median(np.r_[
+                original[0], original[-1], original[:, 0], original[:, -1],
+            ]))
+            peak = float(patch[radius, radius])
+            original_peak = float(original[radius, radius]-original_floor)
+            if peak >= ceiling*.99 or peak <= floor or original_peak <= threshold:
+                check['reason'] = 'bright core or insufficient local contrast'
+                continue
+            coordinates = _radial_coordinates(radius, radius, radii)
+            first = map_coordinates(np.maximum(original-original_floor, 0), coordinates, order=1)
+            last = map_coordinates(np.maximum(patch-floor, 0), coordinates, order=1)
+            ratios = []
+            wings = None
+            for level in (.5, .1):
+                before = crossing_radii(radii, first, level)
+                after = crossing_radii(radii, last, level)
+                if before is None or after is None:
+                    break
+                ratios.extend((after/np.maximum(before, 1e-12)).tolist())
+                wings = after
+            if len(ratios) == 2*PROFILE_RAYS:
+                check.update(width_p10=float(np.quantile(ratios, .1)),
+                             width_p90=float(np.quantile(ratios, .9)))
+            if (len(ratios) != 2*PROFILE_RAYS
+                    or float(np.quantile(ratios, .1)) < MIN_PROFILE_RATIO
+                    or float(np.quantile(ratios, .9)) > max_width_ratio):
+                check['reason'] = 'ambiguous profile or individual width limit'
+                continue
+            core = float(wings.max())+INTERPOLATION_MARGIN_PX
+            outer = min(2*core, PROFILE_LIMIT_PX, y, x,
+                        source.shape[0]-1-y, source.shape[1]-1-x)
+            if outer <= core+1:
+                check['reason'] = 'insufficient taper support'
+                continue
+            target = plan['visible_target']*(float(source[y, x])/q)**CONTRAST_PEAK_EXPONENT
+            target = float(np.clip(target, *(value*ceiling/.85 for value in CONTRAST_OUTPUT_RANGE)))
+            gain = max(1., (target-floor)/(peak-floor))
+            extent = int(np.ceil(outer))
+            local_peak = float(baseline[y-extent:y+extent+1, x-extent:x+extent+1].max())
+            if local_peak >= BRIGHT_PEAK and local_peak > peak*1.1:
+                check['reason'] = 'bright neighbouring profile'
+                continue
+            if local_peak > floor:
+                gain = min(gain, max(1., (ceiling-floor)/(local_peak-floor)))
+            if gain <= 1:
+                check['reason'] = 'already visible or no gamut headroom'
+                continue
+            plan['profiles'].append([y, x, core, outer, gain, floor])
+            check.update(accepted=True, gain=gain, floor=floor,
+                         width_minimum=min(ratios), width_maximum=max(ratios))
+        plan['selected_count'] = len(plan['profiles'])
         return plan

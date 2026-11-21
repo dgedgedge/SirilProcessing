@@ -54,6 +54,11 @@ directement les couches rendues sans recalculer StarNet ou GHS.
 La phase est activée par défaut ; `--disable-autoghs` la désactive même si
 elle a été mémorisée dans la configuration.
 
+La [garde des modes sombres](ghs-histogram-shape.md#121-garde-obligatoire-des-modes-sombres)
+refuse une seconde bosse créée ou excessivement aggravée dans le premier
+quart de l’histogramme, même après un creux profond. Ce rejet précède le
+classement par score et ne peut pas être compensé par les objectifs lumineux.
+
 ## Prérequis et entrée
 
 - Dépendances habituelles de postProcess : NumPy, Astropy, SciPy et Matplotlib.
@@ -62,12 +67,39 @@ elle a été mémorisée dans la configuration.
   `StarNet.py` cible StarNet 2.5 et n'est pas utilisé avec le binaire V2.
 - FITS RGB à trois plans `(3, hauteur, largeur)`, linéaire, dématricé, étoilé.
   Les entiers sont normalisés selon le mécanisme existant `normalized_planes` ;
-  les flottants doivent déjà être dans `[0,1]`. NaN, Inf, valeurs hors domaine,
-  monochrome, CFA et entrée déclarée starless sont refusés.
+  les flottants finis hors de `[0,1]` sont adaptés sur une copie de rendu
+  par la transformation affine commune aux canaux décrite ci-dessous.
+  NaN, Inf, monochrome, CFA et entrée déclarée starless sont refusés.
 - Les images marquées `SPNLIN=True`, ou `SPROLE=STARLESS/STARS`, sont refusées. L'absence de cette carte
   **ne prouve pas la linéarité** : celle-ci relève du contrat du pipeline ou de
   l'utilisateur pour un fichier externe. Aucun diagnostic d'histogramme ne
   permet de certifier qu'une image a conservé sa réponse linéaire.
+
+Avant StarNet, AutoGHS contrôle la plage RGB. Les restaurations flottantes
+peuvent conserver des valeurs négatives ou dépasser 1. Dans ce cas uniquement,
+une copie `01_separation/render_input_linear.fits` est créée avec :
+
+```text
+offset = min(0, minimum RGB)
+scale = max(1, maximum RGB - offset)
+render_input = (input - offset) / scale
+```
+
+La transformation utilise un même décalage et une même échelle pour les trois
+canaux, sans écrêtage ni normalisation indépendante des couleurs. Elle conserve
+les différences de signal à un facteur commun et reste inversible aux arrondis
+float32 près ; le décalage modifie toutefois le zéro du fond et les rapports de
+couleurs des faibles signaux. Cette copie est destinée au rendu, pas aux mesures
+scientifiques. Le FITS de restauration est préservé. Une entrée déjà dans
+`[0,1]` est utilisée directement, sans transformation ni copie supplémentaire.
+
+Les extrema, les nombres de valeurs hors plage, l'offset, l'échelle et le
+chemin réellement séparé sont consignés dans `01_separation/input_preparation.json`
+et dans `input_preparation` du rapport AutoGHS, y compris en cas d'échec après
+préparation. Une ligne INFO annonce toute transformation. Le séparateur
+StarNet conserve son contrat strict `[0,1]` et refuse toujours NaN/Inf.
+Cette préparation ne corrige pas la cause d'éventuels artefacts du moteur de
+restauration : examiner également ses diagnostics.
 
 L'installation de StarNet et de son modèle reste externe au dépôt. Les
 bibliothèques et le modèle doivent être accessibles depuis le mode Siril
@@ -244,12 +276,16 @@ astronomique.
 | `--ghs-max-noise-gain` | `30` | Limite cumulée des proxys bruit et IQR |
 | `--ghs-color-mode` | `human` | Luminosité pondérée `human` ou moyenne `even`, partagée par le GHS du fond et l'asinh des étoiles |
 | `--ghs-chroma` | `off` | `off`, `balanced`, `enhanced` ; RGB expérimental |
+| `--starnet-adaptive-stretch` | activé | Adapter la MTF à l’étendue des sources brillantes ; `--no-starnet-adaptive-stretch` conserve le chemin Siril si aucune cible n’est imposée |
+| `--starnet-max-star-diameter` | `96` | Diamètre équivalent maximal à mi-contraste, pixels de l’entrée du modèle, dans ]0 ; 192[ |
+| `--starnet-target-background` | `auto` | Cible médiane MTF imposée dans ]0 ; 0,5[, prioritaire sur l’adaptation ; `auto` rétablit le choix par image |
 | `--star-render` | `conservative` | Rendu asinh commun des étoiles |
+| `--star-contrast-mode` | `pointwise` | Courbe globale uniquement ; `profiles` est un alias de compatibilité sans effet local |
 | `--star-strength` | `2.0` | Force asinh, dans `]0,20]` |
 | `--star-faint-boost` | `5.0` | Renforcement demandé des étoiles faibles, de 1 à 10 ; réduit par pas de 1 jusqu'au premier rendu respectant la garde de largeur |
-| `--star-boost-fraction` | `0.25` | Budget de pics éligibles renforcés par profil, avec protection des halos, `[0,1]` ; 0 : base seule, 1 : adaptation globale historique ; [méthode](stellar-selection.md) |
-| `--star-histogram-strength` | `1` | Répartition des amplitudes des pics en logarithme, de 0 (gain fixe) à 1 ; réduite si la garde FWHM le demande |
-| `--star-noise-sigma` | `8.0` | Seuil doux du bruit résiduel, dans `[0,20]` ; 0 désactive, seuil réduit si les profils se rétrécissent trop |
+| `--star-boost-fraction` | `0.25` | Quantile de calibration de la courbe globale, `[0,1]` ; 0 : base seule, 1 : adaptation globale historique ; [méthode](stellar-selection.md) |
+| `--star-histogram-strength` | `1` | Force de la courbe globale, de 0 (base seule) à 1 ; réduite sous garde de profils |
+| `--star-noise-sigma` | `0` | Ancien paramètre accepté dans `[0,20]`, sans effet : aucun débruitage dans cette branche |
 | `--star-ceiling` | `0.85` | Plafond du maximum RGB des étoiles seules |
 | `--star-stretch-max-width-ratio` | `None` | Hérite de `--star-max-width-ratio` ; une valeur explicite ≥ 1 limite les étoiles seules |
 | `--star-max-width-ratio` | `2.0` | Rapport FWHM médian maximal après recomposition, si mesurable |
@@ -396,3 +432,9 @@ produire un comparatif et aucune clé `comparison_paths` ou `comparison_previous
 n'est écrite.
 Voir [exports JPEG](render-exports.md) pour l’orientation, la conversion
 RGB et les limites de ces formats.
+
+La [préparation StarNet adaptée à l'image](star-rendering.md#pre-etirement-adapte-a-limage)
+mesure l'étendue des sources brillantes avant l'inférence. Elle réduit le
+pré-étirement seulement si ce critère le demande, sans changer la restauration.
+La reprise `--autoghs-only` relance cette séparation, le rendu, la couleur
+finale et les exports en réutilisant le FITS linéaire restauré.

@@ -632,3 +632,79 @@ def test_peak_shift_rejects_values_outside_normalized_range(limit: float) -> Non
     reference = piecewise_histogram_profile(curved_counts())
     with pytest.raises(ValueError, match='ghs-shape-peak-shift'):
         compare_histogram_shapes(reference, reference, max_peak_shift=limit)
+
+
+def dark_mode_counts(second_height: float = 0.) -> np.ndarray:
+    """Construit un ciel unimodal ou bimodal séparé par un creux profond."""
+    x = (np.arange(128)+.5)/128
+    return (1e5*np.exp(-.5*((x-.04)/.012)**2)
+            + second_height*1e5*np.exp(-.5*((x-.14)/.012)**2)
+            + 100*np.exp(-4*x))
+
+
+def test_dark_modes_cover_a_second_peak_after_a_deep_valley() -> None:
+    """Le contrôle continue après les 10 % qui terminaient l'ancienne fenêtre."""
+    reference = piecewise_histogram_profile(dark_mode_counts())
+    candidate = piecewise_histogram_profile(dark_mode_counts(.8))
+    assert candidate['initial_peak']['end'] < .1
+    assert candidate['initial_peak']['secondary_rise_fraction'] == 0
+    assert candidate['low_light_modes']['prominence_fraction'] > .7
+    protected = protect_histogram_shape(candidate, reference)
+    assert 'new low-light histogram mode' in protected['shape_preservation']['rejections']
+    from lib.ghs_render_quality import HistogramRenderQuality
+
+    assert HistogramRenderQuality.hard_shape_rejections(protected)
+    assert not protected['low_light_mode_guard']['achieved']
+
+
+@pytest.mark.parametrize('second_height', [0., .8, 1.4])
+def test_dark_modes_are_population_invariant(second_height: float) -> None:
+    """Le diagnostic ne dépend ni de N ni du choix du pic dominant."""
+    from lib.ghs_histogram_shape import low_light_mode_profile
+
+    counts = dark_mode_counts(second_height)
+    first = low_light_mode_profile(counts)
+    scaled = low_light_mode_profile(counts*7)
+    assert scaled['prominence_fraction'] == pytest.approx(first['prominence_fraction'])
+    if second_height:
+        assert first['prominence_fraction'] > .6
+    else:
+        assert first['prominence_fraction'] == 0
+
+
+def test_dark_modes_ignore_monotone_shoulders_and_bright_tail() -> None:
+    """Une épaule sans creux et un mode brillant ne deviennent pas des modes sombres."""
+    from lib.ghs_histogram_shape import low_light_mode_profile
+
+    x = (np.arange(128)+.5)/128
+    counts = 1e5*np.exp(-5*x)+2e5*np.exp(-.5*((x-.6)/.02)**2)
+    assert low_light_mode_profile(counts)['prominence_fraction'] == 0
+
+
+@pytest.mark.parametrize('counts', [np.zeros(128), np.ones(128)*.01])
+def test_dark_modes_do_not_invent_a_measure_on_sparse_counts(counts: np.ndarray) -> None:
+    """Une population insuffisante reste non mesurable, sans valeur nulle inventée."""
+    from lib.ghs_histogram_shape import low_light_mode_profile
+
+    report = low_light_mode_profile(counts)
+    assert not report['measurable']
+    assert report['prominence_fraction'] is None
+
+
+@pytest.mark.parametrize('counts', [np.zeros(127), np.full(128, np.nan), -np.ones(128)])
+def test_dark_modes_reject_invalid_counts(counts: np.ndarray) -> None:
+    """Le diagnostic vérifie sa frontière d'entrée avant toute normalisation."""
+    from lib.ghs_histogram_shape import low_light_mode_profile
+
+    with pytest.raises(ValueError, match='Effectifs invalides'):
+        low_light_mode_profile(counts)
+
+
+def test_direct_shape_comparison_also_enforces_dark_modes() -> None:
+    """Les phases CDF et présentation ne doivent pas contourner la nouvelle garde."""
+    reference = piecewise_histogram_profile(dark_mode_counts())
+    candidate = piecewise_histogram_profile(dark_mode_counts(.8))
+    audit = compare_histogram_shapes(reference, candidate)
+    assert not audit['achieved']
+    assert 'new low-light histogram mode' in audit['rejections']
+    assert audit['low_light_mode_guard']['measurable']

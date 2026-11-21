@@ -142,12 +142,14 @@ class StarStretchProcessor(LayerStretchProcessor):
         self, data: np.ndarray, source: Path, report_path: Path,
         backend: ComputeBackend, args: argparse.Namespace, recorder: HistogramDiagnostics,
     ) -> tuple[np.ndarray, JSONReport]:
-        """Étire les étoiles, atténue le bruit et publie images et diagnostics.
+        """Étire globalement les étoiles et publie images et diagnostics.
 
         Les paramètres, unités et exceptions de ConservativeStarRenderer.render
         s'appliquent. star_stretch_max_width_ratio contrôle les étoiles seules ;
         None hérite de la garde commune star_max_width_ratio.
-        star_noise_sigma règle leur porte douce. Le seul réglage partagé avec
+        star_contrast_mode est toujours résolu en courbe globale ; les anciennes
+        valeurs profiles et star_noise_sigma ne réactivent aucun traitement local
+        ni débruitage. Le seul réglage partagé avec
         le fond est ghs_color_mode, qui choisit la luminance de la base asinh.
         """
         output, report = ConservativeStarRenderer.render(
@@ -164,6 +166,9 @@ class StarStretchProcessor(LayerStretchProcessor):
                 args, 'star_noise_sigma', ConservativeStarRenderer.default_noise_sigma,
             ),
             color_mode=getattr(args, 'ghs_color_mode', 'human'),
+            contrast_mode=getattr(
+                args, 'star_contrast_mode', ConservativeStarRenderer.default_contrast_mode,
+            ),
         )
         image, jpeg = self.write_layer(source, report_path, output, 'stars_render', 'STARS')
         diagnostic = report_path.parent / f'{source.stem}_stars_diagnostic.png'

@@ -17,6 +17,7 @@ Les versions et options d'installation sont définies par les fichiers
 |---|---|---|
 | Extrait OpenNGC, Mattia Verga et contributeurs | `data/openngc/objects.csv` : positions, dimensions, magnitudes et noms des objets pour les annotations hors ligne | [Révision amont be3cd6c](https://github.com/mattiaverga/OpenNGC/tree/be3cd6c5498806a2fbb2f7e0452ef802dbb02be0), **CC BY-SA 4.0** ; [provenance et modifications](../data/openngc/README.md), [crédits amont](../data/openngc/UPSTREAM_README.md), [texte CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/legalcode.fr), également livré sous `data/openngc/LICENSE-CC-BY-SA-4.0.txt` |
 | Code adapté de Cosmic Clarity, Franklin Marek | `lib/cosmic_clarity/network.py` : architecture des réseaux de restauration ; intégration et adaptations locales dans le même ensemble | [Révision amont 423acc4](https://github.com/setiastro/cosmicclarity/tree/423acc442724872ff6d81011962a8cbf5744a7f7), **MIT** ; [notice conservée dans le dépôt](https://github.com/dgedgedge/SirilProcessing/blob/main/lib/cosmic_clarity/LICENSE) |
+| Modèle Aberration Remover 2.5.0, Riccardo Alberghi | `data/AberrationRemover/model_v2_5_0.onnx` : correction ONNX des aberrations optiques | [Publication 2.5.0](https://github.com/riccardoalberghi/abberation_models/releases/tag/2.5.0), **CC BY-NC-SA 4.0** ; [provenance, empreinte et attribution](../data/AberrationRemover/README.md), [texte CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/legalcode.fr), également livré sous `data/AberrationRemover/LICENSE-CC-BY-NC-SA-4.0.txt` |
 
 Le répertoire `data/openngc/` représente moins de 1 Mio, notices comprises. Il
 est conservé avec les sources pour que les annotations n'exigent aucun
@@ -29,9 +30,15 @@ des ajouts éditoriaux. Les modifications et l'attribution sont décrites dans s
 README ; la licence des données demeure CC BY-SA 4.0, distincte de la GPL du code.
 Le texte livré est reproduit depuis le [répertoire SPDX des licences](https://github.com/spdx/license-list-data/blob/main/text/CC-BY-SA-4.0.txt).
 
-Les poids neuronaux, exécutables externes, environnements virtuels et images
-personnelles ne sont pas inclus dans ces données embarquées. Les modèles
-Cosmic Clarity et GraXpert sont installés séparément dans `tmp/cache/models/`, ignoré
+Le modèle Aberration Remover 2.5.0 est conservé sans modification avec ses
+notices et son empreinte SHA-256 (24 700 202 octets, environ 23,56 Mio). Sa licence
+**CC BY-NC-SA 4.0** impose notamment l'attribution, un usage non commercial et le
+partage des adaptations sous la même licence ; elle reste distincte de la GPL
+du code. Voir la [notice du modèle](../data/AberrationRemover/README.md).
+
+Les exécutables externes, environnements virtuels et images personnelles ne
+sont pas inclus dans ces données embarquées. Les modèles Cosmic Clarity et
+GraXpert sont installés séparément dans `tmp/cache/models/`, ignoré
 par Git. Le manifeste `lib/cosmic_clarity/models.json` conserve les URL, tailles
 et empreintes des poids Cosmic Clarity ; il ne contient pas les poids eux-mêmes.
 
@@ -70,7 +77,7 @@ pour les bibliothèques natives incluses dans les roues binaires.
 | Matplotlib | Figures et graphiques | [Licence Matplotlib basée sur PSF](https://matplotlib.org/stable/project/license.html) ; polices incluses sous leurs notices propres |
 | Plotly.py | Graphiques interactifs des journaux | [MIT](https://github.com/plotly/plotly.py/blob/main/LICENSE.txt) |
 | PyTorch | Inférence Cosmic Clarity | [BSD-3-Clause et notices tierces](https://github.com/pytorch/pytorch/blob/main/LICENSE) |
-| ONNX Runtime / ONNX Runtime GPU | Inférence GraXpert | [MIT et notices tierces](https://github.com/microsoft/onnxruntime/blob/main/LICENSE) |
+| ONNX Runtime / ONNX Runtime GPU | Inférence GraXpert et Aberration Remover | [MIT et notices tierces](https://github.com/microsoft/onnxruntime/blob/main/LICENSE) |
 | CuPy | Calcul AutoGHS CUDA | [MIT](https://github.com/cupy/cupy/blob/main/LICENSE) ; les composants CUDA installés en complément ont leurs propres licences |
 | dbus-python | Gestion énergétique Linux facultative | [MIT et notices des fichiers sous GPL/AFL](https://gitlab.freedesktop.org/dbus/dbus-python/-/blob/main/COPYING) |
 
@@ -94,3 +101,13 @@ son auteur, sa licence et les modifications apportées dans une notice voisine,
 puis compléter cette page. Pour une dépendance installée, mettre à jour les
 requirements et le tableau correspondant. Une licence de code ne doit pas
 être attribuée automatiquement à un modèle ou à un jeu de données distinct.
+
+## 7. Remerciements
+
+Merci à **Riccardo Alberghi** pour Aberration Remover et la mise à disposition
+du modèle ONNX 2.5.0, et à l'**équipe Siril** et aux contributeurs du
+[script AberrationRemover](https://gitlab.com/free-astro/siril-scripts/-/blob/main/processing/AberrationRemover.py)
+pour le traitement de référence. Le script amont est publié sous
+**GPL-3.0-or-later** ; la licence du modèle reste **CC BY-NC-SA 4.0**.
+L'intégration locale est maintenue par SirilProcessing et ne constitue pas une
+approbation du projet par ces auteurs.

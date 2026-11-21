@@ -41,6 +41,7 @@
 | [quality_star_processors.py](../../lib/quality_star_processors.py) | Séparer la détection Siril, les mesures locales et la comparaison stellaire |
 | [restoration_quality.py](../../lib/restoration_quality.py) | Évaluer les candidats sur des masques indépendants des moteurs et du gradient |
 | [restoration_chains.py](../../lib/restoration_chains.py) | Organiser la comparaison des chaînes complètes, active par défaut |
+| [restoration_preview.py](../../lib/restoration_preview.py) | Présenter les restaurations en JPEG AutoStretch avec une courbe commune aux candidats |
 | [restoration_summary.py](../../lib/restoration_summary.py) | Présenter les essais, contrôles et motifs de sélection dans les journaux et rapports |
 | [quality_preview.py](../../lib/quality_preview.py) | Illustrer les exclusions de qualité et les tuiles de ciel retenues |
 | [power_guard.py](../../lib/power_guard.py) | Fournir le contexte de performance et d’inhibition de veille D-Bus, activé uniquement par les scripts de lancement |

@@ -78,6 +78,8 @@ def write_star_diagnostic(
     width_text = "non mesurable" if width_ratio is None else f"{width_ratio:.3f}"
     reasons = {
         "disabled": "adaptation désactivée",
+        "profile contrast accepted": "contraste local admissible",
+        "overlap width limit": "recouvrements hors garde ; base conservée",
         "insufficient distinct peaks": "pics distincts insuffisants",
         "width limit": "limite de largeur ; gain fixe conservé",
         "width limited": "force réduite par la limite de largeur",
@@ -96,11 +98,34 @@ def write_star_diagnostic(
         f"Pixels max RGB nuls exclus du log : {100 * np.mean(before.max(axis=0) == 0):.2f} % ; "
         "la visibilité finale dépend aussi du fond après recomposition."
     )
+    appearance = report.get('appearance_quality', {})
+    visibility = appearance.get('visibility', {})
+    if visibility:
+        lower = visibility.get('fraction_lower_bound')
+        fraction = 'inconnue' if lower is None else f"≥ {100*lower:.1f} %"
+        annotation += (
+            f"\nObjectif indicatif ≥ 25 % visibles (contraste local Y ≥ 0,03) : {visibility['status']} ; "
+            f"{visibility['visible_count']} / {visibility['candidate_count']} candidats, "
+            f"fraction {fraction}, inconnus {visibility['unknown_count']} (non bloquant)."
+        )
+        metrics = appearance.get('shape', {}).get('metrics', {})
+        measures = []
+        for key, label in [('visible_diameter_px', 'Diamètre visible (px)'),
+                           ('transition_width_px', 'Transition 80→20 % (px)'),
+                           ('skirt_radius_ratio', 'Jupe r5/r50')]:
+            value = metrics.get(key, {}).get('median')
+            if value is not None:
+                measures.append(f"{label} : {value:.3g}")
+        if measures:
+            annotation += "\n" + ' ; '.join(measures) + ' — mesures indicatives.'
     recomposed = report.get("recomposed_visibility", {})
     selection = report.get('boost_selection')
     if selection is not None:
+        label = ('Quantile de calibration' if selection.get('mode') == 'contrast_profiles'
+                 else 'Fraction demandée')
         annotation += (
-            f"\nFraction demandée : {100 * selection['fraction']:.1f} % ; "
+            f"\n{label} : "
+            f"{100 * selection['fraction']:.1f} % ; "
             f"pics retenus : {selection['selected_count']} / {selection['eligible_count']} ; "
             f"renforcés : {selection.get('actually_boosted_count', 'non mesuré')}."
         )
@@ -112,7 +137,7 @@ def write_star_diagnostic(
     figure.suptitle("Diagnostic spécifique — image des étoiles seules", fontsize=16)
     figure.text(0.03, 0.025, annotation, fontsize=9, va="bottom",
                 bbox={"pad": 8})
-    figure.subplots_adjust(top=0.9, bottom=0.23, hspace=0.35, wspace=0.22)
+    figure.subplots_adjust(top=0.9, bottom=0.29, hspace=0.35, wspace=0.22)
     destination.parent.mkdir(parents=True, exist_ok=True)
     apply_dark_diagnostic_style(figure)
     figure.savefig(destination, dpi=120, facecolor=figure.get_facecolor(),

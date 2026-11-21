@@ -66,6 +66,7 @@ nav:
               - Temps de traitement: docs/scripts/postProcess/timings.md
               - Photométrie: docs/scripts/postProcess/photometry.md
               - Restauration: docs/scripts/postProcess/restoration.md
+              - Rapports de restauration: docs/scripts/postProcess/restoration-reports.md
               - Contrôles de qualité: docs/scripts/postProcess/quality.md
               - Processeurs des contrôles: docs/scripts/postProcess/quality-processors.md
               - Calculs PyTorch CUDA et MPS: docs/scripts/postProcess/torch-compute.md
@@ -82,6 +83,7 @@ nav:
               - Point noir après GHS: docs/scripts/postProcess/ghs-blackpoint.md
               - Algorithme AutoGHS: docs/scripts/postProcess/auto-ghs-algorithm.md
               - Rendu des étoiles: docs/scripts/postProcess/star-rendering.md
+              - Apparence des étoiles: docs/scripts/postProcess/stellar-appearance.md
           - Annotation finale: docs/scripts/postProcess/annotations.md
           - Couleur finale après GHS: docs/scripts/postProcess/final-color.md
           - Exports FITS et JPEG: docs/scripts/postProcess/render-exports.md
@@ -104,6 +106,7 @@ nav:
           - Intégration dans Siril: docs/scripts/pyecho/GUIDE.md
           - Répertoires pydir: docs/scripts/pydir/README.md
           - Recherche de doublons: docs/scripts/trouve_doublons/README.md
+          - Comparaison des restaurations: docs/scripts/compareRestoration/README.md
   - 3. Architecture:
       - Organisation générale: docs/architecture/README.md
       - Catalogue des bibliothèques: docs/architecture/LIBRARIES.md

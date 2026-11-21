@@ -1,7 +1,7 @@
 """Rendu stellaire adaptatif et recomposition screen contrôlée.
 
 L'asinh puis les quantiles des pics renforcent les étoiles faibles.
-Une porte douce liée au bruit résiduel est limitée par les profils à 50 et 10 %.
+La même transformation RGB est appliquée partout, sans masque ni débruitage.
 Le gain commun aux trois canaux préserve les rapports de couleur sans présumer les primaires du FITS.
 """
 
@@ -19,11 +19,13 @@ from scipy.ndimage import label, maximum_filter
 from lib.processor import processor
 from lib.ghs_diagnostics import HistogramDiagnostics
 from lib.stretch_transfer import (
-    asinh_rgb, stellar_noise_gate, stellar_operation,
+    asinh_rgb, stellar_operation,
+    protected_stellar_target, MONOTONE_BRIGHT_PROTECTION,
 )
 from lib.restoration_quality import normalized_planes
 from lib.star_separation import validate_rgb, write_rgb
 from lib.type_defs import JSONReport
+from lib.stellar_appearance import StellarAppearanceQuality
 
 VISIBILITY_LEVEL = 0.03  # Contribution normalisée, indicateur d'affichage seulement.
 FRACTION_VISIBLE_TARGET = 0.08  # Sommet visé au quantile retenu, affichage direct.
@@ -35,10 +37,9 @@ REFERENCE_STAR_CEILING = 0.85
 MAX_BALANCE_ATTEMPTS = 8  # Réductions par moitiés avant de conserver le gain fixe.
 FAINT_BOOST_STEP = 1.0  # Décrément du renforcement de base, jusqu'au minimum 1.
 LOGGER = logging.getLogger(__name__)
-NOISE_SIGMA_FACTOR = 8.0  # Écarts robustes du résidu positif, pas du bruit signé initial.
+NOISE_SIGMA_FACTOR = 0.0  # Aucun débruitage dans le rendu stellaire global.
 NOISE_PRECISION_FLOOR = 1e-7  # Intensité normalisée ; éviter d'interpréter les queues numériques.
 MIN_PROFILE_RATIO = 0.90  # Rétrécissement maximal admis à 50 % et à 10 % du pic.
-MAX_NOISE_ATTEMPTS = 8
 
 
 def stellar_noise_estimate(light: np.ndarray) -> tuple[float, float]:
@@ -55,8 +56,9 @@ def stellar_noise_estimate(light: np.ndarray) -> tuple[float, float]:
         Médiane et sigma robuste des différences, en intensités normalisées.
         Le minimum des deux axes limite la confusion avec un gradient axial.
         Une dimension inférieure à trois ou une dispersion sous 1e-7 désactive
-        la porte. Le bruit corrélé, écrêté à zéro ou un champ très dense peuvent
-        biaiser cette estimation ; ce n'est pas un SNR photométrique.
+        retourne un sigma nul. Le bruit corrélé, écrêté à zéro ou un champ
+        très dense peut biaiser cette estimation ; elle ne filtre pas les pixels
+        et ne constitue pas un SNR photométrique.
     """
     if min(light.shape) < 3:
         return float(np.median(light)), 0.0
@@ -146,8 +148,8 @@ def profile_widths(
 
     Deux traversées à mi-hauteur, après soustraction de la médiane du bord,
     sont interpolées sur une fenêtre de 15 pixels. Les profils tronqués ou
-    ambigus ne fournissent pas de largeur. Les pics doivent dépasser 0,005
-    en intensité normalisée.
+    ambigus ne fournissent pas de largeur. Le seuil dépend du bruit, avec un
+    plancher de 1e-5 normalisé ; 64 pics sont répartis dans les amplitudes.
     relative_height, dans ]0,1[, fixe
     la fraction de hauteur au-dessus du fond (0,5 : FWHM ; 0,1 : ailes).
     Les entrées RGB sont normalisées, les largeurs en pixels. Ce contrôle ne
@@ -157,10 +159,16 @@ def profile_widths(
         raise ValueError('Hauteur relative hors de ]0,1[')
     first, last = before.max(axis=0), after.max(axis=0)
     radius = 7
-    peak_threshold = 0.005
+    floor, sigma = stellar_noise_estimate(first)
+    peak_threshold = max(1e-5, floor + 12*sigma)
     peaks = (first == maximum_filter(first, size=2 * radius + 1)) & (first > peak_threshold)
     yy, xx = np.nonzero(peaks)
-    selected = np.argsort(first[yy, xx])[::-1][:64]
+    ordered = np.argsort(first[yy, xx])
+    if len(ordered) > 64:
+        weak = ordered[:-16]
+        selected = np.r_[weak[np.linspace(0, len(weak)-1, 48, dtype=int)], ordered[-16:]]
+    else:
+        selected = ordered
     widths: list[tuple[float, float]] = []
     for index in selected:
         y, x = int(yy[index]), int(xx[index])
@@ -195,7 +203,12 @@ def profile_widths(
         if all(value is not None for value in pair):
             widths.append((pair[0], pair[1]))
     return {
-        "method": "local axial relative-height, 15px; not fitted PSF",
+        "method": "brightness-stratified axial profiles, 15px; not fitted PSF",
+        "maximum_group_median_ratio": max(
+            float(np.median(group)) for group in np.array_split(
+                np.array([b/a for a, b in widths]), min(4, len(widths)),
+            )
+        ) if widths else None,
         "count": len(widths),
         "peak_threshold": peak_threshold,
         "relative_height": relative_height,
@@ -212,7 +225,7 @@ def profile_widths(
 
 
 class ConservativeStarRenderer(processor):
-    """Étire les étoiles avec atténuation du bruit et contrôle des profils.
+    """Étire globalement l’histogramme des étoiles, sans traitement spatial ni bruit.
 
     Voir docs/scripts/postProcess/star-rendering.md pour les quantiles et les
     limites du critère de visibilité, distinct d'une détection astrophysique.
@@ -224,6 +237,7 @@ class ConservativeStarRenderer(processor):
     default_stretch_max_width_ratio = None
     default_noise_sigma = NOISE_SIGMA_FACTOR
     default_boost_fraction = 0.25
+    default_contrast_mode = 'pointwise'
 
     @classmethod
     def get_prefix(cls) -> str:
@@ -232,7 +246,12 @@ class ConservativeStarRenderer(processor):
 
     @classmethod
     def add_arguments(cls, parser: argparse.ArgumentParser) -> None:
-        """Expose renforcement, seuil de bruit et gardes de largeur persistants."""
+        """Expose la courbe globale, les gardes et les paramètres anciens sans effet."""
+        parser.add_argument(
+            "--star-contrast-mode", choices=("profiles", "pointwise"),
+            default=cls.default_contrast_mode,
+            help="Courbe globale uniquement ; profiles est un alias de compatibilité sans effet local",
+        )
         parser.add_argument(
             "--star-render", choices=("conservative",), default="conservative"
         )
@@ -248,11 +267,11 @@ class ConservativeStarRenderer(processor):
         parser.add_argument("--star-ceiling", type=float, default=0.85)
         parser.add_argument(
             '--star-boost-fraction', type=float, default=cls.default_boost_fraction,
-            help='Fraction maximale de pics renforcés en plus : 0 à 1 (défaut 0,25)',
+            help='Quantile de calibration de la courbe globale, de 0 à 1 (défaut 0,25) ; aucun masque',
         )
         parser.add_argument(
             "--star-noise-sigma", type=float, default=NOISE_SIGMA_FACTOR,
-            help="Seuil doux en écarts robustes du résidu positif ; 0 désactive (défaut 8)",
+            help="Ancien réglage accepté pour compatibilité, sans effet : aucun débruitage des étoiles",
         )
         parser.add_argument(
             "--star-max-width-ratio", type=float, default=cls.default_max_width_ratio,
@@ -285,54 +304,91 @@ class ConservativeStarRenderer(processor):
         noise_sigma: float = NOISE_SIGMA_FACTOR,
         boost_fraction: float = default_boost_fraction,
         color_mode: str = 'human',
+        contrast_mode: str = default_contrast_mode,
     ) -> tuple[np.ndarray, JSONReport]:
-        """Calibre une courbe ponctuelle sur une fraction des pics éligibles.
+        """Étire uniquement l'histogramme des étoiles avec une courbe RGB globale.
 
         Parameters
         ----------
         data : np.ndarray
-            RGB positif normalisé (3, hauteur, largeur), source préservée.
+            RGB fini dans [0,1], de forme (3, hauteur, largeur), non modifié.
         strength, ceiling, max_width_ratio, faint_boost : float
-            Paramètres de la base décrits par _render_unrestricted. Sa garde
-            de largeur est résolue avant l'adaptation sélective.
-        histogram_strength : float
-            Mélange adaptatif demandé dans [0,1], réduit par moitiés jusqu'à
-            huit essais, puis essai nul. Les profils à 50 et 10 % sont contrôlés.
+            Force asinh dans ]0,20], plafond dans ]0,1[, limite de largeur >=1
+            et renforcement global des faibles niveaux dans [1,10].
+        histogram_strength, boost_fraction : float
+            Force et quantile de calibration de la courbe globale, dans [0,1].
+            Aucun pixel n'est sélectionné selon ses coordonnées.
         diagnostics : HistogramDiagnostics or None
-            Collecteur des essais et recettes indépendantes, fermé par l'appelant.
+            Enregistre les essais et leur recette, sans filtrer les pixels.
         noise_sigma : float
-            Seuil doux de bruit dans [0,20], celui retenu pour la base est fixé
-            pendant les essais sélectifs.
-        boost_fraction : float
-            Fraction de pics éligibles dans [0,1], 0,25 par défaut. Zéro
-            conserve la base et un retrouve le moteur historique global. Entre
-            les deux, son quantile fixe le point d'inflexion d'une courbe unique.
+            Ancien réglage dans [0,20], validé mais sans effet sur l'image.
+            Le rendu ne réalise aucune suppression de bruit.
         color_mode : str
-            ``human`` utilise la luminosité pondérée du GHS ; ``even`` utilise
-            la moyenne RGB. La balance SPCC/PCC est déjà intégrée aux pixels.
+            Luminance human ou even pour la transformation RGB liée.
+        contrast_mode : str
+            pointwise ; profiles reste un alias de compatibilité, sans effet local.
 
         Returns
         -------
         tuple[np.ndarray, JSONReport]
-            RGB float32 et mesures de la courbe ponctuelle, de la FWHM et des
-            ailes. Aucun masque ni raccord spatial n'est appliqué.
+            RGB float32 et audit de la courbe. Deux triplets RGB identiques ont
+            toujours la même sortie, quel que soit leur emplacement ou voisinage.
 
         Raises
         ------
         ValueError
-            Entrée ou paramètres invalides, ou base non admissible. Une largeur
-            non mesurable ne certifie aucune garde. Sans pics suffisants ou sans
-            candidat admissible, conserver la base explicitement signalée.
+            Entrée ou paramètre invalide, ou aucune courbe globale admissible
+            sous la garde de largeur. Les mesures de profils ajustent uniquement
+            les paramètres globaux, jamais des gains ou des masques locaux.
+        """
+        if not np.isfinite(noise_sigma) or not 0 <= noise_sigma <= 20:
+            raise ValueError('Seuil de bruit stellaire hors de [0,20]')
+        if contrast_mode not in ('profiles', 'pointwise'):
+            raise ValueError('Mode de contraste stellaire inconnu')
+        rendered, report = ConservativeStarRenderer._render_global(
+            data, strength, ceiling, max_width_ratio, faint_boost,
+            histogram_strength, diagnostics, 0., boost_fraction, color_mode,
+            'pointwise',
+        )
+        report.update(
+            method='global histogram stretch: luminance-linked asinh + RGBBlend + intensity curve',
+            contrast_mode='pointwise', spatially_varying=False, histogram_only=True,
+        )
+        report['appearance_quality'] = StellarAppearanceQuality.evaluate(
+            data, rendered, stellar_peak_positions(data),
+        )
+        report['noise_suppression'].update(
+            method='disabled: histogram transformation only',
+            requested_sigma_factor=noise_sigma,
+        )
+        return rendered, report
 
-        Notes
-        -----
-        Voir docs/scripts/postProcess/star-rendering.md. Deux pixels ayant la
-        même intensité reçoivent la même cible, indépendamment de leur position.
+    @staticmethod
+    def _render_global(
+        data: np.ndarray, strength: float = 2.0, ceiling: float = 0.85,
+        max_width_ratio: float = default_max_width_ratio,
+        faint_boost: float = default_faint_boost,
+        histogram_strength: float = default_histogram_strength,
+        diagnostics: HistogramDiagnostics | None = None,
+        noise_sigma: float = NOISE_SIGMA_FACTOR,
+        boost_fraction: float = default_boost_fraction,
+        color_mode: str = 'human',
+        contrast_mode: str = default_contrast_mode,
+    ) -> tuple[np.ndarray, JSONReport]:
+        """Calibre une courbe RGB globale, indépendante des positions.
+
+        Les paramètres, domaines et retours suivent render. Les profils ne
+        servent qu'à sélectionner des paramètres communs à toute l'image.
+        Cette fonction est appelée avec noise_sigma=0 par le rendu public.
         """
         if not np.isfinite(boost_fraction) or not 0 <= boost_fraction <= 1:
             raise ValueError('Fraction stellaire hors de [0,1]')
         if not np.isfinite(histogram_strength) or not 0 <= histogram_strength <= 1:
             raise ValueError('Paramètres stellaires hors limites')
+        if not np.isfinite(max_width_ratio) or max_width_ratio < 1:
+            raise ValueError('Paramètres stellaires : limite de largeur invalide')
+        if contrast_mode not in ('profiles', 'pointwise'):
+            raise ValueError('Mode de contraste stellaire inconnu')
         if boost_fraction == 1:
             rendered, report = ConservativeStarRenderer._render_unrestricted(
                 data, strength, ceiling, max_width_ratio, faint_boost,
@@ -359,6 +415,7 @@ class ConservativeStarRenderer(processor):
         budget = int(np.floor(boost_fraction * peaks.size))
         selection: JSONReport = dict(
             mode='histogram_quantile', fraction=float(boost_fraction),
+            bright_protection_policy=MONOTONE_BRIGHT_PROTECTION,
             eligible_count=int(peaks.size), budget=budget,
             selected_count=budget, shape=list(light.shape),
         )
@@ -382,9 +439,6 @@ class ConservativeStarRenderer(processor):
             bright_input = min(bright_input, 1.)
             fixed = ceiling * np.arcsinh(strength * transition) / np.arcsinh(strength)
             fixed = faint_boost * fixed / (1 + (faint_boost - 1) * fixed / ceiling)
-            fixed *= float(stellar_noise_gate(
-                np.asarray(transition), report['noise_suppression']['threshold'],
-            ))
             visible = FRACTION_VISIBLE_TARGET * ceiling / REFERENCE_STAR_CEILING
             bright = FRACTION_BRIGHT_TARGET * ceiling / REFERENCE_STAR_CEILING
             knots = np.asarray([transition, cutoff, bright_input, 1.], dtype=np.float64)
@@ -398,13 +452,7 @@ class ConservativeStarRenderer(processor):
                     visible_target=visible, bright_protection=bright,
                 )
                 base_light = baseline.max(axis=0)
-                mapped = np.exp(np.interp(
-                    np.log(np.maximum(light, np.finfo(np.float32).tiny)),
-                    np.log(knots), np.log(levels),
-                ))
-                mapped[light <= transition] = base_light[light <= transition]
-                mapped[base_light >= bright] = base_light[base_light >= bright]
-                mapped = np.maximum(base_light, mapped).astype(np.float32)
+                mapped = protected_stellar_target(light, base_light, knots, levels, bright)
                 balance['stop_reason'] = 'width limit'
                 for index in range(MAX_BALANCE_ATTEMPTS + 1):
                     blend = 0. if index == MAX_BALANCE_ATTEMPTS else histogram_strength / 2 ** index
@@ -443,7 +491,7 @@ class ConservativeStarRenderer(processor):
         validate_rgb(rendered)
         report['method'] = (
             'luminance-linked asinh + RGBBlend + quantile histogram curve '
-            '+ soft noise gate'
+            '(global)'
         )
         report['after'] = clipping_metrics(rendered)
         report['color'] = color_drift(data, rendered)
@@ -455,7 +503,7 @@ class ConservativeStarRenderer(processor):
         report['faint_gain_role'] = 'quantile_histogram_curve'
         if diagnostics is not None:
             diagnostics.record_stellar_trial(
-                rendered, 'Renforcement sélectif retenu', 'selected',
+                rendered, 'Étirement global retenu', 'selected',
                 transform_operations=[stellar_operation(report, balance)],
             )
         return rendered, report
@@ -496,9 +544,8 @@ class ConservativeStarRenderer(processor):
             Collecteur des essais sur les étoiles seules, sans effet sur leur
             sélection. Il appartient à l'appelant, qui publie puis ferme son cache.
         noise_sigma : float, optional
-            Seuil doux = médiane du résidu + noise_sigma fois sa dispersion
-            robuste, dans [0,20]. Zéro désactive la suppression. La porte est
-            réduite si les largeurs à 50 % ou 10 % du pic rétrécissent trop.
+            Ancien réglage validé dans [0,20], sans effet sur les pixels.
+            Aucun débruitage n’est appliqué dans ce moteur.
 
         Returns
         -------
@@ -530,7 +577,8 @@ class ConservativeStarRenderer(processor):
                 color_mode,
             )
             ratio = report["fwhm"]["median_ratio"]
-            accepted = ratio is None or ratio <= max_width_ratio
+            checked_ratio = report["fwhm"].get("maximum_group_median_ratio", ratio)
+            accepted = checked_ratio is None or checked_ratio <= max_width_ratio
             if diagnostics is not None:
                 diagnostics.record_stellar_trial(
                     rendered, f'Renforcement {faint_boost:g}',
@@ -599,9 +647,9 @@ class ConservativeStarRenderer(processor):
         Une table de quantiles des pics augmente ensuite les faibles sources ;
         son mélange est réduit par moitiés si la FWHM médiane dépasse la garde.
         histogram_strength=0 désactive cette adaptation ; avec faint_boost=1
-        et noise_sigma=0 cela reproduit l'ancien asinh. Une porte quartique
-        atténue les résidus proches du bruit ; son seuil est réduit si les
-        profils à 50 % ou 10 % se rétrécissent trop. Les zéros sont conservés.
+        cela reproduit l'ancien asinh. Aucun débruitage ni gain spatial n'est
+        appliqué ; noise_sigma reste un paramètre de compatibilité sans effet.
+        Les zéros sont conservés.
         Les rapports RGB le sont sous le plafond lié ; RGBBlend peut les
         modifier près du gamut protégé.
         Les résidus négatifs doivent être compensés explicitement par l'appelant.
@@ -627,15 +675,12 @@ class ConservativeStarRenderer(processor):
         if color_mode not in ('human', 'even'):
             raise ValueError('Mode couleur stellaire inconnu')
         light = data.max(axis=0)
-        # La porte de bruit reste calée sur le maximum RGB : elle doit supprimer
-        # un résidu présent dans un seul canal aussi efficacement qu'un résidu
-        # neutre. Le mode couleur ne pilote que la courbe asinh/RGBBlend.
-        noise_light = light
+        # Le maximum RGB calibre les pics ; aucune estimation ne filtre les pixels.
         base = asinh_rgb(data, strength, ceiling, faint_boost, color_mode)
         target = base.max(axis=0)
         positions = stellar_peak_positions(data)
         peaks = light[positions]
-        floor, sigma = stellar_noise_estimate(noise_light)
+        floor, sigma = stellar_noise_estimate(light)
         # Un résidu écrêté à zéro peut rendre la MAD des niveaux presque nulle.
         # Écarter ses pics de bruit du calage adaptatif, avant les quantiles.
         balance_threshold = max(1e-5, floor + 12 * sigma)
@@ -723,36 +768,19 @@ class ConservativeStarRenderer(processor):
                             "requested strength" if iteration == 0 else "width limited"
                         )
                         break
-        requested_threshold = (
-            min(1.0, floor + noise_sigma * sigma) if sigma and noise_sigma else 0.0
-        )
-        threshold = requested_threshold
+        # Mesurer les profils ne modifie aucun pixel : il n'y a aucune porte
+        # de bruit, même dans les chemins internes du rendu global.
+        rendered = base
+        threshold = 0.0
+        requested_threshold = 0.0
         noise_attempts: list[JSONReport] = []
-        for attempt in range(MAX_NOISE_ATTEMPTS + 1):
-            # Le dernier essai désactive la porte si les ailes ne sont pas préservées.
-            if attempt == MAX_NOISE_ATTEMPTS:
-                threshold = 0.0
-            candidate = base * stellar_noise_gate(noise_light, threshold)[None]
-            half_widths = profile_widths(data, candidate)
-            wing_widths = profile_widths(data, candidate, relative_height=0.1)
-            measured = [item['p10_ratio'] for item in (half_widths, wing_widths)]
-            accepted = all(
-                value is not None and value >= MIN_PROFILE_RATIO for value in measured
-            )
-            # Sans profil exploitable, ne pas certifier une suppression du bruit.
-            accepted = accepted or threshold == 0
-            noise_attempts.append(dict(threshold=threshold, accepted=accepted,
-                                       fwhm_p10=measured[0], wings_p10=measured[1]))
-            if accepted:
-                rendered = candidate
-                break
-            threshold /= 2
+        half_widths = profile_widths(data, rendered)
+        wing_widths = profile_widths(data, rendered, relative_height=0.1)
         validate_rgb(rendered)
         widths = half_widths
         return rendered.astype(np.float32), {
             "method": (
-                "luminance-linked asinh + RGBBlend + faint boost + log peak "
-                "quantiles + soft noise gate"
+                "global luminance-linked asinh + RGBBlend + faint boost + log peak quantiles"
             ),
             "strength": strength,
             "color_mode": color_mode,
@@ -760,7 +788,7 @@ class ConservativeStarRenderer(processor):
             "faint_intensity_gain": 0.0 if threshold else origin_gain,
             "noise_suppression": {
                 "method": (
-                    "max-RGB neighbor-difference MAD + quartic soft gate"
+                    "disabled: histogram transformation only"
                 ),
                 "floor": floor, "sigma": sigma,
                 "sigma_factor": noise_sigma,
@@ -832,6 +860,7 @@ class ConservativeStarRenderer(processor):
             noise_sigma=getattr(args, "star_noise_sigma", NOISE_SIGMA_FACTOR),
             boost_fraction=getattr(args, "star_boost_fraction", self.default_boost_fraction),
             color_mode=getattr(args, "ghs_color_mode", "human"),
+            contrast_mode=getattr(args, "star_contrast_mode", self.default_contrast_mode),
         )
         report.parent.mkdir(parents=True, exist_ok=True)
         write_rgb(source, destination, data, nonlinear=True, role="STARS")

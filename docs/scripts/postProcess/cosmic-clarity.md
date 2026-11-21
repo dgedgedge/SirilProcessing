@@ -235,7 +235,27 @@ La RAM contient néanmoins plusieurs tableaux à la taille de l'image.
 La netteté applique d'abord le modèle stellaire, puis les modèles non stellaires
 encadrant le rayon choisi parmi 1, 2, 4 et 8. Leurs sorties sont interpolées
 linéairement. Chaque intensité `a` mélange l'entrée et la prédiction :
-`sortie = (1 - a) entrée + a prédiction`. Le débruitage utilise le poids AI3.6.
+`sortie = (1 - a) entrée + a prédiction`, dans l'espace préparé de chaque étape.
+
+Le débruitage utilise le poids AI3.6 à pleine intensité. Après recomposition,
+inversion du préétirement et retour aux unités d'entrée, le résultat complet
+`D` est mélangé avec l'entrée effective `I` : `sortie = (1 - a) I + a D`.
+Cet ordre reproduit le mélange final du
+[script Siril CosmicClarity_Denoise](https://gitlab.com/free-astro/siril-scripts/-/blob/main/processing/CosmicClarity_Denoise.py).
+À `a=0`, les plans d'entrée float32 sont conservés exactement, sans inférence ;
+les entiers restent exprimés dans l'échelle Siril normalisée décrite plus haut.
+À `a=1`, le résultat complet est utilisé. À `a=0,5`, la sortie est la moyenne
+de ces deux images, y compris quand un préétirement était nécessaire.
+
+En mode `full`, le filtre guidé produit lui aussi son résultat complet. Une
+intensité couleur omise suit `a` : le mélange final porte alors sur toute
+l'image, comme dans le script Siril. Une intensité couleur explicite distincte
+pondère séparément le résidu couleur après inversion, selon les formules de
+la [page des modes couleur](cosmic-color.md). Le rapport expose
+`blend_domain=linear_input_units` pour le débruitage et
+`prepared_normalized_units` pour la netteté. L'historique FITS précise le
+mélange après inversion. Les valeurs par défaut restent à 0,5 et les mêmes
+contrôles de bruit, flux diffus et étoiles sont appliqués au candidat mélangé.
 
 Cette adaptation reprend les modes luminance/chrominance de la révision AI3
 référencée, avec un rayon fixe et float32. Elle ne reproduit pas l’auto-PSF

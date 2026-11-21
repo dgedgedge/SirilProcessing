@@ -291,9 +291,22 @@ uniquement le dossier concerné et refusent une source qui s’y trouve.
 Ces chemins sont vérifiés par tests avec moteurs simulés ; aucune nouvelle
 validation scientifique avec Siril ou les moteurs neuronaux n’est annoncée.
 
+Le modèle [Aberration Remover livré](aberration.md) ajoute par défaut une
+correction préalable des aberrations ; un chemin vide (`--aberration-model ""`)
+la désactive. Aberration Remover compte comme une étape de netteté : il est
+comparé seul ou suivi d'un débruitage, jamais associé à un autre moteur de
+netteté/déconvolution. Chaque chaîne comporte au plus deux traitements et ne
+répète aucun type : une netteté au plus, un débruitage au plus. L’option d’ordre
+inverse ne déplace jamais Aberration Remover après le débruitage.
+
 Avec trois débruiteurs et deux moteurs de netteté, la liste contient 12 chaînes :
 identité, trois débruitages seuls, deux nettetés seules et six associations.
 `--restoration-reverse-order` ajoute les six associations inversées, soit 18.
+Avec Aberration Remover actif, on ajoute la correction seule et ses trois
+associations avec les débruiteurs : 16/22 chaînes au total. La correction
+n'est calculée qu'une fois sur la référence, puis sa sortie est réutilisée.
+Les associations Aberration Remover → autre netteté et toutes les chaînes à
+trois traitements sont interdites, y compris avec l'ordre inverse.
 Les activations `--disable-denoise` / `--disable-deconvolution` sont respectées.
 Il n’existe pas de plafond de candidats ni de classement préalable top-N.
 
@@ -302,7 +315,8 @@ ensuite réévaluée contre l’image commune : les gains stellaires et de bruit
 sont comptés qu’une fois. Un résultat nul ne bat pas l’identité. Les opérations
 identiques sont partagées selon l’empreinte de l’entrée effective, l’opération,
 la classe, les paramètres et les empreintes des dépendances présentes au début de cet appel. Sans échec ou recherche interne,
-11/17 exécutions de moteurs suffisent pour les 12/18 variantes. Le cache n’est
+Sans Aberration Remover, 11/17 exécutions de moteurs suffisent pour les 12/18
+variantes ; avec lui, 15/21 exécutions suffisent pour les 16/22 variantes. Le cache n’est
 pas persistant entre lancements ; modèles et exécutables doivent rester fixes
 pendant un appel. Versions et empreintes disponibles sont conservées dans les
 rapports enfants. Les opérations GPU ne sont jamais lancées en parallèle.

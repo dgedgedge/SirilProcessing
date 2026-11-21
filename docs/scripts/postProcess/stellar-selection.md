@@ -1,90 +1,88 @@
-# 1. Calage fractionnaire de l’histogramme stellaire
+<a id="1-contraste-stellaire-a-profils-conserves"></a>
+<a id="1-contraste-stellaire-à-profils-conservés"></a>
+<a id="11-objectif-et-modes"></a>
+<a id="11-objectif-et-parametre"></a>
+<a id="12-base-et-mesure-des-profils"></a>
+<a id="12-construction-de-la-courbe"></a>
+<a id="13-gardes-de-largeur-et-de-bruit"></a>
+<a id="13-renforcement-du-contraste-sans-voile"></a>
+<a id="14-rapport-et-recette"></a>
+<a id="14-rapport-reproduction-et-limites"></a>
+<a id="15-limites-et-verifications"></a>
+<a id="2-courbe-globale-ponctuelle-mode-optionnel"></a>
+<a id="21-objectif-et-parametre"></a>
+<a id="21-objectif-et-paramètre"></a>
+<a id="22-construction-de-la-courbe"></a>
+<a id="23-gardes-de-largeur-et-de-bruit"></a>
+<a id="24-rapport-et-recette"></a>
+<a id="25-limites-et-verifications"></a>
+<a id="25-limites-et-vérifications"></a>
 
-[postProcess](README.md) · [Rendu stellaire](star-rendering.md) · [Recettes](stretch-transfer.md)
+# 1. Courbe globale de l'histogramme stellaire
 
-## 1.1. Objectif et paramètre
+[Manuel](README.md) · [Rendu stellaire](star-rendering.md)
 
-`--star-boost-fraction=0.25` ne désigne pas un masque spatial. Il indique la
-fraction supérieure des pics éligibles utilisée pour caler une courbe
-ponctuelle unique. Le traitement ne consulte ni le fond, ni l’image originale,
-ni le nom de l’objet. Deux pixels de même intensité reçoivent la même cible,
-quelle que soit leur position.
+## 1.1. Contrat global
 
-Zéro conserve la base asinh. Un conserve le mode global historique à quantiles.
-Entre les deux, le quantile `1-fraction` fixe le point d’inflexion de la nouvelle
-courbe. Les options suivent CLI > JSON > défaut et sont persistantes avec `-S`.
+À la demande explicite de l'utilisateur, l'étirement de la couche étoiles
+applique une transformation identique à tous les triplets RGB de l'image.
+Il n'emploie aucun masque, gain par étoile, correction du fond local ou
+suppression de bruit. Deux pixels RGB identiques doivent être transformés
+identiquement, même avec des voisins et positions différents.
 
-## 1.2. Construction de la courbe
+## 1.2. Construction de la transformation
 
-Le moteur travaille sur le maximum RGB pour repérer les pics et sur la base
-asinh/RGBBlend déjà calculée pour produire le résultat :
+La base est un asinh lié à la luminosité, complété par une fonction rationnelle
+des faibles niveaux, avec protection RGBBlend du plafond. Une distribution de
+pics peut calibrer une courbe monotone d'intensité ; après calibration, les
+paramètres sont fixes pour toute l'image. Aucune coordonnée stellaire n'est
+utilisée pour appliquer la transformation.
 
-1. détecter les maxima locaux dans une fenêtre de 7 pixels ;
-2. conserver les pics au-dessus du seuil robuste de bruit déjà enregistré ;
-3. calculer `q`, quantile `1-fraction` de leurs amplitudes ;
-4. fixer le début de transition à `max(seuil_bruit, q/2)` ;
-5. viser 0,08 au niveau `q`, pour un plafond de référence 0,85 ;
-6. rejoindre 0,15 au percentile 95 des pics, puis le plafond à l’entrée 1 ;
-7. conserver exactement la base sous le début de transition et dès que la
-   base atteint 0,15.
+`--star-boost-fraction 0.25` choisit le quantile de calibration. Zéro conserve
+la base ; un utilise l'adaptation globale complète. Pour une fraction entre
+zéro et un, les quantiles fixent les raccords entre niveaux d'intensité.
+`--star-histogram-strength`, dans [0,1], mélange cette courbe avec la base.
+Le plafonnement monotone `monotone_cap_v1` évite une inversion au raccord des
+noyaux brillants. La courbe agit sur toutes les intensités correspondantes,
+y compris celles qui ne sont pas des étoiles détectées.
 
-Les niveaux 0,08 et 0,15 suivent proportionnellement `--star-ceiling`. Entre
-les points, l’interpolation est linéaire en coordonnées logarithmiques. La
-cible finale est le maximum de cette proposition et de la base : la courbe ne
-diminue aucun pixel. Son gain est commun aux trois canaux après l’asinh/RGBBlend.
+## 1.3. Choix des paramètres et contrôles
 
-Pour une intensité source `x`, une base `B(x)` et la courbe log-log `H(x)` :
+Les profils mesurés, leurs largeurs et les histogrammes servent à accepter ou
+réduire les paramètres de la courbe globale. Les gardes ne créent aucun
+traitement local. La force retenue reste identique pour toute l'image.
+Une garde non mesurable ne constitue pas une validation physique.
 
-```text
-T(x) = B(x)                                      si x <= q/2
-T(x) = max(B(x), H(x))                           dans la transition
-T(x) = B(x)                                      si B(x) >= 0,15
-sortie = base_RGB * T(x) / max_RGB(base_RGB)
-```
+`--star-contrast-mode pointwise` est le défaut. Une ancienne configuration
+`profiles` produit également cette courbe globale. `--star-noise-sigma` vaut
+zéro ; ses anciennes valeurs valides restent acceptées sans effet. Les
+contrôles de domaine et de finitude restent appliqués aux anciens paramètres.
 
-Il n’y a ni coordonnées sauvegardées, ni profil radial, ni raccord spatial.
-La courbe peut donc être rejouée sur une autre géométrie. La détection des pics
-sert uniquement au calage statistique initial.
+## 1.4. Audits et reproduction
 
-## 1.3. Gardes de largeur et de bruit
+Le rapport indique `histogram_only: true`, `spatially_varying: false`,
+`contrast_mode: pointwise` et `noise_suppression.threshold: 0`.
+`boost_selection.mode` est `histogram_quantile`, ou `all` pour la courbe
+complète. Malgré le nom historique du champ, il ne décrit pas de masque
+spatial ; les coordonnées, rayons et gains par étoile n'y figurent pas.
 
-La porte quartique de bruit appartient à la base et est appliquée avant la
-courbe fractionnaire. La zone située sous le début de transition reste donc
-inchangée. Un résidu et une étoile de même intensité ne peuvent toutefois pas
-être distingués par une transformation d’histogramme.
+La recette fixe se rejoue sur une découpe ou une image déplacée sans exiger
+les dimensions natives : elle reste la même fonction des valeurs RGB.
+Sa courbe scalaire porte `scalar_role: neutral_rgb_restriction` : elle est
+la restriction aux gris R=G=B, pas une LUT exacte de tous les pixels colorés.
 
-Après chaque proposition, le moteur mesure les profils à 50 % et 10 % du pic.
-Le rapport FWHM médian ne doit pas dépasser la garde configurée et le percentile
-10 des rapports ne doit pas descendre sous 0,90. Si nécessaire, la force de la
-courbe est divisée par deux, au plus huit fois ; un dernier essai nul conserve
-la base. Ce contrôle mesure des profils, mais la transformation elle-même reste
-strictement ponctuelle.
+Les anciennes recettes `spatial`, `profiles` et `contrast_profiles` demeurent
+lisibles uniquement pour reproduire les archives. Les utilitaires de rejeu
+historique ne sont pas appelés pour créer les nouveaux rendus stellaires.
+Pour remplacer un ancien résultat local, relancer StarNet et les étirements
+avec `--autoghs-only` ; `--color-only` conserve les couches déjà étirées.
 
-## 1.4. Rapport et recette
+## 1.5. Vérifications et limites
 
-`boost_selection.mode` vaut `histogram_quantile`. Le rapport conserve la
-fraction, les effectifs, `cutoff`, `transition_start`, `visible_target`,
-`bright_protection`, les points de la courbe et la force retenue.
-`actually_boosted_count` compte les pics dont le sommet a augmenté ; ce n’est
-pas un dénombrement astrophysique.
-
-La recette RGB rejoue les points et le seuil de bruit enregistrés, sans
-redétecter les étoiles ni recalculer les quantiles. Les anciennes recettes
-`profiles` et `spatial` restent lisibles pour reproduire les traitements déjà
-enregistrés ; elles ne sont plus produites par le défaut à 25 %.
-
-La courbe scalaire porte `scalar_role: neutral_rgb_restriction`. RGBBlend reste
-dépendant du triplet RGB : la recette RGB est la référence de reproduction.
-
-## 1.5. Limites et vérifications
-
-Le seuil 0,08 est un niveau de présentation pour un affichage direct normalisé,
-pas une grandeur photométrique ni une garantie de perception après fusion. Les
-pics peuvent contenir des résidus StarNet. Une transformation ponctuelle peut
-renforcer tout pixel de même intensité ; la porte de bruit et le début de
-transition limitent ce risque sans le supprimer.
-
-Les tests couvrent les fractions limites, les champs vides ou constants, la
-monotonie, le plafond, les couleurs, les gardes FWHM, l’absence de coordonnées
-et la reproduction exacte sur la géométrie native ou recadrée. Les recettes
-historiques à profils possèdent leurs tests de compatibilité séparés.
+Les tests vérifient l'égalité des sorties pour des triplets identiques dans
+des voisinages différents, le rejeu exact, la permutation et la découpe des
+pixels après calibration, les paramètres historiques sans effet local et
+l'absence de seuil de bruit actif. Les valeurs FITS sources restent préservées.
+Une courbe globale peut amplifier le bruit résiduel ou élargir des profils ;
+ces effets ne doivent pas être compensés par une correction locale dans cette
+branche. La restauration et StarNet restent des étapes distinctes.

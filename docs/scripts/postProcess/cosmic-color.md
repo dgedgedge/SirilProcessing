@@ -25,8 +25,8 @@ Siril/Clarity. Les poids, leurs empreintes et l’architecture ne changent pas.
 | Chrominance en `full` | `--cosmic-color-denoise-amount` | valeur de `--cosmic-denoise-amount` | nombre de 0 à 1 |
 
 Ces paramètres sont mémorisables avec `-S`, avec priorité CLI > configuration
-JSON > défauts. Une intensité couleur explicite égale à zéro conserve Cb/Cr en
-mode `full` ; elle n’empêche pas le traitement de Y. Inversement, une intensité
+JSON > défauts. Une intensité couleur explicite égale à zéro désactive le résidu
+de lissage Cb/Cr en mode `full` ; elle n’empêche pas le traitement de Y. Inversement, une intensité
 neuronale nulle laisse disponible le lissage de chrominance en mode `full`.
 
 - **Luminance** : extrait Y, traite uniquement Y par réseau, puis recompose
@@ -59,6 +59,28 @@ Après traitement et recomposition, la médiane courante de chaque canal est
 ramenée à sa médiane initiale, puis le minimum commun est réintroduit avec
 écrêtage dans `[0,1]`. La translation et l’échelle de normalisation communes
 sont ensuite inversées pour les entrées flottantes.
+
+Le débruitage calcule le résultat complet dans l'espace préparé, puis inverse
+le préétirement et la normalisation avant d'appliquer l'intensité. Quand la
+couleur suit l'intensité neuronale `a`, le mélange est
+`sortie = (1 − a) entrée + a résultat_complet`, comme dans le script Siril.
+L'intensité zéro conserve exactement les plans float32 d'entrée, sans réseau.
+
+Pour une intensité couleur explicite `c` différente de `a`, deux résultats
+complets sont remis dans les unités d'entrée : `L`, sans lissage couleur, et
+`C`, avec lissage couleur complet. Le mélange est :
+
+```text
+sortie = entrée + a × (L − entrée) + c × (C − L)
+```
+
+Ainsi `c=0` désactive le résidu couleur ; `a=c` retrouve le mélange global.
+Quand `a=0`, aucun réseau Y n'est chargé : `L` et `C` sont construits à partir
+de la luminance non modifiée. Ces réglages distincts restent une extension
+locale et ne garantissent pas la conservation photométrique des couleurs.
+Ils conservent temporairement un second résultat RGB complet en RAM ; le cas
+standard `a=c` ne demande pas ce second résultat.
+La netteté conserve ses mélanges successifs dans l'espace préparé.
 
 Les conversions emploient directement les coefficients YCbCr BT.601 de
 l’auteur sur les pixels préparés, sans correction gamma supplémentaire :
@@ -94,6 +116,11 @@ C_filtré = mean(a) Y + mean(b)
 C_sortie = (1 - e) C + e C_filtré
 ```
 
+Cette formule décrit la fonction élémentaire `guided_chroma`. Le moteur de
+débruitage l'appelle avec `s=1` pour construire le résultat couleur complet ;
+le curseur `--cosmic-color-denoise-amount` pondère ensuite le résidu couleur
+après inversion du préétirement, au lieu de modifier le rayon du filtre.
+
 Chaque moyenne porte sur une fenêtre de `(2r + 1)²` pixels avec bords réfléchis.
 L’implémentation utilise `scipy.ndimage.uniform_filter(..., mode='reflect')`
 à la place de `cv2.boxFilter(..., BORDER_REFLECT)` ; aucune nouvelle dépendance
@@ -111,7 +138,7 @@ les entrées invalides lèvent `ValueError`.
 `color_denoise_amount`, écrit un FITS distinct, conserve les dimensions/HDU et
 retourne un audit. `inference.channels` indique `luminance`, `full`, `separate`
 ou `mono` ; `color_mode`, `color_space`, `color_denoise_amount` et
-`temporary_stretch` précisent les réglages appliqués. Le journal indique le mode
+`temporary_stretch` et `blend_domain` précisent les réglages appliqués. Le journal indique le mode
 au moment de la production du candidat.
 
 En mode luminance, Cb/Cr sont conservés **dans l’espace préparé**, avant

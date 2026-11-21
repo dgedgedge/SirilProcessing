@@ -66,6 +66,48 @@ spline du corps le gomme. `initial_peak` expose la méthode, la fenêtre et
 `secondary_rise_fraction`. Les bosses déjà présentes dans la référence
 restent admises ; le contrôle porte sur leur aggravation.
 
+### 1.2.1. Garde obligatoire des modes sombres
+
+Un contrôle indépendant de la spline examine **tout [0 ; 0,25[**, soit les
+32 premières classes des 128 classes de mesure. Il ne s’arrête pas lorsque
+les effectifs passent sous 10 % du premier pic. Il détecte ainsi une seconde
+bosse séparée par un creux profond, même si la spline du corps la gomme.
+
+Après le seul lissage local `[1,2,1]/4`, pour chaque classe i on calcule :
+
+```text
+L(i) = maximum des effectifs depuis le début de la fenêtre jusqu’à i
+R(i) = maximum des effectifs depuis i jusqu’à la fin de la fenêtre
+P = max_i(min(L(i), R(i)) - effectif(i)) / maximum_des_effectifs_de_la_fenêtre
+```
+
+`P` mesure la profondeur du creux bordé par deux populations, en fraction
+du sommet de la fenêtre. Une distribution monotone ou un simple épaulement
+sans creux donne zéro. La normalisation ne dépend pas du nombre de pixels,
+et le changement de pic dominant ne neutralise pas le contrôle. Un mode
+partiellement visible à la limite droite peut contribuer au diagnostic.
+
+Le candidat est **rejeté si `max(0, P_candidat − P_référence) > 0,10`**.
+Cette tolérance additive de 10 points de pourcentage ignore les faibles
+fluctuations et admet les bosses natives sans permettre leur aggravation
+excessive. La référence reste celle fixée avant égalisation, pas le parent
+immédiat : de petites dégradations successives ne réinitialisent pas la garde.
+Le seuil est commun à toutes les images et n’impose aucune position de pic.
+
+La garde s’applique à l’égalisation CDF, à la présentation et à la recherche
+par morceaux, avec contrôles des finalistes sur tous les pixels. Elle est
+**éliminatoire avant classement** : aucun bonus de contraste, de niveau ou
+de queue ne compense ce rejet. Les autres pénalités de bosses restent actives.
+La plage [0 ; 0,25[ vise le fond sombre ; elle ne garantit pas l’absence de
+tout défaut spatial, ni ne contrôle les modes brillants hors de cette plage.
+
+Le profil expose `low_light_modes` ; l’audit comparatif
+`low_light_mode_guard` conserve les deux mesures, leur excès, le seuil et
+le motif `new low-light histogram mode`. Les encarts annoncent explicitement
+le rejet. Une fenêtre de moins de 32 pixels est non mesurable. Les anciens
+rapports sans cette mesure restent lisibles, mais ne certifient pas cette
+garde et ne sont pas reclassés rétroactivement.
+
 ## 1.3. Conservation de la forme
 
 La référence pleine résolution est figée après RANGE, **avant l'égalisation**,
@@ -403,7 +445,9 @@ finalistes de présentation contrôlés. Une mesure absente est indiquée comme
 
 Les encarts `piecewise` donnent aussi le score, R, les trois bonus et les
 pénalités de perte contraste/bruit, déformation, bosse et compression brillante.
-Ces pénalités sont distinctes des motifs de rejet obligatoires. Une qualité
+La garde des modes sombres affiche séparément son excès, sa limite et son
+éventuel rejet obligatoire. Ces pénalités sont distinctes des motifs de rejet
+obligatoires. Une qualité
 non mesurable est explicitement signalée.
 
 L'enveloppe lissée, les morceaux et le repère à 0,8 sont superposés lorsqu'ils

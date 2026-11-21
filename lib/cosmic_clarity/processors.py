@@ -157,16 +157,18 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     )
     group.add_argument(
         '--cosmic-color-denoise-amount', type=float, default=None,
-        help=('Intensité chrominance en mode full, entre 0 et 1 ; '
+        help=('Mélange final du résidu couleur en mode full, entre 0 et 1 ; '
               'défaut : intensité débruitage'),
     )
     group.add_argument('--cosmic-denoise-amount', type=float, default=0.5,
-                       help='Mélange du débruitage entre 0 et 1')
+                       help='Mélange final du débruitage après inversion du préétirement, entre 0 et 1')
 
 
 class _CosmicClarityProcessor(processor):
     """Produit un candidat neuronal puis applique les règles communes de qualité."""
 
+    engine_name = 'cosmic-clarity'
+    engine_label = 'Cosmic Clarity'
     operation: Literal['sharpen', 'denoise'] = 'sharpen'
     parameter_persistence = {'deconvolution_output': False}
 
@@ -250,11 +252,36 @@ class _CosmicClarityProcessor(processor):
                 'min_match_fraction': manual_fraction,
             }
 
+    def _infer(self, source: Path, candidate: Path, args: argparse.Namespace) -> JSONReport:
+        """Calcule le candidat seul ; les contrôles restent communs aux moteurs."""
+        try:
+            from lib.cosmic_clarity.inference import CosmicClarityEngine
+        except ImportError as error:
+            raise RuntimeError(
+                'Dépendances Cosmic Clarity absentes : lancer '
+                'bin/install_dependances.sh'
+            ) from error
+
+        engine = CosmicClarityEngine(
+            Path(getattr(args, 'cosmic_model_dir', DEFAULT_MODEL_DIR)).expanduser().resolve(),
+            ComputeConfig.requested(args, 'cosmic_device'),
+        )
+        return engine.process(
+            source, candidate, self.operation,
+            stellar_amount=getattr(args, 'cosmic_stellar_amount', 0.5),
+            nonstellar_amount=getattr(args, 'cosmic_nonstellar_amount', 0.5),
+            radius=getattr(args, 'cosmic_nonstellar_radius', 3.0),
+            denoise_amount=getattr(args, 'cosmic_denoise_amount', 0.5),
+            sharpen_mode=getattr(args, 'cosmic_sharpen_mode', 'luminance'),
+            denoise_mode=getattr(args, 'cosmic_denoise_mode', 'luminance'),
+            color_denoise_amount=getattr(args, 'cosmic_color_denoise_amount', None),
+        )
+
     def post_process(
         self, input_path: Path | str, output_path: Path | str,
         args: argparse.Namespace | None = None,
     ) -> JSONReport:
-        """Produit et contrôle uniquement le candidat Cosmic Clarity.
+        """Produit et contrôle le candidat du moteur configuré.
 
         Retourne l’entrée si la qualité est refusée, sans évaluer le moteur
         Siril ni sélectionner un gagnant. L’orchestrateur réalise cette sélection.
@@ -300,7 +327,7 @@ class _CosmicClarityProcessor(processor):
         before, after = work / 'before.tsv', work / 'after.tsv'
         result = dict(
             image_path=str(source),
-            engine='cosmic-clarity',
+            engine=self.engine_name,
             status='evaluating',
             candidate_image_path=str(candidate),
             layer=layer,
@@ -317,34 +344,14 @@ class _CosmicClarityProcessor(processor):
         result['timings'] = {}
         save()
         try:
-            try:
-                from lib.cosmic_clarity.inference import CosmicClarityEngine
-            except ImportError as error:
-                raise RuntimeError(
-                    'Dépendances Cosmic Clarity absentes : lancer '
-                    'bin/install_dependances.sh'
-                ) from error
             with log_duration(
-                f"{treatment} Cosmic Clarity — chargement et inférence",
+                f"{treatment} {self.engine_label} — chargement et inférence",
                 result["timings"], "inference_seconds",
             ):
-                engine = CosmicClarityEngine(
-                    Path(getattr(args, 'cosmic_model_dir', DEFAULT_MODEL_DIR)).expanduser().resolve(),
-                    ComputeConfig.requested(args, 'cosmic_device'),
-                )
-                logging.info('%s — début de l’évaluation Cosmic Clarity', treatment)
-                result['inference'] = engine.process(
-                    source, candidate, self.operation,
-                    stellar_amount=getattr(args, 'cosmic_stellar_amount', 0.5),
-                    nonstellar_amount=getattr(args, 'cosmic_nonstellar_amount', 0.5),
-                    radius=getattr(args, 'cosmic_nonstellar_radius', 3.0),
-                    denoise_amount=getattr(args, 'cosmic_denoise_amount', 0.5),
-                    sharpen_mode=getattr(args, 'cosmic_sharpen_mode', 'luminance'),
-                    denoise_mode=getattr(args, 'cosmic_denoise_mode', 'luminance'),
-                    color_denoise_amount=getattr(args, 'cosmic_color_denoise_amount', None),
-                )
+                logging.info('%s — début de l’évaluation %s', treatment, self.engine_label)
+                result['inference'] = self._infer(source, candidate, args)
             with log_duration(
-                f"{treatment} Cosmic Clarity — contrôle stellaire et qualité",
+                f"{treatment} {self.engine_label} — contrôle stellaire et qualité",
                 result["timings"], "quality_seconds",
             ):
                 from lib.quality_processors import QualityContext
@@ -401,7 +408,7 @@ class _CosmicClarityProcessor(processor):
                     if comparison['matched_fraction_before'] < fraction:
                         comparison['warnings'] = ['low_matching_fraction']
                         logging.warning(
-                            'Déconvolution Cosmic Clarity : %d/%d étoiles appariées '
+                            f'Déconvolution {self.engine_label} : %d/%d étoiles appariées '
                             '(%.2f %%), référence %.0f %% ; contrôle de représentativité',
                             comparison['matched_count'], comparison['valid_before_count'],
                             100 * comparison['matched_fraction_before'], 100 * fraction,
@@ -411,7 +418,7 @@ class _CosmicClarityProcessor(processor):
                         comparison['representation'] = representation
                         if not representation['accepted']:
                             comparison['status'] = 'unrepresentative_matches'
-                        logging.info('Représentativité Cosmic Clarity : %s ; motifs=%s',
+                        logging.info(f'Représentativité {self.engine_label} : %s ; motifs=%s',
                                      representation['accepted'], representation['reasons'])
                 else:
                     matching['fraction_policy'] = 'blocking'
@@ -423,7 +430,7 @@ class _CosmicClarityProcessor(processor):
                     verdict = assess_quality(comparison, artifacts, **quality)
                     reasons = verdict['reasons']
                     cosmic_report: JSONReport = dict(
-                        engine='cosmic-clarity',
+                        engine=self.engine_name,
                         status='accepted' if not reasons else 'rejected',
                         output_image=str(candidate if not reasons else source),
                         matching=matching,
@@ -436,7 +443,7 @@ class _CosmicClarityProcessor(processor):
                     reasons = assess_denoising(comparison, artifacts, max_blur=maximum_blur)
                     result['criteria'] = denoising_criteria(comparison, artifacts, maximum_blur)
                     cosmic_report = dict(
-                        engine='cosmic-clarity',
+                        engine=self.engine_name,
                         status='accepted' if not reasons else 'rejected',
                         output_image=str(candidate if not reasons else source),
                         matching=matching,

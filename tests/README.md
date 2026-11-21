@@ -338,12 +338,129 @@ la comparaison stricte par défaut et les métadonnées sources sont préservée
 
 `test_stellar_profiles.py` conserve la couverture de compatibilité des anciennes
 recettes à profils : halos brillants, raccords, champs denses, profils tronqués
-et recettes invalides. Le défaut à 25 % est désormais une courbe ponctuelle
+et recettes invalides. Le mode global `pointwise` à 25 % utilise la courbe ponctuelle
 `histogram_quantile` : les tests vérifient son calage à 0,08, l’absence de
 coordonnées, les gardes de largeur et sa reproduction exacte, y compris après
 recadrage. Les comparatifs réutilisent les séparations existantes sans relancer
-Siril ni StarNet.
+Siril ni StarNet. Les tests du raccord `monotone_cap_v1` vérifient une
+rampe dense, la conservation de la base brillante et un profil gaussien radial
+sans inversion créée au seuil de protection. Ils contrôlent aussi la
+compatibilité des recettes sans politique et le rejet des politiques inconnues.
 `test_stretch_transfer.py` vérifie en plus la luminance `human`, RGBBlend près
 du plafond, la différence avec le mode `even`, l'enregistrement du mode couleur
 et la reproduction bit à bit d'une recette stellaire. Les tests de branches
 contrôlent que `--ghs-color-mode` est partagé par le fond et les étoiles.
+
+`test_aberration.py` couvre Aberration Remover avec une session ONNX simulée :
+conservation médiane/MAD, recouvrements, petites images, protections, entrées
+invalides, FITS uint16 et WCS, activation et énumération des chaînes, sélection du modèle livré depuis un
+autre dossier de lancement et désactivation par chemin vide. Ces tests
+ne remplacent pas la comparaison sur modèle réel avec Siril.
+
+`test_restoration_chains.py` vérifie aussi les séquences dans les bandeaux et
+les durées des calculs : moteur seul, débruitage puis netteté, et ordre inverse
+activé explicitement. Le titre ne doit pas annoncer une étape future.
+
+Les chaînes avec Aberration Remover sont aussi exécutées avec des moteurs
+simulés : correction uniquement sur la référence et en première position,
+limite de deux étapes sans répétition de type, cache commun, classement final
+et ordre inverse. Pour trois débruiteurs et deux autres moteurs de netteté,
+ces scénarios couvrent 16/22 variantes et 15/21 calculs distincts lorsque tous
+les contrôles acceptent. Les combinaisons de deux nettetés sont interdites.
+
+`test_final_render.py` couvre aussi la préparation affine des entrées RGB
+finies hors de [0,1] : données signées, dépassement supérieur, identité,
+inversion et absence de modification de l'entrée. Le scénario de séparation
+contrôle le FITS préparé, les extensions, l'audit et la conservation de la
+source ; NaN/Inf et géométries invalides restent refusés.
+
+Les régressions GraXpert vérifient les bornes réelles du tenseur ONNX, la
+protection des valeurs brillantes sur le tenseur non borné et le bornage après
+mélange, en float et uint16, avec audit des extrema/effectifs. Les tests de
+chaînes rejouent les signatures et empreintes de toutes les étapes, vérifient
+les pixels de chaque référence locale et la référence initiale du contrôle
+final. Les traitements restent indépendants des cibles astronomiques.
+
+Les tests `test_cosmic_inference.py` vérifient le mélange Cosmic Clarity après
+inversion du préétirement : identité à 0 sans réseau, résultat complet à 1,
+interpolation à 0,25/0,5, modes mono/luminance/full/separate, flottants faibles,
+flottants déjà lumineux, valeurs signées et uint16. Ils vérifient aussi le
+résidu de couleur indépendant, la source intacte, les HDU/WCS et le domaine
+`linear_input_units` dans l'audit. Les réseaux simulés sont non identitaires
+pour détecter un déplacement accidentel du mélange avant l'inversion MTF.
+
+`test_restoration_preview.py` contrôle les JPEG AutoStretch de restauration :
+fond cible de 0,25, courbe monotone commune, RGB lié, mono/constantes/valeurs
+signées, orientation, source intacte, candidats rejetés, désactivation et erreurs
+auxiliaires. `test_restoration_chains.py` vérifie les JPEG publiés à chaque
+opération et le partage effectif des paramètres avec l'entrée et la sortie finale.
+
+Les tests GHS de modes sombres (`test_ghs_histogram_shape.py` et
+`test_ghs_render_quality.py`) couvrent une seconde bosse après un creux
+profond, le changement de pic dominant, l’invariance au nombre de pixels,
+les épaules monotones, l’exclusion de la queue brillante, les populations
+insuffisantes et les entrées invalides. Ils vérifient la tolérance de 10 %
+par rapport à la référence fixe, la compatibilité des anciens rapports, le
+rejet avant score malgré des bonus élevés et son affichage dans les encarts.
+La comparaison directe de forme, utilisée par la CDF et la présentation,
+applique aussi cette garde.
+
+`test_stellar_contrast.py` couvre le rendu global courant : conservation des
+sources, valeurs RGB identiques transformées identiquement, recette sans
+coordonnées et rejeu exact après translation ou recadrage. Les anciennes
+options locales ne peuvent pas réactiver un traitement spatial. Les
+utilitaires de profils sont vérifiés séparément pour la lecture des archives :
+piédestaux, voisins brillants, recouvrements et recettes invalides. Les mesures
+de largeur couvrent aussi les pics sous l'ancien seuil fixe de 0,005.
+
+`test_star_separation.py` couvre également la préparation MTF de StarNet :
+cible médiane, inversion hors écrêtage, audit des valeurs écrêtées, canaux
+constants et cas dégénérés, validation des paramètres, absence de double
+pré-étirement, orientation, conservation de la source et priorité CLI/JSON.
+L'adaptation est vérifiée sur des sources synthétiques petites, étendues ou
+allongées, avec centres fixes, essais non mesurables et limite inaccessible.
+Les essais de géométrie ne déclenchent aucune inférence ; une séparation
+Siril/StarNet réelle reste un niveau de validation distinct.
+
+`test_restoration_comparison.py` vérifie le décodage progressif aux frontières
+arbitraires des blocs, les JSON invalides et tronqués, la découverte et le
+dédoublonnage des chemins, la séparation des contrôles locaux et finaux, les
+valeurs absentes, zéro et False, la conservation des alertes non bloquantes,
+l'échappement HTML et la neutralisation des formules CSV, la précision numérique,
+les écritures concurrentes et le code de retour en cas d'export partiel.
+Les essais réels lisent des rapports existants et n'exécutent aucun moteur IA.
+
+`test_restoration_report_storage.py` vérifie le format synthétique v2, la
+conservation des mesures détaillées, l'absence de mutation du cache, les
+copies supprimées dans les critères et tentatives, l'identité des décisions
+et colonnes comparatives entre anciens et nouveaux rapports, et les erreurs
+de publication atomique. Les tests des chaînes vérifient aussi le branchement
+réel des synthèses globales vers les audits locaux et finaux, avec des
+populations de mesures présentes uniquement dans les détails.
+
+Le comparateur vérifie également le regroupement HTML des critères en une
+seule colonne, avec des lignes nommées et des verdicts textuels colorés, tout
+en conservant les colonnes analytiques du CSV.
+
+`test_restoration_early_stop.py` couvre les seuils stricts de 30 % et 35 %,
+l'arrondi flottant à la frontière de FWHM, les mesures manquantes/non finies,
+les FAIL non bloquants, UNKNOWN et critères futurs ou absents, la validation
+des paramètres et la priorité CLI/JSON avec instantanés indépendants. Les
+parcours intégrés sur FITS synthétiques vérifient la chaîne prioritaire,
+l'arrêt effectif, les comptes rendus texte/HTML, la poursuite exhaustive sans
+recalcul des préfixes, le rejet local et la désactivation explicite.
+
+La branche stellaire doit rester une transformation globale de l'histogramme,
+conformément aux consignes communes. Les tests vérifient l'égalité de sortie
+pour des RGB identiques dans des voisinages différents, le rejeu exact après
+permutation, translation ou découpe, l'absence de profils spatiaux dans les
+nouvelles recettes et l'impossibilité de réactiver le débruitage ou le rendu
+local avec une ancienne configuration `profiles` / `star_noise_sigma=8`.
+Les tests des utilitaires de profils locaux concernent le rejeu des archives,
+pas leur utilisation dans les nouveaux rendus.
+
+`test_stellar_appearance.py` vérifie les indicateurs purement diagnostiques :
+objectif exact de 25 %, populations inconnues aux bords, absence de candidat,
+rayons et gradient gaussiens analytiques, comparaison d'une transition élargie,
+jupe Moffat plus étendue et conservation des pixels. Les objectifs sont non
+bloquants ; aucun seuil de netteté perceptuelle n'est inventé.

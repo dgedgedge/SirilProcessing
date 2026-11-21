@@ -15,13 +15,14 @@ import numpy as np
 
 from lib.type_defs import JSONReport
 from lib.stellar_selection import stellar_selection_weights
-from lib.stellar_profiles import profile_gain_map
+from lib.stellar_profiles import profile_gain_map, apply_contrast_profiles
 
 CURVE_TOLERANCE = 1e-7  # Erreur absolue observée aux sondes d'interpolation.
 INITIAL_CURVE_POINTS = 2049
 MAX_CURVE_POINTS = 262145
 MAX_CURVE_REFINEMENTS = 24  # Évite de subdiviser au-delà de la résolution float64.
 GHS_KEYS = ('D', 'B', 'SP', 'LP', 'HP')
+MONOTONE_BRIGHT_PROTECTION = 'monotone_cap_v1'
 
 
 def asinh_rgb(
@@ -140,6 +141,55 @@ def stellar_noise_gate(light: np.ndarray, threshold: float) -> np.ndarray:
     return gate.astype(light.dtype)
 
 
+def protected_stellar_target(
+    light: np.ndarray, baseline: np.ndarray, knots: np.ndarray,
+    levels: np.ndarray, bright_protection: float,
+) -> np.ndarray:
+    """Calibre les étoiles faibles sans inversion au raccord des noyaux protégés.
+
+    Parameters
+    ----------
+    light, baseline : np.ndarray
+        Intensités d'entrée et cibles de base, mêmes formes, finies dans [0,1].
+    knots, levels : np.ndarray
+        Points positifs et strictement croissants de la courbe log-log.
+    bright_protection : float
+        Niveau de présentation dans ]0,1] au-delà duquel la base reste intacte.
+
+    Returns
+    -------
+    np.ndarray
+        ``max(baseline, min(courbe_quantile, bright_protection))``, avec la
+        base conservée sous le premier point. Le dtype est celui de baseline.
+        Le plafond du supplément évite la chute créée par un remplacement
+        brutal par la base lorsque celle-ci atteint le seuil de protection.
+        Le maximum de deux courbes monotones conserve leur monotonie.
+
+    Raises
+    ------
+    ValueError
+        Formes, valeurs ou points de contrôle invalides. Aucune entrée n'est
+        modifiée en place ; les points sont ceux de la recette, sans recalage.
+    """
+    if (light.shape != baseline.shape or light.size == 0
+            or not np.isfinite(light).all() or not np.isfinite(baseline).all()
+            or light.min() < 0 or light.max() > 1
+            or baseline.min() < 0 or baseline.max() > 1
+            or not np.isfinite(bright_protection) or not 0 < bright_protection <= 1):
+        raise ValueError('Intensités ou protection stellaire invalides')
+    if (knots.ndim != 1 or levels.shape != knots.shape or knots.size < 2
+            or not np.isfinite(knots).all() or not np.isfinite(levels).all()
+            or np.any(np.diff(knots) <= 0) or np.any(np.diff(levels) <= 0)
+            or knots[0] <= 0 or knots[-1] > 1 or levels[0] <= 0 or levels[-1] > 1):
+        raise ValueError('Points de la courbe stellaire invalides')
+    mapped = np.exp(np.interp(
+        np.log(np.maximum(light, np.finfo(np.float32).tiny)),
+        np.log(knots), np.log(levels),
+    ))
+    mapped = np.maximum(baseline, np.minimum(mapped, bright_protection))
+    return np.where(light <= knots[0], baseline, mapped).astype(baseline.dtype)
+
+
 def stellar_operation(parameters: JSONReport, balance: JSONReport | None = None) -> JSONReport:
     """Décrit une courbe stellaire, ses quantiles et son seuil de bruit retenu.
 
@@ -149,6 +199,9 @@ def stellar_operation(parameters: JSONReport, balance: JSONReport | None = None)
     spatiale et ses coordonnées sont également copiées.
     """
     balance = balance or {}
+    selection = deepcopy(parameters.get('boost_selection', {'mode': 'all'}))
+    if selection.get('mode') == 'contrast_profiles':
+        selection.pop('profile_checks', None)  # Audit sans effet sur le rejeu.
     return dict(kind='stars', strength=float(parameters['strength']),
                 ceiling=float(parameters['ceiling']), faint_boost=float(parameters['faint_boost']),
                 noise_threshold=float(
@@ -158,7 +211,7 @@ def stellar_operation(parameters: JSONReport, balance: JSONReport | None = None)
                 color_mode=parameters.get('color_mode'),
                 knots=deepcopy(balance.get('input_knots', [])),
                 levels=deepcopy(balance.get('target_knots', [])),
-                boost_selection=deepcopy(parameters.get('boost_selection', {'mode': 'all'})))
+                boost_selection=selection)
 
 
 class CumulativeStretchTransform:
@@ -176,7 +229,8 @@ class CumulativeStretchTransform:
         self.domain = float(low), float(high)
         self.operations = deepcopy(operations)
         spatial = any(op.get('kind') == 'stars' and op.get('histogram_strength', 0) > 0
-                      and op.get('boost_selection', {}).get('mode') in ('spatial', 'profiles')
+                      and op.get('boost_selection', {}).get('mode')
+                      in ('spatial', 'profiles', 'contrast_profiles')
                       for op in self.operations)
         self.scalar_role = ('selected_star_neutral_envelope' if spatial
                             else 'neutral_rgb_restriction')
@@ -244,7 +298,8 @@ class CumulativeStretchTransform:
                 knots = np.asarray(operation.get('knots', []), dtype=np.float64)
                 levels = np.asarray(operation.get('levels', []), dtype=np.float64)
                 selection = operation.get('boost_selection', {'mode': 'all'})
-                profile_mode = selection.get('mode') == 'profiles'
+                profile_mode = selection.get('mode') in ('profiles', 'contrast_profiles')
+                contrast_profiles = selection.get('mode') == 'contrast_profiles'
                 quantile_mode = selection.get('mode') == 'histogram_quantile'
                 if quantile_mode and not legacy:
                     noise_light = output.max(axis=0)
@@ -253,17 +308,29 @@ class CumulativeStretchTransform:
                     )[None]
                     target = base.max(axis=0)
                 if fraction and knots.size and not profile_mode:
-                    balanced = np.exp(np.interp(
-                        np.log(np.maximum(light, np.finfo(np.float32).tiny)),
-                        np.log(knots), np.log(levels),
-                    ))
-                    below = light < knots[0]
-                    balanced[below] = light[below]*levels[0]/knots[0]
-                    balanced = np.maximum(target, balanced).astype(output.dtype)
+                    policy = selection.get('bright_protection_policy') if quantile_mode else None
+                    if quantile_mode and policy == MONOTONE_BRIGHT_PROTECTION:
+                        balanced = protected_stellar_target(
+                            light, target, knots, levels,
+                            selection.get('bright_protection', 1.),
+                        )
+                    else:
+                        if quantile_mode and policy is not None:
+                            raise ValueError('Politique de protection stellaire inconnue')
+                        balanced = np.exp(np.interp(
+                            np.log(np.maximum(light, np.finfo(np.float32).tiny)),
+                            np.log(knots), np.log(levels),
+                        ))
+                        below = light < knots[0]
+                        balanced[below] = light[below]*levels[0]/knots[0]
+                        balanced = np.maximum(target, balanced).astype(output.dtype)
+                        if quantile_mode:
+                            # Les anciennes recettes conservent leur raccord
+                            # historique pour reproduire les exports enregistrés.
+                            balanced[light <= knots[0]] = target[light <= knots[0]]
+                            protected = target >= selection.get('bright_protection', 1.)
+                            balanced[protected] = target[protected]
                     if quantile_mode:
-                        balanced[light <= knots[0]] = target[light <= knots[0]]
-                        protected = target >= selection.get('bright_protection', 1.)
-                        balanced[protected] = target[protected]
                         weights = 1.
                     else:
                         weights = (1. if stellar_envelope and selection.get('mode') == 'spatial'
@@ -311,9 +378,24 @@ class CumulativeStretchTransform:
                                 (p[4] for p in selection.get('profiles', [])),
                                 default=1.,
                             )
-                            base = np.minimum(
-                                base * (1 + fraction * (extra - 1)), ceiling,
-                            )
+                            if contrast_profiles:
+                                floor = min(
+                                    (p[5] for p in selection.get('profiles', [])), default=0.,
+                                )
+                                level = base.max(axis=0)
+                                target = np.minimum(
+                                    level + fraction*(extra-1)*np.maximum(level-floor, 0), ceiling,
+                                )
+                                factor = np.divide(
+                                    target, level, out=np.ones_like(level), where=level > 0,
+                                )
+                                base = base*factor[None]
+                            else:
+                                base = np.minimum(
+                                    base * (1 + fraction * (extra - 1)), ceiling,
+                                )
+                        elif contrast_profiles:
+                            base = apply_contrast_profiles(base, selection, fraction)
                         else:
                             gains = profile_gain_map(selection, light.shape)
                             base = base * (1 + fraction * (gains - 1))[None]

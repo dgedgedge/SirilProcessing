@@ -37,7 +37,10 @@ HARD_SHAPE_REASONS = frozenset((
     'histogram shoulder lost', 'histogram shoulder advance',
     'histogram slope sign inversion',
 ))
-QUALITY_SELECTION_POLICY = 'capped_diffuse_cnr_shoulder_slope_ratios'
+# Tolérance d'aggravation du creux intermodal : 10 % du sommet local.
+MAX_LOW_LIGHT_MODE_EXCESS = .1
+LOW_LIGHT_MODE_REJECTION = 'new low-light histogram mode'
+QUALITY_SELECTION_POLICY = 'capped_diffuse_cnr_shoulder_slope_ratios_dark_modes'
 
 
 class HistogramRenderQuality(ParameterizedComponent):
@@ -78,9 +81,58 @@ class HistogramRenderQuality(ParameterizedComponent):
 
     @staticmethod
     def hard_shape_rejections(profile: JSONReport) -> list[str]:
-        """Protège épaulement, signe et cohérence des ratios ; accepte les anciens audits."""
-        return [reason for reason in profile.get('shape_preservation', {}).get('rejections', [])
-                if reason in HARD_SHAPE_REASONS]
+        """Retourne les refus obligatoires de forme et de modes sombres.
+
+        Les anciens audits sans garde de modes restent lisibles. Les pénalités
+        continues de ratios et de contraste ne sont pas des refus structurels.
+        """
+        reasons = [reason for reason in profile.get('shape_preservation', {}).get('rejections', [])
+                   if reason in HARD_SHAPE_REASONS or reason == LOW_LIGHT_MODE_REJECTION]
+        reasons.extend(profile.get('low_light_mode_guard', {}).get('rejections', []))
+        return list(dict.fromkeys(reasons))
+
+    @staticmethod
+    def low_light_mode_guard(reference: JSONReport, candidate: JSONReport) -> JSONReport:
+        """Refuse une aggravation intermodale supérieure à 10 % du sommet.
+
+        Parameters
+        ----------
+        reference, candidate : JSONReport
+            Profils portant low_light_modes, produit sans spline par
+            piecewise_histogram_profile. La référence reste fixe pendant la
+            recherche ; les bosses natives sont admises à la tolérance additive.
+
+        Returns
+        -------
+        JSONReport
+            Audit indépendant avec fractions, seuil et motifs de rejet.
+            Les anciens rapports sans mesure restent explicitement non certifiés.
+
+        Raises
+        ------
+        ValueError
+            Mesure déclarée exploitable mais non finie ou hors [0,1].
+        """
+        def measured(profile: JSONReport) -> float | None:
+            """Lit une mesure exploitable sans assimiler son absence à zéro."""
+            modes = profile.get('low_light_modes') or {}
+            value = modes.get('prominence_fraction')
+            if value is None or not modes.get('measurable'):
+                return None
+            if not math.isfinite(value) or not 0 <= value <= 1:
+                raise ValueError('Proéminence des modes sombres GHS invalide')
+            return float(value)
+
+        first, last = measured(reference), measured(candidate)
+        excess = max(0., last-first) if first is not None and last is not None else None
+        rejected = excess is not None and excess > MAX_LOW_LIGHT_MODE_EXCESS+1e-12
+        return dict(
+            measurable=excess is not None, reference_prominence_fraction=first,
+            prominence_fraction=last, excess_prominence_fraction=excess,
+            maximum_excess=MAX_LOW_LIGHT_MODE_EXCESS,
+            achieved=not rejected if excess is not None else None,
+            rejections=[LOW_LIGHT_MODE_REJECTION] if rejected else [],
+        )
 
     @staticmethod
     def middle_rise(profile: JSONReport) -> float | None:
@@ -197,7 +249,9 @@ class HistogramRenderQuality(ParameterizedComponent):
             Un creux nouveau avant le pic et l'écrasement des variations du
             ciel sont pénalisés ; une mesure de creux absente reste None.
             La remontée près du pic est mesurée sans la spline du corps et
-            pénalisée relativement à celle de la même référence fixe.
+            pénalisée relativement à celle de la même référence fixe. Une
+            seconde bosse sombre significative relève en plus d’un rejet
+            obligatoire, consigné dans low_light_mode_guard indépendamment du score.
         """
         cls.validate_options(argparse.Namespace(ghs_quality_cnr_floor=cnr_floor,
                                               ghs_quality_tail_bonus=tail_bonus,
@@ -205,6 +259,7 @@ class HistogramRenderQuality(ParameterizedComponent):
         if not math.isfinite(bright_retention) or not 0 < bright_retention <= 1:
             raise ValueError('Conservation brillante de qualité invalide')
         result = dict(profile)
+        result['low_light_mode_guard'] = cls.low_light_mode_guard(reference_shape, profile)
         quality: JSONReport = dict(available=False, estimated=estimated, cnr_retention=None,
                                    visibility_gain=None, score=None,
                                    policy=QUALITY_SELECTION_POLICY)

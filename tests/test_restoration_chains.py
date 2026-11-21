@@ -2,6 +2,7 @@
 from lib.siril_api import format_commands as _format_commands, SirilCommand as _SirilCommand
 
 import argparse
+import json
 from pathlib import Path
 
 from astropy.io import fits
@@ -15,6 +16,7 @@ from lib.postprocess import _PostProcessorSequence
 from lib.type_defs import JSONReport
 
 
+@pytest.mark.parametrize("aberration", [False, True])
 @pytest.mark.parametrize("numbered", [False, True])
 @pytest.mark.parametrize(
     "reverse,variants,operations", [(False, 12, 11), (True, 18, 17)]
@@ -22,9 +24,9 @@ from lib.type_defs import JSONReport
 def test_all_chains_are_evaluated_and_intermediates_cached(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reverse: bool,
     variants: int, operations: int,
-    caplog: pytest.LogCaptureFixture, numbered: bool,
+    caplog: pytest.LogCaptureFixture, numbered: bool, aberration: bool,
 ) -> None:
-    """Vérifie calculs mutualisés, scores finaux et bandeaux des opérations réelles."""
+    """Vérifie cache, scores et séquences réellement atteintes dans les traces."""
     caplog.set_level("DEBUG")
     report = tmp_path / "report.json"
     work = tmp_path / "report_work"
@@ -56,6 +58,9 @@ def test_all_chains_are_evaluated_and_intermediates_cached(
                 assert Path(output_path).parent.parent == work
                 assert args._restoration_work_dir == Path(output_path).parent
                 assert args._quality_reference.path == Path(input_path)
+                np.testing.assert_array_equal(
+                    args._quality_reference.data[0], fits.getdata(input_path),
+                )
                 calls.append((code, Path(input_path)))
                 changed = fits.getdata(input_path).copy()
                 changed[0, 0] = changed[0, 0] * 10 + code
@@ -65,6 +70,9 @@ def test_all_chains_are_evaluated_and_intermediates_cached(
                     status="accepted",
                     output_image=str(destination),
                     selection_score=code,
+                    comparison=dict(pairs=[dict(id=i) for i in range(50)]),
+                    artifacts=dict(channels=[dict(raw=list(range(50)))],
+                                   high_frequency_residual=[dict(raw=list(range(50)))]),
                 )
 
         Fake.__name__ = "Fake" + str(code)
@@ -72,6 +80,10 @@ def test_all_chains_are_evaluated_and_intermediates_cached(
 
     denoisers = [(str(code), engine(code)) for code in (1, 2, 3)]
     sharpeners = [(str(code), engine(code)) for code in (4, 5)]
+    if aberration:
+        sharpeners.append(("aberration_remover", engine(6)))
+        variants += 1 + len(denoisers)
+        operations = variants - 1
 
     def engines(cls, args):
         """Expose tous les moteurs disponibles selon l’opération."""
@@ -79,7 +91,8 @@ def test_all_chains_are_evaluated_and_intermediates_cached(
 
     def final(self, original, candidate, reference, work, args, operations):
         """La meilleure sortie finale n’est pas celle des meilleurs scores locaux."""
-        assert original == source
+        assert original == reference.path == source
+        np.testing.assert_array_equal(reference.data[0], data)
         assert work.name == "verification_finale"
         assert work.parent == candidate.parent
         assert args._restoration_reference_catalog.parent.name == "00_mask_origine"
@@ -89,6 +102,7 @@ def test_all_chains_are_evaluated_and_intermediates_cached(
         return dict(
             status="accepted",
             selection_score=10 if value == 14 else 0.1,
+            comparison=dict(pairs=[dict(id=i) for i in range(50)]),
             rejection_reasons=[],
         )
 
@@ -99,6 +113,17 @@ def test_all_chains_are_evaluated_and_intermediates_cached(
         source, report, args
     )
     assert (report.parent / "index.html").is_file()
+    assert result['input_preview']['status'] == 'written'
+    assert result['result_preview']['status'] == 'written'
+    for preview_result in [result['input_preview'], result['result_preview']]:
+        assert Path(preview_result['output_jpeg']).is_file()
+    html = (report.parent / 'index.html').read_text()
+    assert Path(result['input_preview']['output_jpeg']).name in html
+    assert Path(result['result_preview']['output_jpeg']).name in html
+    common_stretch = result['input_preview']['stretch']
+    assert all(operation['result_preview']['stretch'] == common_stretch
+               for operation in result['operations'])
+
     assert (work / "00_mask_origine/index.html").is_file()
     assert len(result["variants"]) == variants
     assert result["operation_count"] == operations == len(calls)
@@ -125,9 +150,44 @@ def test_all_chains_are_evaluated_and_intermediates_cached(
     assert result["engine_duration_seconds"] == expected_engine_totals
     assert "Durée cumulée — Restauration" in caplog.text
     assert result["selected_chain"] == ["denoise:1", "sharpen:4"]
+    assert result["report_schema_version"] == 2
+    for row in result["variants"]:
+        if row["chain"]:
+            assert "pairs" not in row["comparison"]
+            assert len(json.loads(Path(row["audit_path"]).read_text())["comparison"]["pairs"]) == 50
+    for variant in result["variants"]:
+        chain = variant["chain"]
+        assert len(chain) <= 2
+        assert len({item.split(':')[0] for item in chain}) == len(chain)
+        if "sharpen:aberration_remover" in chain:
+            assert chain[0] == "sharpen:aberration_remover"
+            assert chain.count("sharpen:aberration_remover") == 1
+    if aberration:
+        assert any(variant["chain"] == [
+            "sharpen:aberration_remover", "denoise:1",
+        ] for variant in result["variants"])
+        assert any(code == 6 for code, _ in calls)
+        assert all(path == source for code, path in calls if code == 6)
     assert len(set(masks)) == 1
     assert fits.getdata(source)[0, 0] == 0
     assert fits.getdata(result["output_image"])[0, 0] == 14
+    # Rejouer toutes les signatures de pixels, pas seulement la chaîne gagnante.
+    operation_reports = {item["operation_id"]: item for item in result["operations"]}
+    for variant in result["variants"]:
+        expected_value, expected_input = 0, source
+        for step in variant["steps"]:
+            operation_report = operation_reports[step["operation_id"]]
+            assert Path(operation_report["input_image"]) == expected_input
+            assert operation_report["input_sha256"] == step["input_sha256"]
+            assert operation_report["input_sha256"] == RestorationChainProcessor._fingerprint(
+                expected_input,
+            )
+            assert fits.getdata(expected_input)[0, 0] == expected_value
+            code = 6 if step["engine"] == "aberration_remover" else int(step["engine"])
+            expected_value = expected_value * 10 + code
+            expected_input = Path(operation_report["output_image"])
+            assert fits.getdata(expected_input)[0, 0] == expected_value
+        assert Path(variant["output_image"]) == expected_input
     rows = result["summary"]["rows"]
     assert len(rows) == variants
     assert sum(row["decision"] == "selected" for row in rows) == 1
@@ -155,6 +215,12 @@ def test_all_chains_are_evaluated_and_intermediates_cached(
     for operation in result["operations"]:
         operation_report = Path(operation["report_path"])
         assert operation_report.is_file()
+        assert operation["audit_path"] == str(operation_report)
+        assert "pairs" not in operation["comparison"]
+        detailed = json.loads(operation_report.read_text())
+        assert len(detailed["comparison"]["pairs"]) == 50
+        assert "channels" in detailed["artifacts"]
+        assert "high_frequency_residual" not in detailed["artifacts"]
         local_text = Path(operation["verification_path"])
         assert local_text.parent == operation_report.parent
         assert "VÉRIFICATIONS LOCALES" in local_text.read_text()
@@ -190,6 +256,22 @@ def test_all_chains_are_evaluated_and_intermediates_cached(
     assert titles[-1] == "Restauration — Classement et publication du résultat"
     assert sum(title.startswith("Restauration — Calcul ") for title in titles) == operations
     assert sum("Contrôle final de la variante" in title for title in titles) == len(finals)
+    calculation_titles = [title for title in titles if title.startswith("Restauration — Calcul ")]
+    assert calculation_titles[0].endswith(": Débruitage avec 1")
+    assert any(title.endswith(": Netteté avec 4") for title in calculation_titles)
+    forward_sequence = "Débruitage avec 1 → Netteté avec 4"
+    assert any(title.endswith(": " + forward_sequence) for title in calculation_titles)
+    assert any(
+        "préparation du calcul #" in message and forward_sequence in message
+        for message in messages
+    )
+    assert any(
+        message.startswith("Durée — Restauration — calcul #")
+        and forward_sequence in message for message in messages
+    )
+    reverse_sequence = "Netteté avec 4 → Débruitage avec 1"
+    assert any(reverse_sequence in title for title in calculation_titles) == reverse
+
     for title in titles:
         position = messages.index(title)
         assert messages[position - 1] == messages[position + 1] == "-" * 60

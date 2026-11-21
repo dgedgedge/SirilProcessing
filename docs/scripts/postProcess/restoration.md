@@ -44,7 +44,8 @@ positif pour battre l’identité. Les scores sont décrits dans
 [Cosmic Clarity](cosmic-clarity.md#score-de-sélection-utilisé), et les masques,
 incertitudes et états UNKNOWN dans [Qualité astrophotographique](quality.md).
 
-Sans Clarity ni GraXpert, l’orchestrateur utilise uniquement le moteur Siril.
+Avec Clarity, GraXpert et Aberration Remover désactivés, l’orchestrateur utilise
+uniquement le moteur Siril.
 Le rapport historique direct reste disponible en mode `legacy`. Aucun moteur neuronal n’est créé. Un refus de déconvolution
 Siril permet d’évaluer l’autre candidat. En mode fiable, un échec technique d’un
 moteur est audité puis les autres moteurs sont essayés ; le mode `legacy`
@@ -100,6 +101,19 @@ Dans la comparaison des chaînes, les titres signalent :
    lorsqu’aucune amélioration sûre n’a été retenue.
 
 Une ligne INFO indique la variante courante et le nombre total de variantes.
+Le bandeau de chaque nouveau calcul et ses lignes de durée indiquent la
+séquence jusqu’au moteur courant, dans l’ordre d’application. Par exemple :
+
+```text
+Restauration — Calcul 06 : Netteté avec Aberration Remover
+Restauration — Calcul 09 : Netteté avec Aberration Remover → Débruitage avec Cosmic Clarity
+```
+
+Ces calculs utilisent deux entrées différentes : l’image de référence pour le
+premier, la sortie d’Aberration Remover pour le débruitage du second. La
+correction des aberrations précède toujours le débruitage et ne peut pas
+être associée à une autre netteté/déconvolution. Une étape future de la variante
+n’est pas incluse dans le titre du calcul courant.
 Une opération déjà en cache n’affiche pas de nouveau bandeau de calcul : sa
 réutilisation est en DEBUG. Un contrôle final déjà en cache n’est pas annoncé
 comme un nouveau contrôle. Les étapes non atteintes après rejet ne sont pas
@@ -154,3 +168,126 @@ et règles des chaînes sont décrits dans [Qualité astrophotographique](qualit
 
 Le moteur [GraXpert natif](graxpert.md) déclare ses services d’inférence et de
 modèles dans la même hiérarchie de paramètres.
+
+
+Le moteur ONNX [Aberration Remover](aberration.md) complète par défaut les
+comparaisons de netteté avec le modèle livré dans `data/`. `--aberration-model`
+permet de changer le chemin (une chaîne vide désactive le moteur). Cette page décrit ses
+options, son algorithme et ses limites de validation.
+
+## Traçabilité des entrées et références d’évaluation
+
+Dans `RestorationChainProcessor.post_process`, chaque variante commence sur
+la référence commune. Après une étape acceptée, `current` devient le chemin
+`output_image` renvoyé par ce moteur. L'appel suivant reçoit exactement ce
+chemin, ainsi qu'une référence de qualité préparée sur cette entrée effective.
+Un rejet ou un échec interrompt la variante ; aucune étape suivante n'est
+exécutée sur la référence initiale pour contourner ce rejet.
+
+Le cache d'opération inclut le SHA-256 du fichier d'entrée effectif, l'opération,
+la classe du moteur, les paramètres et les dépendances. Une sortie déjà calculée
+n'est réutilisée que pour cette clé. Chaque étape du rapport référence un
+`operation_id` et son `input_sha256` ; l'opération détaille `input_image`,
+`image_path`, `output_image` et ses masques. Ces champs permettent de contrôler
+la continuité d'une chaîne même quand ses calculs sont partagés avec une autre.
+
+Les contrôles locaux comparent l'entrée effective et le candidat du moteur.
+`reference_for` refuse de réutiliser une référence attachée à un autre chemin.
+Les contrôles finaux comparent volontairement le dernier candidat à la
+**référence initiale commune**, pour mesurer le gain total de la chaîne sans
+additionner les scores locaux. L'usage de cette référence par le contrôle final
+ne signifie pas que les moteurs repartent de l'image d'origine.
+
+La publication copie le candidat final gagnant vers `restoration.fits`.
+La séquence de post-traitement affecte ensuite cette sortie à `current_path`
+et la transmet à AutoGHS. Une éventuelle adaptation de plage pour le rendu
+est auditée séparément et conserve le FITS scientifique.
+
+Les tests de chaînes utilisent des signatures de pixels cumulatives pour
+vérifier toutes les variantes : image effectivement consommée, référence
+locale, empreinte d'entrée, sortie intermédiaire, réutilisation du cache et
+référence finale. Ils vérifient la limite de deux traitements et l'absence de
+répétition de type, avec et sans ordre inverse, indépendamment d'un champ
+astronomique ou d'un modèle réel.
+
+Les [aperçus JPEG AutoStretch de restauration](restoration-previews.md) sont
+activés par défaut pour l'entrée, les résultats des moteurs et la sortie finale.
+Ils partagent la courbe de l'entrée pour faciliter les comparaisons, sans
+modifier les FITS. `--no-restoration-previews` désactive ces exports.
+
+La limite de deux traitements s'applique à toutes les variantes de restauration :
+identité, moteur seul, ou une netteté associée à un débruitage. Deux nettetés,
+deux débruitages et les chaînes à trois étapes sont interdits. Aberration Remover
+participe à la catégorie netteté, en concurrence avec Siril et Cosmic Clarity ;
+il reste avant le débruitage lorsqu'il est utilisé.
+
+## Comparer plusieurs répertoires de résultats
+
+Le script [compareRestoration](../compareRestoration/README.md) extrait les
+variantes et opérations de plusieurs `restoration.json` dans un tableau HTML
+filtrable et un CSV. Il distingue les contrôles finaux des contrôles locaux,
+conserve les alertes non bloquantes et ne relance aucun traitement.
+
+Le rapport global des nouvelles comparaisons de chaînes est une synthèse v2.
+Les populations scientifiques restent dans les audits locaux et finaux
+référencés par `audit_path` : voir
+[organisation et compatibilité des rapports](restoration-reports.md).
+
+<a id="restoration-early-stop"></a>
+
+## Arrêt anticipé après Aberration Remover → GraXpert
+
+Avec `--restoration-early-stop` activé par défaut, le premier traitement essayé
+est la chaîne **Aberration Remover → GraXpert**, si les deux moteurs sont actifs.
+La référence inchangée est enregistrée au préalable sans exécuter de moteur.
+La chaîne conserve les contrôles locaux habituels, puis son contrôle final
+contre l'entrée originale de restauration.
+
+Les autres essais ne sont pas lancés si, et seulement si :
+
+- le candidat final est accepté ;
+- tous les critères finaux actuels sont explicitement `PASS`, y compris les
+  diagnostics non bloquants `diffuse` et `stellar_flux`, la significativité,
+  l'appariement, la rondeur, les anneaux et les contrôles de bruit ;
+- la réduction de FWHM **médiane** est strictement supérieure à **30 %** ;
+- le gain de **bruit utile mesuré** est strictement supérieur à **35 %**.
+
+Le gain de netteté est `1 - fwhm_median_ratio`, et le gain de bruit est le
+`useful_noise_gain` enregistré dans la décomposition du score. Ces deux
+quantités sont sans unité. Pour éviter un dépassement artificiel dû à
+l'arrondi de `1 - 0.7`, le premier test compare directement le ratio à
+`1 - seuil`. Une égalité exacte à un seuil ne suffit pas.
+
+Un `FAIL`, même non bloquant pour l'acceptation, un `UNKNOWN`, un critère attendu
+absent ou une mesure absente/non finie interdit l'arrêt anticipé. Un nouveau
+critère final est également contrôlé. Les critères requis sont ceux de la
+validation actuelle d'une chaîne de netteté avec débruitage, pas uniquement
+les critères bloquants. Cette règle peut donc poursuivre tous les essais même
+si les gains de netteté et de bruit dépassent les seuils.
+
+Sinon l'orchestrateur poursuit toutes les autres variantes prévues, avec la
+même référence et les mêmes règles de classement. Le cache réutilise les
+opérations et contrôles finaux déjà effectués ; AR seul n'est pas recalculé.
+Si AR est rejeté localement, GraXpert n'est pas appliqué au candidat refusé,
+mais le débruitage seul reste essayé sur l'original. Si un moteur de la chaîne
+prioritaire est désactivé, la recherche habituelle reste disponible.
+
+Le service `lib.restoration_early_stop.RestorationEarlyStop`, dérivé de
+`ParameterizedComponent`, possède les options et la décision de suffisance ;
+il n'effectue aucun calcul d'image. Les paramètres se résolvent suivant
+CLI > JSON > défaut et sont mémorisables avec `-S` :
+
+| Option | Défaut | Effet |
+|---|---|---|
+| `--restoration-early-stop` / `--no-restoration-early-stop` | activé | Priorité à AR → GraXpert et arrêt conditionnel ; désactiver pour retrouver l'ordre et le parcours exhaustifs |
+| `--restoration-early-stop-fwhm-gain` | `0.30` | Gain médian de FWHM à dépasser strictement, fraction finie dans `[0,1[` |
+| `--restoration-early-stop-noise-gain` | `0.35` | Gain de bruit utile à dépasser strictement, fraction finie dans `[0,1[` |
+
+Le champ `early_stop` du rapport indique l'activation, le déclenchement, les
+conditions mesurées, les critères absents ou non PASS, et les nombres de
+variantes prévues, évaluées et non exécutées. La synthèse texte et l'index HTML
+signalent un arrêt anticipé. Les variantes non exécutées n'ont ni verdict ni
+score : elles ne sont jamais présentées comme rejetées. Le résultat retenu
+satisfait une condition de suffisance ; il n'est pas démontré meilleur que les
+variantes non exécutées. Une reprise `--autoghs-only` ne relance pas cette
+recherche de restauration.
