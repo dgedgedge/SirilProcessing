@@ -142,6 +142,8 @@ class AberrationEngine(ParameterizedComponent):
 
         ONNX Runtime est importé au calcul uniquement. La politique commune
         choisit CUDA si disponible, sinon CPU ; CoreML est exclu comme en amont.
+        Les bibliothèques NVIDIA du venv sont préchargées avant la session CUDA
+        si ONNX Runtime fournit preload_dlls, comme pour GraXpert.
         Une panne d'inférence est propagée sans reprise silencieuse.
         """
         args = self._get_args()
@@ -155,6 +157,10 @@ class AberrationEngine(ParameterizedComponent):
         providers = ['CPUExecutionProvider']
         if (ComputeConfig.requested(args) == 'auto'
                 and 'CUDAExecutionProvider' in ort.get_available_providers()):
+            if hasattr(ort, 'preload_dlls'):
+                # Rechercher CUDA/cuDNN dans les paquets NVIDIA du venv,
+                # sans dépendre du chargement préalable d'un autre moteur.
+                ort.preload_dlls(directory='')
             providers.insert(0, 'CUDAExecutionProvider')
         session = ort.InferenceSession(str(model), providers=providers)
         with fits.open(source, memmap=False) as hdul:

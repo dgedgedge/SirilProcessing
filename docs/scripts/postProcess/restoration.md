@@ -291,3 +291,9 @@ score : elles ne sont jamais présentées comme rejetées. Le résultat retenu
 satisfait une condition de suffisance ; il n'est pas démontré meilleur que les
 variantes non exécutées. Une reprise `--autoghs-only` ne relance pas cette
 recherche de restauration.
+
+En cas de poursuite, le journal INFO énumère chaque condition non satisfaite
+sur une ligne « motif de poursuite » : candidat rejeté, critère absent,
+FAIL/UNKNOWN avec son motif et son rôle bloquant ou diagnostique, gains
+insuffisants ou non mesurés avec les seuils stricts attendus. Un critère
+non bloquant pour accepter une image peut ainsi empêcher l'arrêt anticipé.

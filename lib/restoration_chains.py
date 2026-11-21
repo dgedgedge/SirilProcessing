@@ -758,8 +758,11 @@ class RestorationChainProcessor(processor):
                     )
                 else:
                     logging.info(
-                        "Restauration — poursuite de tous les essais : %s", verdict,
+                        "Restauration — poursuite de tous les essais : "
+                        "conditions d’arrêt anticipé non satisfaites",
                     )
+                    for message in RestorationEarlyStop.continuation_messages(variant, verdict):
+                        logging.info("Restauration — motif de poursuite : %s", message)
             result["duration_seconds"] = time.monotonic() - started
             RestorationReportStorage.write(report, result)
             if stop_now:

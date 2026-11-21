@@ -110,3 +110,42 @@ class RestorationEarlyStop(ParameterizedComponent):
             minimum_fwhm_gain=min_fwhm, minimum_noise_gain=min_noise,
             missing_criteria=missing, non_pass_criteria=non_pass,
         )
+
+    @classmethod
+    def continuation_messages(cls, audit: JSONReport, assessment: JSONReport) -> list[str]:
+        """Nomme chaque condition empêchant l'arrêt, sans changer son verdict.
+
+        Les critères diagnostiques restent distingués des critères bloquants
+        pour l'acceptation. Les mesures absentes ne sont jamais affichées à zéro.
+        """
+        messages = []
+        conditions = assessment['conditions']
+        if not conditions['accepted']:
+            reasons = audit.get('rejection_reasons') or audit.get('reason') or audit.get('error')
+            messages.append(f"candidat non accepté : statut={audit.get('status', 'UNKNOWN')} ; "
+                            f"motif={reasons or 'non renseigné'}")
+        criteria = audit.get('criteria', {})
+        for name in assessment['missing_criteria']:
+            messages.append(f'critère {name} : absent, validation impossible')
+        for name in assessment['non_pass_criteria']:
+            check = criteria.get(name)
+            check = check if isinstance(check, dict) else {}
+            role = ('diagnostique non bloquant pour l’acceptation'
+                    if check.get('blocking') is False else
+                    'bloquant pour l’acceptation' if check.get('blocking') is True
+                    else 'rôle bloquant non renseigné')
+            messages.append(
+                f"critère {name} : {check.get('status') or 'UNKNOWN'} ; {role} ; "
+                f"motif={check.get('reason') or 'non renseigné'} ; "
+                "PASS requis pour l’arrêt anticipé"
+            )
+        for condition, key, threshold, label in (
+            ('fwhm_gain', 'fwhm_gain', 'minimum_fwhm_gain', 'gain FWHM médiane'),
+            ('useful_noise_gain', 'useful_noise_gain', 'minimum_noise_gain', 'gain bruit utile'),
+        ):
+            if not conditions[condition]:
+                value = assessment[key]
+                text = 'non mesuré' if value is None else f'{100*value:.6g} %'
+                messages.append(f'{label} : {text} ; strictement supérieur à '
+                                f'{100*assessment[threshold]:.6g} % requis')
+        return messages

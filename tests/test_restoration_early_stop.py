@@ -190,3 +190,21 @@ def test_priority_full_fallback_and_cache(
         assert calls[0] == (2, 0)
     assert fits.getdata(source)[0, 0] == 0
     assert early['evaluated_variant_count'] == len(result['variants'])
+
+
+def test_continuation_messages_are_explicit(passing_audit: JSONReport) -> None:
+    """Les diagnostics FAIL, absences et seuils manqués sont nommés sans ambiguïté."""
+    passing_audit['criteria']['diffuse'] = dict(status='FAIL', blocking=False,
+                                               reason='DIFFUSE_AUDIT')
+    del passing_audit['criteria']['stars']
+    passing_audit['score_details']['fwhm_median_ratio'] = .7
+    passing_audit['score_details']['useful_noise_gain'] = None
+    verdict = Policy.assess(passing_audit, argparse.Namespace())
+    messages = '\n'.join(Policy.continuation_messages(passing_audit, verdict))
+    assert 'diffuse : FAIL' in messages
+    assert 'diagnostique non bloquant' in messages
+    assert 'PASS requis' in messages
+    assert 'stars : absent' in messages
+    assert '30 % ; strictement supérieur à 30 %' in messages
+    assert 'gain bruit utile : non mesuré' in messages
+    assert '35 % requis' in messages

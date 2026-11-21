@@ -73,8 +73,9 @@ def test_protections_and_zero_strength(shape: tuple[int, int, int]) -> None:
     np.testing.assert_array_equal(AberrationEngine.restore(data, None, 'image', 0), data)
 
 
+@pytest.mark.parametrize('backend', ['cpu', 'auto'])
 def test_fits_metadata_and_units(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, backend: str,
 ) -> None:
     """Le traitement conserve unités uint16, WCS et source sur disque."""
     model = tmp_path / 'model.onnx'
@@ -83,12 +84,20 @@ def test_fits_metadata_and_units(
     original = np.arange(32 * 33, dtype=np.uint16).reshape(32, 33)
     fits.writeto(source, original, header=fits.Header({'CRPIX1': 12.5}))
     contents = source.read_bytes()
+    events = []
+
+    def session(*args: object, **kwargs: object) -> AffineSession:
+        """Vérifie le préchargement avant toute création de session CUDA."""
+        assert events == (['preload'] if backend == 'auto' else [])
+        return AffineSession()
+
     monkeypatch.setitem(sys.modules, 'onnxruntime', SimpleNamespace(
-        InferenceSession=lambda *a, **kw: AffineSession(),
-        get_available_providers=lambda: ['CPUExecutionProvider'],
+        InferenceSession=session,
+        preload_dlls=lambda **kwargs: events.append('preload'),
+        get_available_providers=lambda: ['CUDAExecutionProvider', 'CPUExecutionProvider'],
     ))
     engine = AberrationEngine()
-    engine.set_from_args(argparse.Namespace(aberration_model=str(model), compute_backend='cpu'))
+    engine.set_from_args(argparse.Namespace(aberration_model=str(model), compute_backend=backend))
     report = engine.process(source, candidate)
     np.testing.assert_allclose(fits.getdata(candidate), original, atol=.02)
     assert fits.getheader(candidate)['CRPIX1'] == 12.5

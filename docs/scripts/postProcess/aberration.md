@@ -127,3 +127,9 @@ usage scientifique, comparer sur un FITS linéaire avec le même modèle dans
 Siril, examiner les jointures et les étoiles aux bords, puis vérifier les
 verdicts du rapport de restauration. Cette validation réelle n'a pas été
 réalisée lors de l'intégration.
+
+Pour CUDA, le moteur précharge les bibliothèques NVIDIA présentes dans le venv
+avec `onnxruntime.preload_dlls(directory='')` lorsque cette API est disponible,
+avant de créer la session, comme GraXpert. Le chargement ne dépend donc pas de
+l'ordre des moteurs. Cela ne remplace pas l'installation des dépendances CUDA
+et cuDNN si celles-ci sont absentes du venv.
