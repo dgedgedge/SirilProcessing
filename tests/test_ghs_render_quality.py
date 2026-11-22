@@ -149,7 +149,10 @@ def test_spatial_measure_matches_full_region_definitions() -> None:
     spatial = Quality.sample_measure(luminance(image, 'human'), transformed, thresholds, 'human')
     full = ProtectedGHSFinalizer.measure(image, transformed, thresholds, 'human')
     for key, value in spatial.items():
-        assert value == pytest.approx(full[key], rel=1e-5)
+        if key == 'weak_structure':
+            assert value == full[key]
+        else:
+            assert value == pytest.approx(full[key], rel=1e-5)
     with pytest.raises(ValueError, match='Grille'):
         Quality.sample_measure(light[:2], image, thresholds, 'human')
 

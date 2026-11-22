@@ -92,6 +92,26 @@ def test_sky_excludes_galaxy_and_masks_are_fixed(galaxy, tmp_path):
     json.dumps(audit, allow_nan=False)
 
 
+@pytest.mark.parametrize('factor, expected', [(0.2, 'FAIL'), (1.8, 'PASS')])
+def test_signed_diffuse_loss(
+    galaxy: tuple[Path, np.ndarray, np.ndarray], tmp_path: Path,
+    factor: float, expected: str,
+) -> None:
+    """Une perte corroborée échoue ; une augmentation comparable reste admise."""
+    source, diffuse, noise = galaxy
+    reference = QualityReference(source, argparse.Namespace(compute_backend='cpu'))
+    candidate = tmp_path / 'signed_diffuse.fits'
+    fits.writeto(candidate, (0.1 + factor * diffuse + noise).astype('float32'))
+    audit = reference.evaluate(candidate)['diffuse']
+    assert audit['status'] == expected
+    measured = [entry for entry in audit['per_region'] if entry.get('value') is not None]
+    assert measured
+    assert any(abs(entry['value']) > .05 for entry in measured)
+    if factor > 1:
+        assert all(entry['value'] < 0 for entry in measured)
+        assert all(entry['status'] != 'FAIL' for entry in audit['per_region'])
+
+
 def test_erased_diffuse_signal_is_corrobated(galaxy, tmp_path):
     """La suppression du signal ne peut pas être compensée par un bon bruit."""
     source, diffuse, noise = galaxy

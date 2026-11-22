@@ -438,3 +438,10 @@ mesure l'étendue des sources brillantes avant l'inférence. Elle réduit le
 pré-étirement seulement si ce critère le demande, sans changer la restauration.
 La reprise `--autoghs-only` relance cette séparation, le rendu, la couleur
 finale et les exports en réutilisant le FITS linéaire restauré.
+
+Le classement `piecewise` complète ses populations d'intensité par les
+[structures faibles détectées et le ciel régional](ghs-weak-structures.md).
+Il peut préférer un fond plus sombre à visibilité conservée, avec repli sur
+les critères antérieurs si la mesure est insuffisante. Les constantes et
+limites de cette heuristique sont détaillées dans la page spécialisée ;
+il n'y a pas de correction locale ni de paramètre propre à un objet.

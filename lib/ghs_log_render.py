@@ -400,7 +400,8 @@ class LogHistogramRenderer(processor):
                 )
                 if not assessment['profile']['render_quality']['available']:
                     shape_rejections.append('unmeasurable render quality')
-            rejections = QuartileGHSProcessor.diffuse_rejections(baseline, measured)
+            rejections = QuartileGHSProcessor.diffuse_rejections(
+                baseline, measured, allow_weak_preservation=piecewise)
             if piecewise:
                 noise = ProtectedGHSFinalizer.noise_assessment(baseline, measured, relative=True)
                 assessment['noise_assessment'] = noise

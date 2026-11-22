@@ -468,7 +468,7 @@ def _slope_ratio_annotation(audit: JSONReport) -> list[str]:
     position = geometry.get('shoulder_position')
     advance = audit.get('shoulder_advance')
     ratios = geometry.get('ratios', [])
-    return [
+    lines = [
         'Épaulement : '+(f'{position:.4f}' if position is not None else 'absent'),
         'Avance de l’épaulement : '+(f'{advance:.4f}' if advance is not None else 'non mesurable'),
         'Limite d’avance : '+str(audit.get('maximum_shoulder_advance')),
@@ -476,6 +476,35 @@ def _slope_ratio_annotation(audit: JSONReport) -> list[str]:
             f'{value:.3f}' if value is not None else '?' for value in ratios), 38),
         f"Écart isolé des ratios : {audit.get('ratio_break', 0):.3f}",
         f"Poids du raidissement terminal : {audit.get('terminal_weight', .2):.2f}",
+    ]
+    for key, label in [('reference_geometry', 'Pentes référence'),
+                       ('candidate_geometry', 'Pentes candidat')]:
+        slopes = audit.get(key, {}).get('slopes', [])
+        if slopes:
+            lines.append(textwrap.fill(label+': '+', '.join(f'{s:.3g}' for s in slopes), 38))
+    for row in audit.get('slope_order', {}).get('comparisons', []):
+        if row.get('reversed'):
+            lines.append(f"Ordre signé inversé au raccord {row['index']}"
+                         + (' (queue exemptée)' if row.get('terminal_exemption') else ''))
+    shift = audit.get('boundary_fraction_shift')
+    if shift is not None:
+        lines.append(f'Écart de découpage relatif : {shift:.4f}')
+    return lines
+
+
+def _weak_structure_annotation(comparison: JSONReport) -> list[str]:
+    """Expose les mesures du signal faible, sans présenter une absence comme zéro."""
+    if not comparison:
+        return []
+    if not comparison.get('available'):
+        return ['Structures faibles : non mesurables (politique antérieure)']
+    return [
+        'STRUCTURES FAIBLES / CIEL (grille)',
+        f"Contraste faible : {comparison['contrast']:.3f}",
+        f"CNR conservé : {100*comparison['cnr_retention']:.1f} %",
+        f"Ciel régional Q90 : {comparison['sky_level']:.4f}",
+        f"Niveau faible : {comparison['faint_level']:.4f}",
+        f"Contribution au score : {comparison['score_adjustment']:+.3f}",
     ]
 
 
@@ -495,7 +524,7 @@ def _render_quality_annotation(profile: JSONReport) -> list[str]:
     """
     quality = profile.get('render_quality')
     if quality is None:
-        return []
+        return _weak_structure_annotation(profile.get('weak_structure_comparison', {}))
     if not quality.get('available'):
         return ['', 'QUALITÉ : non mesurable']
     lines = ['', 'QUALITÉ DU RENDU' + (' (estimée)' if quality.get('estimated') else ''),
@@ -512,6 +541,7 @@ def _render_quality_annotation(profile: JSONReport) -> list[str]:
                        ('bright_penalty', 'Compression brillante')):
         if key in quality:
             lines.append(f"Pénalité {label.lower()} : {quality[key]:.3f}")
+    lines.extend(_weak_structure_annotation(quality.get('weak_structure', {})))
     mode_guard = profile.get('low_light_mode_guard', {})
     if mode_guard.get('measurable'):
         lines.append(
@@ -626,7 +656,8 @@ def ghs_annotation(report: JSONReport) -> str:
             'histogram shoulder lost': 'Épaulement disparu',
             'histogram shoulder advance': 'Épaulement trop avancé',
             'histogram slope sign inversion': 'Pente descendante devenue croissante ou nulle',
-            'histogram slope ratio inversion': 'Ordre des pentes inversé',
+            'histogram slope ratio inversion': 'Ordre des rapports inversé (ancien contrôle)',
+            'histogram slope order inversion': 'Ordre signé des pentes inversé',
             'histogram slope ratio distortion': 'Rapport de pentes excessivement modifié',
             'histogram slope ratio break': 'Rupture isolée des rapports de pentes',
         })
@@ -845,7 +876,10 @@ def histogram_figure(
     curves = []
     population_label = 'Étoiles seules' if report.get('diagnostic_subject') == 'stars' else 'Sans étoiles'
     for index in ([] if with_stars else selection):
-        if index == 0:
+        if len(states) == 1 and report.get("diagnostic_trial"):
+            label = population_label + " — candidat mesuré"
+            color = DIAGNOSTIC_COLORS[1]
+        elif index == 0:
             label = population_label + " — entrée linéaire"
             color = DIAGNOSTIC_COLORS[0]
         elif index == len(states) - 1:
@@ -895,6 +929,20 @@ def histogram_figure(
             line, = axis.plot(xx, yy, color='#dd99ee', linewidth=1, marker='o', markersize=3)
             if index == 0:
                 legend_handles['Approximation par morceaux'] = line
+        audit = trial.get('shape_preservation') or profile.get('shape_preservation', {})
+        geometry = audit.get('candidate_geometry', {})
+        shape = profile.get('shape') or profile.get('histogram_shape', {}).get('shape') or {}
+        boundaries = geometry.get('boundaries', [])
+        source_x, source_y = shape.get('x', []), shape.get('log_density', [])
+        if source_x and source_y and len(boundaries) == 6:
+            colors = ['#ff595e', '#ffca3a', '#8ac926', '#1982c4', '#b18bff']
+            for i, (left, right) in enumerate(zip(boundaries, boundaries[1:])):
+                fit_x = np.linspace(left, right, 5)
+                slope, intercept = np.polyfit(fit_x, np.interp(fit_x, source_x, source_y), 1)
+                xx = np.asarray([left, right])
+                yy = 10**(intercept+slope*xx)*profile['support']/len(curves[-1][0])
+                line, = axis.plot(xx, yy, color=colors[i], linewidth=2, marker='|')
+                legend_handles[f'Pente contrôlée {i+1} ({slope:.3g})'] = line
         floor = profile.get('regression_floor', {})
         if floor.get('minimum_count', 0) > 0:
             target = floor['minimum_count']*floor['reference_bins']/len(curves[-1][0])

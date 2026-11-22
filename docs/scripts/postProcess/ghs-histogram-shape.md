@@ -152,8 +152,14 @@ Les deux pentes descendantes donnent un rapport positif. On compare
 - Une multiplication commune, comme `−1 / −2 → −0,2 / −0,4`, est libre.
 
 `--ghs-shape-ratio-tolerance` vaut **0,5** : la zone sans coût satisfait
-`|e| ≤ log(1,5)`. L’ordre est contrôlé de part et d’autre de 1 ; une marge de
-10 % évite de qualifier d’inversion une quasi-égalité bruitée. L’aplatissement
+`|e| ≤ log(1,5)`. L’ordre n’est pas contrôlé par ces rapports : pour chaque raccord, on
+compare directement `delta = pente_suivante - pente_précédente`. Le signe de
+`delta` est retenu seulement si `abs(delta)` dépasse
+`0,10 × max(abs(pente_précédente), abs(pente_suivante))`. Deux signes opposés
+significatifs entre référence et candidat indiquent une inversion d’ordre
+signé, même si les pentes sont positives. Zéro ou une quasi-égalité ne
+définissent pas d’ordre. Les rapports servent uniquement au contrôle distinct
+d’amplitude et de rupture, pas à ce test d’ordre. L’aplatissement
 d’un segment n’impose pas que son prédécesseur s’aplatisse lui aussi : cette
 condition ne fait pas partie de la politique.
 
@@ -544,3 +550,35 @@ couches StarNet et étoiles déjà calculées ; elles exécutent le GHS et les
 exports sur CUDA. Elles ne réexécutent ni StarNet ni la couleur finale. Les
 rapports et graphiques d'essai restent externes au dépôt ; leurs objectifs
 incomplets ne sont pas assimilés à une validation complète du rendu.
+
+### Diagnostic du découpage et des pentes contrôlées
+
+Le graphique trace les cinq régressions réellement utilisées pour le contrôle,
+avec une couleur et un numéro par région, distinctes de l'approximation
+adaptative par morceaux. L'encart donne les cinq pentes de référence et du
+candidat et les raccords d'ordre signé inversé. Les anciens motifs de rejet
+par rapports restent lisibles dans les audits historiques.
+
+Le champ `slope_order` enregistre les différences signées, tolérances et ordres
+avant/après. `boundary_fraction_shift` mesure le déplacement maximal des
+coupures après normalisation de chaque support à [0,1]. Les segmentations
+restent indépendantes ; ce décalage est un diagnostic, pas un nouveau rejet.
+Une inversion peut venir d'une modification du profil ou du découpage :
+l'ordre direct ne prétend pas éliminer cette seconde source d'incertitude.
+
+La géométrie des pentes commence après le pic dominant. Un creux avant ce pic
+n'est donc pas une pente de ce contrôle : les modes sombres et creux sont
+évalués séparément. Le diagnostic sur les effectifs regroupés en 128 classes
+ne garantit pas l'absence d'irrégularités fines dans un histogramme de 4096
+classes. Il faut distinguer les effectifs bruts, la spline lissée et les
+segments ajustés avant d'attribuer un creux à une structure réelle ou au modèle.
+
+## Structures faibles et ciel régional
+
+Le classement `piecewise` intègre désormais la [mesure fixe des parties faibles
+d'objets détectés](ghs-weak-structures.md). Un ciel moins lumineux peut être
+préféré si contraste, CNR et visibilité faible sont conservés. Dans ce cas,
+les écarts d'ordre des pentes descendantes deviennent une pénalité bornée ;
+les rejets structurels de signe, de modes sombres et d'écrêtage restent actifs.
+Les règles historiques sont conservées si les nouvelles régions ne sont pas
+mesurables. Cette évolution ne réalise aucune correction spatiale de l'image.

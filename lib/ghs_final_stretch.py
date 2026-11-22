@@ -8,6 +8,8 @@ Voir docs/scripts/postProcess/ghs-highlight-protection.md.
 
 from __future__ import annotations
 
+from lib.ghs_render_quality import HistogramRenderQuality
+
 import argparse
 import itertools
 import json
@@ -192,6 +194,8 @@ class ProtectedGHSFinalizer(processor):
             counts if xp is np else xp.asnumpy(counts),
             window_end=tail_endpoint,
         )
+        from lib.ghs_weak_structure import WeakStructureQuality
+        result['weak_structure'] = WeakStructureQuality.measure(reference, light, xp)
         return result
 
     @staticmethod
@@ -391,6 +395,16 @@ class ProtectedGHSFinalizer(processor):
                                          histogram_score_enabled=not shape_enabled,
                                          relative_noise=shape_enabled)
             if shape_enabled:
+                from lib.ghs_weak_structure import WeakStructureQuality
+                weak = WeakStructureQuality.compare(first, last)
+                last['weak_structure_comparison'] = weak
+                if weak.get('lower_background_preferred'):
+                    reasons = [reason for reason in reasons if reason not in (
+                        'no useful diffuse gain', 'no useful presentation gain',
+                        'diffuse visibility regression')]
+                    score = max(0., score) + weak['score_adjustment']
+                else:
+                    score += weak['score_adjustment']
                 if id(first) not in shape_cache:
                     shape_cache[id(first)] = piecewise_histogram_profile(
                         np.array(first['histogram_counts']), shape_options.ghs_linearity_tolerance,
@@ -405,10 +419,16 @@ class ProtectedGHSFinalizer(processor):
                 audit = compare_histogram_shapes(reference, candidate,
                                                   max_peak_shift=shape_options.ghs_shape_peak_shift,
                                                   **shape_comparison_options(shape_options))
+                candidate['weak_structure_comparison'] = weak
                 last['histogram_shape'] = candidate
                 last['shape_preservation'] = audit
-                reasons.extend(audit['rejections'])
-                score -= audit['penalty']
+                slopes = audit.get('candidate_geometry', {}).get('slopes', [])
+                soft_curvature = (weak.get('available') and weak.get('sufficient')
+                                  and slopes and all(slope < 0 for slope in slopes))
+                reasons.extend(HistogramRenderQuality.hard_shape_rejections(
+                    {'shape_preservation': audit}) if soft_curvature else audit['rejections'])
+                penalty = WeakStructureQuality.shape_penalty(audit, weak)
+                score -= penalty
                 if score <= MIN_SCORE and 'no useful presentation gain' not in reasons:
                     reasons.append('no useful presentation gain')
             return score, reasons
@@ -538,15 +558,16 @@ class ProtectedGHSFinalizer(processor):
         def presentation_rank(record: JSONReport) -> tuple[float, float]:
             """Départage les présentations admissibles par déplacement puis gain.
 
-            Les objectifs de queue sont traités par le moteur suivant. Ici,
-            forme, bruit et contraste ont déjà passé les gardes ; on évite
-            d'éclaircir davantage le ciel pour le seul score de gain diffus.
-            Le mode historique conserve son classement de score.
+            Avec des structures faibles mesurables, la qualité départage avant
+            le déplacement du pic. Sans segmentation fiable, l'ancien classement
+            reste disponible ; le mode historique conserve son score propre.
             """
             if not shape_enabled:
                 return record['score'], 0.
             measured = record.get('starless', record.get('after', {}))
             shift = measured.get('shape_preservation', {}).get('peak_shift')
+            if measured.get('weak_structure_comparison', {}).get('available'):
+                return (record['score'], -float(shift) if shift is not None else -math.inf)
             return (-float(shift) if shift is not None else -math.inf, record['score'])
 
         for d, b, sp, hp in itertools.product(

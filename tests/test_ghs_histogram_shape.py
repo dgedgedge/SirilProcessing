@@ -1,6 +1,7 @@
 """Mesures par morceaux, bruit de queue et protection de forme AutoGHS."""
 
 import argparse
+from pathlib import Path
 import json
 
 import numpy as np
@@ -708,3 +709,62 @@ def test_direct_shape_comparison_also_enforces_dark_modes() -> None:
     assert not audit['achieved']
     assert 'new low-light histogram mode' in audit['rejections']
     assert audit['low_light_mode_guard']['measurable']
+
+
+@pytest.mark.parametrize('first,last,inverted', [
+    ([-6., -4., -3.], [-3., -4., -5.], True),
+    ([6., 4., 3.], [3., 4., 5.], True),
+    ([-6., -4., -3.], [-.6, -.4, -.3], False),
+    ([-6., -6.1, -6.2], [-6.2, -6.1, -6.], False),
+    ([0., 0., 0.], [0., 0., 0.], False),
+])
+def test_slope_order_uses_signed_differences(
+    first: list[float], last: list[float], inverted: bool,
+) -> None:
+    """L'ordre signé reste défini sans division, même pour zéro ou des pentes positives."""
+    from lib.ghs_histogram_shape import compare_slope_order
+    result = compare_slope_order(np.asarray(first), np.asarray(last))
+    assert result['inverted'] is inverted
+    row = result['comparisons'][0]
+    assert row['reference_difference'] == pytest.approx(first[1]-first[0])
+    assert row['candidate_difference'] == pytest.approx(last[1]-last[0])
+
+
+def test_terminal_order_exemption_and_invalid_slopes() -> None:
+    """La queue descendante garde son exception ; les données invalides sont refusées."""
+    from lib.ghs_histogram_shape import compare_slope_order
+    result = compare_slope_order(np.array([-6., -4., -3.]), np.array([-6., -4., -8.]))
+    assert not result['inverted']
+    assert result['comparisons'][-1]['reversed']
+    assert result['comparisons'][-1]['terminal_exemption']
+    with pytest.raises(ValueError):
+        compare_slope_order(np.array([1., np.nan]), np.array([1., 2.]))
+
+
+def test_controlled_slopes_are_drawn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Le graphique distingue les cinq segments de contrôle du découpage adaptatif."""
+    from matplotlib.figure import Figure
+    from lib.ghs_diagnostics import histogram_figure
+    counts = curved_counts()
+    profile = piecewise_histogram_profile(counts)
+    audit = compare_histogram_shapes(profile, profile)
+    captured = []
+    save = Figure.savefig
+
+    def capture(figure: Figure, *args: object, **kwargs: object) -> None:
+        """Capture les légendes réellement visibles dans le PNG produit."""
+        legends = list(figure.legends) + [axis.get_legend() for axis in figure.axes]
+        for legend in legends:
+            if legend:
+                captured.extend(text.get_text() for text in legend.get_texts())
+        return save(figure, *args, **kwargs)
+
+    monkeypatch.setattr(Figure, 'savefig', capture)
+    path = tmp_path/'slopes.png'
+    histogram_figure(dict(histograms=[dict(counts=counts.tolist())],
+                          diagnostic_trial=dict(stage='Contrôle', status='accepted',
+                                                profile=profile, shape_preservation=audit)), path)
+    assert path.is_file()
+    assert len([label for label in captured if label.startswith('Pente contrôlée')]) == 5

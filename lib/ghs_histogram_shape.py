@@ -28,7 +28,7 @@ SHOULDER_FIT_TOLERANCE = .02  # Résidu en décroissance normalisée, pas en dex
 SHOULDER_MIN_FLATTENING = .15  # Réduction relative de pente définissant un épaulement.
 POST_SHOULDER_REGIONS = 5
 SLOPE_RELATIVE_EPSILON = 1e-6
-RATIO_ORDER_TOLERANCE = float(np.log(1.1))  # Ignorer les inversions dues aux quasi-égalités.
+SLOPE_ORDER_TOLERANCE = .1  # Écart direct minimal : 10 % de la plus forte pente voisine.
 RATIO_EXCESS_WEIGHT = 10.
 RATIO_INVERSION_PENALTY = 8.
 TERMINAL_RATIO_WEIGHT = .2  # Raidissement de queue moins influent que les raccords internes.
@@ -396,6 +396,42 @@ def _cached_shoulder_geometry(
     return result
 
 
+def compare_slope_order(reference: np.ndarray, candidate: np.ndarray) -> JSONReport:
+    """Compare directement l'ordre signé des pentes voisines, sans quotient.
+
+    Chaque différence s[i+1]-s[i] est comparée à 10 % du maximum des deux
+    amplitudes voisines, indépendamment dans chaque profil. Une quasi-égalité
+    ne définit pas d'ordre. Une multiplication positive commune des pentes
+    ne change pas ce diagnostic. Un raidissement descendant du dernier raccord
+    est diagnostiqué mais exempté comme auparavant pour la queue terminale.
+    Les pentes croissantes restent contrôlées séparément par l'appelant.
+    """
+    first, last = np.asarray(reference, dtype=float), np.asarray(candidate, dtype=float)
+    if (first.ndim != 1 or first.size < 2 or last.shape != first.shape
+            or not np.isfinite(first).all() or not np.isfinite(last).all()):
+        raise ValueError('Pentes finies de même dimension requises')
+    rows = []
+    for index in range(first.size-1):
+        differences, thresholds, orders = [], [], []
+        for slopes in (first, last):
+            delta = float(slopes[index+1]-slopes[index])
+            threshold = SLOPE_ORDER_TOLERANCE*max(abs(slopes[index]), abs(slopes[index+1]))
+            order = 1 if delta > threshold else -1 if delta < -threshold else 0
+            differences.append(delta)
+            thresholds.append(float(threshold))
+            orders.append(order)
+        terminal = index == first.size-2 and last[index+1] < last[index] < 0
+        reversed_order = orders[0]*orders[1] < 0
+        rows.append(dict(index=index+1, reference_difference=differences[0],
+                         candidate_difference=differences[1],
+                         reference_tolerance=thresholds[0], candidate_tolerance=thresholds[1],
+                         reference_order=orders[0], candidate_order=orders[1],
+                         reversed=reversed_order, terminal_exemption=bool(terminal)))
+    return dict(method='signed adjacent slope differences', tolerance=SLOPE_ORDER_TOLERANCE,
+                comparisons=rows,
+                inverted=any(row['reversed'] and not row['terminal_exemption'] for row in rows))
+
+
 def compare_shoulder_slope_ratios(
     reference: JSONReport, candidate: JSONReport, max_advance: float,
     ratio_tolerance: float, terminal_weight: float = TERMINAL_RATIO_WEIGHT,
@@ -404,7 +440,8 @@ def compare_shoulder_slope_ratios(
 
     max_advance est le déplacement positif autorisé de l'épaulement dans
     [0,1]. ratio_tolerance borne les écarts logarithmiques par log(1+t).
-    Les rapports proches de 1 à 10 % près n'ont pas d'ordre significatif.
+    L’ordre est comparé directement par les différences signées des pentes ;
+    les quasi-égalités à 10 % de l’amplitude voisine sont non significatives.
     Un raidissement terminal descendant pèse 20 % et n'est pas éliminatoire ;
     les inversions de signe des pentes restent interdites à toute position.
     """
@@ -441,7 +478,14 @@ def compare_shoulder_slope_ratios(
     if np.any((first < -initial_floor) & (last >= -final_floor)):
         reasons.append('histogram slope sign inversion')
     errors, normal_errors = [], []
-    inversion = False
+    order_audit = compare_slope_order(first, last)
+    result['slope_order'] = order_audit
+    inversion = order_audit['inverted']
+    bounds_before = np.asarray(before['boundaries'])
+    bounds_after = np.asarray(after['boundaries'])
+    fractions_before = (bounds_before-bounds_before[0])/(bounds_before[-1]-bounds_before[0])
+    fractions_after = (bounds_after-bounds_after[0])/(bounds_after[-1]-bounds_after[0])
+    result['boundary_fraction_shift'] = float(np.max(abs(fractions_after-fractions_before)))
     bound = float(np.log1p(ratio_tolerance))
     for index, (old, new) in enumerate(zip(before['ratios'], after['ratios'])):
         if old is None or new is None or old <= 0 or new <= 0:
@@ -454,13 +498,11 @@ def compare_shoulder_slope_ratios(
         errors.append(error)
         if not terminal_steepening:
             normal_errors.append(change)
-            if abs(np.log(old)) > RATIO_ORDER_TOLERANCE and abs(np.log(new)) > RATIO_ORDER_TOLERANCE:
-                inversion |= bool(np.sign(np.log(old)) != np.sign(np.log(new)))
             if error > bound:
                 reasons.append('histogram slope ratio distortion')
         result['penalty'] += RATIO_EXCESS_WEIGHT*(max(0., error-bound)/bound)**2
     if inversion:
-        reasons.append('histogram slope ratio inversion')
+        reasons.append('histogram slope order inversion')
         result['penalty'] += RATIO_INVERSION_PENALTY
     # Une rupture isolée ne doit pas être masquée par une moyenne des ratios.
     ratio_break = (float(np.max(abs(np.asarray(normal_errors)-np.median(normal_errors))))

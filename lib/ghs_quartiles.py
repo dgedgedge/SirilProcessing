@@ -705,7 +705,9 @@ class QuartileGHSProcessor(processor):
         return output
 
     @staticmethod
-    def diffuse_rejections(before: JSONReport, after: JSONReport) -> list[str]:
+    def diffuse_rejections(
+        before: JSONReport, after: JSONReport, *, allow_weak_preservation: bool = False,
+    ) -> list[str]:
         """Protège la luminosité diffuse et sa séparation du ciel à masques fixes.
 
         Parameters
@@ -728,6 +730,10 @@ class QuartileGHSProcessor(processor):
         après chaque essai. Elle évite d'améliorer une droite logarithmique en
         assombrissant les structures déjà révélées par la présentation GHS.
         """
+        from lib.ghs_weak_structure import WeakStructureQuality
+        weak = WeakStructureQuality.compare(before, after)
+        if allow_weak_preservation and weak.get('lower_background_preferred'):
+            return []
         first, last = before.get('diffuse_median'), after.get('diffuse_median')
         if first is None or first <= DIFFUSE_RETENTION_EPSILON:
             return []
@@ -1067,7 +1073,7 @@ class QuartileGHSProcessor(processor):
                     if first.get(key) is not None and last.get(key) is not None and last[key] < -MAX_CHROMA_LOSS:
                         reasons.append(key)
                 if not regions_only:
-                    reasons.extend(self.diffuse_rejections(first, last))
+                    reasons.extend(self.diffuse_rejections(first, last, allow_weak_preservation=self.preserve_shape))
                 if (not regions_only and first.get('sky_median') is not None
                         and last.get('sky_median') is not None
                         and last['sky_median'] > max(MAX_FINAL_BACKGROUND, first['sky_median'])):

@@ -808,3 +808,7 @@ dépassent respectivement 30 % et 35 %. Sinon tous les autres essais continuent.
 
 [Apparence des étoiles](stellar-appearance.md) : objectif non bloquant de 25 %
 de candidats visibles, taille apparente, gradient et jupe mesurés sans traitement local.
+
+[Structures faibles et sobriété du ciel starless](ghs-weak-structures.md) :
+mesures d'objets détectés, contraste au ciel régional et préférence de courbe
+globale lorsque le fond peut rester plus sombre sans effacer les détails.

@@ -40,7 +40,7 @@ HARD_SHAPE_REASONS = frozenset((
 # Tolérance d'aggravation du creux intermodal : 10 % du sommet local.
 MAX_LOW_LIGHT_MODE_EXCESS = .1
 LOW_LIGHT_MODE_REJECTION = 'new low-light histogram mode'
-QUALITY_SELECTION_POLICY = 'capped_diffuse_cnr_shoulder_slope_ratios_dark_modes'
+QUALITY_SELECTION_POLICY = 'weak_structure_background_cnr_shape_dark_modes'
 
 
 class HistogramRenderQuality(ParameterizedComponent):
@@ -208,6 +208,8 @@ class HistogramRenderQuality(ParameterizedComponent):
             delta = (light[:, 1:]-light[:, :-1])[pairs]
             total = (light[:, 1:]+light[:, :-1])[pairs]
             result['local_contrast'] = float(np.median(abs(delta)/np.maximum(total, 1e-12)))
+        from lib.ghs_weak_structure import WeakStructureQuality
+        result['weak_structure'] = WeakStructureQuality.measure(reference_light, light)
         return result
 
     @classmethod
@@ -298,7 +300,6 @@ class HistogramRenderQuality(ParameterizedComponent):
                 deviations.append(max(0., (limit-value if lower else value-limit)/scale)**2)
         if audit.get('policy') == 'shoulder_and_slope_ratios':
             deviations = []
-        shape_penalty = SHAPE_WEIGHT*(audit.get('penalty', 0.)+sum(deviations))
         rise, reference_rise = cls.middle_rise(profile), cls.middle_rise(reference_shape)
         excess_rise = (max(0., rise-reference_rise)
                        if rise is not None and reference_rise is not None else None)
@@ -350,9 +351,15 @@ class HistogramRenderQuality(ParameterizedComponent):
         reference_reward = reference_weight*level_progress
         tail_reward = tail_bonus*tail_progress
         light_reward = reference_reward+tail_reward
+        from lib.ghs_weak_structure import WeakStructureQuality
+        weak = WeakStructureQuality.compare(before, after)
+        shape_penalty = SHAPE_WEIGHT*(WeakStructureQuality.shape_penalty(audit, weak)
+                                      + sum(deviations))
         score = (cnr_reward+visibility_reward+light_reward
                  - cnr_penalty-shape_penalty-rise_penalty-bright_penalty
                  - valley_penalty-sky_penalty-peak_penalty)
+        score += weak['score_adjustment']
+        quality['weak_structure'] = weak
         if not math.isfinite(score):
             raise ValueError('Score de qualité non fini')
         quality.update(available=True, cnr_retention=retention, cnr_floor=cnr_floor,

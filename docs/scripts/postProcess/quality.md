@@ -155,8 +155,12 @@ la redistribution de lumière. Le fond de chaque ouverture est estimé sur une
 couronne commune admissible, séparément avant/après. Les flux intégrés sont en
 somme de pixels normalisés ; un faible SNR ou l’absence de couronne donne
 `UNKNOWN`, sans division instable. Les contributions de blocs spatiaux et les
-résidus lissés à plusieurs échelles corroborent une variation de flux. La simple
-baisse des hautes fréquences ne constitue pas un rejet.
+résidus lissés à plusieurs échelles corroborent une perte de flux. La perte
+relative signée est `(flux_avant - flux_après) / flux_avant` : seule une valeur
+strictement supérieure au seuil (5 % par défaut), significative et corroborée,
+déclenche `diffuse = FAIL`. Une augmentation donne une valeur négative,
+enregistrée dans le rapport sans déclencher ce rejet. La simple baisse des
+hautes fréquences ne constitue pas un rejet.
 
 La photométrie stellaire utilise des ouvertures de rayon au moins trois FWHM
 avec fond local, aux positions initiales ; les médianes de changements de flux
@@ -166,7 +170,7 @@ Le diagnostic conserve aussi les nouveaux pixels à saturation normalisée ;
 leur seule présence ne prouve pas un écrêtage artificiel.
 
 Ces nouveaux contrôles photométriques sont **en observation par défaut**.
-`--quality-enforce-diffuse` rend bloquante une perte/création de flux diffus
+`--quality-enforce-diffuse` rend bloquante une perte de flux diffus
 corroborée ou un changement stellaire significatif au-delà du seuil configuré.
 Ils demandent une calibration sur plusieurs références. Un `PASS` signifie
 « aucune perte confirmée par ce contrôle », jamais « fidélité prouvée ».

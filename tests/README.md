@@ -186,6 +186,8 @@ le dossier des poids ; sinon le dossier ignoré `tmp/cache/models/cosmicclarity`
 Les tests synthétiques utilisent un ciel/bruit et des structures connus, y compris
 une galaxie et un filament effacés, une nébulosité dominante, du signal rouge et
 du bruit corrélé. Les décisions UNKNOWN sont vérifiées sans faux bonus de bruit.
+Le contrôle diffus distingue une perte corroborée (FAIL) d'une augmentation de
+flux (variation négative conservée dans le rapport, sans FAIL).
 Les champs stellaires denses vérifient que le lissage ne transforme pas les
 étoiles en faux signal diffus. Une image majoritairement couverte de signal
 vérifie que le ciel connu dans les quatre coins reste exploitable, tandis
@@ -464,3 +466,18 @@ objectif exact de 25 %, populations inconnues aux bords, absence de candidat,
 rayons et gradient gaussiens analytiques, comparaison d'une transition élargie,
 jupe Moffat plus étendue et conservation des pixels. Les objectifs sont non
 bloquants ; aucun seuil de netteté perceptuelle n'est inventé.
+
+Le contrôle d'ordre des pentes est testé par différences signées directes :
+pentes négatives, positives ou nulles, quasi-égalités, invariance par
+multiplication positive et exception de la queue terminale. Un test du PNG
+vérifie les cinq segments de contrôle effectivement présents dans la légende,
+distincts du découpage adaptatif.
+
+`test_ghs_weak_structure.py` vérifie les populations fixes indépendantes du
+candidat, leur signature, la préférence d'un ciel sobre avec préservation du
+contraste et du CNR, la protection contre une solution artificiellement noire,
+le budget de visibilité initiale des images linéaires et le repli en absence
+de segmentation fiable. Il contrôle aussi le maintien de la garde de nouvelle
+bosse sombre malgré un bonus de signal faible et la limitation des écarts de
+courbure aux pentes descendantes. Les essais réels sur grille et les recherches
+GHS complètes sont distingués dans les comptes rendus.
