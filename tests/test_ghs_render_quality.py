@@ -149,7 +149,10 @@ def test_spatial_measure_matches_full_region_definitions() -> None:
     spatial = Quality.sample_measure(luminance(image, 'human'), transformed, thresholds, 'human')
     full = ProtectedGHSFinalizer.measure(image, transformed, thresholds, 'human')
     for key, value in spatial.items():
-        assert value == pytest.approx(full[key], rel=1e-5)
+        if key == 'weak_structure':
+            assert value == full[key]
+        else:
+            assert value == pytest.approx(full[key], rel=1e-5)
     with pytest.raises(ValueError, match='Grille'):
         Quality.sample_measure(light[:2], image, thresholds, 'human')
 
@@ -313,3 +316,62 @@ def test_full_reference_bonus_cannot_hide_a_strong_ratio_penalty(
     last = Quality.attach(high, measure, measure, profile, bright_retention=.45)
     assert last['render_quality']['reference_reward'] == 1.
     assert histogram_selection_key(first) > histogram_selection_key(last)
+
+
+def test_dark_mode_cannot_be_compensated_by_any_quality_bonus(
+    profile: JSONReport, measure: JSONReport,
+) -> None:
+    """Une excellente note ne rend pas admissible une nouvelle seconde bosse."""
+    reference = dict(profile, low_light_modes=dict(measurable=True, prominence_fraction=0.))
+    candidate = dict(profile, low_light_modes=dict(measurable=True, prominence_fraction=.8))
+    candidate = Quality.attach(candidate, measure, measure, reference, bright_retention=.45)
+    candidate['render_quality']['score'] = 100.
+    assert Quality.hard_shape_rejections(candidate) == ['new low-light histogram mode']
+    assert not histogram_selection_key(candidate)[0]
+    assert 'low_light_mode_guard' not in profile
+
+
+@pytest.mark.parametrize('initial,final,rejected', [
+    (0., .05, False), (0., .1, False), (0., .1001, True),
+    (.6, .6, False), (.6, .65, False), (.6, .71, True), (.8, .2, False),
+])
+def test_dark_mode_guard_compares_to_the_fixed_reference(
+    initial: float, final: float, rejected: bool,
+) -> None:
+    """Les bosses natives sont tolérées, mais pas leur aggravation cumulative."""
+    reference = dict(low_light_modes=dict(measurable=True, prominence_fraction=initial))
+    candidate = dict(low_light_modes=dict(measurable=True, prominence_fraction=final))
+    guard = Quality.low_light_mode_guard(reference, candidate)
+    assert bool(guard['rejections']) is rejected
+    assert guard['excess_prominence_fraction'] == pytest.approx(max(0., final-initial))
+
+
+def test_dark_mode_guard_missing_reference_remains_unknown() -> None:
+    """La lecture d'un ancien rapport ne certifie pas une référence absente."""
+    candidate = dict(low_light_modes=dict(measurable=True, prominence_fraction=.8))
+    guard = Quality.low_light_mode_guard({}, candidate)
+    assert guard['achieved'] is None
+    assert guard['reference_prominence_fraction'] is None
+    assert guard['rejections'] == []
+
+
+@pytest.mark.parametrize('value', [np.nan, np.inf, -.1, 1.1])
+def test_dark_mode_guard_rejects_invalid_prominence(value: float) -> None:
+    """Une mesure invalide ne peut pas neutraliser silencieusement la garde."""
+    candidate = dict(low_light_modes=dict(measurable=True, prominence_fraction=value))
+    with pytest.raises(ValueError, match='Proéminence'):
+        Quality.low_light_mode_guard({}, candidate)
+
+
+def test_dark_mode_annotation_distinguishes_a_hard_rejection(
+    profile: JSONReport, measure: JSONReport,
+) -> None:
+    """L'encart annonce la garde et son rejet, au lieu d'une simple pénalité."""
+    from lib.ghs_diagnostics import _render_quality_annotation
+
+    reference = dict(profile, low_light_modes=dict(measurable=True, prominence_fraction=0.))
+    candidate = dict(profile, low_light_modes=dict(measurable=True, prominence_fraction=.8))
+    graded = Quality.attach(candidate, measure, measure, reference, bright_retention=.45)
+    annotation = '\n'.join(_render_quality_annotation(graded))
+    assert '80.0 % (maximum 10.0 %)' in annotation
+    assert 'REJET : nouvelle bosse' in annotation

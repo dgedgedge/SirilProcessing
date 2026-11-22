@@ -236,7 +236,16 @@ def test_full_mode_reduces_chroma_noise(
         denoise_amount=0, color_denoise_amount=.5,
     )
     result_y, result_cb, _ = extract_luminance(fits.getdata(target))
-    assert result_cb.std() < cb.std() / 2
+    full_target = tmp_path / 'full_color.fit'
+    CosmicClarityEngine(tmp_path, 'cpu').process(
+        source, full_target, 'denoise', denoise_mode='full',
+        denoise_amount=0, color_denoise_amount=1.,
+    )
+    np.testing.assert_allclose(
+        fits.getdata(target), .5 * (fits.getdata(source) + fits.getdata(full_target)),
+        atol=2e-7,
+    )
+    assert result_cb.std() < cb.std()
     np.testing.assert_allclose(result_y, y, atol=1e-6)
     loader.assert_not_called()
 
@@ -319,3 +328,91 @@ def test_load_downloads_missing_weight(tmp_path: Path, monkeypatch: pytest.Monke
     assert (tmp_path / 'custom/test.pth').read_bytes() == payload
     load.assert_called_with(tmp_path / 'custom/test.pth', map_location='cpu', weights_only=True)
     assert engine.used_models['test.pth'] == entry['sha256']
+
+
+@pytest.mark.parametrize('mode', ['mono', 'luminance', 'full', 'separate'])
+@pytest.mark.parametrize('units', ['faint_float', 'bright_float', 'signed_float', 'uint16'])
+def test_denoise_strength_blends_full_endpoint_in_input_units(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str, units: str,
+) -> None:
+    """Le curseur interpole l'entrée et la sortie complète après inversion MTF."""
+    base = np.random.default_rng(513).uniform(.001, .004, (16, 16)).astype(np.float32)
+    base[7:9, 7:9] = .03
+    data = base if mode == 'mono' else np.stack((base, base * 1.2, base * .8))
+    if units == 'bright_float':
+        data = data * 3 + .2
+    elif units == 'signed_float':
+        data = data * 1000 - 2
+    elif units == 'uint16':
+        data = (data * 65535).astype(np.uint16)
+    source = tmp_path / 'source.fits'
+    fits.HDUList([
+        fits.PrimaryHDU(data, fits.Header({'CRPIX1': 12.5, 'OBJECT': 'Synthetic'})),
+        fits.ImageHDU(np.arange(6), name='AUX'),
+    ]).writeto(source)
+    original = source.read_bytes()
+    calls = []
+
+    def infer(
+        self: CosmicClarityEngine, planes: NDArray[np.float32], name: str,
+    ) -> NDArray[np.float32]:
+        """Lisse fortement les résidus préparés pour rendre la MTF non commutative."""
+        calls.append(name)
+        median = np.median(planes, axis=(1, 2), keepdims=True)
+        return (.3 * planes + .7 * median).astype(np.float32)
+
+    monkeypatch.setattr(CosmicClarityEngine, '_apply', infer)
+    engine = CosmicClarityEngine(tmp_path, 'cpu')
+    kwargs = {'denoise_mode': 'luminance' if mode == 'mono' else mode}
+    endpoint = tmp_path / 'full.fits'
+    engine.process(source, endpoint, 'denoise', denoise_amount=1, **kwargs)
+    full = fits.getdata(endpoint)
+    normalized_input = data.astype(np.float32) / (65535 if units == 'uint16' else 1)
+    assert not np.allclose(full, normalized_input, atol=1e-7)
+    for strength in (0., .25, .5, 1.):
+        destination = tmp_path / f'blend_{strength}.fits'
+        before_calls = len(calls)
+        audit = engine.process(source, destination, 'denoise', denoise_amount=strength, **kwargs)
+        expected = (1 - strength) * normalized_input + strength * full
+        np.testing.assert_allclose(fits.getdata(destination), expected, rtol=2e-6, atol=2e-7)
+        assert audit['blend_domain'] == 'linear_input_units'
+        assert audit['denoise_amount'] == strength
+        if strength == 0:
+            np.testing.assert_array_equal(fits.getdata(destination), normalized_input)
+            assert len(calls) == before_calls
+        with fits.open(destination) as hdul:
+            assert hdul[0].header['CRPIX1'] == 12.5
+            np.testing.assert_array_equal(hdul['AUX'].data, np.arange(6))
+    assert source.read_bytes() == original
+
+
+@pytest.mark.parametrize('amount,color', [(0., .5), (.25, .75), (.75, .25), (.5, 0.)])
+def test_independent_chroma_strength_is_blended_after_inverse(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, amount: float, color: float,
+) -> None:
+    """Les intensités Y et couleur pondèrent leurs résidus en unités d'entrée."""
+    base = np.random.default_rng(514).uniform(.001, .004, (3, 16, 16)).astype(np.float32)
+    source = tmp_path / 'source.fits'
+    fits.writeto(source, base)
+
+    def infer(
+        self: CosmicClarityEngine, planes: NDArray[np.float32], name: str,
+    ) -> NDArray[np.float32]:
+        """Renvoie une contraction déterministe autour de la médiane préparée."""
+        return .5 * planes + .5 * np.median(planes, axis=(1, 2), keepdims=True)
+
+    monkeypatch.setattr(CosmicClarityEngine, '_apply', infer)
+    engine = CosmicClarityEngine(tmp_path, 'cpu')
+    luminance, full, mixed = [tmp_path / name for name in ('luma.fits', 'full.fits', 'mixed.fits')]
+    # À Y nul, les endpoints de couleur ne doivent pas charger le modèle Y.
+    endpoint_amount = 0. if amount == 0 else 1.
+    engine.process(source, luminance, 'denoise', denoise_mode='full',
+                   denoise_amount=endpoint_amount, color_denoise_amount=0.)
+    engine.process(source, full, 'denoise', denoise_mode='full',
+                   denoise_amount=endpoint_amount, color_denoise_amount=1.)
+    engine.process(source, mixed, 'denoise', denoise_mode='full',
+                   denoise_amount=amount, color_denoise_amount=color)
+    # Pour amount=0, le seul résidu non nul est celui de couleur.
+    luma_data = fits.getdata(luminance)
+    expected = base + amount * (luma_data - base) + color * (fits.getdata(full) - luma_data)
+    np.testing.assert_allclose(fits.getdata(mixed), expected, atol=2e-7, rtol=2e-5)

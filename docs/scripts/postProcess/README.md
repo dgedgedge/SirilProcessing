@@ -786,3 +786,29 @@ en mode autonome ; le plan numéroté conserve l’accueil à la racine de l’o
 
 Les traitements Siril utilisent la [factory de sessions sirilpy](../lightProcess/reference/SIRIL_API.md),
 avec démarrage automatique sans IHM, plans d’appels JSON et journaux de session.
+
+
+Le moteur ONNX [Aberration Remover](aberration.md) complète par défaut les
+comparaisons de netteté avec le modèle livré dans `data/`. `--aberration-model`
+permet de changer le chemin (une chaîne vide désactive le moteur). Cette page décrit ses
+options, son algorithme et ses limites de validation.
+
+Les [aperçus JPEG AutoStretch de restauration](restoration-previews.md) sont
+activés par défaut pour l'entrée, les résultats des moteurs et la sortie finale.
+Ils partagent la courbe de l'entrée pour faciliter les comparaisons, sans
+modifier les FITS. `--no-restoration-previews` désactive ces exports.
+
+[Rapports synthétiques et audits détaillés de restauration](restoration-reports.md) :
+organisation du JSON global, accès aux mesures complètes et compatibilité.
+
+La restauration essaie par défaut Aberration Remover → GraXpert en priorité,
+avec un [arrêt anticipé conditionnel](restoration.md#restoration-early-stop)
+si tous les critères passent et si les gains médians de FWHM et de bruit utile
+dépassent respectivement 30 % et 35 %. Sinon tous les autres essais continuent.
+
+[Apparence des étoiles](stellar-appearance.md) : objectif non bloquant de 25 %
+de candidats visibles, taille apparente, gradient et jupe mesurés sans traitement local.
+
+[Structures faibles et sobriété du ciel starless](ghs-weak-structures.md) :
+mesures d'objets détectés, contraste au ciel régional et préférence de courbe
+globale lorsque le fond peut rester plus sombre sans effacer les détails.

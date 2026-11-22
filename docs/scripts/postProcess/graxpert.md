@@ -118,16 +118,34 @@ sont refusés. Les entrées flottantes et uint16 sont prises en charge.
 Pour chaque canal, la médiane et le MAD sont mesurés sur un pixel sur quatre dans
 les deux dimensions. La normalisation est `0,04 × (image − médiane) / MAD` ;
 l’inversion est `prédiction / 0,04 × MAD + médiane`. Ce MAD sert au modèle, pas au
-score de qualité du fond de ciel. Les pixels normalisés au-dessus du seuil 10 sont
-conservés, suivant le script Siril.
+score de qualité du fond de ciel. Le tenseur transmis au réseau est borné à
+`[-10, 10]`, comme dans GraXpert et le script Siril. Les pixels dont la valeur
+normalisée originale est au moins 10 restent inchangés ; ce masque est calculé
+avant le bornage du tenseur d'inférence.
 
 Les tuiles avancent de 128 pixels, avec une bordure de 64 pixels écartée de chaque
 prédiction. Les marges recopient les pixels comme le script de référence ; les
 images trop petites pour une marge entière répètent leur queue sans modifier
 leur taille finale. Seules les parties centrales sont replacées. La dernière
 fourniture de tuiles contient les éléments réels, sans compléter artificiellement
-le lot. Le résultat est mélangé avec l’original selon l’intensité ; le uint16 est
-remis dans son échelle avant mélange, comme Siril.
+le lot. Le résultat est mélangé avec l’entrée effective du moteur selon
+l’intensité : `strength × prédiction + (1 − strength) × entrée`. À 0,5,
+la moitié de l’entrée est donc conservée ; cela ne garantit pas une réduction
+du bruit de 50 %. Une intensité de 1 utilise pleinement la prédiction.
+
+Après mélange, les valeurs sont bornées à `[0, 1]` en unités normalisées,
+conformément à
+[`blend_images` de GraXpert](https://github.com/Steffenhir/GraXpert/blob/main/graxpert/denoising.py).
+Les valeurs négatives deviennent 0 et les dépassements supérieurs deviennent 1.
+Pour uint16, cela correspond à `[0, 65535]`, avec une seule conversion entière
+après mélange et bornage. Les FITS sources restent intacts.
+Le rapport d'inférence `output_range` donne la politique `clip_after_blend`,
+les extrema normalisés avant correction et les nombres de valeurs corrigées.
+Une ligne WARNING signale une correction. Le candidat ainsi écrit passe
+ensuite les contrôles de bruit, de flux diffus et de géométrie ; le bornage
+n'est pas une preuve de qualité et peut biaiser les mesures près du zéro.
+Aberration Remover applique déjà un bornage à `[0, 1]` après son mélange ;
+voir [son contrat numérique](aberration.md).
 
 Les fournisseurs enregistrés dans la session sont consignés dans le rapport.
 Une session GPU autorise les opérations auxiliaires sur CPU et exige qu’un

@@ -536,3 +536,61 @@ def test_coreml_session_without_cuda_preload(monkeypatch: pytest.MonkeyPatch) ->
     engine.backend = 'cuda'
     with pytest.raises(RuntimeError, match='Aucun fournisseur ONNX GPU'):
         engine._create_session(Path('model.onnx'), True)
+
+
+def test_model_inputs_are_bounded_and_bright_pixels_remain_protected(
+    tmp_path: Path, native_engine: argparse.Namespace, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Les bornes du modèle ne remplacent pas le masque sur l'entrée originale."""
+    source, candidate = tmp_path / 'input.fits', tmp_path / 'output.fits'
+    data = np.random.default_rng(84).normal(.1, .001, (128, 128)).astype(np.float32)
+    data[0, 0], data[0, 1] = -.8, .9
+    fits.writeto(source, data)
+    batches = []
+
+    def predict(self: Session, names: None, feed: dict[str, np.ndarray]) -> list[np.ndarray]:
+        """Capture les tenseurs réellement transmis et annule le résidu normalisé."""
+        batch = feed['gen_input_image']
+        assert batch.min() >= -10 and batch.max() <= 10
+        batches.append(batch.copy())
+        return [np.zeros_like(batch)]
+
+    monkeypatch.setattr(Session, 'run', predict)
+    native_engine.graxpert_strength = 1.
+    GraXpertEngine(native_engine).process(source, candidate)
+    assert batches and min(batch.min() for batch in batches) == -10
+    assert max(batch.max() for batch in batches) == 10
+    assert fits.getdata(candidate)[0, 1] == pytest.approx(data[0, 1], abs=1e-7)
+
+
+@pytest.mark.parametrize('dtype', [np.float32, np.uint16])
+def test_output_is_bounded_after_blending_with_audit(
+    tmp_path: Path, native_engine: argparse.Namespace,
+    monkeypatch: pytest.MonkeyPatch, dtype: type[np.generic],
+) -> None:
+    """Le mélange est borné après calcul, pour float et uint16, sans toucher la source."""
+    source, candidate = tmp_path / 'input.fits', tmp_path / 'output.fits'
+    scale = 65535 if dtype == np.uint16 else 1
+    data = (np.random.default_rng(85).uniform(.1, .2, (128, 128)) * scale).astype(dtype)
+    fits.writeto(source, data)
+    original = source.read_bytes()
+
+    def denoise(self: GraXpertEngine, image: np.ndarray) -> np.ndarray:
+        """Produit deux dépassements connus pour distinguer avant et après mélange."""
+        result = image.copy()
+        result[0, 0] = -2
+        result[0, 1] = 2
+        result[0, 2] = -.05
+        return result
+
+    monkeypatch.setattr(GraXpertEngine, '_denoise', denoise)
+    native_engine.graxpert_strength = .5
+    result = GraXpertEngine(native_engine).process(source, candidate)
+    output = fits.getdata(candidate)
+    assert output.min() == 0 and output.max() == scale
+    expected = np.clip(.5 * (-.05 * scale) + .5 * float(data[0, 2]), 0, scale)
+    assert output[0, 2] == pytest.approx(expected, abs=1 if dtype == np.uint16 else 1e-7)
+    assert result['output_range']['below_zero_count'] == 1
+    assert result['output_range']['above_one_count'] == 1
+    assert result['output_range']['policy'] == 'clip_after_blend'
+    assert source.read_bytes() == original

@@ -101,7 +101,7 @@ def test_fractional_histogram_recipe_has_exact_nontrivial_replay() -> None:
     ):
         light += peak * np.exp(-((yy-y)**2+(xx-x)**2)/2)
     data = np.array([light, .6*light, .3*light])
-    expected, report = ConservativeStarRenderer.render(data)
+    expected, report = ConservativeStarRenderer.render(data, contrast_mode='pointwise')
     assert report['boost_selection']['mode'] == 'histogram_quantile'
     assert report['boost_selection']['actually_boosted_count'] > 0
     operation = stellar_operation(report, report['histogram_balance'])
@@ -124,8 +124,8 @@ def test_bright_halo_with_neighbouring_peaks_stays_identical() -> None:
     ):
         light += peak*np.exp(-((yy-y)**2+(xx-x)**2)/2)
     source = np.array([light*.6, light*.8, light])
-    base, _ = ConservativeStarRenderer.render(source, boost_fraction=0)
-    rendered, report = ConservativeStarRenderer.render(source)
+    base, _ = ConservativeStarRenderer.render(source, boost_fraction=0, contrast_mode='pointwise')
+    rendered, report = ConservativeStarRenderer.render(source, contrast_mode='pointwise')
     assert report['boost_selection']['mode'] == 'histogram_quantile'
     protected = base.max(axis=0) >= .15
     np.testing.assert_array_equal(rendered[:, protected], base[:, protected])

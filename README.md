@@ -73,7 +73,10 @@ respectives, précisées notamment dans les guides
 [Cosmic Clarity](docs/scripts/postProcess/cosmic-clarity.md) et
 [GraXpert](docs/scripts/postProcess/graxpert.md). Le catalogue
 [OpenNGC](data/openngc/README.md), utilisé pour les annotations, reste sous
-licence CC BY-SA 4.0.
+licence CC BY-SA 4.0. Le modèle [Aberration Remover 2.5.0](data/AberrationRemover/README.md),
+de **Riccardo Alberghi**, est conservé avec les sources sous **CC BY-NC-SA 4.0**
+(usage non commercial). Merci à son auteur et à l'équipe Siril pour leur travail
+sur ce traitement.
 
 L'[inventaire des outils, données tierces et licences](docs/THIRD_PARTY.md)
 précise les composants livrés dans le dépôt et ceux installés séparément.

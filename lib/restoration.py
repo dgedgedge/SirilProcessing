@@ -17,6 +17,8 @@ from lib.parameterized_component import ParameterizedComponent
 from lib.restoration_quality import QualityReference, RestorationQuality
 from lib.type_defs import JSONReport
 from lib.restoration_summary import RestorationSummary
+from lib.restoration_preview import RestorationPreviewProcessor
+from lib.restoration_early_stop import RestorationEarlyStop
 
 
 class RestorationComparisonProcessor(processor):
@@ -28,6 +30,7 @@ class RestorationComparisonProcessor(processor):
 
     parameter_prefixes: ClassVar[tuple[str, ...]] = (
         "cosmic_",
+        "aberration_",
         "deconvolution_",
         "denoise_",
         "quality_",
@@ -61,7 +64,12 @@ class RestorationComparisonProcessor(processor):
         from lib.quality_star_processors import StarComparisonProcessor
 
         children = (cls.siril_processor, cls.cosmic_processor(), RestorationQuality,
+                    RestorationPreviewProcessor, RestorationEarlyStop,
                     ArtifactQualityProcessor, ReferencePreparationProcessor, StarComparisonProcessor)
+        from lib.aberration import AberrationRemoverProcessor
+
+        if cls.operation == "sharpen":
+            children += (AberrationRemoverProcessor,)
         return children + (
             (GraXpertDenoiseProcessor,) if cls.operation == "denoise" else ()
         )
@@ -71,7 +79,12 @@ class RestorationComparisonProcessor(processor):
         """Déclare une seule fois services, moteurs optionnels et modes de chaînes."""
         from lib.compute_config import ComputeConfig
 
+        from lib.aberration import AberrationRemoverProcessor
+
+        AberrationRemoverProcessor.add_arguments(parser)
         ComputeConfig.add_arguments(parser)
+        RestorationPreviewProcessor.add_arguments(parser)
+        RestorationEarlyStop.add_arguments(parser)
         if not any(action.dest == "enable_clarity" for action in parser._actions):
             from lib.cosmic_clarity.processors import add_arguments
 
@@ -114,6 +127,10 @@ class RestorationComparisonProcessor(processor):
 
             if GraXpertDenoiseProcessor.is_enabled(args):
                 engines.append(("graxpert", GraXpertDenoiseProcessor))
+        if cls.operation == "sharpen" and getattr(args, "aberration_model", None):
+            from lib.aberration import AberrationRemoverProcessor
+
+            engines.append(("aberration_remover", AberrationRemoverProcessor))
         return engines
 
     @staticmethod
@@ -175,14 +192,19 @@ class RestorationComparisonProcessor(processor):
         if destination.suffix.lower() not in (".fit", ".fits", ".fts"):
             raise ValueError("Une sortie FITS est requise")
         engines = self.engines(args)
+        preview = RestorationPreviewProcessor(source)
         treatment = "Déconvolution" if self.operation == "sharpen" else "Débruitage"
         if (
             legacy
             and not getattr(args, "enable_clarity", True)
-            and not any(name == "graxpert" for name, _ in engines)
+            and [name for name, _ in engines] == ["siril"]
         ):
             log_section(f"{treatment} — Évaluation du moteur Siril", separator="-")
             result = self.siril_processor().post_process(source, report, args)
+            result['input_preview'] = preview.optional(
+                source, report.with_name(report.stem + '_input_autostretch.jpg'), args,
+            )
+            preview.attach(result, report, args)
             log_section(f"{treatment} — Publication du résultat", separator="-")
             RestorationSummary.write(
                 result,
@@ -213,12 +235,16 @@ class RestorationComparisonProcessor(processor):
                 reference.save_masks(report.with_name(report.stem + "_masks.fits"))
             )
             result["quality_reference"] = reference.audit()
+        result['input_preview'] = preview.optional(
+            source, report.with_name(report.stem + '_input_autostretch.jpg'), args,
+        )
         candidates = []
         for name, engine in engines:
             label = {
                 "siril": "Siril",
                 "cosmic_clarity": "Cosmic Clarity",
                 "graxpert": "GraXpert",
+                "aberration_remover": "Aberration Remover",
             }[name]
             log_section(f"{treatment} — Évaluation du moteur {label}", separator="-")
             child_path = report.with_name(report.stem + "_" + name + ".json")
@@ -262,6 +288,7 @@ class RestorationComparisonProcessor(processor):
                     report.write_text(json.dumps(result, indent=2), encoding="utf-8")
                     raise
             evaluation["duration_seconds"] = time.monotonic() - start
+            preview.attach(evaluation, child_path, args)
             result["evaluations"][name] = evaluation
             logging.info(
                 "%s — évaluation %s : statut=%s ; raisons=%s",
@@ -340,6 +367,7 @@ class RestorationComparisonProcessor(processor):
             "siril": "Siril",
             "cosmic_clarity": "Cosmic Clarity",
             "graxpert": "GraXpert",
+            "aberration_remover": "Aberration Remover",
         }
         logging.info(
             "%s — choix final : %s ; score=%s ; %s",
@@ -352,6 +380,7 @@ class RestorationComparisonProcessor(processor):
                 else "aucun candidat accepté"
             ),
         )
+        preview.attach(result, report, args)
         RestorationSummary.write(
             result,
             report,

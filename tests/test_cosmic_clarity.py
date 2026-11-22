@@ -212,7 +212,9 @@ def test_processor_quality_and_source_preservation(
     if status == 'no_safe_improvement':
         final.write_bytes(b'previous output')
     with caplog.at_level('INFO'):
-        result = cls().post_process(source, report, arguments('--no-enable-graxpert'))
+        result = cls().post_process(source, report, arguments(
+            '--no-enable-graxpert', '--aberration-model', '',
+        ))
     treatment = 'Déconvolution' if operation == 'sharpen' else 'Débruitage'
     assert f'{treatment} — début de l’évaluation Cosmic Clarity' in caplog.text
     assert f'{treatment} — Évaluation du moteur Siril' in caplog.text

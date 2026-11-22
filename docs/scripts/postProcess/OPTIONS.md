@@ -177,3 +177,41 @@ pour le [bruit sur tuiles](noise-tiles.md), sans changer les autres diagnostics.
 `mps` impose PyTorch Metal sur Mac et `auto` choisit CUDA, MPS ou CPU ;
 sans surcharge, ils suivent `--compute-backend auto` ou `cpu`. Les fenêtres
 retenues, mesures de flux et seuils gardent les mêmes définitions.
+
+
+Le moteur ONNX [Aberration Remover](aberration.md) complète par défaut les
+comparaisons de netteté avec le modèle livré dans `data/`. `--aberration-model`
+permet de changer le chemin (une chaîne vide désactive le moteur). Cette page décrit ses
+options, son algorithme et ses limites de validation.
+
+Les [aperçus JPEG AutoStretch de restauration](restoration-previews.md) sont
+activés par défaut pour l'entrée, les résultats des moteurs et la sortie finale.
+Ils partagent la courbe de l'entrée pour faciliter les comparaisons, sans
+modifier les FITS. `--no-restoration-previews` désactive ces exports.
+
+Le rendu des étoiles applique uniquement une transformation globale de
+l'histogramme (`--star-contrast-mode pointwise`). L'ancienne valeur `profiles`
+est un alias sans effet local. Aucun débruitage n'est appliqué dans cette
+branche ; `--star-noise-sigma` vaut zéro et ses anciennes valeurs restent sans
+effet. `--star-boost-fraction 0.25` calibre une courbe d'intensité commune à tous
+les pixels. Voir [la contrainte du rendu](star-rendering.md#étirement-propre-aux-étoiles)
+et [la courbe globale](stellar-selection.md).
+
+StarNet adapte par défaut sa MTF à l'étendue des sources brillantes :
+`--starnet-max-star-diameter 96` règle la limite en pixels de l'entrée du
+modèle. `--starnet-target-background auto` laisse choisir la cible par image ;
+une valeur numérique dans ]0 ; 0,5[ l'impose. Pour conserver le comportement
+historique, utiliser `--no-starnet-adaptive-stretch --starnet-target-background auto`.
+Voir la [méthode et ses limites](star-rendering.md#pre-etirement-adapte-a-limage).
+
+## Recherche prioritaire de restauration
+
+`--restoration-early-stop` est actif par défaut : AR → GraXpert est essayé en
+premier, puis les autres variantes ne sont lancées que si ses critères ou ses
+gains sont insuffisants. `--no-restoration-early-stop` rétablit le parcours
+exhaustif. Les seuils stricts sont réglés par
+`--restoration-early-stop-fwhm-gain 0.30` et
+`--restoration-early-stop-noise-gain 0.35`, fractions finies dans `[0,1[`,
+mémorisables avec `-S`. Tous les critères finaux doivent être PASS, y compris
+les diagnostics non bloquants. Voir
+[conditions d'arrêt et poursuite avec cache](restoration.md#restoration-early-stop).

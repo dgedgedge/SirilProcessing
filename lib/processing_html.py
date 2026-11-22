@@ -385,6 +385,7 @@ class ProcessingHtmlReport:
             'input_image': 'Image d’entrée', 'image_path': 'Image de référence',
             'output_jpeg': 'Image JPEG', 'output_annotated_image': 'Image annotée',
             'verification_path': 'Compte rendu des vérifications',
+            'audit_path': 'Audit JSON détaillé',
             'input_mask_path': 'Masque utilisé',
             'input_mask_preview_path': 'Aperçu du masque',
             'error': 'Erreur', 'reason': 'Motif', 'rejection_reasons': 'Motifs de rejet',
@@ -808,12 +809,16 @@ class ProcessingHtmlReport:
         return ''.join(parts)
 
     @classmethod
-    def _restoration_view(cls, payload: object) -> str:
+    def _restoration_view(
+        cls, payload: object, directory: Path | None = None,
+    ) -> str:
         """Présente choix et critères en colonnes, sans recalcul scientifique.
 
         Les contrôles non bloquants gardent leur drapeau explicite. Les motifs
         de rejet restent enregistrés séparément du score et de l'admissibilité.
         Les absences de valeurs agrégées ne sont pas comblées par des calculs.
+        Si directory est fourni, les audits existants sont liés relativement
+        à cette page ; aucune population détaillée n’est rechargée.
         """
         if not isinstance(payload, dict):
             return '<p>Rapport de restauration invalide.</p>'
@@ -836,7 +841,17 @@ class ProcessingHtmlReport:
                            and isinstance(item := row['criteria'].get(name), dict)
                            and 'blocking' in item for row in variants)
             fields_by_criterion[name] = ['value', 'threshold', *(['blocking'] if blocking else []), 'status']
+        early = payload.get('early_stop')
+        early = early if isinstance(early, dict) else {}
+        early_notice = ''
+        if early.get('triggered'):
+            early_notice = ('<p><strong>Arrêt anticipé : qualité suffisante.</strong> '
+                            + escape(str(early.get('evaluated_variant_count')))
+                            + ' variantes évaluées sur '
+                            + escape(str(early.get('planned_variant_count')))
+                            + ' ; les autres variantes n’ont pas été exécutées.</p>')
         parts = ['<section><h3>Choix de la chaîne</h3><p>' + escape(label) + '</p>',
+                 early_notice,
                  cls._ranking_view(payload), '<h4>Décision et contrôles par combinaison</h4>',
                  cls._presentation_legend(),
                  '<div class="criteria-scroll"><table class="criteria-table presentation-table">'
@@ -845,7 +860,9 @@ class ProcessingHtmlReport:
             parts.append(cls._vertical_header(title, rowspan=2, group_start=True))
         for name, fields in fields_by_criterion.items():
             parts.append(cls._vertical_header(name, colspan=len(fields), group_start=True))
-        parts.append(cls._vertical_header('Motif enregistré', rowspan=2, group_start=True) + '</tr><tr>')
+        parts.append(cls._vertical_header('Motif enregistré', rowspan=2, group_start=True)
+                     + cls._vertical_header('Audit JSON détaillé', rowspan=2, group_start=True)
+                     + '</tr><tr>')
         for fields in fields_by_criterion.values():
             for field in fields:
                 title = {'value': 'Valeur', 'threshold': 'Seuil', 'blocking': 'Bloquant', 'status': 'Verdict'}[field]
@@ -876,6 +893,7 @@ class ProcessingHtmlReport:
             reasons = row.get('reasons') or row.get('reason') or row.get('rejection_reasons')
             group_starts.add(len(cells))
             cells.append(reasons or None)
+            cells.append(row.get('audit_path'))
             parts.append('<tr>')
             for index, value in enumerate(cells):
                 classes = ['criteria-group-start'] if index in group_starts else []
@@ -885,6 +903,8 @@ class ProcessingHtmlReport:
                 content = (cls._selection_symbol(value)
                            if index in verdict_columns
                            else escape(cls._presentation_value(value)))
+                if index == len(cells) - 1 and directory is not None and value:
+                    content = cls._source_link(value, directory)
                 parts.append('<td' + attribute + '>' + content + '</td>')
             parts.append('</tr>')
         parts.append('</tbody></table></div></section>')
@@ -1701,7 +1721,7 @@ class ProcessingHtmlReport:
                 return ''
             if path.name == 'restoration.json':
                 with path.open(encoding='utf-8') as stream:
-                    return cls._restoration_view(json.load(stream))
+                    return cls._restoration_view(json.load(stream), directory)
             if path.stat().st_size > cls.JSON_LIMIT:
                 return '' if path.suffix == '.json' else f'<p>{title} : fichier volumineux.</p>'
             if path.suffix == '.json':

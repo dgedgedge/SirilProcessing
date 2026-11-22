@@ -33,7 +33,7 @@ Siril sont refusés. Les versions sont relevées dans le journal Siril et,
 si identifiable, dans le README du dossier StarNet ; une version absente
 n'est pas inventée.
 
-Le script charge un RGB float32 de travail et exécute **`starnet -stretch`**,
+Le chemin historique charge un RGB float32 de travail et exécute **`starnet -stretch`**,
 sans `-nostarmask`. L'interface Siril 1.4 applique un pré-étirement MTF non lié
 aux canaux, effectue l'échange TIFF 16 bits requis par StarNet V2, puis applique
 la pseudo-inverse au résultat sans étoiles. Il y a donc un impact possible de
@@ -46,6 +46,65 @@ Il refuse le binaire V2 ; la présente intégration choisit donc l'interface
 historique disponible dans Siril 1.4.4. Elle devra être adaptée pour Siril 1.6,
 où l'interface historique est annoncée retirée. Aucune substitution automatique
 vers un script non validé n'est effectuée.
+
+<a id="pre-etirement-adapte-a-limage"></a>
+
+### Pré-étirement adapté à l'image
+
+`--starnet-adaptive-stretch` est activé par défaut. Le choix dépend de
+l'image linéaire, sans nom d'objet ni valeur prédéfinie par cible :
+
+1. Les noyaux connexes au-dessus de 0,5 en maximum RGB repèrent des sources
+   brillantes potentielles ; une composante d'un pixel est ignorée.
+2. Une MTF de référence à cible médiane 0,25 prépare une mesure de leur
+   étendue apparente. Dans une fenêtre de rayon 96 pixels, le fond est estimé
+   dans l'anneau extérieur, puis la composante contenant le centre est mesurée
+   à mi-contraste. Son diamètre équivalent vaut `2 × sqrt(surface / pi)`.
+3. Les contours tronqués et les rapports des axes des moments inférieurs à
+   0,75 sont exclus. Il s'agit d'une heuristique, pas d'une classification
+   certaine entre étoile et structure diffuse. Les centres retenus restent
+   fixes pendant tous les essais.
+4. Si le diamètre maximal dépasse `--starnet-max-star-diameter` (**96 pixels**
+   par défaut, dans ]0 ; 192[), la cible est divisée par deux, sans descendre
+   sous 0,05. Trois bissections affinent ensuite la cible la plus claire qui
+   respecte la limite. Ces essais ne font que des transformations et mesures
+   d'image ; **StarNet n'est lancé qu'une fois**.
+5. Sans source mesurable, sans dépassement ou sans amélioration mesurable,
+   la commande historique `starnet -stretch` reste utilisée. Si même la cible
+   minimale ne satisfait pas la limite, le meilleur essai est utilisé avec
+   `limit_met: false`, sans certifier la disparition d'un artefact.
+
+Le diamètre mesuré appartient à l'image étirée destinée au réseau : il ne
+représente pas une FWHM optique ni une mesure photométrique. Le seuil est
+une garde commune de préparation du modèle, pas un détecteur garanti de grille.
+Une source étendue ronde peut être ambiguë ; les bords non mesurables restent
+explicitement signalés. La méthode peut atténuer les motifs réguliers autour
+des grandes étoiles, sans garantir tous les résidus du modèle StarNet V2.
+
+Quand une adaptation est choisie, la MTF est calculée par canal avec
+`noir = max(0, médiane − 2,8 × 1,4826 × MAD)`, blanc fixé à 1. Le paramètre
+médian est résolu pour atteindre la cible choisie. Une médiane dégénérée ou
+un inverse numériquement non représentable conserve une MTF identité, avec
+motif d'audit. Le FITS préparé est envoyé à `starnet` **sans `-stretch`**, puis
+la MTF enregistrée est inversée après StarNet. L'échange TIFF16 reste quantifié,
+et les valeurs sous le noir sont écrêtées pour le réseau : cet inverse ne
+récupère pas leurs détails perdus. La source scientifique reste inchangée ;
+le résidu signé est calculé à partir de cette source, puis compensé comme
+décrit ci-dessous. Les formules de MTF suivent la
+[documentation Siril](https://siril.readthedocs.io/en/stable/processing/stretching.html).
+
+`--starnet-target-background 0.08` impose une cible et prend priorité sur
+l'adaptation ; ce réglage n'est **pas** le défaut universel. La valeur `auto`
+rétablit le choix automatique. `--no-starnet-adaptive-stretch` avec une cible
+`auto` conserve le pré-étirement historique de Siril. Ces paramètres suivent
+CLI > JSON > défaut et ne sont mémorisés qu'avec `-S`.
+
+Le rapport `separation.json` conserve `stretch_adaptation` : critère, sources,
+diamètres, essais, cible retenue, conformité et motif. `prestretch_parameters`
+contient les MTF par canal et le nombre de valeurs sous le noir. Le journal
+annonce le changement de diamètre et la cible quand l'adaptation intervient.
+Les contrôles algébriques de reconstruction ne certifient pas la fidélité
+astrophysique des structures reconstruites par le réseau.
 
 Après succès du processus, les dimensions, les canaux et les valeurs finies
 non négatives sont contrôlés. Le fond brut peut dépasser 1 lors du retour
@@ -112,17 +171,22 @@ fidélité des structures retirées par le réseau ; l’inspection reste néces
 
 ## Étirement propre aux étoiles
 
-Le défaut applique un [calage fractionnaire à 25 %](stellar-selection.md) au
-renforcement adaptatif supplémentaire. La base asinh est d’abord rendue
-admissible, puis le quantile supérieur des pics calibre une courbe ponctuelle
-log-log. Il n’existe ni masque d’étoiles sélectionnées, ni gain par profil, ni
-raccord spatial : deux pixels de même intensité reçoivent la même cible.
-Les étapes globales historiques décrites ci-dessous restent disponibles avec
-`--star-boost-fraction 1` ; les essais GHS présentés en fin de page restent
-des comparaisons hors pipeline.
+**Contrainte utilisateur durable : cette branche réalise uniquement une
+transformation globale de l'histogramme.** La même transformation RGB est
+appliquée partout : deux triplets RGB identiques ont la même sortie,
+indépendamment de leurs coordonnées ou de leur voisinage. Aucun masque,
+renforcement par étoile, traitement local du piédestal, débruitage, filtrage ou
+déconvolution n'est autorisé dans cette branche. Cette règle figure également
+dans les consignes communes du dépôt.
 
-Le rendu `conservative` commence par une courbe monotone de référence. Comme
-la branche starless, il hérite de `--ghs-color-mode=human` par défaut :
+Le mode effectif est `--star-contrast-mode pointwise`. Une ancienne valeur
+`profiles`, en CLI ou dans la configuration, est acceptée comme alias de
+compatibilité : elle produit la même courbe globale et ne réactive aucun
+traitement local. `--star-noise-sigma` vaut zéro par défaut ; les anciennes
+valeurs valides sont acceptées mais n'ont plus d'effet sur les pixels.
+
+Le rendu `conservative` utilise l'asinh lié à la luminosité, puis une
+transformation rationnelle des faibles intensités :
 
 ```text
 Yhuman = 0,2126 R + 0,7152 G + 0,0722 B
@@ -131,171 +195,48 @@ base(Y) = ceiling * asinh(strength*Y) / asinh(strength)
 target(Y) = faint_boost * base(Y) / (1 + (faint_boost-1)*base(Y)/ceiling)
 ```
 
-Le résultat lié applique `target(Y)/Y` aux trois canaux. Tant qu'il reste sous
-le plafond, ce gain commun préserve leurs rapports. S'il dépasse le plafond,
-RGBBlend le mélange avec les trois courbes asinh indépendantes, selon la même
-construction que le GHS du fond. Cela évite un écrêtage coloré tout en ne
-modifiant la chromaticité que dans la zone où le gamut doit être protégé.
-Le plafond de 0,85 ménage les hautes lumières, tandis que la force asinh 2 est
-complétée par `--star-faint-boost=5` par défaut.
+Le mode couleur suit `--ghs-color-mode human|even`. Le gain lié est commun aux
+trois canaux. RGBBlend protège le plafond en mélangeant des courbes RGB
+ponctuelles lorsque nécessaire ; son calcul dépend uniquement du triplet RGB,
+jamais de sa position. Le plafond est 0,85, la force asinh 2 et le renforcement
+des faibles niveaux 5 par défaut. Ce rendu est un étirement asinh et une courbe
+d'intensité, même si la branche est rangée dans `03_ghs_stars`.
 
-La résolution photométrique et SPCC/PCC sont effectuées avant StarNet : leur
-balance des canaux est donc déjà inscrite dans les pixels des deux couches.
-Le mode `human` l'exploite comme proxy perceptuel cohérent ; il ne remplace pas
-une matrice complète capteur → XYZ/sRGB, qui n'est pas fournie par le FITS.
-Le maximum RGB reste employé pour détecter les pics, contrôler les profils et
-piloter la porte de bruit. La courbe fractionnaire applique ensuite un gain RGB
-commun : elle ne recalcule ni la balance photométrique ni RGBBlend.
-La seconde courbe augmente surtout les faibles intensités et comprime doucement
-les fortes vers le même plafond. Avant atténuation du bruit, le gain à l'origine vaut
-`ceiling*strength*faint_boost/asinh(strength)`, soit environ 5,89 par défaut,
-contre 1,18 avec `--star-faint-boost=1`. Le facteur est paramétrable
-de 1 à 10 : c'est le renforcement **demandé**, que la garde de largeur peut
-réduire automatiquement. Il est sauvegardé par Config avec les autres options. Les étoiles
-fortes ne sont pas toutes ramenées à une intensité commune.
+<a id="adaptation-a-la-repartition-des-pics"></a>
+<a id="adaptation-à-la-répartition-des-pics"></a>
 
-### Atténuation douce du bruit résiduel
+### Calibration de la courbe globale
 
-Après la courbe de référence et l'éventuelle adaptation des pics, le moteur
-applique une porte monotone au maximum RGB `L` :
+`--star-histogram-strength 1` autorise une courbe monotone de quantiles,
+calibrée sur la distribution des amplitudes des pics. Le quantile
+`--star-boost-fraction 0.25` fixe son raccord entre intensités faibles et
+brillantes. La courbe résultante est appliquée à tous les pixels ; ce n'est
+ni un budget de corrections locales ni une sélection de coordonnées.
+Zéro conserve la courbe de base ; un conserve l'adaptation globale complète.
+Voir [construction de la transformation](stellar-selection.md).
 
-```text
-T = min(1, médiane(L) + star_noise_sigma * sigma)
-porte(L) = (1 + T^4) * L^4 / (L^4 + T^4)
-target_final(L) = target(L) * porte(L)
-```
+Les mesures de profils à 50 % et 10 % du pic restent des diagnostics et des
+gardes pour choisir des paramètres **communs à toute l'image**. Elles ne
+produisent aucun gain local. Un dépassement de la limite de largeur diminue
+la force ou le renforcement global. La limite des étoiles seules est
+`--star-stretch-max-width-ratio`, qui hérite de `--star-max-width-ratio`
+(valeur commune par défaut 2). Une largeur non mesurable ne certifie pas la
+garde. Le contrôle distinct après recomposition reste inchangé.
 
-`--star-noise-sigma=8` règle le seuil de transition en écarts robustes du
-**résidu positif**, et non du bruit signé de l'image d'origine. La dispersion
-est estimée par `1.4826 * MAD(différences voisines) / sqrt(2)` sur chaque axe ;
-le minimum des deux estimations limite la confusion avec un gradient axial.
-Le facteur doit être fini dans `[0,20]` ; zéro désactive la porte. Le seuil
-est exprimé en intensité normalisée. Les dimensions inférieures à trois pixels,
-les champs constants et une dispersion inférieure ou égale à `1e-7` désactivent
-également la porte, sans inventer une mesure de bruit exploitable.
+<a id="attenuation-douce-du-bruit-residuel"></a>
+<a id="atténuation-douce-du-bruit-résiduel"></a>
 
-La pente devient nulle à l'origine : les très faibles résidus sont atténués,
-les intensités significatives retrouvent progressivement la courbe de
-renforcement, et la borne `1 → ceiling` reste préservée. Le même gain est
-appliqué aux trois canaux ; aucun filtrage spatial ni seuil dur n'est appliqué.
-Les étoiles confondues avec le bruit peuvent être atténuées avec lui.
+### Absence de débruitage dans cette branche
 
-Pour protéger les ailes, le moteur mesure les largeurs à 50 % et à 10 % du
-pic au-dessus du fond local, aux mêmes positions avant/après. Le percentile
-10 des rapports après/avant doit rester au moins égal à `0,90` pour chacune
-des deux hauteurs. Sinon, le seuil `T` est divisé par deux. Après huit essais,
-un dernier essai désactive la porte. Si l'une des deux mesures est impossible,
-la porte est également réduite jusqu'à désactivation ; cela ne certifie pas
-la qualité des profils. La garde supérieure de FWHM reste appliquée au rendu
-final et réduit le renforcement demandé si nécessaire.
-
-Le rapport `noise_suppression` contient la médiane, le sigma estimé, le facteur,
-les seuils demandé/retenu et chaque essai avec ses mesures et son acceptation.
-`wings` décrit les largeurs à 10 % ; `fwhm` celles à 50 %, avec leur percentile
-10 (`p10_ratio`). La recette exportée conserve le seuil retenu pour rejouer le
-rendu sans réestimer le bruit sur une autre image.
-
-Ces mesures locales ne garantissent pas la conservation de toutes les ailes :
-la fenêtre fait 15 pixels de côté et la sélection reste limitée aux 64 pics
-les plus brillants au-dessus de `0,005`. Une étoile plus faible peut donc ne
-pas participer au contrôle. Le seuil utilisé est enregistré dans
-`peak_threshold`. Le bruit corrélé, les résidus écrêtés à zéro et les champs
-très denses biaisent l'estimation. La réduction effective du bruit
-n'est pas garantie pour toute image, notamment si la protection des profils
-impose de réduire ou désactiver la porte. Une inspection sur données réelles
-reste nécessaire.
-
-### Adaptation à la répartition des pics
-
-Un gain fixe reste insuffisant lorsque les amplitudes linéaires des étoiles sont
-très faibles. Une valeur positive de `--star-histogram-strength` active
-une adaptation, active par défaut (`1`), pour rendre visibles les faibles
-étoiles dont le gain fixe laisse les pics proches de zéro :
-
-1. Repérer les maxima du maximum RGB sur une fenêtre de 7 pixels. Le seuil est
-   `max(1e-5, médiane + 5 × 1.4826 × MAD)`, en intensité normalisée. Un plateau
-   connexe fournit une seule position. Ce sont des **pics candidats**, pouvant
-   inclure du bruit ou des résidus StarNet, pas des étoiles certifiées.
-2. Écarter du calage les pics inférieurs ou égaux à
-   `max(1e-5, médiane(L) + 12*sigma)`, où sigma est la dispersion robuste par
-   différences voisines décrite plus haut. Cette marge conservatrice limite
-   le calage sur le bruit positif lorsque sa MAD de niveaux est presque nulle.
-   Le rapport conserve `calibration_peak_threshold` et `calibration_peak_count`.
-   Avec au moins huit pics restants et quatre amplitudes distinctes, calculer 17 quantiles
-   entre 5 et 95 %. Leur attribuer des niveaux régulièrement espacés en logarithme
-   de 0,04 à 0,65 pour un plafond de 0,85 ; ces niveaux suivent proportionnellement
-   le plafond configuré. Interpoler en log-log, prolonger linéairement vers zéro
-   et ajouter la borne `1 → ceiling`. Garder le maximum de cette courbe et du
-   rendu fixe : l'adaptation ne diminue aucune contribution.
-3. Mélanger cette proposition au rendu fixe avec la force demandée. Mesurer la
-   largeur des profils ; si elle dépasse la garde, diviser la force par deux et
-   réessayer, au plus huit fois. Retenir le premier essai admissible, ou conserver
-   le gain fixe si aucun ne passe.
-4. Appliquer l'augmentation retenue comme gain commun aux trois canaux du
-   rendu asinh/RGBBlend, avec un gain nul si le niveau de référence est nul.
-
-Si le rendu obtenu dépasse encore la limite de largeur, réduire `faint_boost`
-d'une unité et recommencer ces étapes sur les mêmes étoiles linéaires.
-La recherche commence à la valeur demandée et s'arrête au **premier rendu
-admissible**, sans essayer les renforcements plus faibles. La valeur 1 est
-toujours essayée en dernier : par exemple `5 → 4 → 3 → 2 → 1` ou
-`2,4 → 1,4 → 1`. La force asinh, le plafond et la limite de largeur restent
-inchangés. Les valeurs demandées en CLI/JSON ne sont pas réécrites.
-Avec un facteur limité à 10, la boucle comporte au plus dix essais de base.
-Si même le dernier essai dépasse la limite, l'erreur indique le seuil et
-les renforcements/rapports essayés. Les autres erreurs restent bloquantes.
-
-L'objectif est de répartir davantage les amplitudes des pics en logarithme.
-Il ne s'agit pas de forcer l'histogramme de **tous les pixels** à être plat :
-le fond nul et les ailes stellaires le dominent, et leur égalisation peut rendre
-visibles des résidus. La limitation FWHM peut empêcher d'atteindre la force
-demandée. Les cas constants ou insuffisamment peuplés conservent la courbe fixe.
-`--star-histogram-strength=0` retrouve cette courbe ; ajouter
-`--star-faint-boost=1 --star-noise-sigma=0` retrouve le rendu asinh historique. Ces paramètres suivent
-CLI > JSON > défaut et sont persistants avec `--save-config`.
-
-Il n'y a ni rééchantillonnage ni optimisation du fond sur cette branche.
-La fraction de 25 % calibre une courbe ponctuelle ; le mode historique global
-(`--star-boost-fraction 1`) reste disponible. Une couleur déjà perdue dans un noyau
-saturé ne peut pas être rétablie.
-
-Aucun pixel stellaire nul n'est rendu positif par ce renforcement : il révèle
-les contributions déjà extraites et ne recrée pas une étoile absente du masque.
-Les rapports donnent `requested_faint_boost` (demande), `faint_boost` (retenu),
-et `width_adaptation` (pas, essais de base, rapports de largeur, acceptation,
-historique de l'adaptation des pics pour chaque essai et motif d'arrêt).
-Une largeur non mesurable reste signalée comme telle, sans certifier la garde.
-Le journal indique chaque renforcement refusé avec sa mesure et la réduction
-finalement retenue. Les rapports donnent aussi le gain à l'origine de la courbe fixe
-`fixed_curve_faint_intensity_gain`, et celui de la courbe retenue
-`faint_intensity_gain` (nul lorsque la porte de bruit est active). `histogram_balance` contient la force demandée/retenue,
-les points de la table, chaque essai et son rapport de largeur, ainsi que le
-motif d'arrêt. Les métriques `visibility` comparent, **aux mêmes positions**, le
-nombre de pics au-dessus de 0,03 en maximum RGB avant et après. Ce seuil fixe
-est un indicateur de contraste normalisé, sans modèle de perception ni SNR.
-
-Les contrôles portent sur les fractions à 0 et 1 par canal, les excursions du
-domaine et la chromaticité RGB normalisée. La chroma de diagnostic est l'écart
-entre maximum et minimum des composantes RGB normalisées par leur somme :
-c'est une mesure relative aux canaux, pas une saturation perceptuelle calibrée.
-
-Une FWHM approximative est mesurée aux mêmes pics avant et après : au plus 64
-maxima locaux, au-dessus de 0,005, dans une fenêtre 15 × 15. Deux profils axiaux
-sont corrigés du niveau médian des extrémités ; les traversées de demi-hauteur
-sont interpolées. Les profils tronqués ou sans traversée exploitable sont
-exclus. Le rapport fournit le nombre de profils et les largeurs médianes ;
-`null` exprime une mesure impossible. Le seuil de rapport médian
-`--star-stretch-max-width-ratio`, hérité de `--star-max-width-ratio` en
-l’absence de valeur propre explicite,
-déclenche la réduction du renforcement et ne provoque une erreur qu'après
-épuisement des essais de base. Il s'agit d'un contrôle de profils locaux,
-**pas d'un ajustement PSF**, ni d'une garantie d'absence de halos faibles.
-Une limite de 1,5 autorise une augmentation de 50 % de cette largeur médiane.
-La valeur par défaut commune est 2, mais une valeur CLI/JSON existante reste
-prioritaire. Une valeur propre explicite, par exemple 1,2, reste respectée.
-Cette garde est une heuristique de présentation, sans calibration physique.
-Le contrôle distinct après fusion conserve `--star-max-width-ratio` et reste bloquant si cette recomposition
-introduit un dépassement : il ne relance pas les traitements amont.
+Aucune porte de bruit ne modifie le rendu. Les rapports indiquent
+`histogram_only: true`, `spatially_varying: false`,
+`contrast_mode: pointwise` et `noise_suppression.threshold: 0`.
+Les anciennes valeurs de `star_noise_sigma` sont enregistrées à titre de
+compatibilité, sans activer de traitement. L'estimation du bruit utilisée
+pour calibrer les pics n'est pas une modification des pixels.
+Les recettes de nouvelles images sont globales et se rejouent sans géométrie
+stellaire native. Les anciens audits ou recettes spatiales restent lisibles
+pour leur reproduction historique, mais ne sont plus produits par le rendu.
 
 ### Diagnostic spécifique des étoiles
 
@@ -370,60 +311,23 @@ Références : [StarNet Siril](https://siril.readthedocs.io/en/stable/processing
 [recomposition graphique](https://siril.readthedocs.io/en/stable/processing/stars/star-recomp.html),
 [algorithme GHS](auto-ghs-algorithm.md), [guide et paramètres](auto-ghs.md).
 
-### Vérification sur les couches M33 et M31
+<a id="verification-sur-les-couches-m33-et-m31"></a>
+<a id="comparaison-exploratoire-avec-une-courbe-ghs"></a>
 
-Un essai sur les couches StarNet déjà produites de M33 et M31 a comparé le
-rendu limité à un renforcement retenu de 1 avec une adaptation demandée de 1
-et une limite de largeur de 1,5. Le renforcement de base demandé reste 5.
-Les fonds GHS existants ont été réutilisés sans nouveau calcul.
+### Vérification du rendu courant
 
-| Mesure | M33 | M31 |
-|---|---:|---:|
-| Pics de la couche au-dessus de 0,03, ancien rendu | 304 | 1 600 |
-| Pics de la couche au-dessus de 0,03, essai adaptatif | 11 492 | 34 284 |
-| Rapport FWHM médian de l'essai | 1,463 | 1,488 |
-| Pics de contribution après fusion au-dessus de 0,03 | 10 949 | 32 107 |
+Les tests de `test_stellar_contrast.py` vérifient un fond non nul laissé
+inchangé, les profils gaussiens faibles et brillants, la couleur RGB, les
+recouvrements, les exclusions et la reproduction exacte de la recette.
+Les rendus réels sont comparés sur les mêmes couches StarNet et les mêmes
+fonds GHS ; cette vérification ne valide pas une nouvelle séparation StarNet.
+Les sources et les FITS scientifiques restent inchangés.
 
-Les mêmes positions candidates sont suivies ; ces nombres ne constituent pas
-un catalogue d'étoiles astrophysiques. Aucun pixel à 1 n'a été relevé dans les
-couches étirées ni dans les recompositions de cet essai. Cette vérification
-réutilise la séparation existante et ne valide pas une nouvelle exécution de
-StarNet ou de Siril. Les rapports et images d'origine sont préservés.
+## Objectifs indicatifs de visibilité et de forme
 
-Une configuration sauvegardée avec `star_histogram_strength: 0` continue de
-désactiver l'adaptation ; fournir `--star-histogram-strength 1` pour l'activer.
-De même, un `star_stretch_max_width_ratio: 1.2` sauvegardé reste explicite :
-le remplacer en CLI par `--star-stretch-max-width-ratio 1.5` pour cet essai.
-
-### Comparaison exploratoire avec une courbe GHS
-
-Une recherche hors pipeline a également évalué `lib.auto_ghs.ghs_transfer`
-sur les mêmes couches. La transformation est appliquée au maximum RGB,
-normalisée au plafond de 0,85, puis suivie de la même porte de bruit ; un gain
-commun conserve les rapports RGB. Le moteur stellaire de production reste
-l'asinh adaptatif : ces candidats GHS ne constituent pas une nouvelle option.
-
-La recherche a testé D dans `{2,3,4,5,6,7,8}`, B dans `{-1,0,2,5}` et HP dans
-`{0.001,0.01,0.05,0.2,1}`, avec LP=0 et SP égal à la médiane des pics candidats.
-Les candidats respectent une FWHM médiane ≤ 1,5 et les contrôles de
-rétrécissement à 50 % et 10 %. Les paramètres sélectionnés ont ensuite été
-réappliqués aux images complètes, puis fusionnés avec les fonds existants.
-
-| Mesure GHS | M33 | M31 |
-|---|---:|---:|
-| D / B / HP | 8 / 2 / 0,05 | 7 / 0 / 0,01 |
-| SP | 0,000138988 | 0,000304270 |
-| Pics de couche au-dessus de 0,03 | 17 021 | 32 843 |
-| Rapport FWHM médian, 63 profils | 1,384 | 1,039 |
-| Rapport médian à 10 % du pic, 62 profils | 1,431 | 1,015 |
-| Pics de contribution après fusion au-dessus de 0,03 | 16 734 | 31 798 |
-
-Aucun pixel à 1 n'est relevé dans ces couches ou leurs recompositions. Le
-compromis visibilité/largeur est favorable au GHS dans ces deux essais ; cette
-grille finie ne démontre pas un optimum universel. La sélection des profils
-reste dominée par les étoiles brillantes et les fenêtres de 15 pixels ne
-contrôlent pas les halos étendus.
-
-La [documentation Siril sur les étirements](https://siril.readthedocs.io/en/stable/processing/stretching.html)
-décrit SP et la protection linéaire au-delà de HP. Cette protection ne dispense
-pas de mesurer les profils après transformation et après fusion.
+Les [indicateurs d'apparence stellaire](stellar-appearance.md) mesurent un objectif
+non bloquant d'au moins 25 % de candidats visibles par contraste local,
+le diamètre apparent, la pente de transition et l'étendue de la jupe. Ils
+figurent dans `appearance_quality` et dans le diagnostic PNG. Ils ne modifient
+ni les pixels ni le choix de la courbe globale. Aucun seuil perceptuel de
+netteté ou de jupe n'est encore déclaré validé.

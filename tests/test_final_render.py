@@ -1044,3 +1044,85 @@ def test_branch_diagnostics_are_published_before_recomposition(
         assert Path(report['histogram_path']).is_file()
         assert Path(report['histogram_series_manifest']).is_file()
         assert Path(report['histogram_gallery']).is_file()
+
+
+@pytest.mark.parametrize('limits', [(-.001046, 1.0), (.1, 1.4), (-3., -2.), (0., 1.)])
+def test_render_input_affine_preserves_differences(limits: tuple[float, float]) -> None:
+    """La préparation est globale et réversible aux arrondis float32 près."""
+    data = np.linspace(*limits, 3 * 16 * 16, dtype=np.float32).reshape(3, 16, 16)
+    original = data.copy()
+    prepared, audit = AutoGHSFinalRenderer.prepare_render_input(data)
+    assert prepared.min() >= 0 and prepared.max() <= 1
+    np.testing.assert_allclose(
+        prepared.astype(np.float64) * audit['scale'] + audit['offset'],
+        original, atol=2e-7,
+    )
+    np.testing.assert_array_equal(data, original)
+    assert audit['applied'] == (limits != (0., 1.))
+    if not audit['applied']:
+        assert prepared is data
+
+
+@pytest.mark.parametrize('data', [
+    np.zeros((1, 4, 4)), np.zeros((3, 0, 4)),
+    np.full((3, 4, 4), np.nan), np.full((3, 4, 4), np.inf),
+])
+def test_render_input_invalid_pixels_still_rejected(data: np.ndarray) -> None:
+    """La normalisation ne masque pas une géométrie invalide ou NaN/Inf."""
+    with pytest.raises(ValueError):
+        AutoGHSFinalRenderer.prepare_render_input(data)
+
+
+def test_signed_restoration_is_staged_before_starnet(
+    linear_rgb: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Une sortie signée prépare une copie auditée avant toute exécution StarNet."""
+    with fits.open(linear_rgb, mode='update') as hdul:
+        hdul[0].data[0, 0, 0] = -.001046
+        hdul[0].data[1, 0, 0] = 1.1
+    original = linear_rgb.read_bytes()
+    report = tmp_path / 'autoghs.json'
+
+    def inspect_input(
+        self: StarNetSeparator, source: Path, report_path: Path, args: argparse.Namespace,
+    ) -> JSONReport:
+        """Contrôle le vrai FITS préparé, puis interrompt avant le programme externe."""
+        assert source != linear_rgb
+        assert source.name == 'render_input_linear.fits'
+        data = fits.getdata(source)
+        assert data.min() == 0 and data.max() == 1
+        assert fits.getheader(source)['OBJECT'] == 'Synthetic'
+        assert len(fits.getdata(source, extname='AUX')) == 6
+        audit = json.loads((report_path.parent / 'input_preparation.json').read_text())
+        assert audit['below_zero_count'] == 1
+        assert audit['above_one_count'] == 1
+        assert audit['image_path'] == str(source)
+        assert audit['applied']
+        raise RuntimeError('stop after verified preparation')
+
+    monkeypatch.setattr(StarNetSeparator, 'post_process', inspect_input)
+    with pytest.raises(RuntimeError, match='stop after verified preparation'):
+        AutoGHSFinalRenderer().post_process(linear_rgb, report, argparse.Namespace())
+    assert linear_rgb.read_bytes() == original
+    assert json.loads(report.read_text())['input_preparation']['applied']
+
+
+def test_signed_input_completes_render_with_external_separator_stub(
+    linear_rgb: Path, fake_separation: list[str], tmp_path: Path,
+) -> None:
+    """L'entrée signée atteint la publication avec le seul séparateur simulé."""
+    with fits.open(linear_rgb, mode='update') as hdul:
+        hdul[0].data[0, 0, 0] = -.001046
+    original = linear_rgb.read_bytes()
+    result = AutoGHSFinalRenderer().post_process(
+        linear_rgb, tmp_path / 'autoghs.json', argparse.Namespace(
+            compute_backend='cpu', ghs_bins=512, ghs_max_iterations=1,
+        ),
+    )
+    assert result['status'] != 'ERROR'
+    assert result['input_preparation']['applied']
+    assert result['input_preparation']['below_zero_count'] == 1
+    assert fake_separation == [result['input_preparation']['image_path']]
+    assert linear_rgb.read_bytes() == original
+    final = fits.getdata(result['output_image'])
+    assert np.isfinite(final).all() and final.min() >= 0 and final.max() <= 1

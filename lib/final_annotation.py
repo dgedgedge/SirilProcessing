@@ -116,6 +116,7 @@ class FinalImageAnnotator(processor):
         engines = {
             "siril": "Siril", "cosmic_clarity": "Cosmic Clarity",
             "cosmic-clarity": "Cosmic Clarity", "graxpert": "GraXpert",
+            "aberration_remover": "Aberration Remover",
         }
         unchanged = {"no_safe_improvement", "rejected", "DISABLED", "disabled"}
         selected: list[tuple[str, str]] = []

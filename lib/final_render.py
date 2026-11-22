@@ -157,6 +157,52 @@ class AutoGHSFinalRenderer(processor):
             },
         )
 
+    @staticmethod
+    def prepare_render_input(data: np.ndarray) -> tuple[np.ndarray, JSONReport]:
+        """Met un RGB linéaire fini dans [0, 1] sans écrêtage des pixels.
+
+        Parameters
+        ----------
+        data : np.ndarray
+            Plans RGB en unités Siril, de forme (3, hauteur, largeur).
+
+        Returns
+        -------
+        tuple[np.ndarray, dict]
+            Plans float32 et audit de la transformation globale
+            ``(data - offset) / scale``. Offset et scale sont communs aux
+            trois canaux ; une entrée déjà dans [0, 1] reste inchangée.
+            La source n'est jamais modifiée en place. Le calcul float64
+            évite le débordement lors de la différence des extrêmes float32.
+
+        Raises
+        ------
+        ValueError
+            Géométrie invalide ou pixels non finis. Cette adaptation est
+            réservée au rendu ; elle ne modifie pas le FITS scientifique.
+        """
+        if data.ndim != 3 or data.shape[0] != 3 or data.size == 0:
+            raise ValueError("AutoGHS nécessite un FITS RGB linéaire à trois plans")
+        if not np.isfinite(data).all():
+            raise ValueError("AutoGHS refuse les pixels NaN/Inf")
+        minimum, maximum = float(data.min()), float(data.max())
+        offset = min(0.0, minimum)
+        scale = max(1.0, maximum - offset)
+        applied = offset != 0.0 or scale != 1.0
+        prepared = (
+            ((data.astype(np.float64) - offset) / scale).astype(np.float32)
+            if applied else data
+        )
+        validate_rgb(prepared)
+        return prepared, dict(
+            applied=applied, method="global_affine_no_clipping",
+            formula="(input - offset) / scale", offset=offset, scale=scale,
+            input_minimum=minimum, input_maximum=maximum,
+            below_zero_count=int(np.count_nonzero(data < 0)),
+            above_one_count=int(np.count_nonzero(data > 1)),
+            output_minimum=float(prepared.min()), output_maximum=float(prepared.max()),
+        )
+
     def post_process(
         self,
         input_path: Path,
@@ -166,8 +212,11 @@ class AutoGHSFinalRenderer(processor):
         """Publie un rendu RANGE étoilé, ses couches et ses diagnostics.
 
         La séparation, les deux branches et la recomposition sont écrites directement
-        dans le parent du rapport, sans enveloppe autoghs_work. Seuls leurs
-        produits et l'ancienne enveloppe sont nettoyés ; une entrée située
+        dans le parent du rapport, sans enveloppe autoghs_work.
+        Une copie de rendu est préparée par transformation affine commune aux
+        canaux si la plage dépasse [0, 1], avec audit sans écrêtage. Le FITS
+        scientifique reste intact. Seuls les produits et l'ancienne enveloppe
+        sont nettoyés ; une entrée située
         dans ces dossiers est refusée avant toute suppression.
 
         Parameters
@@ -201,12 +250,12 @@ class AutoGHSFinalRenderer(processor):
         if source == report_path:
             raise ValueError("Le rapport AutoGHS ne peut pas remplacer la source")
         work_root: Path | None = None
+        input_preparation: JSONReport | None = None
         started = time.monotonic()
         try:
             args = self._get_args(args)
             options = GHSOptimizer.options(args)
-            data = normalized_planes(source)
-            validate_rgb(data)
+            data, input_preparation = self.prepare_render_input(normalized_planes(source))
             header = fits.getheader(source)
             validate_linear_header(header)
             headroom = getattr(args, "ghs_headroom", 0.95)
@@ -236,8 +285,22 @@ class AutoGHSFinalRenderer(processor):
             for directory in (separation_dir, stars_dir, ghs_dir,
                               recomposition_dir):
                 directory.mkdir()
+            separation_input = source
+            if input_preparation["applied"]:
+                separation_input = separation_dir / "render_input_linear.fits"
+                write_rgb(source, separation_input, data)
+                LOGGER.info(
+                    "AutoGHS — préparation du rendu sans écrêtage : "
+                    "min=%g ; max=%g ; %d valeurs négatives ; "
+                    "%d valeurs au-dessus de 1 ; offset=%g ; échelle=%g",
+                    input_preparation["input_minimum"], input_preparation["input_maximum"],
+                    input_preparation["below_zero_count"], input_preparation["above_one_count"],
+                    input_preparation["offset"], input_preparation["scale"],
+                )
+            input_preparation["image_path"] = str(separation_input)
+            atomic_report(separation_dir / "input_preparation.json", input_preparation)
             separation = StarNetSeparator().post_process(
-                source, separation_dir / "separation.json", args
+                separation_input, separation_dir / "separation.json", args
             )
             starless = normalized_planes(separation["starless_linear"])
             residual = normalized_planes(separation["stars_linear"])
@@ -351,6 +414,7 @@ class AutoGHSFinalRenderer(processor):
                 },
                 "image_path": str(source),
                 "source_sha256": fingerprint,
+                "input_preparation": input_preparation,
                 "input_linear": True,
                 "output_linear": False,
                 "shape": list(data.shape),
@@ -420,6 +484,7 @@ class AutoGHSFinalRenderer(processor):
                 "image_path": str(source),
                 "error": str(error),
                 "work_directory": str(work_root) if work_root is not None else None,
+                "input_preparation": input_preparation,
                 "no_automatic_retry": True,
             }
             try:

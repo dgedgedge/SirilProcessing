@@ -28,7 +28,7 @@ SHOULDER_FIT_TOLERANCE = .02  # Résidu en décroissance normalisée, pas en dex
 SHOULDER_MIN_FLATTENING = .15  # Réduction relative de pente définissant un épaulement.
 POST_SHOULDER_REGIONS = 5
 SLOPE_RELATIVE_EPSILON = 1e-6
-RATIO_ORDER_TOLERANCE = float(np.log(1.1))  # Ignorer les inversions dues aux quasi-égalités.
+SLOPE_ORDER_TOLERANCE = .1  # Écart direct minimal : 10 % de la plus forte pente voisine.
 RATIO_EXCESS_WEIGHT = 10.
 RATIO_INVERSION_PENALTY = 8.
 TERMINAL_RATIO_WEIGHT = .2  # Raidissement de queue moins influent que les raccords internes.
@@ -43,6 +43,9 @@ MAX_PIECES = 6
 # Variation de pente, après normalisation horizontale et verticale.
 SLOPE_CHANGE_THRESHOLD = .3
 MIN_SHAPE_DROP_DEX = .2
+# Fenêtre sombre commune et population minimale pour une mesure de modes fiable.
+LOW_LIGHT_WINDOW_END = .25
+MIN_LOW_LIGHT_POPULATION = 32
 # Le pic garde sa propre enveloppe locale : la spline du corps peut gommer
 # un second mode. Arrêt dès que les effectifs tombent sous 10 % du maximum.
 INITIAL_PEAK_FRACTION = .1
@@ -138,6 +141,60 @@ def _pieces(x: np.ndarray, y: np.ndarray, tolerance: float) -> list[JSONReport]:
     return paths.get(size-1, (0.0, []))[1]
 
 
+def low_light_mode_profile(counts: np.ndarray) -> JSONReport:
+    """Mesure le creux séparant deux modes dans le premier quart d'intensité.
+
+    Parameters
+    ----------
+    counts : np.ndarray
+        128 effectifs finis non négatifs, sur [0,1], réels ou pondérés.
+
+    Returns
+    -------
+    JSONReport
+        Profondeur maximale d'un creux bordé par deux populations, divisée
+        par le sommet de la fenêtre [0,0.25[. Les effectifs sont seulement
+        lissés par [1,2,1]/4 ; aucun arrêt au premier creux ni spline.
+        Une fenêtre de moins de 32 pixels est non mesurable, jamais unimodale
+        par convention. Les positions sont des centres de classes normalisés.
+
+    Raises
+    ------
+    ValueError
+        Forme, effectifs négatifs ou valeurs non finies invalides.
+
+    Notes
+    -----
+    Pour chaque classe i, le creux vaut
+    min(max(effectifs à gauche), max(effectifs à droite)) - effectif[i].
+    La normalisation rend le test indépendant de la population et du choix
+    du pic dominant. Ce diagnostic ne transforme pas les pixels. Voir
+    docs/scripts/postProcess/ghs-histogram-shape.md.
+    """
+    values = np.asarray(counts, dtype=np.float64)
+    if (values.shape != (HISTOGRAM_BINS,) or not np.isfinite(values).all()
+            or np.any(values < 0)):
+        raise ValueError('Effectifs invalides pour les modes sombres GHS')
+    stop = int(HISTOGRAM_BINS * LOW_LIGHT_WINDOW_END)
+    report: JSONReport = dict(
+        method='local_smoothed_saddle', window=[0., LOW_LIGHT_WINDOW_END], measurable=False,
+        prominence_fraction=None, valley=None, bins=stop,
+        minimum_population=MIN_LOW_LIGHT_POPULATION,
+    )
+    if values[:stop].sum() < MIN_LOW_LIGHT_POPULATION:
+        return report
+    smooth = np.convolve(values, [.25, .5, .25], mode='same')[:stop]
+    left = np.maximum.accumulate(smooth)
+    right = np.maximum.accumulate(smooth[::-1])[::-1]
+    depths = np.maximum(0., np.minimum(left, right)-smooth)
+    valley = int(np.argmax(depths))
+    report.update(
+        measurable=True, prominence_fraction=float(depths[valley]/smooth.max()),
+        valley=(valley+.5)/HISTOGRAM_BINS if depths[valley] > 0 else None,
+    )
+    return report
+
+
 def piecewise_histogram_profile(
     counts: np.ndarray, tolerance: float = .05,
     smoothing: float = DEFAULT_SMOOTHING,
@@ -166,6 +223,7 @@ def piecewise_histogram_profile(
         le pic dominant, pour détecter un nouveau mode masquant ce creux.
         initial_peak mesure la remontée locale en fraction du sommet, avant
         la première classe sous 10 % de celui-ci, indépendamment de la spline.
+        low_light_modes couvre tout le premier quart, même après un creux profond.
     """
     if not np.isfinite(smoothing) or not 1e-8 <= smoothing <= .1:
         raise ValueError('ghs-shape-smoothing doit être dans [1e-8,0.1]')
@@ -176,7 +234,8 @@ def piecewise_histogram_profile(
                   line_end=None, line_span=0.0, slope=None, intercept=None,
                   pieces=[], shape=None, reference_covered=False,
                   reference_log_density=None, prepeak_valley_dex=None,
-                  initial_peak=None, score=-1.0, loss=None)
+                  initial_peak=None, low_light_modes=low_light_mode_profile(counts),
+                  score=-1.0, loss=None)
     if legacy['peak'] is None or not legacy['support']:
         return result
     values = np.asarray(counts, dtype=np.float64)
@@ -337,6 +396,42 @@ def _cached_shoulder_geometry(
     return result
 
 
+def compare_slope_order(reference: np.ndarray, candidate: np.ndarray) -> JSONReport:
+    """Compare directement l'ordre signé des pentes voisines, sans quotient.
+
+    Chaque différence s[i+1]-s[i] est comparée à 10 % du maximum des deux
+    amplitudes voisines, indépendamment dans chaque profil. Une quasi-égalité
+    ne définit pas d'ordre. Une multiplication positive commune des pentes
+    ne change pas ce diagnostic. Un raidissement descendant du dernier raccord
+    est diagnostiqué mais exempté comme auparavant pour la queue terminale.
+    Les pentes croissantes restent contrôlées séparément par l'appelant.
+    """
+    first, last = np.asarray(reference, dtype=float), np.asarray(candidate, dtype=float)
+    if (first.ndim != 1 or first.size < 2 or last.shape != first.shape
+            or not np.isfinite(first).all() or not np.isfinite(last).all()):
+        raise ValueError('Pentes finies de même dimension requises')
+    rows = []
+    for index in range(first.size-1):
+        differences, thresholds, orders = [], [], []
+        for slopes in (first, last):
+            delta = float(slopes[index+1]-slopes[index])
+            threshold = SLOPE_ORDER_TOLERANCE*max(abs(slopes[index]), abs(slopes[index+1]))
+            order = 1 if delta > threshold else -1 if delta < -threshold else 0
+            differences.append(delta)
+            thresholds.append(float(threshold))
+            orders.append(order)
+        terminal = index == first.size-2 and last[index+1] < last[index] < 0
+        reversed_order = orders[0]*orders[1] < 0
+        rows.append(dict(index=index+1, reference_difference=differences[0],
+                         candidate_difference=differences[1],
+                         reference_tolerance=thresholds[0], candidate_tolerance=thresholds[1],
+                         reference_order=orders[0], candidate_order=orders[1],
+                         reversed=reversed_order, terminal_exemption=bool(terminal)))
+    return dict(method='signed adjacent slope differences', tolerance=SLOPE_ORDER_TOLERANCE,
+                comparisons=rows,
+                inverted=any(row['reversed'] and not row['terminal_exemption'] for row in rows))
+
+
 def compare_shoulder_slope_ratios(
     reference: JSONReport, candidate: JSONReport, max_advance: float,
     ratio_tolerance: float, terminal_weight: float = TERMINAL_RATIO_WEIGHT,
@@ -345,7 +440,8 @@ def compare_shoulder_slope_ratios(
 
     max_advance est le déplacement positif autorisé de l'épaulement dans
     [0,1]. ratio_tolerance borne les écarts logarithmiques par log(1+t).
-    Les rapports proches de 1 à 10 % près n'ont pas d'ordre significatif.
+    L’ordre est comparé directement par les différences signées des pentes ;
+    les quasi-égalités à 10 % de l’amplitude voisine sont non significatives.
     Un raidissement terminal descendant pèse 20 % et n'est pas éliminatoire ;
     les inversions de signe des pentes restent interdites à toute position.
     """
@@ -382,7 +478,14 @@ def compare_shoulder_slope_ratios(
     if np.any((first < -initial_floor) & (last >= -final_floor)):
         reasons.append('histogram slope sign inversion')
     errors, normal_errors = [], []
-    inversion = False
+    order_audit = compare_slope_order(first, last)
+    result['slope_order'] = order_audit
+    inversion = order_audit['inverted']
+    bounds_before = np.asarray(before['boundaries'])
+    bounds_after = np.asarray(after['boundaries'])
+    fractions_before = (bounds_before-bounds_before[0])/(bounds_before[-1]-bounds_before[0])
+    fractions_after = (bounds_after-bounds_after[0])/(bounds_after[-1]-bounds_after[0])
+    result['boundary_fraction_shift'] = float(np.max(abs(fractions_after-fractions_before)))
     bound = float(np.log1p(ratio_tolerance))
     for index, (old, new) in enumerate(zip(before['ratios'], after['ratios'])):
         if old is None or new is None or old <= 0 or new <= 0:
@@ -395,13 +498,11 @@ def compare_shoulder_slope_ratios(
         errors.append(error)
         if not terminal_steepening:
             normal_errors.append(change)
-            if abs(np.log(old)) > RATIO_ORDER_TOLERANCE and abs(np.log(new)) > RATIO_ORDER_TOLERANCE:
-                inversion |= bool(np.sign(np.log(old)) != np.sign(np.log(new)))
             if error > bound:
                 reasons.append('histogram slope ratio distortion')
         result['penalty'] += RATIO_EXCESS_WEIGHT*(max(0., error-bound)/bound)**2
     if inversion:
-        reasons.append('histogram slope ratio inversion')
+        reasons.append('histogram slope order inversion')
         result['penalty'] += RATIO_INVERSION_PENALTY
     # Une rupture isolée ne doit pas être masquée par une moyenne des ratios.
     ratio_break = (float(np.max(abs(np.asarray(normal_errors)-np.median(normal_errors))))
@@ -427,6 +528,8 @@ def compare_histogram_shapes(
     d'amplitude et de distance restent informatives pour lire les diagnostics.
     Le signe des pentes et les proportions de leurs rapports voisins
     sont protégés ; un raidissement terminal bénéficie d'un poids réduit.
+    Une aggravation excessive des modes sombres, mesurée sans spline sur
+    [0,0.25[, est éliminatoire pour toutes les phases utilisant cet audit.
     La référence reste fixe pendant toutes les phases.
 
     Parameters
@@ -457,12 +560,15 @@ def compare_histogram_shapes(
     if not np.isfinite(max_peak_shift) or not 0 <= max_peak_shift <= 1:
         raise ValueError('ghs-shape-peak-shift doit être dans [0,1]')
     before, after = reference.get('shape'), candidate.get('shape')
-    audit: JSONReport = dict(measurable=False, achieved=None, rejections=[],
-                             drop_retention=None, minimum_drop_retention=None,
-                             distance=None, penalty=0.0)
+    mode_guard = HistogramRenderQuality.low_light_mode_guard(reference, candidate)
+    audit: JSONReport = dict(
+        measurable=False, achieved=False if mode_guard['rejections'] else None,
+        rejections=list(mode_guard['rejections']), low_light_mode_guard=mode_guard,
+        drop_retention=None, minimum_drop_retention=None, distance=None, penalty=0.0,
+    )
     if not before or before['drop_dex'] < MIN_SHAPE_DROP_DEX:
         return audit
-    reasons = []
+    reasons = list(audit['rejections'])
     if not after or after['drop_dex'] < MIN_SHAPE_DROP_DEX:
         reasons.append('unmeasurable histogram shape')
         audit.update(measurable=True, achieved=False, rejections=reasons)
@@ -496,7 +602,7 @@ def compare_histogram_shapes(
     comparison = compare_shoulder_slope_ratios(
         reference, candidate, max_shoulder_advance, ratio_tolerance, terminal_weight,
     )
-    reasons = list(comparison['rejections'])
+    reasons = list(dict.fromkeys([*reasons, *comparison['rejections']]))
     if not comparison['measurable']:
         reasons.append('unmeasurable histogram shape')
     if peak_shift > max_peak_shift+1e-12:
@@ -543,7 +649,8 @@ def protect_histogram_shape(
     Returns
     -------
     JSONReport
-        Copie du candidat enrichie de shape_preservation et du score pénalisé.
+        Copie enrichie des audits de forme et de modes sombres, avec score
+        pénalisé. Une seconde bosse excessive constitue un rejet obligatoire.
         Les refus restent à faire appliquer par le moteur ou le sélecteur.
     """
     result = dict(profile)
@@ -551,5 +658,7 @@ def protect_histogram_shape(
                                      ratio_tolerance=ratio_tolerance,
                                      max_shoulder_advance=max_shoulder_advance,
                                      terminal_weight=terminal_weight)
-    result.update(shape_preservation=audit, score=profile['score']-audit['penalty'])
+    mode_guard = audit['low_light_mode_guard']
+    result.update(shape_preservation=audit, low_light_mode_guard=mode_guard,
+                  score=profile['score']-audit['penalty'])
     return result

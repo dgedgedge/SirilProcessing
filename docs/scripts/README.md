@@ -192,3 +192,9 @@ venv sans installation ; `--reset` le supprime puis le recrée complètement.
 
 Les détails des moteurs sont décrits dans [CUDA](install_cuda/README.md)
 et [Apple Silicon MPS/CoreML](install_macos/README.md).
+
+## 2.9. compareRestoration — comparaison des résultats
+
+[Manuel](compareRestoration/README.md), [options](compareRestoration/OPTIONS.md)
+et [lecture des critères](compareRestoration/FORMAT.md) : tableaux HTML et CSV
+comparant les traitements et chaînes de plusieurs répertoires existants.

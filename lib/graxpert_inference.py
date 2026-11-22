@@ -188,6 +188,8 @@ class GraXpertEngine(ParameterizedComponent):
         Le MAD nul est refusé plutôt qu’une normalisation instable. Les mêmes
         médianes/MAD sont utilisées pour toutes les tuiles d’un canal. Les pixels
         normalisés au-dessus du seuil du modèle restent inchangés, comme Siril.
+        Le tenseur envoyé au modèle est borné à [-10, 10] ; le masque de
+        protection conserve les valeurs normalisées originales, avant bornage.
         """
         height, width, _ = image.shape
         sampled = image[::4, ::4]
@@ -230,7 +232,8 @@ class GraXpertEngine(ParameterizedComponent):
             normalized = np.asarray(
                 (tiles - median) / mad * MODEL_MAD, dtype=np.float32
             )
-            predictions = self.session.run(None, {"gen_input_image": normalized})[0]
+            model_input = np.clip(normalized, -MODEL_THRESHOLD, MODEL_THRESHOLD)
+            predictions = self.session.run(None, {"gen_input_image": model_input})[0]
             if (
                 predictions.shape != normalized.shape
                 or not np.isfinite(predictions).all()
@@ -251,7 +254,11 @@ class GraXpertEngine(ParameterizedComponent):
 
         Le repli CPU, s’il est autorisé, recommence l’image entière. Les erreurs
         de format/contrat ne déclenchent pas un repli de périphérique. Un fichier
-        candidat est écrit uniquement après une inférence valide.
+        candidat est écrit uniquement après une inférence valide. Le mélange
+        est borné à [0, 1] en unités normalisées, comme GraXpert amont, avant
+        les contrôles de qualité. L'audit output_range conserve les extrema et
+        effectifs corrigés ; la source n'est jamais modifiée. Pour uint16,
+        le mélange est calculé avant l'unique conversion vers les unités entières.
         """
         import onnxruntime as ort
 
@@ -313,12 +320,27 @@ class GraXpertEngine(ParameterizedComponent):
                 denoised = denoised[:, :, 0]
             else:
                 denoised = np.moveaxis(denoised, -1, 0)
-            if original.dtype.kind == "u":
-                denoised = np.clip(denoised * scale, 0, scale).astype(original.dtype)
-            else:
-                denoised = denoised.astype(original.dtype)
-            blended = self.strength * denoised + (1 - self.strength) * original
+            # Mélanger avant de borner, conformément à blend_images amont.
+            blended = self.strength * (denoised * scale) + (1 - self.strength) * original
+            if not np.isfinite(blended).all():
+                raise ValueError("Mélange GraXpert non fini")
+            output_range = dict(
+                policy="clip_after_blend", unit="normalized_intensity",
+                minimum_before=float(blended.min()) / scale,
+                maximum_before=float(blended.max()) / scale,
+                below_zero_count=int(np.count_nonzero(blended < 0)),
+                above_one_count=int(np.count_nonzero(blended > scale)),
+                sample_count=int(blended.size),
+            )
+            np.clip(blended, 0, scale, out=blended)
             hdul[0].data = blended.astype(original.dtype)
+            if output_range["below_zero_count"] or output_range["above_one_count"]:
+                logging.warning(
+                    "GraXpert — sortie bornée à [0, 1] après mélange : "
+                    "%d valeurs négatives ; %d au-dessus de 1 ; min=%g ; max=%g",
+                    output_range["below_zero_count"], output_range["above_one_count"],
+                    output_range["minimum_before"], output_range["maximum_before"],
+                )
             hdul[0].header.add_history(
                 f"GraXpert ONNX denoise {self.models.version}; strength={self.strength}"
             )
@@ -336,6 +358,7 @@ class GraXpertEngine(ParameterizedComponent):
             requested_backend=self.backend,
             duration_seconds=time.monotonic() - start,
             strength=self.strength,
+            output_range=output_range,
             batch_size=self.batch_size,
             window_size=WINDOW_SIZE,
             stride=STRIDE,

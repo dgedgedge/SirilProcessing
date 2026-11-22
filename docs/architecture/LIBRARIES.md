@@ -22,6 +22,7 @@
 | [gaia_catalogue.py](../../lib/gaia_catalogue.py) | Acquérir et vérifier l'extrait Gaia astrométrique optionnel ; [format et intégrité](../scripts/install_dependances/resources.md) |
 | gaia_spcc.py | Installer et vérifier les 48 régions spectrales SPCC ; [reprise et intégrité](../scripts/install_dependances/resources.md#31-catalogue-spectral-spcc-complet) |
 | [ghs_final_stretch.py](../../lib/ghs_final_stretch.py) | Rechercher le renforcement final D/B/SP/HP sous [contraintes de hautes lumières](../scripts/postProcess/ghs-highlight-protection.md) |
+| [ghs_weak_structure.py](../../lib/ghs_weak_structure.py) | Mesurer les [structures faibles et le ciel régional](../scripts/postProcess/ghs-weak-structures.md) pour le classement global GHS |
 | [ghs_log_histogram.py](../../lib/ghs_log_histogram.py) | Mesurer la décroissance semi-log robuste pour le [classement des essais GHS](../scripts/postProcess/ghs-highlight-protection.md#31-régression-de-la-décroissance-logarithmique) |
 | [stretch_transfer.py](../../lib/stretch_transfer.py) | Reconstituer les chemins et exporter les [transformations cumulées des essais](../scripts/postProcess/stretch-transfer.md) |
 | [stretch_branches.py](../../lib/stretch_branches.py) | Posséder les traitements et diagnostics des [deux couches indépendantes](../scripts/postProcess/stretch-branches.md) |
@@ -41,6 +42,7 @@
 | [quality_star_processors.py](../../lib/quality_star_processors.py) | Séparer la détection Siril, les mesures locales et la comparaison stellaire |
 | [restoration_quality.py](../../lib/restoration_quality.py) | Évaluer les candidats sur des masques indépendants des moteurs et du gradient |
 | [restoration_chains.py](../../lib/restoration_chains.py) | Organiser la comparaison des chaînes complètes, active par défaut |
+| [restoration_preview.py](../../lib/restoration_preview.py) | Présenter les restaurations en JPEG AutoStretch avec une courbe commune aux candidats |
 | [restoration_summary.py](../../lib/restoration_summary.py) | Présenter les essais, contrôles et motifs de sélection dans les journaux et rapports |
 | [quality_preview.py](../../lib/quality_preview.py) | Illustrer les exclusions de qualité et les tuiles de ciel retenues |
 | [power_guard.py](../../lib/power_guard.py) | Fournir le contexte de performance et d’inhibition de veille D-Bus, activé uniquement par les scripts de lancement |

@@ -370,3 +370,100 @@ def test_spatial_recipe_replays_selection_and_labels_envelope(
                           cumulative_transfer=transform.curve(), transfer_domain=(.001, 1)),
                      tmp_path / 'envelope.png')
     assert captured == [True]
+
+
+def quantile_protection_recipe(policy: str | None = None) -> dict:
+    """Construit une courbe synthétique exposant le raccord des noyaux brillants."""
+    selection = dict(mode='histogram_quantile', bright_protection=.15)
+    if policy is not None:
+        selection['bright_protection_policy'] = policy
+    return dict(
+        kind='stars', strength=2., ceiling=.85, faint_boost=3.,
+        noise_threshold=4e-6, histogram_strength=1., color_mode='human',
+        knots=[.0002, .0004, .007, 1.], levels=[.001, .08, .15, .85],
+        boost_selection=selection,
+    )
+
+
+def test_quantile_bright_protection_does_not_reverse_intensities() -> None:
+    """Le raccord ne doit pas assombrir un pixel quand son entrée augmente."""
+    from lib.stretch_transfer import MONOTONE_BRIGHT_PROTECTION, stellar_noise_gate
+
+    ramp = np.geomspace(1e-8, 1., 65536)
+    rgb = np.stack((ramp, ramp, ramp))
+    operation = quantile_protection_recipe(MONOTONE_BRIGHT_PROTECTION)
+    rendered = CumulativeStretchTransform((0., 1.), [operation]).apply_rgb(rgb, ideal=True)
+    baseline = asinh_rgb(rgb, 2., .85, 3.) * stellar_noise_gate(ramp, 4e-6)[None]
+    assert np.min(np.diff(rendered[0])) >= -1e-12
+    assert rendered.max() <= .85
+    protected = baseline.max(axis=0) >= .15
+    np.testing.assert_allclose(rendered[:, protected], baseline[:, protected], atol=1e-12)
+    legacy = CumulativeStretchTransform((0., 1.), [quantile_protection_recipe()]).apply_rgb(
+        rgb, ideal=True,
+    )
+    assert np.min(np.diff(legacy[0])) < -.05
+
+
+def test_radial_gaussian_does_not_gain_a_dark_ring_at_bright_protection() -> None:
+    """Une PSF monotone reste décroissante du noyau vers les ailes."""
+    from lib.stretch_transfer import MONOTONE_BRIGHT_PROTECTION
+
+    radius = np.linspace(0, 10, 10001)
+    profile = .2 * np.exp(-.5 * (radius / 2.) ** 2)
+    rgb = np.stack((profile, profile, profile))
+    recipe = quantile_protection_recipe(MONOTONE_BRIGHT_PROTECTION)
+    rendered = CumulativeStretchTransform((0., 1.), [recipe]).apply_rgb(rgb, ideal=True)
+    assert np.max(np.diff(rendered[0])) <= 1e-12
+    old = CumulativeStretchTransform((0., 1.), [quantile_protection_recipe()]).apply_rgb(rgb, ideal=True)
+    assert np.max(np.diff(old[0])) > .05
+
+
+def test_historical_quantile_recipe_remains_reproducible() -> None:
+    """L'absence de politique versionnée conserve exactement l'ancien export."""
+    from lib.stretch_transfer import stellar_noise_gate
+
+    values = np.geomspace(1e-7, 1., 4096)
+    rgb = np.stack((values, .7 * values, .4 * values))
+    operation = quantile_protection_recipe()
+    base = asinh_rgb(rgb, 2., .85, 3.) * stellar_noise_gate(values, 4e-6)[None]
+    target = base.max(axis=0)
+    mapped = np.exp(np.interp(np.log(values), np.log(operation['knots']), np.log(operation['levels'])))
+    mapped = np.maximum(mapped, target)
+    mapped[values <= operation['knots'][0]] = target[values <= operation['knots'][0]]
+    mapped[target >= .15] = target[target >= .15]
+    expected = base * (mapped / target)[None]
+    actual = CumulativeStretchTransform((0., 1.), [operation]).apply_rgb(rgb, ideal=True)
+    np.testing.assert_allclose(actual, expected, atol=1e-12)
+
+
+def test_unknown_bright_protection_policy_fails_explicitly() -> None:
+    """Une future politique inconnue n'est pas interprétée comme une ancienne courbe."""
+    operation = quantile_protection_recipe('unknown_policy')
+    with pytest.raises(ValueError, match='Politique de protection'):
+        CumulativeStretchTransform((0., 1.), [operation]).apply_rgb(np.full((3, 4), .01))
+
+
+@pytest.mark.parametrize('invalid', ['empty', 'shape', 'nan', 'negative', 'protection', 'knots'])
+def test_protected_stellar_target_rejects_invalid_inputs(invalid: str) -> None:
+    """Le calcul commun refuse les intensités et points de contrôle invalides."""
+    from lib.stretch_transfer import protected_stellar_target
+
+    light = np.array([.001, .01])
+    baseline = np.array([.01, .1])
+    knots = np.array([.001, 1.])
+    levels = np.array([.01, .85])
+    protection = .15
+    if invalid == 'empty':
+        light = baseline = np.array([])
+    elif invalid == 'shape':
+        baseline = np.array([.1])
+    elif invalid == 'nan':
+        light[0] = np.nan
+    elif invalid == 'negative':
+        baseline[0] = -.1
+    elif invalid == 'protection':
+        protection = 0.
+    elif invalid == 'knots':
+        knots = knots[::-1]
+    with pytest.raises(ValueError):
+        protected_stellar_target(light, baseline, knots, levels, protection)

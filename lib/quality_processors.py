@@ -391,7 +391,12 @@ class FluxQualityProcessor(QualityProcessor):
 
 
 class DiffuseSignalProcessor(FluxQualityProcessor):
-    """Qualité — signal diffus ; conserve les définitions et seuils scientifiques existants."""
+    """Détecte les pertes significatives de flux diffus, pas les augmentations.
+
+    La perte relative signée (avant - après) / avant doit dépasser strictement
+    le seuil configuré et être corroborée par les contrôles statistiques.
+    Les variations négatives restent enregistrées sans déclencher ce rejet.
+    """
 
     stage_key = "diffuse"
     stage_label = "Qualité — signal diffus"
@@ -537,7 +542,7 @@ class DiffuseSignalProcessor(FluxQualityProcessor):
                     and (ci[0] > 0 or ci[1] < 0)
                     and abs(fb - fa) > 3 * uncertainty
                 )
-                lost = abs(loss) > reference.flux_loss and significant and corroborated
+                lost = loss > reference.flux_loss and significant and corroborated
                 entries.append(
                     dict(
                         criterion(

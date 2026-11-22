@@ -102,6 +102,23 @@ instructions explicites de l'utilisateur et les règles de l'environnement.
 - Pour les guide logs, conserver la calibration précédente du même fichier
   avec les guidages suivants, sans doublonner ses trajectoires à l'affichage.
 
+## Contrainte du rendu de la couche étoiles
+
+- Dans la branche d'étirement de la couche étoiles (`StarStretchProcessor` /
+  `ConservativeStarRenderer`), l'utilisateur exige uniquement un travail sur
+  la transformation globale de l'histogramme : la même courbe RGB doit être
+  appliquée à tous les pixels, indépendamment de leur position et de leur
+  voisinage. Deux triplets RGB identiques doivent donner la même sortie.
+- Ne pas introduire à cet endroit de renforcement par étoile, masque spatial,
+  gain local, traitement du piédestal, filtrage, déconvolution, débruitage ou
+  autre modification locale des pixels. Les mesures de profils et les
+  diagnostics peuvent guider le choix d'une courbe commune à toute l'image ;
+  ils ne doivent jamais piloter un traitement spatial sélectif.
+- Les anciennes options sauvegardées ne doivent pas réactiver ces traitements.
+  Cette contrainte concerne l'étirement de la couche étoiles, pas les étapes
+  distinctes de restauration, séparation StarNet ou recomposition. Toute
+  dérogation exige une nouvelle demande explicite de l'utilisateur.
+
 ## Vérifications
 
 - Utiliser l'environnement Python du projet lorsqu'il est disponible :

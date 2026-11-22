@@ -115,7 +115,7 @@ def test_default_faint_boost_is_stronger_and_configurable() -> None:
     assert parser.parse_args([]).star_max_width_ratio == 2
     assert parser.parse_args([]).star_stretch_max_width_ratio is None
     assert parser.parse_args([]).star_histogram_strength == 1
-    assert parser.parse_args([]).star_noise_sigma == 8
+    assert parser.parse_args([]).star_noise_sigma == 0
     assert parser.parse_args([]).star_boost_fraction == .25
     assert parser.parse_args(["--star-max-width-ratio", "1.5"]).star_max_width_ratio == 1.5
     assert parser.parse_args(["--star-faint-boost", "3"]).star_faint_boost == 3
@@ -148,7 +148,8 @@ def test_adaptive_histogram_reveals_faint_peaks_with_bounded_width() -> None:
     assert default_report["histogram_balance"]["requested_strength"] == 1
     assert default_report['visibility']['above_threshold'] >= previous['visibility']['above_threshold']
     assert default_report['boost_selection']['fraction'] == .25
-    assert default_report['boost_selection']['selected_count'] <= 9
+    assert default_report['boost_selection']['selected_count'] <= 36
+    assert default_report['boost_selection']['mode'] == 'histogram_quantile'
     assert np.all(default >= fixed - 1e-7)
     adapted, report = ConservativeStarRenderer.render(
         data, histogram_strength=0.8, boost_fraction=1,
@@ -234,7 +235,7 @@ def test_first_admissible_base_boost_is_selected() -> None:
 
 def test_admissible_requested_boost_is_unchanged() -> None:
     """Ne pas essayer de force inférieure lorsque la première satisfait la garde."""
-    _, report = ConservativeStarRenderer.render(width_limited_star(), max_width_ratio=2)
+    _, report = ConservativeStarRenderer.render(width_limited_star(), max_width_ratio=2, contrast_mode='pointwise')
     assert report['faint_boost'] == report['requested_faint_boost'] == 5
     assert len(report['width_adaptation']['iterations']) == 1
     assert report['width_adaptation']['stop_reason'] == 'requested boost'
@@ -307,23 +308,24 @@ def noisy_star_field() -> np.ndarray:
     return np.array([light, .7 * light, .4 * light], dtype=np.float32)
 
 
-def test_noise_gate_reduces_residual_and_boosts_significant_stars(
+def test_global_histogram_stretch_does_not_denoise_stars(
     noisy_star_field: np.ndarray,
 ) -> None:
-    """Réduire le RMS du fond tout en renforçant un pic faible, sans couper les ailes."""
+    """Le rendu global ne filtre pas le résidu et conserve une recette exacte."""
     source = noisy_star_field.copy()
     rendered, report = ConservativeStarRenderer.render(source, max_width_ratio=1.2)
     noise = report['noise_suppression']
     assert report['histogram_balance']['calibration_peak_count'] >= 4
-    assert report['histogram_balance']['stop_reason'] == 'insufficient distinct peaks'
-    assert noise['threshold'] > 0
-    assert np.mean(rendered[0, 120:] ** 2) < np.mean(source[0, 120:] ** 2)
-    assert rendered[0, 30, 30] > 3 * source[0, 30, 30]
+    assert report['histogram_only']
+    assert noise['threshold'] == 0
+    expected, _ = ConservativeStarRenderer.render(source, max_width_ratio=1.2, noise_sigma=0)
+    np.testing.assert_array_equal(rendered, expected)
+    assert rendered[0, 30, 30] > source[0, 30, 30]
     assert report['fwhm']['median_ratio'] <= 1.2
     assert report['fwhm']['p10_ratio'] >= .9
     assert report['wings']['p10_ratio'] >= .9
     assert report['after']['white_fraction_rgb'] == [0, 0, 0]
-    assert report['faint_intensity_gain'] == 0
+    assert report['faint_intensity_gain'] > 0
     linked = rendered[0] < .849
     np.testing.assert_allclose(rendered[1][linked], .7 * rendered[0][linked], atol=1e-7)
     np.testing.assert_array_equal(source, noisy_star_field)
@@ -337,16 +339,19 @@ def test_noise_gate_reduces_residual_and_boosts_significant_stars(
     np.testing.assert_array_equal(replay.apply_rgb(source), rendered)
 
 
-def test_noise_gate_relaxes_before_truncating_wings(noisy_star_field: np.ndarray) -> None:
-    """Un seuil excessif est réduit ; la largeur à 10 % protège les profils."""
+def test_saved_noise_setting_cannot_reactivate_denoising(noisy_star_field: np.ndarray) -> None:
+    """Même un ancien facteur de bruit élevé laisse la même courbe globale."""
     y, x = np.indices(noisy_star_field.shape[1:])
     removed = .009 * np.exp(-((x - 30) ** 2 + (y - 30) ** 2) / 4)
     removed += .072 * np.exp(-((x - 85) ** 2 + (y - 30) ** 2) / 4)
     source = np.maximum(noisy_star_field - np.array([removed, .7 * removed, .4 * removed]), 0)
     _, report = ConservativeStarRenderer.render(source.astype('f4'), noise_sigma=20)
     noise = report['noise_suppression']
-    assert noise['threshold'] < noise['requested_threshold']
-    assert any(not step['accepted'] for step in noise['iterations'])
+    assert noise['threshold'] == noise['requested_threshold'] == 0
+    assert noise['requested_sigma_factor'] == 20
+    actual, _ = ConservativeStarRenderer.render(source.astype('f4'), noise_sigma=20)
+    expected, _ = ConservativeStarRenderer.render(source.astype('f4'), noise_sigma=0)
+    np.testing.assert_array_equal(actual, expected)
     assert report['wings']['p10_ratio'] >= .9
 
 
@@ -361,7 +366,7 @@ def test_noise_gate_without_profiles_remains_unvalidated() -> None:
     """Un bruit sans étoile mesurable ne fournit pas de validation des ailes."""
     light = np.random.default_rng(7).uniform(0, .0001, (32, 32)).astype('f4')
     _, report = ConservativeStarRenderer.render(np.array([light, light, light]))
-    assert report['noise_suppression']['requested_threshold'] > 0
+    assert report['noise_suppression']['requested_threshold'] == 0
     assert report['noise_suppression']['threshold'] == 0
     assert report['wings']['count'] == 0
 
@@ -468,12 +473,13 @@ def test_default_fraction_builds_pointwise_quantile_curve(
     """Les 25 % calent une courbe globale sans coordonnées ni masque spatial."""
     source = fractional_star_field
     original = source.copy()
-    base, _ = ConservativeStarRenderer.render(source, boost_fraction=0)
-    rendered, report = ConservativeStarRenderer.render(source)
+    base, _ = ConservativeStarRenderer.render(source, boost_fraction=0, contrast_mode='pointwise')
+    rendered, report = ConservativeStarRenderer.render(source, contrast_mode='pointwise')
     selection = report['boost_selection']
     assert selection['fraction'] == .25
     assert selection['selected_count'] <= selection['budget'] == 9
     assert selection['mode'] == 'histogram_quantile'
+    assert selection['bright_protection_policy'] == 'monotone_cap_v1'
     assert 'selected' not in selection and 'others' not in selection
     assert selection['visible_target'] == pytest.approx(.08)
     assert selection['actually_boosted_count'] > selection['selected_count']
@@ -485,6 +491,9 @@ def test_default_fraction_builds_pointwise_quantile_curve(
         [stellar_operation(report, report['histogram_balance'])],
     )
     np.testing.assert_array_equal(replay.apply_rgb(source), rendered)
+    ramp = np.geomspace(1e-8, 1., 65536).astype(np.float64)
+    neutral_curve = replay.apply_rgb(np.stack((ramp, ramp, ramp)), ideal=True)[0]
+    assert np.min(np.diff(neutral_curve)) >= -1e-7
     np.testing.assert_array_equal(source, original)
     assert report['width_adaptation']['iterations'][-1]['histogram_balance']['requested_strength'] == 0
 

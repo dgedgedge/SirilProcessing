@@ -1,6 +1,7 @@
 """Mesures par morceaux, bruit de queue et protection de forme AutoGHS."""
 
 import argparse
+from pathlib import Path
 import json
 
 import numpy as np
@@ -632,3 +633,138 @@ def test_peak_shift_rejects_values_outside_normalized_range(limit: float) -> Non
     reference = piecewise_histogram_profile(curved_counts())
     with pytest.raises(ValueError, match='ghs-shape-peak-shift'):
         compare_histogram_shapes(reference, reference, max_peak_shift=limit)
+
+
+def dark_mode_counts(second_height: float = 0.) -> np.ndarray:
+    """Construit un ciel unimodal ou bimodal séparé par un creux profond."""
+    x = (np.arange(128)+.5)/128
+    return (1e5*np.exp(-.5*((x-.04)/.012)**2)
+            + second_height*1e5*np.exp(-.5*((x-.14)/.012)**2)
+            + 100*np.exp(-4*x))
+
+
+def test_dark_modes_cover_a_second_peak_after_a_deep_valley() -> None:
+    """Le contrôle continue après les 10 % qui terminaient l'ancienne fenêtre."""
+    reference = piecewise_histogram_profile(dark_mode_counts())
+    candidate = piecewise_histogram_profile(dark_mode_counts(.8))
+    assert candidate['initial_peak']['end'] < .1
+    assert candidate['initial_peak']['secondary_rise_fraction'] == 0
+    assert candidate['low_light_modes']['prominence_fraction'] > .7
+    protected = protect_histogram_shape(candidate, reference)
+    assert 'new low-light histogram mode' in protected['shape_preservation']['rejections']
+    from lib.ghs_render_quality import HistogramRenderQuality
+
+    assert HistogramRenderQuality.hard_shape_rejections(protected)
+    assert not protected['low_light_mode_guard']['achieved']
+
+
+@pytest.mark.parametrize('second_height', [0., .8, 1.4])
+def test_dark_modes_are_population_invariant(second_height: float) -> None:
+    """Le diagnostic ne dépend ni de N ni du choix du pic dominant."""
+    from lib.ghs_histogram_shape import low_light_mode_profile
+
+    counts = dark_mode_counts(second_height)
+    first = low_light_mode_profile(counts)
+    scaled = low_light_mode_profile(counts*7)
+    assert scaled['prominence_fraction'] == pytest.approx(first['prominence_fraction'])
+    if second_height:
+        assert first['prominence_fraction'] > .6
+    else:
+        assert first['prominence_fraction'] == 0
+
+
+def test_dark_modes_ignore_monotone_shoulders_and_bright_tail() -> None:
+    """Une épaule sans creux et un mode brillant ne deviennent pas des modes sombres."""
+    from lib.ghs_histogram_shape import low_light_mode_profile
+
+    x = (np.arange(128)+.5)/128
+    counts = 1e5*np.exp(-5*x)+2e5*np.exp(-.5*((x-.6)/.02)**2)
+    assert low_light_mode_profile(counts)['prominence_fraction'] == 0
+
+
+@pytest.mark.parametrize('counts', [np.zeros(128), np.ones(128)*.01])
+def test_dark_modes_do_not_invent_a_measure_on_sparse_counts(counts: np.ndarray) -> None:
+    """Une population insuffisante reste non mesurable, sans valeur nulle inventée."""
+    from lib.ghs_histogram_shape import low_light_mode_profile
+
+    report = low_light_mode_profile(counts)
+    assert not report['measurable']
+    assert report['prominence_fraction'] is None
+
+
+@pytest.mark.parametrize('counts', [np.zeros(127), np.full(128, np.nan), -np.ones(128)])
+def test_dark_modes_reject_invalid_counts(counts: np.ndarray) -> None:
+    """Le diagnostic vérifie sa frontière d'entrée avant toute normalisation."""
+    from lib.ghs_histogram_shape import low_light_mode_profile
+
+    with pytest.raises(ValueError, match='Effectifs invalides'):
+        low_light_mode_profile(counts)
+
+
+def test_direct_shape_comparison_also_enforces_dark_modes() -> None:
+    """Les phases CDF et présentation ne doivent pas contourner la nouvelle garde."""
+    reference = piecewise_histogram_profile(dark_mode_counts())
+    candidate = piecewise_histogram_profile(dark_mode_counts(.8))
+    audit = compare_histogram_shapes(reference, candidate)
+    assert not audit['achieved']
+    assert 'new low-light histogram mode' in audit['rejections']
+    assert audit['low_light_mode_guard']['measurable']
+
+
+@pytest.mark.parametrize('first,last,inverted', [
+    ([-6., -4., -3.], [-3., -4., -5.], True),
+    ([6., 4., 3.], [3., 4., 5.], True),
+    ([-6., -4., -3.], [-.6, -.4, -.3], False),
+    ([-6., -6.1, -6.2], [-6.2, -6.1, -6.], False),
+    ([0., 0., 0.], [0., 0., 0.], False),
+])
+def test_slope_order_uses_signed_differences(
+    first: list[float], last: list[float], inverted: bool,
+) -> None:
+    """L'ordre signé reste défini sans division, même pour zéro ou des pentes positives."""
+    from lib.ghs_histogram_shape import compare_slope_order
+    result = compare_slope_order(np.asarray(first), np.asarray(last))
+    assert result['inverted'] is inverted
+    row = result['comparisons'][0]
+    assert row['reference_difference'] == pytest.approx(first[1]-first[0])
+    assert row['candidate_difference'] == pytest.approx(last[1]-last[0])
+
+
+def test_terminal_order_exemption_and_invalid_slopes() -> None:
+    """La queue descendante garde son exception ; les données invalides sont refusées."""
+    from lib.ghs_histogram_shape import compare_slope_order
+    result = compare_slope_order(np.array([-6., -4., -3.]), np.array([-6., -4., -8.]))
+    assert not result['inverted']
+    assert result['comparisons'][-1]['reversed']
+    assert result['comparisons'][-1]['terminal_exemption']
+    with pytest.raises(ValueError):
+        compare_slope_order(np.array([1., np.nan]), np.array([1., 2.]))
+
+
+def test_controlled_slopes_are_drawn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Le graphique distingue les cinq segments de contrôle du découpage adaptatif."""
+    from matplotlib.figure import Figure
+    from lib.ghs_diagnostics import histogram_figure
+    counts = curved_counts()
+    profile = piecewise_histogram_profile(counts)
+    audit = compare_histogram_shapes(profile, profile)
+    captured = []
+    save = Figure.savefig
+
+    def capture(figure: Figure, *args: object, **kwargs: object) -> None:
+        """Capture les légendes réellement visibles dans le PNG produit."""
+        legends = list(figure.legends) + [axis.get_legend() for axis in figure.axes]
+        for legend in legends:
+            if legend:
+                captured.extend(text.get_text() for text in legend.get_texts())
+        return save(figure, *args, **kwargs)
+
+    monkeypatch.setattr(Figure, 'savefig', capture)
+    path = tmp_path/'slopes.png'
+    histogram_figure(dict(histograms=[dict(counts=counts.tolist())],
+                          diagnostic_trial=dict(stage='Contrôle', status='accepted',
+                                                profile=profile, shape_preservation=audit)), path)
+    assert path.is_file()
+    assert len([label for label in captured if label.startswith('Pente contrôlée')]) == 5
