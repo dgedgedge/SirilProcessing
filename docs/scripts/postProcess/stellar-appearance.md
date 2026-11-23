@@ -1,4 +1,4 @@
-# 1. Apparence des étoiles : objectifs non bloquants
+# 1. Apparence des étoiles et sélection de la courbe globale
 
 [Rendu stellaire](star-rendering.md) · [Courbe globale](stellar-selection.md)
 
@@ -6,7 +6,9 @@
 
 `lib.stellar_appearance.StellarAppearanceQuality` mesure le résultat de la
 courbe globale sur la couche étoiles. Il ne modifie aucun pixel, ne produit
-aucun masque ou gain spatial, ne choisit aucun essai et ne bloque pas le rendu.
+aucun masque ou gain spatial et ne choisit lui-même aucun essai. Le moteur
+stellaire utilise sa mesure de visibilité pour choisir une courbe globale,
+sous les gardes de profils décrites ci-dessous.
 Ses indicateurs figurent dans `stars.json`, sous `appearance_quality`, et dans
 le PNG de diagnostic stellaire. La restauration et le fond restent indépendants.
 
@@ -30,10 +32,41 @@ rendre une étoile visible selon le nouvel indicateur.
 Les candidats trop proches des bords pour mesurer leur fond sont inconnus.
 Avec N candidats, V visibles mesurés et U inconnus, la fraction de visibilité
 se situe dans `[V/N, (V+U)/N]`. L'objectif indicatif est `PASS` si la borne basse
-est au moins 0,25, `FAIL` si la borne haute est inférieure à 0,25 et `UNKNOWN`
+est au moins 0,40, `FAIL` si la borne haute est inférieure à 0,40 et `UNKNOWN`
 sinon. Sans candidat, les fractions sont absentes, pas nulles. Tous les verdicts
-portent `blocking: false` : un FAIL ne rejette pas la courbe et ne change aucun
-paramètre d'étirement.
+portent `blocking: false` : un objectif inaccessible ne fait pas échouer le
+rendu. Il influence cependant réellement les paramètres de la courbe retenue.
+
+`--star-visible-fraction` fixe cet objectif entre 0 et 1 (défaut `0.40`).
+Si la courbe initiale l'atteint déjà, elle est conservée. Sinon, jusqu'à sept
+courbes globales supplémentaires sont évaluées : quantiles de calibration
+élargis vers la cible puis vers 1, et mélanges du calage complet à 0,125, 0,25,
+0,5 et 1 fois l'intensité demandée. Cela permet d'augmenter progressivement la
+visibilité sans passer directement à une adaptation complète trop forte.
+
+Toutes utilisent les mêmes positions candidates initiales. La sélection
+favorise d'abord la fraction visible mesurée, avec un bénéfice saturé à la
+cible. Une fois la cible atteinte, elle préfère les profils les plus proches
+de ceux de l'entrée, puis le plus petit changement du quantile demandé.
+Elle ne cherche donc ni le maximum d'étoiles à tout prix, ni les étoiles les
+plus fines. La fraction obtenue peut dépasser la cible : ce n'est pas un quota.
+
+Les candidats supplémentaires doivent respecter la limite de largeur
+`--star-stretch-max-width-ratio` (ou la limite commune héritée), à 50 %, 10 %
+et 5 % du pic, avec un plancher de ratio de 0,90. Les médianes sont contrôlées
+par groupes de luminosité, y compris le groupe brillant, pour surveiller à la
+fois finesse et jupe. Une référence de profil devenue non mesurable ne peut
+pas disparaître du contrôle pour rendre le candidat admissible. Ce sont des
+profils axiaux sur 15 pixels, pas des PSF ajustées ni une garantie perceptuelle.
+Les ailes plus larges que la fenêtre restent une limite de cette mesure.
+
+Sans amélioration admissible, la courbe initiale sûre reste utilisée et
+l'objectif non atteint est enregistré. Avec une visibilité entièrement
+inconnue, aucune recherche supplémentaire n'est faite. Une cible nulle,
+`--star-histogram-strength 0` ou `--star-boost-fraction 0` désactive également
+cette recherche. Les anciens réglages explicites restent donc respectés.
+`visibility_selection` conserve les essais, gardes, objectif et paramètres
+retenus ; les galeries enregistrent les recettes globales rejouables.
 
 ## 1.3. Taille apparente, transition et jupe
 
@@ -73,4 +106,6 @@ Les tests couvrent le seuil exact de 40 %, les bords et champs vides, la
 conservation des pixels, les rayons et gradients gaussiens analytiques, la
 transition plus large d'une étoile diffuse et les ailes plus étendues d'un
 profil Moffat. Le rendu global et les recettes gardent leurs tests d'invariance
-spatiale. Ces mesures ne sont pas ajoutées aux critères bloquants du rendu.
+spatiale. `test_stellar_visibility_selection.py` vérifie aussi que deux objectifs
+de visibilité produisent réellement des pixels différents, que les gardes de
+finesse/ailes priment sur la cible et que la recette reproduit exactement la sortie.

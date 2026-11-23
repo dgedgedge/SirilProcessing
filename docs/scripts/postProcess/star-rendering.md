@@ -328,6 +328,9 @@ Les sources et les FITS scientifiques restent inchangés.
 Les [indicateurs d'apparence stellaire](stellar-appearance.md) mesurent un objectif
 non bloquant d'au moins 40 % de candidats visibles par contraste local,
 le diamètre apparent, la pente de transition et l'étendue de la jupe. Ils
-figurent dans `appearance_quality` et dans le diagnostic PNG. Ils ne modifient
-ni les pixels ni le choix de la courbe globale. Aucun seuil perceptuel de
+figurent dans `appearance_quality` et dans le diagnostic PNG. La visibilité
+guide désormais le choix de la courbe globale via `--star-visible-fraction` ;
+les nouvelles courbes sont contrôlées en finesse et ailes par groupes de
+luminosité. Aucun gain spatial ni modification locale ne sont appliqués.
+Aucun seuil perceptuel de
 netteté ou de jupe n'est encore déclaré validé.

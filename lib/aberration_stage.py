@@ -140,8 +140,8 @@ class AberrationCorrectionStage(processor):
     ) -> JSONReport:
         """Compare les mêmes étoiles, exige un gain utile et aucune régression forte.
 
-        Les bords doivent conserver 70 % des références et au moins cinq
-        paires si au moins cinq étoiles y étaient détectées. Un gain global
+        Sans 1 000 paires globales, les bords doivent conserver 70 % des
+        références. Le minimum de cinq paires locales reste requis. Un gain global
         seul ne valide pas une correction demandée spécifiquement aux bords.
         """
         groups, failures = {}, []
@@ -152,7 +152,10 @@ class AberrationCorrectionStage(processor):
             pairs = [p for p in comparison.get('pairs', []) if group in cls._groups(
                 p['x_before'], p['y_before'], shape, args.aberration_edge_fraction)]
             count = len(pairs)
-            reliable = count >= minimum and count >= cls.MIN_RETENTION * before[group]['count']
+            reliable = count >= minimum and StarComparisonProcessor.sufficient_retention(
+                count, before[group]['count'], cls.MIN_RETENTION,
+                total_matched=comparison.get('matched_count', len(comparison.get('pairs', []))),
+            )
             item = dict(count=count, reliable=reliable)
             if reliable:
                 delta = float(np.median([

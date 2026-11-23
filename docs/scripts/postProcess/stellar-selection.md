@@ -38,7 +38,7 @@ pics peut calibrer une courbe monotone d'intensité ; après calibration, les
 paramètres sont fixes pour toute l'image. Aucune coordonnée stellaire n'est
 utilisée pour appliquer la transformation.
 
-`--star-boost-fraction 0.25` choisit le quantile de calibration. Zéro conserve
+`--star-boost-fraction 0.25` choisit le quantile initial de calibration. Zéro conserve
 la base ; un utilise l'adaptation globale complète. Pour une fraction entre
 zéro et un, les quantiles fixent les raccords entre niveaux d'intensité.
 `--star-histogram-strength`, dans [0,1], mélange cette courbe avec la base.
@@ -52,6 +52,13 @@ Les profils mesurés, leurs largeurs et les histogrammes servent à accepter ou
 réduire les paramètres de la courbe globale. Les gardes ne créent aucun
 traitement local. La force retenue reste identique pour toute l'image.
 Une garde non mesurable ne constitue pas une validation physique.
+
+L'[objectif de visibilité](stellar-appearance.md) `--star-visible-fraction 0.40`
+peut élargir le quantile et ajuster le mélange de la courbe pour révéler davantage
+d'étoiles. Il sature le bénéfice à la cible et contrôle les profils à 50 %, 10 %
+et 5 % du pic, par luminosité. S'il n'est pas atteignable sans dégradation,
+le rendu reste sûr et signale l'objectif non atteint. Zéro désactive cette
+recherche supplémentaire ; aucun traitement local n'est introduit.
 
 `--star-contrast-mode pointwise` est le défaut. Une ancienne configuration
 `profiles` produit également cette courbe globale. `--star-noise-sigma` vaut

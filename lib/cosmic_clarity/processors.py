@@ -52,7 +52,8 @@ def assess_matching_representation(
     classes de flux par ses quartiles. Le flux relatif gaussien est proportionnel
     à A*FWHMx*FWHMy : il sert seulement à classer les étoiles avant traitement.
     Une strate de dix étoiles ou plus doit retenir au moins la moitié du taux
-    global. Ce facteur est une heuristique conservatrice, pas un test statistique
+    global à partir de 1 000 paires ; sous ce nombre, la référence est le maximum
+    entre taux global et fraction demandée. Ce facteur est une heuristique, pas un test statistique
     calibré ; les strates trop petites sont signalées sans verdict individuel.
     L’absence d’amplitudes exploitables empêche de valider la représentativité.
     """
@@ -63,10 +64,15 @@ def assess_matching_representation(
         eligible = set(reference['eligible_reference_ids'])
         stars = [star for star in stars if star['id'] in eligible]
     matched = {pair['reference_id'] for pair in comparison['pairs']}
+    from lib.quality_star_processors import StarComparisonProcessor
     if not stars:
         return dict(accepted=False, reasons=['missing_reference_stars'], groups=[])
     retained = np.array([star['id'] in matched for star in stars])
     fraction = float(retained.mean())
+    reference_retention = (
+        fraction if len(matched) >= StarComparisonProcessor.ABSOLUTE_MATCH_THRESHOLD
+        else max(fraction, comparison.get('min_match_fraction', 0))
+    )
     x = np.array([star['x'] for star in stars])
     y = np.array([star['y'] for star in stars])
     spatial = (x >= np.median(x)).astype(int) + 2 * (y >= np.median(y)).astype(int)
@@ -81,7 +87,7 @@ def assess_matching_representation(
             count = int(retained[mask].sum())
             rate = count / total
             evaluated = total >= MIN_REPRESENTATIVE_GROUP
-            accepted = not evaluated or rate >= max(fraction, comparison.get("min_match_fraction", 0)) * MIN_RELATIVE_GROUP_RETENTION
+            accepted = not evaluated or rate >= reference_retention * MIN_RELATIVE_GROUP_RETENTION
             groups.append(dict(kind=kind, index=int(label), reference_count=total,
                                matched_count=count, retention=rate,
                                evaluated=evaluated, accepted=accepted))
@@ -98,6 +104,7 @@ def assess_matching_representation(
         assess_groups(labels, 'brightness')
     return dict(accepted=not reasons, reasons=reasons, groups=groups,
                 matched_fraction=fraction, min_group_size=MIN_REPRESENTATIVE_GROUP,
+                reference_retention=reference_retention,
                 min_relative_retention=MIN_RELATIVE_GROUP_RETENTION,
                 brightness_proxy='A * FWHMx * FWHMy (before)')
 
@@ -195,9 +202,8 @@ class _CosmicClarityProcessor(processor):
         """Calcule des seuils d'appariement adaptés au champ mesuré.
 
         Le rayon suit la FWHM médiane et le minimum de correspondances dépend
-        du nombre initial. La référence de fraction reste 70 % : bloquante pour
-        un petit catalogue, alerte avec contrôle de représentativité à partir
-        de LARGE_MATCH_SAMPLE. Sans étoiles valides, retour aux seuils manuels.
+        du nombre initial. La référence de fraction reste 70 %, avec l'alternative
+        commune de 1 000 paires. Sans étoiles valides, retour aux seuils manuels.
         """
         stars, _ = read_star_catalog(before_catalog)
         layer_stars = [star for star in stars if star['layer'] == layer]
@@ -391,7 +397,7 @@ class _CosmicClarityProcessor(processor):
                 )
                 comparison = compare_star_catalogs(
                     before, after, match_radius, minimum,
-                    0.0 if large_auto else fraction, layer,
+                    fraction, layer,
                     reference_images=(source, candidate)
                     if getattr(args, 'deconvolution_reference_measurements', True) else None,
                     quality_mode=getattr(args, 'quality_mode', 'reliable'),
@@ -403,7 +409,7 @@ class _CosmicClarityProcessor(processor):
                         comparison['status'] = 'insufficient_matches'
 
                 if large_auto:
-                    matching['fraction_policy'] = 'warning_with_representation_checks'
+                    matching['fraction_policy'] = 'absolute_count_or_fraction_with_representation_checks'
                     matching['warning_fraction'] = fraction
                     if comparison['matched_fraction_before'] < fraction:
                         comparison['warnings'] = ['low_matching_fraction']
@@ -421,7 +427,7 @@ class _CosmicClarityProcessor(processor):
                         logging.info(f'Représentativité {self.engine_label} : %s ; motifs=%s',
                                      representation['accepted'], representation['reasons'])
                 else:
-                    matching['fraction_policy'] = 'blocking'
+                    matching['fraction_policy'] = 'absolute_count_or_fraction'
 
                 artifacts = {}
                 if comparison['status'] == 'validated':

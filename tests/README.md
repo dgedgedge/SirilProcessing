@@ -497,6 +497,18 @@ anciens rapports numérotés. Les reprises et comparaisons couvrent les chemins
 compatibles sans renommer les produits existants.
 L'audit de flux d'AR est vérifié sur une structure étendue synthétique atténuée
 ou amplifiée et sur un champ sans mesure. `test_final_annotation.py` vérifie
-que seul le statut d'AR apparaît dans le PNG, même si les mesures détaillées
+que la synthèse d'AR (rondeur initiale, largeur relative et décision) apparaît
+dans le PNG, même si les mesures détaillées
 et seuils sont présents dans le rapport. `test_aberration.py` vérifie la
 protection du fond par défaut et sa désactivation explicite.
+
+Les tests de comparaison stellaire couvrent la règle « 1 000 paires OU 70 % »,
+avec les bornes 999/1 000 et 69,9/70 % sur de vrais catalogues synthétiques.
+Les tests AR vérifient que le seuil relatif local ne réintroduit pas un refus
+quand la cohorte globale atteint 1 000 paires.
+
+`test_stellar_visibility_selection.py` vérifie que l'objectif de visibilité
+modifie réellement le rendu global : les cibles 20 % et 70 % produisent des
+pixels et taux différents. Les tests couvrent la limite de profils et la jupe
+du groupe brillant, un objectif inaccessible, les valeurs invalides, les deux
+triplets identiques sous des voisinages différents et le rejeu exact de la recette.

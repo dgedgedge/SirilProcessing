@@ -455,6 +455,9 @@ class AutoGHSFinalRenderer(processor):
                         args, "star_faint_boost",
                         ConservativeStarRenderer.default_faint_boost,
                     ),
+                    "star_visible_fraction": getattr(
+                        args, "star_visible_fraction", ConservativeStarRenderer.default_visible_fraction,
+                    ),
                     "star_ceiling": getattr(args, "star_ceiling", 0.85),
                     "star_histogram_strength": getattr(
                         args, "star_histogram_strength",

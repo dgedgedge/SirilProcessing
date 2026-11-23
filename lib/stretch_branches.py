@@ -169,6 +169,9 @@ class StarStretchProcessor(LayerStretchProcessor):
             contrast_mode=getattr(
                 args, 'star_contrast_mode', ConservativeStarRenderer.default_contrast_mode,
             ),
+            visible_fraction=getattr(
+                args, 'star_visible_fraction', ConservativeStarRenderer.default_visible_fraction,
+            ),
         )
         image, jpeg = self.write_layer(source, report_path, output, 'stars_render', 'STARS')
         diagnostic = report_path.parent / f'{source.stem}_stars_diagnostic.png'

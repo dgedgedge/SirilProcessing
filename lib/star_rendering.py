@@ -152,6 +152,8 @@ def profile_widths(
     plancher de 1e-5 normalisé ; 64 pics sont répartis dans les amplitudes.
     relative_height, dans ]0,1[, fixe
     la fraction de hauteur au-dessus du fond (0,5 : FWHM ; 0,1 : ailes).
+    Le nombre de références mesurables et les médianes par groupes de
+    luminosité permettent de contrôler les étoiles brillantes séparément.
     Les entrées RGB sont normalisées, les largeurs en pixels. Ce contrôle ne
     remplace pas une PSF. Une fraction invalide lève ValueError.
     """
@@ -170,6 +172,7 @@ def profile_widths(
     else:
         selected = ordered
     widths: list[tuple[float, float]] = []
+    reference_count = 0
     for index in selected:
         y, x = int(yy[index]), int(xx[index])
         if min(y, x, first.shape[0] - 1 - y, first.shape[1] - 1 - x) < radius:
@@ -200,15 +203,19 @@ def profile_widths(
                 )
                 measures.append(float(rpos - lpos))
             pair.append(float(np.mean(measures)) if measures else None)
+        if pair[0] is not None:
+            reference_count += 1
         if all(value is not None for value in pair):
             widths.append((pair[0], pair[1]))
+    groups = [dict(count=len(group), median_ratio=float(np.median(group)))
+              for group in np.array_split(
+                  np.array([b/a for a, b in widths]), min(4, len(widths)),
+              )] if widths else []
     return {
         "method": "brightness-stratified axial profiles, 15px; not fitted PSF",
-        "maximum_group_median_ratio": max(
-            float(np.median(group)) for group in np.array_split(
-                np.array([b/a for a, b in widths]), min(4, len(widths)),
-            )
-        ) if widths else None,
+        "maximum_group_median_ratio": max(group['median_ratio'] for group in groups) if groups else None,
+        "brightness_groups": groups,
+        "reference_count": reference_count,
         "count": len(widths),
         "peak_threshold": peak_threshold,
         "relative_height": relative_height,
@@ -237,6 +244,9 @@ class ConservativeStarRenderer(processor):
     default_stretch_max_width_ratio = None
     default_noise_sigma = NOISE_SIGMA_FACTOR
     default_boost_fraction = 0.25
+    default_visible_fraction = StellarAppearanceQuality.VISIBLE_TARGET
+    VISIBILITY_FRACTION_STEPS = 4
+    VISIBILITY_BLEND_FACTORS = (.125, .25, .5, 1.)
     default_contrast_mode = 'pointwise'
 
     @classmethod
@@ -268,6 +278,10 @@ class ConservativeStarRenderer(processor):
         parser.add_argument(
             '--star-boost-fraction', type=float, default=cls.default_boost_fraction,
             help='Quantile de calibration de la courbe globale, de 0 à 1 (défaut 0,25) ; aucun masque',
+        )
+        parser.add_argument(
+            '--star-visible-fraction', type=float, default=cls.default_visible_fraction,
+            help='Objectif de candidats visibles guidant la courbe globale (défaut 0.40 ; 0 désactive la recherche)',
         )
         parser.add_argument(
             "--star-noise-sigma", type=float, default=NOISE_SIGMA_FACTOR,
@@ -305,6 +319,7 @@ class ConservativeStarRenderer(processor):
         boost_fraction: float = default_boost_fraction,
         color_mode: str = 'human',
         contrast_mode: str = default_contrast_mode,
+        visible_fraction: float = default_visible_fraction,
     ) -> tuple[np.ndarray, JSONReport]:
         """Étire uniquement l'histogramme des étoiles avec une courbe RGB globale.
 
@@ -327,6 +342,11 @@ class ConservativeStarRenderer(processor):
             Luminance human ou even pour la transformation RGB liée.
         contrast_mode : str
             pointwise ; profiles reste un alias de compatibilité, sans effet local.
+        visible_fraction : float
+            Objectif dans [0,1] favorisant les courbes admissibles qui révèlent
+            cette fraction de candidats, sans imposer un rejet si inaccessible.
+            Zéro désactive cette recherche supplémentaire. Les contrôles de
+            largeur et des ailes priment toujours sur cet objectif.
 
         Returns
         -------
@@ -345,23 +365,151 @@ class ConservativeStarRenderer(processor):
             raise ValueError('Seuil de bruit stellaire hors de [0,20]')
         if contrast_mode not in ('profiles', 'pointwise'):
             raise ValueError('Mode de contraste stellaire inconnu')
+        if not np.isfinite(visible_fraction) or not 0 <= visible_fraction <= 1:
+            raise ValueError('Objectif de visibilité stellaire hors de [0,1]')
         rendered, report = ConservativeStarRenderer._render_global(
             data, strength, ceiling, max_width_ratio, faint_boost,
             histogram_strength, diagnostics, 0., boost_fraction, color_mode,
             'pointwise',
         )
+        positions = stellar_peak_positions(data)
+        appearance = StellarAppearanceQuality.evaluate(
+            data, rendered, positions, target_fraction=visible_fraction,
+        )
+        rendered, report, appearance = ConservativeStarRenderer._select_visibility(
+            data, rendered, report, appearance, positions, visible_fraction,
+            strength, ceiling, max_width_ratio, faint_boost, histogram_strength,
+            boost_fraction, color_mode, diagnostics,
+        )
         report.update(
             method='global histogram stretch: luminance-linked asinh + RGBBlend + intensity curve',
             contrast_mode='pointwise', spatially_varying=False, histogram_only=True,
         )
-        report['appearance_quality'] = StellarAppearanceQuality.evaluate(
-            data, rendered, stellar_peak_positions(data),
-        )
+        report['appearance_quality'] = appearance
         report['noise_suppression'].update(
             method='disabled: histogram transformation only',
             requested_sigma_factor=noise_sigma,
         )
         return rendered, report
+
+    @staticmethod
+    def _select_visibility(
+        data: np.ndarray, rendered: np.ndarray, report: JSONReport, appearance: JSONReport,
+        positions: tuple[np.ndarray, np.ndarray], target: float,
+        strength: float, ceiling: float, max_width_ratio: float, faint_boost: float,
+        histogram_strength: float, boost_fraction: float, color_mode: str,
+        diagnostics: HistogramDiagnostics | None,
+    ) -> tuple[np.ndarray, JSONReport, JSONReport]:
+        """Classe au plus sept autres courbes globales selon la visibilité mesurée.
+
+        Les positions initiales restent fixes. Le score sature à l'objectif,
+        puis préfère les profils/ailes les moins élargis et le plus petit
+        changement du quantile demandé. Les candidats supplémentaires doivent
+        respecter les gardes de largeur à 50 %, 10 % et 5 % du pic, y compris les
+        groupes d'amplitude. Une cible inaccessible conserve le meilleur essai
+        sûr, sans traitement local et sans inventer de mesure sur les bords.
+        """
+        def rank(audit: JSONReport, measured: JSONReport, fraction: float) -> tuple[float, float, float]:
+            """Sature le gain utile à la cible et départage par la largeur des profils."""
+            lower = measured['visibility']['fraction_lower_bound']
+            penalty = sum(
+                float(np.mean([abs(group['median_ratio']-1.)
+                               for group in audit.get(key, {}).get('brightness_groups', [])]))
+                for key in ('fwhm', 'wings', 'skirt')
+                if audit.get(key, {}).get('brightness_groups')
+            )
+            return (min(target, lower) if lower is not None else -1.,
+                    -penalty, -abs(fraction-boost_fraction))
+
+        report['skirt'] = profile_widths(data, rendered, .05)
+        best_key = rank(report, appearance, boost_fraction)
+        attempts = [dict(fraction=boost_fraction, status='initial',
+                         visible_fraction=appearance['visibility']['fraction_lower_bound'])]
+        enabled = target > 0 and histogram_strength > 0 and boost_fraction > 0
+        reason = 'disabled' if not enabled else 'already_satisfied'
+        if enabled and appearance['visibility']['status'] != 'PASS':
+            visibility = appearance['visibility']
+            if visibility['candidate_count'] == 0 or visibility['unknown_count'] == visibility['candidate_count']:
+                reason = 'unmeasurable_visibility'
+            else:
+                reason = 'best_safe_visibility'
+                first = max(boost_fraction, target)
+                fractions = np.unique(np.linspace(first, 1., ConservativeStarRenderer.VISIBILITY_FRACTION_STEPS))
+                settings = [(float(f), histogram_strength) for f in fractions
+                            if f < 1 and abs(f-boost_fraction) >= 1e-9]
+                settings += [(1., histogram_strength*b)
+                             for b in ConservativeStarRenderer.VISIBILITY_BLEND_FACTORS]
+                for fraction, blend in settings:
+                    if fraction == boost_fraction and blend == histogram_strength:
+                        continue
+                    try:
+                        candidate, audit = ConservativeStarRenderer._render_global(
+                            data, strength, ceiling, max_width_ratio, faint_boost,
+                            blend, None, 0., fraction, color_mode, 'pointwise',
+                        )
+                    except ValueError as error:
+                        if not str(error).startswith('Gonflement des profils stellaires'):
+                            raise
+                        attempts.append(dict(fraction=fraction, histogram_strength=blend,
+                                             status='rejected', reason='width_limit'))
+                        continue
+                    audit['skirt'] = profile_widths(data, candidate, .05)
+                    safe = True
+                    for key in ('fwhm', 'wings', 'skirt'):
+                        widths = audit.get(key, {})
+                        ratio = widths.get('maximum_group_median_ratio', widths.get('median_ratio'))
+                        if ratio is None or ratio > max_width_ratio:
+                            safe = False
+                        if widths.get('p10_ratio') is None or widths['p10_ratio'] < MIN_PROFILE_RATIO:
+                            safe = False
+                        if widths.get('count', 0) < widths.get('reference_count', 0):
+                            safe = False
+                        if any(group['median_ratio'] < MIN_PROFILE_RATIO
+                               for group in widths.get('brightness_groups', [])):
+                            safe = False
+                    measured = StellarAppearanceQuality.evaluate(
+                        data, candidate, positions, target_fraction=target,
+                    )
+                    attempts.append(dict(fraction=fraction, histogram_strength=blend,
+                                         status='admissible' if safe else 'rejected',
+                                         visible_fraction=measured['visibility']['fraction_lower_bound'],
+                                         profile_groups={k: audit[k].get('brightness_groups', [])
+                                                         for k in ('fwhm', 'wings', 'skirt')},
+                                         reason=None if safe else 'profile_guard'))
+                    if diagnostics is not None:
+                        diagnostics.record_stellar_trial(
+                            candidate, f'Objectif {100*target:g} % — quantile {fraction:g}, mélange {blend:g}',
+                            'admissible' if safe else 'rejected',
+                            transform_operations=[stellar_operation(audit, audit['histogram_balance'])],
+                        )
+                    key = rank(audit, measured, fraction)
+                    if safe and key > best_key:
+                        rendered, report, appearance, best_key = candidate, audit, measured, key
+                if diagnostics is not None:
+                    diagnostics.record_stellar_trial(
+                        rendered, 'Étirement global retenu — visibilité', 'selected',
+                        transform_operations=[stellar_operation(report, report['histogram_balance'])],
+                    )
+        report['visibility_selection'] = dict(
+            target_fraction=target, enabled=enabled, attempts=attempts,
+            stop_reason='target_reached' if enabled and appearance['visibility']['status'] == 'PASS' else reason,
+            selected_fraction=report.get('boost_selection', {}).get('fraction', boost_fraction),
+            requested_calibration_fraction=boost_fraction,
+            profile_guard=dict(minimum_ratio=MIN_PROFILE_RATIO, maximum_ratio=max_width_ratio,
+                               relative_heights=[.5, .1, .05], brightness_stratified=True),
+            target_reached=appearance['visibility']['status'] == 'PASS',
+            spatially_varying=False,
+        )
+        initial = attempts[0]['visible_fraction']
+        final = appearance['visibility']['fraction_lower_bound']
+        LOGGER.info(
+            'Étoiles — objectif visibilité %.1f %% ; courbe initiale=%s ; '
+            'courbe retenue=%s ; décision=%s ; %d courbe(s) évaluée(s)',
+            100*target, 'inconnue' if initial is None else f'{100*initial:.1f} %',
+            'inconnue' if final is None else f'{100*final:.1f} %',
+            report['visibility_selection']['stop_reason'], len(attempts),
+        )
+        return rendered, report, appearance
 
     @staticmethod
     def _render_global(
@@ -861,6 +1009,7 @@ class ConservativeStarRenderer(processor):
             boost_fraction=getattr(args, "star_boost_fraction", self.default_boost_fraction),
             color_mode=getattr(args, "ghs_color_mode", "human"),
             contrast_mode=getattr(args, "star_contrast_mode", self.default_contrast_mode),
+            visible_fraction=getattr(args, "star_visible_fraction", self.default_visible_fraction),
         )
         report.parent.mkdir(parents=True, exist_ok=True)
         write_rgb(source, destination, data, nonlinear=True, role="STARS")

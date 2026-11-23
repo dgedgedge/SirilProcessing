@@ -162,10 +162,11 @@ class FinalImageAnnotator(processor):
 
     @staticmethod
     def aberration_line(treatments: JSONReport | None) -> str:
-        """Affiche uniquement le statut d'utilisation d'AR dans le rendu annoté.
+        """Résume rondeur initiale, largeur bords/centre et décision d'utilisation.
 
-        Les gains et seuils restent dans le rapport scientifique de l'étape,
-        sans surcharger l'encart. Les archives et absences restent explicites.
+        Les valeurs viennent des mesures initiales sauvegardées ; les données
+        absentes ne deviennent pas zéro. Les gains, flux et seuils détaillés
+        restent dans le rapport scientifique. Aucun motif de refus n'est ajouté.
         """
         prefix = 'Aberration Remover : '
         if treatments is None:
@@ -187,7 +188,30 @@ class FinalImageAnnotator(processor):
         description = labels.get(status, 'statut non renseigné')
         if stage.get('reason') == 'model_disabled':
             description = 'désactivé'
-        return prefix + description
+        before = stage.get('before', {})
+        before = before if isinstance(before, dict) else {}
+
+        def value(group: str, key: str) -> float | None:
+            """Lit uniquement une mesure numérique finie du groupe initial."""
+            measures = before.get(group, {})
+            item = measures.get(key) if isinstance(measures, dict) else None
+            if isinstance(item, bool) or not isinstance(item, (int, float)) or not math.isfinite(item):
+                return None
+            return float(item)
+
+        parts = []
+        whole, edge = value('all', 'roundness'), value('edge', 'roundness')
+        if whole is not None and edge is not None:
+            parts.append(f'rondeur champ/bords {whole:.3f}/{edge:.3f}'.replace('.', ','))
+        elif whole is not None:
+            parts.append(f'rondeur champ {whole:.3f}'.replace('.', ','))
+        elif edge is not None:
+            parts.append(f'rondeur bords {edge:.3f}'.replace('.', ','))
+        width, center = value('edge', 'fwhm_px'), value('center', 'fwhm_px')
+        if width is not None and center is not None and center > 0:
+            parts.append(f'FWHM bords/centre {width/center:.2f}'.replace('.', ','))
+        parts.append(description)
+        return prefix + ' | '.join(parts)
 
     @staticmethod
     def draw_panel(image: Image.Image, lines: list[str]) -> tuple[int, int, int, int]:

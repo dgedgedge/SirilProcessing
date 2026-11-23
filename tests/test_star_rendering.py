@@ -144,7 +144,7 @@ def test_adaptive_histogram_reveals_faint_peaks_with_bounded_width() -> None:
         light += amplitude * np.exp(-((x - cx) ** 2 + (y - cy) ** 2) / 2)
     data = np.array([light, 0.6 * light, 0.3 * light])
     fixed, previous = ConservativeStarRenderer.render(data, histogram_strength=0)
-    default, default_report = ConservativeStarRenderer.render(data)
+    default, default_report = ConservativeStarRenderer.render(data, visible_fraction=0)
     assert default_report["histogram_balance"]["requested_strength"] == 1
     assert default_report['visibility']['above_threshold'] >= previous['visibility']['above_threshold']
     assert default_report['boost_selection']['fraction'] == .25
@@ -474,7 +474,7 @@ def test_default_fraction_builds_pointwise_quantile_curve(
     source = fractional_star_field
     original = source.copy()
     base, _ = ConservativeStarRenderer.render(source, boost_fraction=0, contrast_mode='pointwise')
-    rendered, report = ConservativeStarRenderer.render(source, contrast_mode='pointwise')
+    rendered, report = ConservativeStarRenderer.render(source, contrast_mode='pointwise', visible_fraction=0)
     selection = report['boost_selection']
     assert selection['fraction'] == .25
     assert selection['selected_count'] <= selection['budget'] == 9

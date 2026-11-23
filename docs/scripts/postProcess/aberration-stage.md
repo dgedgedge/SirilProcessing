@@ -62,8 +62,11 @@ que le modèle sait corriger. Les médianes ne garantissent pas chaque coin.
 ## 1.3. Sélection après calcul
 
 Les paires doivent satisfaire les contrôles communs de correspondance et de
-représentativité stellaire. Pour chaque groupe évalué, il faut au moins 70 %
-de rétention des références initiales, 10 paires globales et 5 par sous-groupe.
+représentativité stellaire. Le champ exige au moins 1 000 paires ou 70 % de
+rétention des références initiales. Avec 1 000 paires globales, le seuil relatif
+de 70 % n'est pas réimposé aux sous-groupes ; le minimum de 10 paires globales
+et 5 par sous-groupe reste requis. Sans ces 1 000 paires, chaque groupe doit
+conserver 70 % de ses propres références.
 Les étoiles perdues ne peuvent donc pas simplement améliorer la médiane.
 
 Le gain utile est soit la médiane des différences de rondeur ≥ 0,03 point,
@@ -87,8 +90,8 @@ Une absence de mesure donne `null`, jamais zéro. Ce diagnostic ne change pas
 la sélection stellaire ; il n'est pas un flux global intégré de l'objet.
 Son calcul ajoute un audit de régions diffuses à chaque essai effectivement
 exécuté, y compris un candidat ensuite refusé, sans lancer les autres moteurs.
-L'[image annotée](annotations.md) affiche uniquement le statut d'utilisation
-d'AR. Les gains, seuils et variations de flux restent disponibles dans les rapports.
+L'[image annotée](annotations.md) résume la rondeur initiale champ/bords,
+le rapport FWHM bords/centre et la décision d'utilisation d'AR. Les gains, seuils et variations de flux restent disponibles dans les rapports.
 
 Si le gain est trop faible ou les correspondances insuffisantes, `output_image`
 désigne **le fichier d'entrée, inchangé**, avec `status: retained_input`.

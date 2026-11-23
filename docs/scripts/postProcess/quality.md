@@ -183,9 +183,12 @@ Aucun contrôle ne peut garantir l’existence d’un ciel vide ou retrouver une
 nébulosité indistinguable du fond sur une seule image.
 
 Les étoiles ont par défaut les mêmes seuils entre Siril et Clarity : 10 mesures
-comparables, 70 % de survie et rayon de 1 pixel, avec mesure aux positions initiales
+comparables, puis **au moins 1 000 étoiles appariées ou 70 % des références**
+(par défaut), avec un rayon de 1 pixel, avec mesure aux positions initiales
 et SNR initial ≥ 10. Les groupes spatiaux et de flux d’au moins dix étoiles doivent
-conserver au moins la moitié du maximum entre taux global et fraction demandée.
+conserver au moins la moitié du maximum entre taux global et fraction demandée
+sous 1 000 paires ; à partir de 1 000 paires, la référence est le taux global
+réel pour ne pas réintroduire un seuil relatif bloquant.
 Les règles Clarity auto historiques restent disponibles en mode `legacy`.
 Le gain FWHM de 2 %, la rondeur à 0,01, le bruit amplifié de 15 % et les anneaux
 sur au plus 10 % des étoiles restent des critères heuristiques. L’incertitude

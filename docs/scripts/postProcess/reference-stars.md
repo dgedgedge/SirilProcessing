@@ -19,6 +19,21 @@ indépendante après reste dans son TSV et son effectif est conservé comme
 diagnostic, mais n’est pas nécessaire pour retrouver une étoile dans la mesure
 locale. Les commandes de détection continuent d’être exécutées et doivent réussir.
 
+## Suffisance de la comparaison
+
+Le minimum d'étoiles configuré reste requis. La cohorte est ensuite suffisante
+avec **au moins 1 000 paires ou la fraction minimale de références retrouvées**,
+70 % par défaut. Les bornes sont inclusives : 1 000 suffit, 999 ne suffit pas
+si le taux reste sous 70 %. Les contrôles de représentativité et de qualité
+restent indépendants ; une cohorte suffisante ne garantit pas l'acceptation du
+traitement. À partir de 1 000 paires, la représentativité des groupes est
+comparée au taux global réel, sans réimposer indirectement un plancher de 70 %.
+Cette règle commune s'applique aux comparaisons avant/après AR,
+Siril, Cosmic Clarity, GraXpert et aux contrôles finaux de restauration.
+Les rapports conservent le taux réel et le seuil absolu alternatif ; un PASS
+avec un taux sous 70 % est ainsi explicable. Les anciennes mesures ne sont
+pas réécrites ni reclassées automatiquement.
+
 ## Module et étapes
 
 `lib/reference_stars.py` fournit `image_plane`, `measure_star` et

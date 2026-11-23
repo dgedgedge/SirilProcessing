@@ -88,8 +88,10 @@ L'encart distingue la correction optique et la restauration réellement appliqu�
 
 Une ligne indépendante décrit [Aberration Remover](aberration-stage.md) :
 `appliqué`, `essai non retenu, entrée conservée`, `non déclenché` ou `désactivé`.
-Les mesures de rondeur, finesse, flux diffus et leurs limites restent dans les
-rapports de l'étape ; elles ne sont pas affichées sur l'image annotée.
+La ligne résume trois points : rondeur initiale champ/bords, rapport initial
+FWHM bords/centre et statut, sans explication en cas de refus. Exemple : `Aberration Remover : rondeur champ/bords 0,649/0,650 |
+FWHM bords/centre 1,02 | appliqué`. Les mesures manquantes sont omises. Les
+gains, variations de flux et seuils détaillés restent dans les rapports.
 Les reprises réutilisent le statut sauvegardé. Sans rapport d'AR, aucun usage
 n'est déduit des options ; une chaîne AR historique retenue reste identifiable.
 

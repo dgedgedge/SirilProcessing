@@ -95,6 +95,24 @@ def test_center_gain_cannot_hide_bad_edges_or_missing_stars() -> None:
     assert 'edge:insufficient_pairs' in verdict['reasons']
 
 
+def test_thousand_global_pairs_allow_lower_spatial_retention() -> None:
+    """Un grand échantillon dispense du taux local, mais pas du minimum de paires."""
+    before = AberrationCorrectionStage.baseline(stars(), (100, 100), .2)
+    for group in before.values():
+        group['count'] *= 100
+    audit = comparison(.1, .1)
+    audit['pairs'] *= 50
+    audit['matched_count'] = len(audit['pairs'])
+    assert audit['matched_count'] == 1000
+    verdict = AberrationCorrectionStage.assess(
+        audit, before, (100, 100), ['edge:roundness'], options())
+    assert verdict['accepted']
+    audit['pairs'] = [p for p in audit['pairs'] if p['x_before'] != 10]
+    audit['matched_count'] = len(audit['pairs'])
+    assert not AberrationCorrectionStage.assess(
+        audit, before, (100, 100), ['edge:roundness'], options())['accepted']
+
+
 @pytest.mark.parametrize('roundness,gain,status,force', [
     (.95, .1, 'skipped', False), (.7, .1, 'accepted', False),
     (.7, .01, 'retained_input', False), (.95, .01, 'retained_input', True),

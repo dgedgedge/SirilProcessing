@@ -289,6 +289,10 @@ def log_quality_diagnostics(
             if comparison['min_match_fraction'] > 0
             else 'fraction globale non bloquante ; contrôles de représentativité obligatoires'
         )
+        alternative = comparison.get('absolute_match_threshold')
+        if alternative is not None and comparison['min_match_fraction'] > 0:
+            fraction_rule = (f"au moins {alternative} étoiles appariées OU fraction minimale "
+                             f"{100 * comparison['min_match_fraction']:.2f} %")
         logging.info(
             '%s — appariement : %d/%d étoiles (%.4f %%) ; minimum %d ; '
             '%s ; rayon %.3f px ; verdict=%s',
@@ -301,7 +305,7 @@ def log_quality_diagnostics(
     if representation:
         for group in representation['groups']:
             kind = 'zone spatiale' if group['kind'] == 'spatial' else 'classe de flux'
-            minimum = (representation['matched_fraction']
+            minimum = (representation.get('reference_retention', representation['matched_fraction'])
                        * representation['min_relative_retention'])
             verdict = ('non évaluée : effectif trop faible' if not group['evaluated']
                        else 'conforme' if group['accepted'] else 'REJET : sous-représentée')

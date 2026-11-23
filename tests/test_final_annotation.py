@@ -58,10 +58,10 @@ def test_metadata_does_not_invent_mosaic_integration() -> None:
 @pytest.mark.parametrize('status,label', [
     ('accepted', 'appliqué'), ('retained_input', 'essai non retenu, entrée conservée'),
 ])
-def test_aberration_panel_shows_only_usage(
+def test_aberration_panel_shows_compact_summary(
     tmp_path: Path, status: str, label: str,
 ) -> None:
-    """Le PNG affiche uniquement l'usage même si les rapports contiennent des mesures."""
+    """Le PNG résume rondeur, largeur relative et décision sans les autres détails."""
     source = tmp_path / 'render.fits'
     fits.writeto(source, np.full((3, 300, 600), .2, dtype='f4'),
                  fits.Header({'SPNLIN': True}))
@@ -91,7 +91,9 @@ def test_aberration_panel_shows_only_usage(
     assert len(lines) == 1
     line = lines[0]
     assert label in line
-    assert line == 'Aberration Remover : ' + label
+    assert line == ('Aberration Remover : rondeur champ/bords 0,720/0,650 | '
+                    'FWHM bords/centre 1,40 | ' + label)
+    assert 'flux' not in line and 'gain requis' not in line
     with Image.open(result['output_annotated_image']) as image:
         assert image.size == (600, 300)
     assert source.read_bytes() == original
@@ -103,7 +105,17 @@ def test_skipped_aberration_hides_measurements_and_limits() -> None:
         'status': 'skipped', 'before': {'all': {'roundness': .95, 'fwhm_px': 3.}},
         'parameters': {'aberration_roundness_target': .9},
     }})
-    assert line == 'Aberration Remover : non déclenché'
+    assert line == 'Aberration Remover : rondeur champ 0,950 | non déclenché'
+
+
+def test_aberration_summary_omits_refusal_reason_and_invalid_values() -> None:
+    """Le statut suffit ; motifs de refus et valeurs invalides restent omis."""
+    line = FinalImageAnnotator.aberration_line({'aberration': {
+        'status': 'retained_input', 'quality': {'reasons': ['insufficient_matches']},
+        'before': {'all': {'roundness': float('nan')},
+                   'edge': {'fwhm_px': 3.}, 'center': {'fwhm_px': 0.}},
+    }})
+    assert line == 'Aberration Remover : essai non retenu, entrée conservée'
 
 
 

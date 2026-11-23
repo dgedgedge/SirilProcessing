@@ -203,6 +203,15 @@ une valeur numérique dans ]0 ; 0,5[ l'impose. Pour conserver le comportement
 historique, utiliser `--no-starnet-adaptive-stretch --starnet-target-background auto`.
 Voir la [méthode et ses limites](star-rendering.md#pre-etirement-adapte-a-limage).
 
+## Objectif de visibilité des étoiles
+
+`--star-visible-fraction 0.40` guide la recherche d'une courbe globale révélant
+au moins 40 % des candidats de l'entrée. Les gardes de finesse et d'ailes,
+y compris sur les étoiles brillantes, priment sur cet objectif. Une cible
+inaccessible n'arrête pas le rendu. `--star-visible-fraction 0` désactive la
+recherche supplémentaire, comme une intensité ou fraction de calage nulle.
+Voir [sélection et limites de mesure](stellar-appearance.md).
+
 ## Recherche prioritaire de restauration
 
 Le raccourci historique AR → GraXpert n'est plus utilisé dans la séquence

@@ -77,6 +77,34 @@ def test_minimum_fraction_and_empty_catalog(tmp_path):
     assert compare_star_catalogs(before, after, 1, 3, .7, 0)['matched_count'] == 0
 
 
+@pytest.mark.parametrize('matched,total,expected', [
+    (999, 2000, 'insufficient_matches'), (1000, 2000, 'validated'),
+    (1000, 4000, 'validated'),
+    (699, 1000, 'insufficient_matches'), (700, 1000, 'validated'),
+])
+def test_absolute_or_relative_matching_threshold(
+    tmp_path: Path, matched: int, total: int, expected: str,
+) -> None:
+    """1 000 paires ou 70 % suffisent exactement sur de vrais catalogues appariés."""
+    indices = np.linspace(0, total-1, matched, dtype=int)
+    before = catalog(tmp_path / 'before.tsv', [(i, 10*i, 4) for i in range(total)])
+    after = catalog(tmp_path / 'after.tsv', [(int(i), 10*int(i), 3) for i in indices])
+    result = compare_star_catalogs(before, after, 1, 10, .7, 0)
+    assert result['status'] == expected
+    assert result['matched_count'] == matched
+    assert result['absolute_match_threshold'] == 1000
+    assert result['criterion']['alternative_matched_count_threshold'] == 1000
+
+
+def test_thousand_matches_still_require_spatial_representation(tmp_path: Path) -> None:
+    """1 000 paires concentrées dans un seul côté ne valident pas la représentativité."""
+    before = catalog(tmp_path / 'before.tsv', [(i, 10*i, 4) for i in range(4000)])
+    after = catalog(tmp_path / 'after.tsv', [(i, 10*i, 3) for i in range(1000)])
+    result = compare_star_catalogs(before, after, 1, 10, .7, 0)
+    assert result['matched_count'] == 1000
+    assert result['status'] == 'unrepresentative_matches'
+
+
 def test_malformed_catalog_fails(tmp_path):
     path = tmp_path/'bad.tsv'
     path.write_text('X Y FWHM\n1 2 3\n')
@@ -211,7 +239,7 @@ def test_invalid_parameters(tmp_path, simulated_siril, options):
 def test_order_and_default_activation() -> None:
     """La restauration et le rendu final sont actifs par défaut."""
     sequence = _PostProcessorSequence()
-    assert isinstance(sequence.processors[-4], PhotometricColorCalibrator)
+    assert isinstance(sequence.processors[-5], PhotometricColorCalibrator)
     assert isinstance(sequence.processors[-3], DeconvolutionProcessor)
     assert sequence.processors[-2].get_prefix() == 'denoise'
     assert sequence.processors[-1].get_prefix() == 'autoghs'
