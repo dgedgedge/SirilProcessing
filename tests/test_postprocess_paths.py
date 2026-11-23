@@ -8,15 +8,15 @@ from lib.postprocess_paths import reset_autoghs_work_dir, reset_restoration_work
 
 @pytest.mark.parametrize('relative,expected', [
     ('report.json', 'report_work'),
-    ('04_restoration/restoration.json', '04_restoration'),
-    ('04_restoration/01_denoise_siril.json',
-     '04_restoration/01_denoise_siril'),
-    ('04_restoration/02_sharpen_cosmic_clarity.json',
-     '04_restoration/02_sharpen_cosmic_clarity'),
-    ('04_restoration/02_denoise/denoise_graxpert.json',
-     '04_restoration/02_denoise/denoise_graxpert'),
-    ('04_restoration/01_deconvolution/deconvolution_siril.json',
-     '04_restoration/01_deconvolution/deconvolution_siril'),
+    ('05_restoration/restoration.json', '05_restoration'),
+    ('05_restoration/01_denoise_siril.json',
+     '05_restoration/01_denoise_siril'),
+    ('05_restoration/02_sharpen_cosmic_clarity.json',
+     '05_restoration/02_sharpen_cosmic_clarity'),
+    ('05_restoration/02_denoise/denoise_graxpert.json',
+     '05_restoration/02_denoise/denoise_graxpert'),
+    ('05_restoration/01_deconvolution/deconvolution_siril.json',
+     '05_restoration/01_deconvolution/deconvolution_siril'),
 ])
 def test_restoration_work_is_direct_and_protects_sources(
     tmp_path: Path, relative: str, expected: str,
@@ -100,7 +100,7 @@ def test_numbered_restoration_flattens_work_and_cleans_only_owned_products(
     tmp_path: Path,
 ) -> None:
     """La racine reste intacte, seuls les anciens produits et essais sont nettoyés."""
-    root = tmp_path / '04_restoration'
+    root = tmp_path / '05_restoration'
     root.mkdir()
     (tmp_path / '01_calibration').mkdir()
     source = tmp_path / 'input.fits'
@@ -120,7 +120,7 @@ def test_numbered_restoration_flattens_work_and_cleans_only_owned_products(
     assert source.read_bytes() == b'original'
 
 
-@pytest.mark.parametrize('report_name', ['05_autoghs.json', '05_autoghs/autoghs.json'])
+@pytest.mark.parametrize('report_name', ['06_autoghs.json', '06_autoghs/autoghs.json'])
 def test_autoghs_stages_are_direct_and_preserve_neighboring_files(
     tmp_path: Path, report_name: str,
 ) -> None:
@@ -137,7 +137,7 @@ def test_autoghs_stages_are_direct_and_preserve_neighboring_files(
         old = report.parent / name
         old.mkdir()
         (old / 'obsolete.fits').write_bytes(b'old')
-    unrelated = report.parent / '06_color'
+    unrelated = report.parent / '07_color'
     unrelated.mkdir()
     (unrelated / 'color.fits').write_bytes(b'color')
     assert reset_autoghs_work_dir(report, source) == report.parent
@@ -176,7 +176,7 @@ def test_autoghs_cleanup_removes_symlink_without_removing_target(tmp_path: Path)
     target.mkdir()
     marker = target / 'preserved.fits'
     marker.write_bytes(b'preserved')
-    work = tmp_path / '05_autoghs'
+    work = tmp_path / '06_autoghs'
     work.mkdir()
     link = work / '01_separation'
     link.symlink_to(target, target_is_directory=True)

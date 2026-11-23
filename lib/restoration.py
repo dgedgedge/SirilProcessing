@@ -127,10 +127,6 @@ class RestorationComparisonProcessor(processor):
 
             if GraXpertDenoiseProcessor.is_enabled(args):
                 engines.append(("graxpert", GraXpertDenoiseProcessor))
-        if cls.operation == "sharpen" and getattr(args, "aberration_model", None):
-            from lib.aberration import AberrationRemoverProcessor
-
-            engines.append(("aberration_remover", AberrationRemoverProcessor))
         return engines
 
     @staticmethod

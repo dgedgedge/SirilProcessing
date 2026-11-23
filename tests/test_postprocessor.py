@@ -16,6 +16,7 @@ from lib.postprocess import (
 )
 from lib.processor import processor
 from lib.type_defs import JSONReport
+from lib.aberration_stage import AberrationCorrectionStage
 from lib.restoration_chains import RestorationChainProcessor
 from lib.final_render import AutoGHSFinalRenderer
 
@@ -33,6 +34,7 @@ def test_default_postprocess_order() -> None:
     assert [type(step) for step in sequence.processors] == [
         GradientExtractor,
         PhotometricColorCalibrator,
+        AberrationCorrectionStage,
         DeconvolutionProcessor,
         NoiseReductionProcessor,
         AutoGHSFinalRenderer,
@@ -44,7 +46,7 @@ def test_standard_backend_selection() -> None:
     sequence = _PostProcessorSequence()
     selected = sequence._selected_processors(_args("--disable-clarity"))
     assert [type(step) for step in selected] == [
-        GradientExtractor, PhotometricColorCalibrator, RestorationChainProcessor,
+        GradientExtractor, PhotometricColorCalibrator, AberrationCorrectionStage, RestorationChainProcessor,
         AutoGHSFinalRenderer,
     ]
     selected = sequence._selected_processors(
@@ -53,6 +55,7 @@ def test_standard_backend_selection() -> None:
     assert [type(step) for step in selected] == [
         GradientExtractor,
         PhotometricColorCalibrator,
+        AberrationCorrectionStage,
         DeconvolutionProcessor,
         NoiseReductionProcessor,
         AutoGHSFinalRenderer,
@@ -137,11 +140,11 @@ def test_deconvolution_no_safe_improvement_continues_sequence(tmp_path: Path) ->
 
 
 @pytest.mark.parametrize("options, expected", [
-    ((), [(1, "gradient"), (2, "photometry"), (3, "restoration"), (5, "autoghs")]),
-    (("--disable-photometry",), [(1, "gradient"), (3, "restoration"), (5, "autoghs")]),
+    ((), [(1, "gradient"), (2, "photometry"), (3, "aberration"), (4, "restoration"), (6, "autoghs")]),
+    (("--disable-photometry",), [(1, "gradient"), (3, "aberration"), (4, "restoration"), (6, "autoghs")]),
     (("--no-restoration-compare-chains",), [
-        (1, "gradient"), (2, "photometry"), (3, "deconvolution"),
-        (4, "denoise"), (5, "autoghs"),
+        (1, "gradient"), (2, "photometry"), (3, "aberration"), (4, "deconvolution"),
+        (5, "denoise"), (6, "autoghs"),
     ]),
 ])
 def test_standard_step_numbers_survive_restoration_merge(
@@ -160,7 +163,7 @@ def test_standard_step_numbers_survive_restoration_merge(
         return {"output_image": str(input_path)}
 
     for provider in (GradientExtractor, PhotometricColorCalibrator,
-                     RestorationChainProcessor, DeconvolutionProcessor,
+                     RestorationChainProcessor, AberrationCorrectionStage, DeconvolutionProcessor,
                      NoiseReductionProcessor, AutoGHSFinalRenderer):
         monkeypatch.setattr(provider, "post_process", record)
     source = tmp_path / "source.fits"
@@ -175,6 +178,7 @@ def test_standard_step_numbers_survive_restoration_merge(
     labels = {
         "gradient": "Correction du gradient",
         "photometry": "Étalonnage photométrique des couleurs",
+        "aberration": "Aberration Remover",
         "restoration": "Comparaison des chaînes de restauration",
         "deconvolution": "Déconvolution", "denoise": "Débruitage",
         "autoghs": "Rendu final AutoGHS et étoiles",

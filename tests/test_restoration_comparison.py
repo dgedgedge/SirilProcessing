@@ -21,7 +21,7 @@ class SmallChunks(io.StringIO):
 @pytest.fixture
 def report(tmp_path: Path) -> Path:
     """Crée deux variantes et une opération dont l'alerte reste non bloquante."""
-    path = tmp_path / 'Objet' / '04_restoration' / 'restoration.json'
+    path = tmp_path / 'Objet' / '05_restoration' / 'restoration.json'
     path.parent.mkdir(parents=True)
     path.write_text(json.dumps({
         'engine': 'chains', 'status': 'accepted', 'selected_chain': ['denoise:graxpert'],

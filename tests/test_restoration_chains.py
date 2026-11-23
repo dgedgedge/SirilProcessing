@@ -32,7 +32,7 @@ def test_all_chains_are_evaluated_and_intermediates_cached(
     work = tmp_path / "report_work"
     if numbered:
         (tmp_path / "01_calibration").mkdir()
-        report = tmp_path / "04_restoration/restoration.json"
+        report = tmp_path / "05_restoration/restoration.json"
         work = report.parent
     source = tmp_path / "source.fits"
     data = np.random.default_rng(1).normal(0.1, 0.001, (128, 128)).astype("float32")
@@ -288,6 +288,7 @@ def test_sequence_uses_one_restoration_after_gradient_and_photometry() -> None:
     assert [step.get_prefix() for step in historic] == [
         "gradient",
         "photometry",
+        "aberration",
         "deconvolution",
         "denoise",
         "autoghs",
@@ -296,6 +297,7 @@ def test_sequence_uses_one_restoration_after_gradient_and_photometry() -> None:
     assert [step.get_prefix() for step in competitive] == [
         "gradient",
         "photometry",
+        "aberration",
         "restoration",
         "autoghs",
     ]

@@ -91,3 +91,6 @@ et le relais physique `02_mosaic/image.fits` ; voir
 `processing_html.py` publie les index hors ligne des résultats et leurs
 aperçus, sans relancer les moteurs ni lire les pixels FITS. Voir les
 [index de traitement](../scripts/lightProcess/html-reports.md).
+
+`lib.aberration_stage.AberrationCorrectionStage` orchestre la correction optique
+conditionnelle avant restauration ; voir [son algorithme et ses seuils](../scripts/postProcess/aberration-stage.md).

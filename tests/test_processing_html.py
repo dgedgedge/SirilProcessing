@@ -31,10 +31,10 @@ class Links(HTMLParser):
 def results(tmp_path: Path) -> Path:
     """Construit des résultats contenant aperçus, rapport et fichiers FITS témoins."""
     root = tmp_path / 'M31'
-    step = root / '04_restoration/01_denoise_siril'
+    step = root / '05_restoration/01_denoise_siril'
     checks = step / 'verification_finale'
     checks.mkdir(parents=True)
-    for directory in (root / '01_calibration', root / '05_autoghs'):
+    for directory in (root / '01_calibration', root / '06_autoghs'):
         directory.mkdir()
     (root / 'M31.fits').write_bytes(b'FITS must not be read or changed')
     (root / 'M31.jpg').write_bytes(b'jpeg')
@@ -70,7 +70,7 @@ def test_recursive_pages_include_images_audits_and_highest_final_exports(results
     assert 'M31.jpg' in parser.images
     assert 'M31_annotated.png' in parser.images
     assert 'M31.fits' in parser.urls
-    step = results / '04_restoration/01_denoise_siril/index.html'
+    step = results / '05_restoration/01_denoise_siril/index.html'
     text = step.read_text()
     assert 'PASS' in text and 'Seuil' in text and 'modulation' in text
     assert '<script>alert' not in text
@@ -82,7 +82,7 @@ def test_recursive_pages_include_images_audits_and_highest_final_exports(results
 
 def test_foreign_index_is_refused_before_any_page_is_written(results: Path) -> None:
     """Une page étrangère dans un sous-dossier protège toute la publication."""
-    existing = results / '04_restoration/index.html'
+    existing = results / '05_restoration/index.html'
     existing.write_text('<h1>Manuel personnel</h1>')
     with pytest.raises(FileExistsError):
         ProcessingHtmlReport(results).generate()
@@ -182,7 +182,7 @@ def test_publication_does_not_invalidate_stack_but_source_changes_do(
 
 def test_html_displays_recorded_accepted_chain_comparison(results: Path) -> None:
     """Le tableau rend les valeurs et le choix, en échappant les noms de chaînes."""
-    report = results / '04_restoration/restoration.json'
+    report = results / '05_restoration/restoration.json'
     report.write_text(json.dumps({'summary': {'accepted_ranking': {
         'policy': 'Meilleur score positif', 'formula': 'formule enregistrée',
         'rows': [{'rank': 1, 'label': '<chosen>', 'decision': 'RETENUE',
@@ -199,7 +199,7 @@ def test_html_displays_recorded_accepted_chain_comparison(results: Path) -> None
 
 def test_index_extracts_visible_json_summary_parameters_and_quality(results: Path) -> None:
     """Les informations utiles sont présentées avant les détails JSON repliables."""
-    report = results / '04_restoration/restoration.json'
+    report = results / '05_restoration/restoration.json'
     report.write_text(json.dumps({
         'status': 'SUCCESS', 'restoration': {
             'status': 'accepted', 'engine': 'chains', 'selected_chain': ['denoise:siril'],
@@ -225,7 +225,7 @@ def test_existing_json_without_prebuilt_ranking_is_summarized_without_changes(
     results: Path,
 ) -> None:
     """La commande extrait aussi les anciens audits, sans relancer ni réécrire les calculs."""
-    report = results / '04_restoration/restoration.json'
+    report = results / '05_restoration/restoration.json'
     report.write_text(json.dumps({
         'selected_chain': ['best'], 'selection_score': .8,
         'variants': [
@@ -273,7 +273,7 @@ def test_restoration_report_uses_json_and_only_explains_score_before_table(
     results: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Le JSON seul fournit le choix, les scores et les critères, même volumineux."""
-    directory = results / '04_restoration'
+    directory = results / '05_restoration'
     monkeypatch.setattr(ProcessingHtmlReport, 'JSON_LIMIT', 10)
     payload = {'selected_chain': ['graxpert', 'siril'], 'selection_score': .48,
                'variants': [{'chain': ['graxpert', 'siril'], 'status': 'accepted',
@@ -318,7 +318,7 @@ def test_quality_definitions_are_central_and_linked_only_where_used(results: Pat
         assert 'Comprendre les critères de qualité' not in page.read_text()
     calibration = (results / '01_calibration/index.html').read_text()
     assert 'quality-criteria.html#' not in calibration
-    step = (results / '04_restoration/01_denoise_siril/index.html').read_text()
+    step = (results / '05_restoration/01_denoise_siril/index.html').read_text()
     assert 'href="../../quality-criteria.html#noise"' in step
     linked = ProcessingHtmlReport._link_quality_terms(
         '<p>diffuse roundness</p><a href="noise.txt">noise</a>', '../')
@@ -821,7 +821,7 @@ def test_restoration_child_tables_share_style_without_changing_other_stages(resu
     payload = dict(status='accepted', parameters={'gain': .123456},
                    criteria={'noise': dict(status='PASS', value=.123456, threshold=1.0),
                              'diffuse': dict(status='UNKNOWN', value=None, threshold=None)})
-    stage = results/'04_restoration/02_local'
+    stage = results/'05_restoration/02_local'
     stage.mkdir()
     child = stage/'audit.json'
     other = results/'01_calibration/audit.json'

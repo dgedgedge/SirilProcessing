@@ -107,9 +107,21 @@ def test_signed_diffuse_loss(
     measured = [entry for entry in audit['per_region'] if entry.get('value') is not None]
     assert measured
     assert any(abs(entry['value']) > .05 for entry in measured)
+    for entry in measured:
+        assert entry['value'] == pytest.approx(
+            (entry['flux_after'] - entry['flux_before']) / entry['flux_before']
+        )
+        assert entry['threshold'] == -.05
     if factor > 1:
-        assert all(entry['value'] < 0 for entry in measured)
+        assert all(entry['value'] > 0 for entry in measured)
         assert all(entry['status'] != 'FAIL' for entry in audit['per_region'])
+    else:
+        failed = [entry for entry in measured if entry['status'] == 'FAIL']
+        assert failed
+        assert all(entry['value'] < -.05 for entry in failed)
+        assert all(entry['block_interval'][1] < 0 for entry in failed)
+        assert all(any(scale['residual_median'] < 0 and scale['significant']
+                       for scale in entry['multiscale']) for entry in failed)
 
 
 def test_erased_diffuse_signal_is_corrobated(galaxy, tmp_path):

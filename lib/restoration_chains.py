@@ -364,7 +364,7 @@ class RestorationChainProcessor(processor):
     ) -> JSONReport:
         """Évalue les variantes et garde les audits dans un dossier direct.
 
-        Le plan numéroté utilise directement 04_restoration ; les appels autonomes
+        Le plan numéroté utilise directement 05_restoration ; les appels autonomes
         conservent <rapport>_work. Chaque opération regroupe son rapport, ses
         candidats et scripts dans un même dossier numéroté, préparé
         avant l’appel moteur. Le numéro identifie le calcul ; son nom décrit

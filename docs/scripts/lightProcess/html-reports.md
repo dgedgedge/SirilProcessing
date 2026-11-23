@@ -33,7 +33,7 @@ M31/
   M31.fits
   M31.jpg
   M31_annotated.png
-  04_restoration/
+  05_restoration/
     index.html                    # restauration et synthèse de ses contrôles
     restoration_summary.txt
     00_mask_origine/

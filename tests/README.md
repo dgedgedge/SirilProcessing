@@ -183,11 +183,16 @@ le dossier des poids ; sinon le dossier ignoré `tmp/cache/models/cosmicclarity`
 
 ## Qualité astrophotographique
 
+`test_stellar_appearance.py` vérifie l'objectif non bloquant de 40 % d'étoiles
+visibles : 40 % atteint le seuil, tandis que 20 %, 25 % et 30 % échouent au diagnostic.
+
 Les tests synthétiques utilisent un ciel/bruit et des structures connus, y compris
 une galaxie et un filament effacés, une nébulosité dominante, du signal rouge et
 du bruit corrélé. Les décisions UNKNOWN sont vérifiées sans faux bonus de bruit.
 Le contrôle diffus distingue une perte corroborée (FAIL) d'une augmentation de
-flux (variation négative conservée dans le rapport, sans FAIL).
+flux (variation positive conservée dans le rapport, sans FAIL). Les valeurs
+suivent `(après - avant) / avant`, avec un seuil signé négatif et des résidus
+et intervalles négatifs pour les pertes confirmées.
 Les champs stellaires denses vérifient que le lissage ne transforme pas les
 étoiles en faux signal diffus. Une image majoritairement couverte de signal
 vérifie que le ciel connu dans les quatre coins reste exploitable, tandis
@@ -481,3 +486,17 @@ de segmentation fiable. Il contrôle aussi le maintien de la garde de nouvelle
 bosse sombre malgré un bonus de signal faible et la limitation des écarts de
 courbure aux pentes descendantes. Les essais réels sur grille et les recherches
 GHS complètes sont distingués dans les comptes rendus.
+
+`test_aberration_stage.py` vérifie le déclenchement optique avant restauration,
+les gains appariés de rondeur/FWHM au centre et aux bords, le refus des
+régressions et des pertes de correspondances, et le maintien exact de la source.
+Les tests de séquence vérifient que AR précède la restauration sans y être rejoué.
+`test_output_layout.py` vérifie aussi la numérotation photométrie 03, AR 04,
+restauration 05, AutoGHS 06 et couleur 07, ainsi que la lecture explicite des
+anciens rapports numérotés. Les reprises et comparaisons couvrent les chemins
+compatibles sans renommer les produits existants.
+L'audit de flux d'AR est vérifié sur une structure étendue synthétique atténuée
+ou amplifiée et sur un champ sans mesure. `test_final_annotation.py` vérifie
+que seul le statut d'AR apparaît dans le PNG, même si les mesures détaillées
+et seuils sont présents dans le rapport. `test_aberration.py` vérifie la
+protection du fond par défaut et sa désactivation explicite.

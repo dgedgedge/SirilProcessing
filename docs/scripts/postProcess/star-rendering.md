@@ -240,7 +240,7 @@ pour leur reproduction historique, mais ne sont plus produits par le rendu.
 
 ### Diagnostic spécifique des étoiles
 
-Dans `05_autoghs/03_ghs_stars/` (ou `03_ghs_stars/` à côté du rapport autonome), `<image>_stars_diagnostic.png` présente :
+Dans `06_autoghs/03_ghs_stars/` (ou `03_ghs_stars/` à côté du rapport autonome), `<image>_stars_diagnostic.png` présente :
 
 - les mêmes extraits centraux (512 pixels de côté au plus) avant/après, avec les
   intensités affichées directement sans auto-étirement ni gamma ;
@@ -326,7 +326,7 @@ Les sources et les FITS scientifiques restent inchangés.
 ## Objectifs indicatifs de visibilité et de forme
 
 Les [indicateurs d'apparence stellaire](stellar-appearance.md) mesurent un objectif
-non bloquant d'au moins 25 % de candidats visibles par contraste local,
+non bloquant d'au moins 40 % de candidats visibles par contraste local,
 le diamètre apparent, la pente de transition et l'étendue de la jupe. Ils
 figurent dans `appearance_quality` et dans le diagnostic PNG. Ils ne modifient
 ni les pixels ni le choix de la courbe globale. Aucun seuil perceptuel de

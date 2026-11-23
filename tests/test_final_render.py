@@ -118,7 +118,7 @@ def test_single_range_contract_and_published_artifacts(
     monkeypatch.setattr(module, "recompose", fusion)
     result = AutoGHSFinalRenderer().post_process(
         linear_rgb,
-        tmp_path / "05_autoghs.json",
+        tmp_path / "06_autoghs.json",
         argparse.Namespace(
             compute_backend="cpu", ghs_bins=512, ghs_max_iterations=2, ghs_chroma=chroma
         ),
@@ -197,7 +197,7 @@ def test_single_range_contract_and_published_artifacts(
             assert hdul[0].header["OBJECT"] == "Synthetic"
             assert hdul["AUX"].data.tolist() == list(range(6))
     assert linear_rgb.read_bytes() == original
-    assert json.loads((tmp_path / "05_autoghs.json").read_text()) == result
+    assert json.loads((tmp_path / "06_autoghs.json").read_text()) == result
 
 
 @pytest.mark.parametrize(
@@ -236,13 +236,13 @@ def test_failure_publishes_nothing(
     with pytest.raises(RuntimeError, match="injected failure"):
         AutoGHSFinalRenderer().post_process(
             linear_rgb,
-            tmp_path / "05_autoghs.json",
+            tmp_path / "06_autoghs.json",
             argparse.Namespace(
                 compute_backend="cpu", ghs_max_iterations=1, ghs_bins=256
             ),
         )
-    assert not list(tmp_path.glob("05_autoghs_render_*"))
-    report = json.loads((tmp_path / "05_autoghs.json").read_text())
+    assert not list(tmp_path.glob("06_autoghs_render_*"))
+    report = json.loads((tmp_path / "06_autoghs.json").read_text())
     assert report["status"] == "ERROR" and report["no_automatic_retry"]
     assert len(fake_separation) <= 1
 
@@ -316,7 +316,7 @@ def test_range_rendering_survives_local_starnet_overshoot(
 
     monkeypatch.setattr(StarNetSeparator, "post_process", with_overshoot)
     result = AutoGHSFinalRenderer().post_process(
-        linear_rgb, tmp_path / "05_autoghs.json",
+        linear_rgb, tmp_path / "06_autoghs.json",
         argparse.Namespace(compute_backend="cpu", ghs_bins=256, ghs_max_iterations=1),
     )
     assert result["status"] in ("SUCCESS", "NO_IMPROVEMENT", "TARGETS_NOT_REACHED")
@@ -451,11 +451,11 @@ def test_preflight_failure_is_reported(
     """Le refus d'une entrée déjà étirée écrit aussi un rapport ERROR sans extraction."""
     with fits.open(linear_rgb, mode="update") as hdul:
         hdul[0].header.update(header)
-    report = tmp_path / "05_autoghs.json"
+    report = tmp_path / "06_autoghs.json"
     with pytest.raises(ValueError, match="non linéaire"):
         AutoGHSFinalRenderer().post_process(linear_rgb, report, argparse.Namespace())
     assert json.loads(report.read_text())["status"] == "ERROR"
-    assert not list(tmp_path.glob("05_autoghs_render_*"))
+    assert not list(tmp_path.glob("06_autoghs_render_*"))
 
 
 def test_default_activation_and_explicit_disable(
@@ -468,7 +468,7 @@ def test_default_activation_and_explicit_disable(
         self, input_path: Path, output_path: Path, args: argparse.Namespace
     ) -> dict[str, str]:
         """Enregistre le rendu par défaut sans exécuter les moteurs externes."""
-        assert output_path.name == "05_autoghs.json"
+        assert output_path.name == "06_autoghs.json"
         calls.append(input_path)
         return {"output_image": str(input_path)}
 
@@ -651,9 +651,9 @@ def test_ordered_autoghs_directory_is_reset_on_rerun(
         compute_backend="cpu", ghs_strategy="range", ghs_bins=256,
         ghs_max_iterations=1,
     )
-    report = tmp_path / "05_autoghs.json"
+    report = tmp_path / "06_autoghs.json"
     first = renderer.post_process(linear_rgb, report, args)
-    legacy_work = tmp_path / "05_autoghs_work"
+    legacy_work = tmp_path / "06_autoghs_work"
     legacy_work.mkdir()
     stale = legacy_work / "obsolete.fits"
     stale.write_bytes(b"obsolete")
@@ -680,7 +680,7 @@ def test_ordered_autoghs_directory_is_reset_on_rerun(
     assert len(fake_separation) == 2
     assert sorted(path.name for path in tmp_path.iterdir()) == [
         "01_separation", "03_ghs_starless", "03_ghs_stars", "04_recomposition",
-        "05_autoghs.json", "linear.fits"
+        "06_autoghs.json", "linear.fits"
     ]
     source = tmp_path / "03_ghs_stars/linear_input.fits"
     source.write_bytes(linear_rgb.read_bytes())

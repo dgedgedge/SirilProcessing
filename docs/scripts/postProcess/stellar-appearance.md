@@ -14,7 +14,7 @@ La visibilité réelle dépend du fond après fusion, de l'écran, du gamma,
 de l'échelle d'affichage et de l'observateur. Les mesures suivantes sont des
 proxys d'affichage normalisé, pas un modèle calibré de l'œil humain.
 
-## 1.2. Objectif de visibilité : au moins 25 %
+## 1.2. Objectif de visibilité : au moins 40 %
 
 La population est celle des pics candidats détectés dans l'entrée stellaire
 linéaire par le détecteur existant. Elle reste fixe avant/après ; il ne s'agit
@@ -69,7 +69,7 @@ mesures photométriques. Les ailes qui dépassent la fenêtre restent inconnues.
 
 ## 1.4. Vérifications
 
-Les tests couvrent le seuil exact de 25 %, les bords et champs vides, la
+Les tests couvrent le seuil exact de 40 %, les bords et champs vides, la
 conservation des pixels, les rayons et gradients gaussiens analytiques, la
 transition plus large d'une étoile diffuse et les ailes plus étendues d'un
 profil Moffat. Le rendu global et les recettes gardent leurs tests d'invariance

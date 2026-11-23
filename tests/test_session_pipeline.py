@@ -319,7 +319,7 @@ def test_postprocess_each_final_stack_with_shared_parameters(
     assert stack.call_count == len(postprocess_calls) == 1
     for root, (image, report, args) in zip(roots, postprocess_calls):
         assert image == tmp_path / "out" / root.name / "02_mosaic/image.fits"
-        assert report == tmp_path / "out" / root.name / "06_color/postprocess.json"
+        assert report == tmp_path / "out" / root.name / "07_color/postprocess.json"
         assert args.compute_backend == "cpu"
         assert args.ghs_chroma == "enhanced" and args.ghs_dynamic_target == 0.8
         assert args.photometry_object == "M33"
@@ -338,7 +338,7 @@ def test_postprocess_only_final_mosaic(
     assert stack.call_count == 2 and len(postprocess_calls) == 1
     image, report, _ = postprocess_calls[0]
     assert image == tmp_path / "out/field/02_mosaic/image.fits"
-    assert report == tmp_path / "out/field/06_color/postprocess.json"
+    assert report == tmp_path / "out/field/07_color/postprocess.json"
     call = mosaic.return_value.post_process.call_args.kwargs
     assert call["input_path"].name == "stack_combined.fits"
 
@@ -499,13 +499,13 @@ def test_lightprocess_executes_common_exports_after_stack(
     stack.side_effect = stack_rgb
     caplog.set_level("INFO")
     assert run([root], "--postprocess", "--disable-photometry", "--disable-autoghs",
-               "--disable-denoise", "--disable-deconvolution",
+               "--disable-denoise", "--disable-deconvolution", "--disable-aberration",
                "--gradient-method", "polynomial", "--gradient-min-order", "1",
                "--gradient-max-order", "1", "--no-gradient-measurement-image") == 0
     directory = tmp_path / "out/field"
     source = directory / "02_mosaic/image.fits"
     final = directory / "field.fits"
-    report = directory / "06_color/postprocess.json"
+    report = directory / "07_color/postprocess.json"
     result = json.loads(report.read_text())
     assert set(result) == {"gradient", "annotation"}
     assert result["annotation"]["status"] == "SKIPPED"
@@ -513,10 +513,10 @@ def test_lightprocess_executes_common_exports_after_stack(
     assert final.read_bytes() == Path(result["gradient"]["output_image"]).read_bytes()
     assert source.is_file() and not final.with_suffix(".jpg").exists()
     work = directory
-    assert not (work / "04_restoration/diagnostics").exists()
-    assert not (work / "04_restoration/01_chains").exists()
-    assert (work / "06_color/postprocess.log").is_file()
-    log = (work / "06_color/postprocess.log").read_text(encoding="utf-8")
+    assert not (work / "05_restoration/diagnostics").exists()
+    assert not (work / "05_restoration/01_chains").exists()
+    assert (work / "07_color/postprocess.log").is_file()
+    log = (work / "07_color/postprocess.log").read_text(encoding="utf-8")
     assert "Début du post-traitement : image.fits" in log
     assert "Post-traitement — étape 03 : Correction du gradient" in log
 

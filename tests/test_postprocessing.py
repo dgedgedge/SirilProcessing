@@ -335,7 +335,7 @@ def test_autoghs_only_skips_linear_steps_and_quality(
     args = argparse.Namespace(autoghs_only=True, enable_autoghs=False,
                               enable_final_color=False, final_color_explicit=True)
     result = PostProcessingProcessor().post_process(source, tmp_path / 'run.json', args)
-    assert calls == ['05_autoghs.json']
+    assert calls == ['06_autoghs.json']
     assert set(result['treatments']) == {'autoghs', 'annotation'}
     assert Path(result['output_annotated_image']).is_file()
     assert result['quality_preview_path'] is None

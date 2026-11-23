@@ -43,7 +43,7 @@ Le contrat est `post_process(input_path, output_path, args=None)` :
   `output_jpeg` est ajouté si AutoGHS ou la passe couleur a fourni un JPEG.
 
 Le JSON sur disque conserve son schéma historique : une clé par traitement,
-comme `gradient`, `photometry`, `restoration`, `autoghs`, `final_color` et `annotation`. Il correspond au
+comme `gradient`, `photometry`, `aberration`, `restoration`, `autoghs`, `final_color` et `annotation`. Il correspond au
 contenu de `treatments` dans l’enveloppe retournée. Le consommateur suivant
 reçoit le FITS exporté grâce à `output_image`.
 
@@ -157,9 +157,9 @@ reste possible en simulation.
 
 Avec lightProcess, le relais est `<sortie>/M33/02_mosaic/image.fits` et les
 traitements suivent [le plan numéroté](../lightProcess/output-layout.md) :
-photométrie sous `03_photometrie`, restauration sous `04_restoration`, GHS sous
-`05_autoghs` et couleur sous `06_color`. Le rapport global est
-`06_color/postprocess.json`, avec son journal et son manifeste de reprise.
+photométrie sous `03_photometrie`, restauration sous `05_restoration`, GHS sous
+`06_autoghs` et couleur sous `07_color`. Le rapport global est
+`07_color/postprocess.json`, avec son journal et son manifeste de reprise.
 Le résultat publié est `<sortie>/M33/M33.fits`, accompagné du JPEG et du PNG
 annoté lorsqu'ils sont produits. La mosaïque suit exactement le même relais.
 

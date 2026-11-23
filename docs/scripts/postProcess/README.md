@@ -6,7 +6,7 @@ Présentation : [Principe du post-traitement et diagramme de séquence](principl
 Un [signal sonore de fin](completion-sound.md), désactivable, annonce le succès de la commande.
 
 `bin/postProcess.py` traite une image FITS dans cet ordre :
-**correction du gradient → étalonnage spectrophotométrique → comparaison des chaînes complètes de restauration**.
+**correction du gradient → étalonnage spectrophotométrique → [Aberration Remover conditionnel](aberration-stage.md) → comparaison des chaînes complètes de restauration**.
 Chaque étape reçoit l’image retenue par la précédente et produit un rapport JSON.
 Les [contrôles de qualité sont des processeurs récursifs](quality-processors.md),
 avec des analyses indépendantes sur étoiles, tuiles et régions diffuses.
@@ -23,7 +23,7 @@ La comparaison des chaînes débruitage → netteté est active par défaut ;
 l’ordre inverse reste optionnel. `--no-restoration-compare-chains` rétablit
 les comparaisons par étape, déconvolution puis débruitage. Voir la
 [synthèse des essais et des éliminations](quality.md#synthèse-des-essais-et-des-éliminations).
-Les cinq traitements sont activés par défaut ; leur activation peut être
+Les six traitements sont activés par défaut ; leur activation peut être
 modifiée par la ligne de commande ou par la configuration mémorisée.
 
 Cette commande s’utilise séparément sur un résultat de stacking ou une mosaïque,
@@ -135,7 +135,7 @@ flowchart TD
     B --> U{"AutoGHS activé ?"}
     O --> U
     T --> U
-    U -->|Oui, par défaut| F["05 · Rendu AutoGHS et étoiles<br/>puis 06 · Couleur finale si activée"]
+    U -->|Oui, par défaut| F["06 · Rendu AutoGHS et étoiles<br/>puis 07 · Couleur finale si activée"]
     U -->|Non| R["Exports FITS, JPEG si produit<br/>Diagnostics et rapport global"]
     F --> R
 ```
@@ -688,7 +688,7 @@ rapports/
     ├── 03_restoration.fits
     ├── 03_restoration_summary.txt
     ├── 03_restoration_work/
-    ├── 05_autoghs.json
+    ├── 06_autoghs.json
     ├── 01_separation/separation_work/
     ├── 03_ghs_stars/
     ├── 03_ghs_starless/
@@ -751,7 +751,7 @@ argparse retourne `2` pour une ligne de commande invalide.
 AutoGHS conserve le numéro `05`, y compris lorsque `03_restoration` regroupe les
 étapes 03/04. Les sous-dossiers de séparation, étoiles, GHS, recomposition et
 diagnostics sont placés directement à côté du rapport, sans `autoghs_work/`.
-Dans le plan lightProcess, ils se trouvent directement dans `05_autoghs/`.
+Dans le plan lightProcess, ils se trouvent directement dans `06_autoghs/`.
 La photométrie utilise `02_photometry_work/`. Seuls les produits propres à chaque
 traitement sont nettoyés à la relance ; voir [AutoGHS](auto-ghs.md).
 

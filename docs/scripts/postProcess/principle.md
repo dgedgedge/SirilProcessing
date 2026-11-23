@@ -23,20 +23,21 @@ les réglages et les contrôles du renforcement chromatique.
 
 Le diagramme décrit le parcours avec AutoGHS actif, commun à lightProcess et
 postProcess. Les corrections linéaires désactivées transmettent l'image reçue.
-Les numéros `05` et `06` désignent les étapes AutoGHS et couleur ; dans le plan
-lightProcess, leurs fichiers sont sous `05_autoghs/` et `06_color/`.
+Les numéros `06` et `07` désignent les étapes AutoGHS et couleur ; dans le plan
+lightProcess, leurs fichiers sont sous `06_autoghs/` et `07_color/`.
 
 ```mermaid
 sequenceDiagram
     autonumber
     participant P as Post-traitement
     participant L as Traitements linéaires
-    participant A as 05 · AutoGHS
-    participant C as 06 · Couleur finale
+    participant A as 06 · AutoGHS
+    participant C as 07 · Couleur finale
     participant E as Publication
     P->>L: Stack ou mosaïque linéaire avec étoiles
     L->>L: Correction du gradient, si activée
     L->>L: Astrométrie et couleurs SPCC, si activées
+    L->>L: Aberration Remover si défaut stellaire mesuré, conserver si gain utile
     L->>L: Comparaison et choix de la restauration
     L-->>P: Image linéaire retenue avec étoiles
     P->>A: Préparer le rendu
@@ -77,7 +78,7 @@ omise et la sortie reste linéaire. `--autoghs-only` reprend à la préparation 
 rendu ; `--color-only` réutilise directement les deux couches existantes avant
 les exports et l'annotation.
 
-Dans `06_color/color.json`, `image_path` désigne le fond GHS utilisé en entrée,
+Dans `07_color/color.json`, `image_path` désigne le fond GHS utilisé en entrée,
 `output_starless_image` le fond coloré et `output_image` l'image recomposée
 avec étoiles. Un fichier nommé `*_starless_ghs_range_color_final.fits` peut
 donc contenir les étoiles : son nom reprend celui du fond d'entrée. Dans le

@@ -84,7 +84,16 @@ Le sous-rapport `stacking` conserve les comptes, les rapports sources, les
 motifs d'indisponibilité et le statut `AVAILABLE`, `PARTIAL`, `UNAVAILABLE` ou
 `INVALID`. Les rapports de stacking/mosaïque doivent donc rester disponibles.
 
-L'encart affiche aussi le type de restauration réellement appliqué, par exemple :
+L'encart distingue la correction optique et la restauration réellement appliquées.
+
+Une ligne indépendante décrit [Aberration Remover](aberration-stage.md) :
+`appliqué`, `essai non retenu, entrée conservée`, `non déclenché` ou `désactivé`.
+Les mesures de rondeur, finesse, flux diffus et leurs limites restent dans les
+rapports de l'étape ; elles ne sont pas affichées sur l'image annotée.
+Les reprises réutilisent le statut sauvegardé. Sans rapport d'AR, aucun usage
+n'est déduit des options ; une chaîne AR historique retenue reste identifiable.
+
+La ligne de restauration reste distincte :
 
 ```text
 Restauration : Débruitage (GraXpert) → Déconvolution (Siril)

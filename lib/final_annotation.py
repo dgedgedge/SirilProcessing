@@ -161,6 +161,35 @@ class FinalImageAnnotator(processor):
         return "Restauration : " + (description or "aucune")
 
     @staticmethod
+    def aberration_line(treatments: JSONReport | None) -> str:
+        """Affiche uniquement le statut d'utilisation d'AR dans le rendu annoté.
+
+        Les gains et seuils restent dans le rapport scientifique de l'étape,
+        sans surcharger l'encart. Les archives et absences restent explicites.
+        """
+        prefix = 'Aberration Remover : '
+        if treatments is None:
+            return prefix + 'non renseigné'
+        stage = treatments.get('aberration')
+        if stage is None:
+            restoration = treatments.get('restoration', {})
+            chain = restoration.get('selected_chain') if isinstance(restoration, dict) else None
+            if (isinstance(restoration, dict)
+                    and isinstance(chain, list) and 'sharpen:aberration_remover' in chain):
+                return prefix + 'appliqué via restauration (ancien rapport)'
+            return prefix + 'non appliqué'
+        if not isinstance(stage, dict):
+            return prefix + 'non renseigné'
+        status = stage.get('status')
+        labels = {'accepted': 'appliqué', 'retained_input': 'essai non retenu, entrée conservée',
+                  'skipped': 'non déclenché', 'DISABLED': 'désactivé', 'disabled': 'désactivé',
+                  'failed': 'en échec'}
+        description = labels.get(status, 'statut non renseigné')
+        if stage.get('reason') == 'model_disabled':
+            description = 'désactivé'
+        return prefix + description
+
+    @staticmethod
     def draw_panel(image: Image.Image, lines: list[str]) -> tuple[int, int, int, int]:
         """Compose un encart ajusté automatiquement, sans déborder de l'image.
 
@@ -347,7 +376,8 @@ class FinalImageAnnotator(processor):
             Sans surcharge, consulter les rapports associés au FITS fourni.
         treatments : JSONReport, optional
             Résultats complets du post-traitement, après fusion des reprises,
-            pour afficher la restauration réellement appliquée. Sans ces
+            pour afficher le statut d'Aberration Remover et la restauration
+            réellement appliquée. Sans ces
             rapports, afficher « Restauration : non renseignée ».
 
         Returns
@@ -381,6 +411,7 @@ class FinalImageAnnotator(processor):
                     acquisition_source if acquisition_source is not None else source
                 )
                 lines.extend(stacking['lines'])
+                lines.append(self.aberration_line(treatments))
                 lines.append(self.restoration_line(treatments))
                 objects, sky_audit = [], {"status": "DISABLED"}
                 if getattr(runtime, "annotation_objects", True):

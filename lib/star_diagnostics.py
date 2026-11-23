@@ -104,7 +104,7 @@ def write_star_diagnostic(
         lower = visibility.get('fraction_lower_bound')
         fraction = 'inconnue' if lower is None else f"≥ {100*lower:.1f} %"
         annotation += (
-            f"\nObjectif indicatif ≥ 25 % visibles (contraste local Y ≥ 0,03) : {visibility['status']} ; "
+            f"\nObjectif indicatif ≥ 40 % visibles (contraste local Y ≥ 0,03) : {visibility['status']} ; "
             f"{visibility['visible_count']} / {visibility['candidate_count']} candidats, "
             f"fraction {fraction}, inconnus {visibility['unknown_count']} (non bloquant)."
         )

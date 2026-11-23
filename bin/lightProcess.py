@@ -243,7 +243,7 @@ Sorties:
     - Des FITS calibres par sous-session
     - 01_calibration : sous-sessions et stacks ; part_XX par panneau en mosaique
     - 02_mosaic/image.fits : assemblage ou copie du stack si champ simple
-    - 03_photometrie, 04_restoration, 05_autoghs, 06_color : traitements et rapports
+    - 03_photometrie, 05_restoration, 06_autoghs, 07_color : traitements et rapports
     - Syntheses JSON/TXT dans leurs etapes ; resultat final <objet>.fits a la racine
     - Hors --mosaic : exactement un repertoire d'entree
 

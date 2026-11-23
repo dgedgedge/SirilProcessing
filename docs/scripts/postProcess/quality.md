@@ -156,11 +156,16 @@ couronne commune admissible, séparément avant/après. Les flux intégrés sont
 somme de pixels normalisés ; un faible SNR ou l’absence de couronne donne
 `UNKNOWN`, sans division instable. Les contributions de blocs spatiaux et les
 résidus lissés à plusieurs échelles corroborent une perte de flux. La perte
-relative signée est `(flux_avant - flux_après) / flux_avant` : seule une valeur
-strictement supérieure au seuil (5 % par défaut), significative et corroborée,
-déclenche `diffuse = FAIL`. Une augmentation donne une valeur négative,
+relative est représentée par la variation `(flux_après - flux_avant) / flux_avant` :
+seule une valeur strictement inférieure à −5 % par défaut, significative et
+corroborée, déclenche `diffuse = FAIL`. Une augmentation donne une valeur positive,
 enregistrée dans le rapport sans déclencher ce rejet. La simple baisse des
 hautes fréquences ne constitue pas un rejet.
+Le seuil `threshold` du rapport est signé (−0,05 par défaut) ; l'option
+`--quality-max-flux-loss` reste une tolérance positive (0,05 par défaut).
+Les résidus multi-échelles et intervalles par blocs utilisent aussi après moins
+avant, après soustraction des fonds locaux. Les anciens rapports ne sont pas
+réécrits : leur convention doit être interprétée avec la version qui les a produits.
 
 La photométrie stellaire utilise des ouvertures de rayon au moins trois FWHM
 avec fond local, aux positions initiales ; les médianes de changements de flux
@@ -242,7 +247,7 @@ remplace les produits précédents ; les éventuels essais internes d’un moteu
 restent dans le dossier propre à ce moteur, sans enveloppe `001`.
 
 Dans le plan numéroté de lightProcess, ce regroupement est
-`04_restoration/`. Les opérations ont chacune leur dossier, par
+`05_restoration/`. Les opérations ont chacune leur dossier, par
 exemple `01_denoise_siril/`. Ce dossier contient le rapport `.json`, les
 scripts, candidats, résultats FITS et catalogues de cette opération, sans
 suffixe `_work` ni sous-dossier moteur supplémentaire.
@@ -285,7 +290,7 @@ dans le dossier du traitement. Les anciens dossiers `final_XX` ne sont plus
 créés. Le catalogue stellaire de référence reste partagé sous
 `00_mask_origine/common_reference.tsv`.
 
-Au niveau supérieur, `04_restoration/restoration_summary.txt` récapitule
+Au niveau supérieur, `05_restoration/restoration_summary.txt` récapitule
 les contrôles locaux et finaux de toutes les chaînes, leurs rejets et le
 classement, avec les chemins des comptes rendus détaillés. Il reste voisin
 du rapport global JSON ; les appels autonomes utilisent `<rapport>_summary.txt`.
@@ -444,7 +449,7 @@ de 256 régions au plus par défaut. Les mesures par région restent identiques 
 Dans le plan numéroté, le dossier `diagnostics` n’est plus généré. Les exports
 référencent les aperçus de masques déjà présents auprès de leurs images ;
 aucun jeu de masques d’illustration supplémentaire n’est calculé à cette fin.
-Les essais et `00_mask_origine` sont directement sous `04_restoration`. Lors
+Les essais et `00_mask_origine` sont directement sous `05_restoration`. Lors
 d’une nouvelle restauration, seuls les dossiers de produits reconnus (dont
 les anciennes enveloppes `01_chains` et `diagnostics`) sont nettoyés ; les
 rapports globaux et fichiers voisins sont préservés. Les appels autonomes

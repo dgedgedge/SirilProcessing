@@ -21,7 +21,7 @@ calcul ne produisent pas automatiquement ces aperçus.
 Dans une restauration numérotée :
 
 ```text
-04_restoration/
+05_restoration/
   restoration_input_autostretch.jpg
   restoration_autostretch.jpg
   01_denoise_cosmic_clarity/

@@ -16,9 +16,10 @@ from lib.type_defs import JSONReport
 
 @dataclass(frozen=True)
 class OutputLayout:
-    """Décrit les six étapes d'un objet et leurs rapports, sans état partagé."""
+    """Décrit les étapes d'un objet et leurs rapports, sans état partagé."""
 
     root: Path
+    legacy: bool = False
 
     @property
     def calibration(self) -> Path:
@@ -38,7 +39,7 @@ class OutputLayout:
     @property
     def report(self) -> Path:
         """Place la synthèse globale auprès de la dernière étape."""
-        return self.root / '06_color' / 'postprocess.json'
+        return self.root / ('06_color' if self.legacy else '07_color') / 'postprocess.json'
 
     def panel(self, index: int, mosaic: bool) -> Path:
         """Numérote les panneaux dans l'ordre des entrées ; un champ reste direct."""
@@ -95,20 +96,28 @@ class OutputLayout:
         stages = {
             'gradient': '03_photometrie/01_gradient/gradient.json',
             'photometry': '03_photometrie/photometry.json',
-            'restoration': '04_restoration/restoration.json',
-            'deconvolution': '04_restoration/01_deconvolution/deconvolution.json',
-            'denoise': '04_restoration/02_denoise/denoise.json',
-            'autoghs': '05_autoghs/autoghs.json',
-            'final_color': '06_color/color.json',
+            'aberration': '04_aberration_remover/aberration.json',
+            'restoration': '05_restoration/restoration.json',
+            'deconvolution': '05_restoration/01_deconvolution/deconvolution.json',
+            'denoise': '05_restoration/02_denoise/denoise.json',
+            'autoghs': '06_autoghs/autoghs.json',
+            'final_color': '07_color/color.json',
         }
         if prefix not in stages:
             raise ValueError(f'Étape inconnue de l’arborescence : {prefix}')
-        return self.root / stages[prefix]
+        relative = stages[prefix]
+        if self.legacy:
+            relative = relative.replace('04_aberration_remover', '03_aberration_remover')
+            relative = relative.replace('05_restoration', '04_restoration')
+            relative = relative.replace('06_autoghs', '05_autoghs')
+            relative = relative.replace('07_color', '06_color')
+        return self.root / relative
 
     def create(self) -> None:
-        """Crée les six répertoires sans supprimer d'anciens produits."""
+        """Crée les sept répertoires sans supprimer d'anciens produits."""
         for name in ('01_calibration', '02_mosaic', '03_photometrie',
-                     '04_restoration', '05_autoghs', '06_color'):
+                     '04_aberration_remover',
+                     '05_restoration', '06_autoghs', '07_color'):
             (self.root / name).mkdir(parents=True, exist_ok=True)
 
     def handoff(self, source: Path) -> Path:
@@ -146,9 +155,9 @@ class OutputLayout:
         """Distingue la synthèse numérotée des rapports autonomes historiques."""
         report = report.resolve()
         root = report.parent.parent
-        if (report.parent.name == '06_color' and report.name == 'postprocess.json'
+        if (report.parent.name in ('06_color', '07_color') and report.name == 'postprocess.json'
                 and (root / '01_calibration').is_dir()):
-            return cls(root)
+            return cls(root, legacy=report.parent.name == '06_color')
         return None
 
     @staticmethod
