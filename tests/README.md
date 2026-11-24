@@ -517,3 +517,10 @@ modifie réellement le rendu global : les cibles 20 % et 70 % produisent des
 pixels et taux différents. Les tests couvrent la limite de profils et la jupe
 du groupe brillant, un objectif inaccessible, les valeurs invalides, les deux
 triplets identiques sous des voisinages différents et le rejeu exact de la recette.
+
+La détection des structures faibles est testée par hystérésis : graines fortes
+restreintes à P95, extensions intermédiaires puis faibles, connexité à huit
+voisins, absence de franchissement d'un trou sous seuil et exclusion des îlots
+sans graine ou des pics isolés. Une extension trop petite reste visible sur la
+carte mais ne reçoit pas de score de qualité. Les masques restent fixes par
+référence et les pixels scientifiques inchangés.

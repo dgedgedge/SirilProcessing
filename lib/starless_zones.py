@@ -26,7 +26,8 @@ class StarlessZoneMap:
                      (3, 'Diffus global P75–P95'), (4, 'Lumineux > P95'),
                      (6, 'Fond et diffus : seuils confondus'))
     SPATIAL_LABELS = ((0, 'Inactif'), (1, 'Ciel retenu par détection'), (2, 'Non classé'),
-                      (3, 'Autres parties des structures'), (5, 'Parties faibles P25–P50 des objets'))
+                      (4, 'Graines > P95 grille et ≥ 6 σ'), (3, 'Signal connecté ≥ 3 σ, hors graines'),
+                      (5, 'Faible émission connectée : 1,5–3 σ'))
 
     @classmethod
     def classify(cls, data: np.ndarray, color_mode: str = 'human') -> tuple[np.ndarray, np.ndarray, JSONReport]:
@@ -35,7 +36,7 @@ class StarlessZoneMap:
         Les seuils globaux P25/P75/P95 sont ceux du champ complet. La grille
         et les masques faibles viennent du même moteur que le score GHS.
         Les identifiants sont 0=inactif, 1=ciel, 2=autre, 3=diffus/objet,
-        4=lumineux global, 5=parties faibles, 6=fond et diffus simultanément
+        4=lumineux global ou graine spatiale, 5=parties faibles, 6=fond et diffus simultanément
         lorsque les seuils sont confondus. Deux tableaux séparés préservent
         les recouvrements entre méthodes. Aucune carte n'est une segmentation
         astrophysique certifiée, ni un masque de transformation des pixels.
@@ -59,10 +60,11 @@ class StarlessZoneMap:
         weak, masks = WeakStructureQuality.classify_grid(light)
         weak['stride'] = stride
         weak_map = np.where(active, 2, 0).astype('uint8')
-        if weak['available']:
+        if masks:
             weak_map[masks['sky']] = 1
             weak_map[masks['objects']] = 3
             weak_map[masks['faint']] = 5
+            weak_map[masks['seeds']] = 4
         return global_map, weak_map, dict(
             scientific_output=False, reference_scope='starless branch input',
             sampling='regular stride; no block averaging', stride=stride,
@@ -129,7 +131,8 @@ class StarlessZoneMap:
             weak = report['weak_structure']
             message = ('Masques fixes sur l’entrée ; classes superposables entre méthodes.'
                        if weak['available'] else
-                       'Détection spatiale indisponible : ' + weak['reason'])
+                       ('Zones détectées, évaluation indisponible : ' if weak.get('classification_available')
+                        else 'Détection spatiale indisponible : ') + weak['reason'])
             fig.suptitle(title + ' — zones utilisées pour les mesures GHS', color='white', fontsize=15)
             fig.text(.5, .025, f"{message}\nGrille {global_map.shape[1]} × {global_map.shape[0]}, pas {stride} pixels ; aucune correction locale.",
                      ha='center', color='#d7deea', fontsize=10)

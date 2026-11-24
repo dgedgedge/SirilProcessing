@@ -14,7 +14,98 @@ def scene() -> np.ndarray:
     """Construit une émission étendue faible sur ciel bruité avec un gradient doux."""
     y, x = np.indices((160, 160))
     noise = np.random.default_rng(73).normal(0, .001, x.shape)
-    return (.02+.001*x/160+.035*np.exp(-((x-80)**2+(y-80)**2)/250)+noise)
+    return (.02+.001*x/160+.035*np.exp(-((x-80)**2+(y-80)**2)/600)+noise)
+
+
+def test_hysteresis_keeps_weak_extensions_but_not_isolated_weak_regions() -> None:
+    """Le même signal faible est retenu seulement s'il rejoint une graine fiable."""
+    signal = np.zeros((80, 80))
+    signal[5:24, 5:30] = 2.
+    signal[8:18, 8:18] = 4.
+    signal[10:14, 10:14] = 8.
+    signal[45:60, 45:60] = 2.
+    signal[55:65, 5:15] = 2.
+    signal[60, 10] = 8.  # Un pic isolé ne forme pas une graine de quatre cellules.
+    masks = Weak.connected_regions(signal, np.ones(signal.shape, dtype=bool))
+    assert masks['seeds'][11, 11]
+    assert masks['middle'][9, 9]
+    assert masks['faint'][6, 6]
+    assert not masks['objects'][50, 50]
+    assert not masks['objects'][60, 10]
+    assert np.all(masks['faint'] <= masks['objects'])
+
+
+def test_hysteresis_does_not_jump_over_a_gap_below_weak_threshold() -> None:
+    """La connexité n'invente pas de pont de signal à travers le fond."""
+    signal = np.zeros((48, 48))
+    signal[8:15, 8:15] = 4.
+    signal[10:12, 10:12] = 8.
+    signal[20:30, 8:15] = 2.
+    masks = Weak.connected_regions(signal, np.ones(signal.shape, dtype=bool))
+    assert masks['objects'][10, 10]
+    assert not masks['faint'].any()
+    assert not masks['objects'][25, 10]
+
+
+def test_connectivity_uses_eight_neighbors_and_keeps_brightness_fluctuations() -> None:
+    """Une liaison diagonale avec un renforcement local reste une extension connectée."""
+    signal = np.zeros((48, 48))
+    signal[8:12, 8:12] = 8.
+    for i in range(12, 30):
+        signal[i, i] = 2. if i % 2 else 4.
+    masks = Weak.connected_regions(signal, np.ones(signal.shape, dtype=bool))
+    assert masks['objects'][29, 29]
+    assert masks['faint'][29, 29]
+    assert masks['middle'][28, 28]
+
+
+def test_bright_seed_support_is_required_but_not_imposed_on_extensions() -> None:
+    """Une zone significative hors P95 n'est pas une graine ; les extensions restent admises."""
+    signal = np.zeros((64, 64))
+    signal[5:20, 5:20] = 2.
+    signal[10:14, 10:14] = 8.
+    signal[40:55, 40:55] = 8.
+    allowed = np.zeros(signal.shape, dtype=bool)
+    allowed[10:14, 10:14] = True
+    masks = Weak.connected_regions(signal, np.ones(signal.shape, dtype=bool), seed_support=allowed)
+    assert masks['faint'][7, 7]
+    assert not masks['objects'][45, 45]
+
+
+def test_insufficient_weak_extension_is_unknown_but_keeps_diagnostic_masks() -> None:
+    """Une petite couronne détectée ne suffit pas à attribuer un score de qualité fiable."""
+    y, x = np.indices((160, 160))
+    image = (.02+.001*x/160+.035*np.exp(-((x-80)**2+(y-80)**2)/250)
+             + np.random.default_rng(73).normal(0, .001, x.shape))
+    result, masks = Weak.classify_grid(image)
+    assert not result['available'] and result['classification_available']
+    assert result['faint_count'] < Weak.MIN_PIXELS
+    assert masks['objects'].any()
+    measured = Weak.measure(image, image)
+    assert not measured['available'] and 'candidate' not in measured
+
+
+def test_each_retained_object_contains_a_bright_seed() -> None:
+    """Toute composante retenue possède une graine >P95, même avec des renforcements secondaires."""
+    from scipy.ndimage import label
+
+    source = scene()
+    audit, masks = Weak.classify_grid(source)
+    assert audit['available'] and audit['seed_quantile'] == .95
+    labels, count = label(masks['objects'], structure=np.ones((3, 3)))
+    assert count > 0
+    for identifier in range(1, count+1):
+        assert masks['seeds'][labels == identifier].any()
+    assert np.all(source[masks['seeds']] > audit['seed_luminance_threshold'])
+
+
+def test_old_and_connected_segmentations_are_not_compared() -> None:
+    """Une signature d'image identique ne suffit pas si la définition des zones a changé."""
+    measured = Weak.measure(scene(), scene())
+    legacy = deepcopy(measured)
+    legacy.pop('segmentation_version')
+    comparison = Weak.compare({'weak_structure': legacy}, {'weak_structure': measured})
+    assert not comparison['available'] and comparison['score_adjustment'] == 0
 
 
 def measurements(sky: float, faint: float, contrast: float, cnr: float) -> JSONReport:

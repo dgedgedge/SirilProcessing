@@ -27,18 +27,41 @@ un essai. La signature SHA-256 de la grille de référence, ses dimensions,
 les effectifs et les seuils doivent correspondre pour comparer deux mesures.
 Les phases qui commencent sur une autre image possèdent leur propre référence.
 
-Le détecteur utilise la luminosité du mode GHS `human` ou `even` :
+Le détecteur utilise la luminosité du mode GHS `human` ou `even`. Il combine
+une sélection de graines lumineuses et une croissance par hystérésis :
 
-- une tendance gaussienne lente de sigma 12 cellules ;
-- des excès positifs aux échelles 1, 2 et 4, au-dessus de trois sigmas de
-  bruit filtré estimés à partir des différences de voisins ;
-- des composantes d'au moins 16 cellules ;
-- les niveaux P25–P50 **à l'intérieur des objets détectés**, pour leurs parties faibles.
+1. Une tendance gaussienne lente de sigma 12 cellules sert de fond de référence.
+2. Aux échelles 1, 2 et 4, l'excès positif par rapport à cette tendance est
+   divisé par le bruit filtré estimé. Le maximum de ces significativités est
+   conservé par cellule. Les seuils sigma sont heuristiques : ils ne constituent
+   pas une probabilité calibrée sur du bruit corrélé ou un fond structuré.
+3. Les graines fortes doivent être **strictement au-dessus de P95** des
+   luminosités actives de la grille et atteindre au moins **6 sigma**.
+   Une graine doit contenir au moins **quatre cellules connexes**. P95 porte
+   ici sur la grille, pas sur les percentiles du champ complet de l'autre mesure.
+4. Les graines s'étendent d'abord dans le support **≥3 sigma**, puis dans le
+   support **≥1,5 sigma**, en connexité à huit voisins. Aucun trou sous le seuil
+   faible n'est franchi et aucune dilatation artificielle ne relie les objets.
+5. Les composantes finales doivent avoir au moins **16 cellules**. Les parties
+   faibles sont leurs cellules entre **1,5 inclus et 3 sigma exclus**, reliées
+   à une graine forte. La sélection par P25–P50 regroupant tous les objets
+   n'est plus utilisée.
+
+La contrainte est topologique, sans décroissance stricte pixel par pixel :
+une extension peut contenir des fluctuations, filaments ou renforcements
+secondaires. Une région faible isolée n'entre pas dans cette mesure, mais
+n'est pas déclarée bruit et n'est jamais supprimée de l'image. P95 seul ne
+suffit pas à prouver un signal réel ; il est combiné avec la significativité
+et la taille des graines. Ces constantes sont génériques et nécessitent une
+calibration sur plusieurs types de champs, sans réglage par nom d'objet.
 
 Le masque de ciel exclut les objets et leur voisinage dilaté, demande une
 proximité avec la tendance lente à deux sigmas et exclut le quart le plus
 lumineux de la référence. Les zéros inactifs ne deviennent pas du ciel.
-Au moins 32 cellules faibles et suffisamment de ciel sont nécessaires.
+Au moins 32 cellules faibles et suffisamment de ciel sont nécessaires pour
+calculer la qualité. Si une extension est détectée mais trop petite pour cette
+mesure, les masques restent disponibles sur la carte et le score reste
+indisponible ; aucun gain n'est inventé.
 Les filtres ne servent qu'à cette détection ; ils ne remplacent aucun pixel.
 
 Cette segmentation est une heuristique, pas une preuve de ciel vide ni une
@@ -154,9 +177,10 @@ Les trois panneaux montrent :
    pour P75–P95, rose pour > P95, gris pour les autres niveaux et noir pour les
    pixels inactifs. Si P25 et P75 sont confondus, un violet distinct signale
    le recouvrement fond/diffus au lieu de cacher l'un des masques.
-3. La détection spatiale : bleu pour le ciel admissible, orange pour les
-   structures hors parties faibles, vert pour les parties faibles P25–P50,
-   gris pour les cellules non classées et noir pour les inactives.
+3. La détection spatiale : rose pour les graines >P95 et ≥6 sigma, orange
+   pour le signal connecté ≥3 sigma hors graines, vert pour les extensions
+   connectées entre 1,5 et 3 sigma, bleu pour le ciel admissible, gris pour les
+   cellules non classées et noir pour les inactives.
 
 Les deux cartes sont séparées parce que leurs populations peuvent se
 recouvrir. Les percentiles globaux sont calculés sur le champ complet ; les
@@ -171,6 +195,14 @@ qui utilisent une nouvelle référence peuvent avoir d'autres masques : cette
 carte ne prétend pas représenter simultanément chaque phase de recherche.
 Le contexte étiré ne sert jamais à recalculer les masques de cette carte.
 Une détection indisponible est indiquée explicitement et ne produit pas de
-fausses classes de structures. Les essais synthétiques vérifient l'identité
+fausses classes de structures. Des masques détectés avec trop peu de cellules
+faibles pour le score restent affichés avec « évaluation indisponible ». Les essais synthétiques vérifient l'identité
 avec les masques du score, les quantiles confondus, la grille, le PNG et la
 conservation des sources (`tests/test_starless_zones.py`).
+
+Le rapport enregistre `segmentation_version: connected_hysteresis_v1`, les seuils
+sigma et P95, les effectifs de graines et de support intermédiaire, ainsi que
+les cellules faibles. `faint_reference_range` décrit désormais l'étendue des
+luminosités lissées de ces extensions, pas des quantiles. Les comparaisons
+entre méthodes de segmentation différentes sont indisponibles plutôt que de
+comparer des populations incompatibles.

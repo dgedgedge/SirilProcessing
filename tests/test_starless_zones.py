@@ -15,7 +15,7 @@ from lib.starless_zones import StarlessZoneMap
 def scene() -> np.ndarray:
     """Fournit une structure étendue faible sur fond bruité connu."""
     y, x = np.indices((160, 160))
-    light = (.02+.001*x/160+.035*np.exp(-((x-80)**2+(y-80)**2)/250)
+    light = (.02+.001*x/160+.035*np.exp(-((x-80)**2+(y-80)**2)/600)
              + np.random.default_rng(73).normal(0, .001, x.shape))
     return np.repeat(light[None], 3, axis=0).astype('f4')
 
@@ -32,7 +32,9 @@ def test_map_uses_the_actual_quality_masks_and_thresholds() -> None:
     assert report['weak_structure']['reference_sha256'] == measured['reference_sha256']
     np.testing.assert_array_equal(spatial == 1, masks['sky'])
     np.testing.assert_array_equal(spatial == 5, masks['faint'])
-    np.testing.assert_array_equal(np.isin(spatial, [3, 5]), masks['objects'])
+    np.testing.assert_array_equal(np.isin(spatial, [3, 4, 5]), masks['objects'])
+    np.testing.assert_array_equal(spatial == 4, masks['seeds'])
+    assert np.all(light[masks['seeds']] > report['weak_structure']['seed_luminance_threshold'])
     thresholds = report['thresholds']
     np.testing.assert_array_equal(np.isin(global_map, [1, 6]),
                                   (light > 1e-6) & (light <= thresholds['sky']))

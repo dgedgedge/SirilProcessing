@@ -9,7 +9,7 @@ import math
 import hashlib
 from types import ModuleType
 import numpy as np
-from scipy.ndimage import gaussian_filter, label, binary_dilation
+from scipy.ndimage import gaussian_filter, label, binary_dilation, binary_propagation
 
 from lib.type_defs import JSONReport
 
@@ -28,11 +28,15 @@ class WeakStructureQuality:
     MIN_COMPONENT_PIXELS = 16
     BACKGROUND_SCALE = 12.
     SIGNAL_SCALES = (1., 2., 4.)
-    SIGNAL_SIGMA = 3.
+    SEED_SIGMA = 6.
+    SEED_QUANTILE = .95
+    INTERMEDIATE_SIGMA = 3.
+    WEAK_SIGMA = 1.5
+    MIN_SEED_PIXELS = 4
+    SEGMENTATION_VERSION = 'connected_hysteresis_v1'
     SKY_SIGMA = 2.
     REGION_GRID = 4
     MIN_SKY_REGIONS = 4
-    FAINT_QUANTILES = (.25, .5)
     SKY_REFERENCE_QUANTILE = .75
     MIN_BACKGROUND_IMPROVEMENT = .01
     CNR_RETENTION = .98
@@ -43,6 +47,50 @@ class WeakStructureQuality:
     SHAPE_PENALTY_CAP = .25
     UNNECESSARY_SKY_WEIGHT = 2.
     COMPARABLE_QUALITY_TOLERANCE = .02
+
+    @classmethod
+    def connected_regions(
+        cls, significance: np.ndarray, active: np.ndarray,
+        *, seed_support: np.ndarray | None = None,
+    ) -> dict[str, np.ndarray]:
+        """Relie les faibles excès aux graines fortes par hystérésis à huit voisins.
+
+        significance est le maximum multi-échelle du signal normalisé par
+        son bruit estimé, en unités sigma. Les graines ≥6 sigma d'au moins
+        quatre cellules croissent dans le support ≥3 puis ≥1,5 sigma, sans
+        franchir de trou sous le seuil faible. Les composantes finales doivent
+        avoir au moins 16 cellules. Les parties faibles sont le support connecté
+        entre 1,5 et 3 sigma ; les îlots sans graine sont exclus du critère,
+        sans être déclarés bruit ni supprimés des pixels scientifiques.
+        seed_support restreint facultativement les graines aux pixels dont la
+        luminosité dépasse le percentile fort ; cette restriction ne s'applique
+        pas au support d'extension faible.
+        """
+        if (significance.ndim != 2 or not significance.size or significance.shape != active.shape
+                or not np.isfinite(significance).all() or active.dtype != bool):
+            raise ValueError('Significativité finie et masque actif booléen 2D requis')
+        if seed_support is not None and (seed_support.shape != active.shape or seed_support.dtype != bool):
+            raise ValueError('Masque des graines incompatible')
+        connectivity = np.ones((3, 3), dtype=bool)
+        strong = active & (significance >= cls.SEED_SIGMA)
+        if seed_support is not None:
+            strong &= seed_support
+        labels, _ = label(strong, structure=connectivity)
+        sizes = np.bincount(labels.ravel())
+        accepted = sizes >= cls.MIN_SEED_PIXELS
+        accepted[0] = False
+        seeds = accepted[labels]
+        middle_support = active & (significance >= cls.INTERMEDIATE_SIGMA)
+        weak_support = active & (significance >= cls.WEAK_SIGMA)
+        middle = binary_propagation(seeds, structure=connectivity, mask=middle_support)
+        objects = binary_propagation(middle, structure=connectivity, mask=weak_support)
+        labels, _ = label(objects, structure=connectivity)
+        sizes = np.bincount(labels.ravel())
+        accepted = sizes >= cls.MIN_COMPONENT_PIXELS
+        accepted[0] = False
+        objects = accepted[labels]
+        return dict(seeds=seeds & objects, middle=middle_support & objects, objects=objects,
+                    faint=objects & ~middle_support)
 
     @staticmethod
     def _noise(light: np.ndarray, sky: np.ndarray) -> float | None:
@@ -60,9 +108,10 @@ class WeakStructureQuality:
 
         reference est la grille de luminosité 2D déjà échantillonnée (au plus
         192 cellules par côté dans le chemin normal), finie dans [0,1]. Les
-        masques objects, sky et faint sont fixes sur cette référence et ne
-        modifient aucun pixel. Une classification insuffisante retourne un
-        audit indisponible et aucun masque utilisable, jamais un faux ciel.
+        masques seeds, middle, objects, sky et faint sont fixes sur cette
+        référence et ne modifient aucun pixel. Si les effectifs de mesure sont
+        insuffisants, les zones détectées restent visualisables mais l'audit
+        est indisponible pour le score. Sans objet, aucun masque n'est publié.
         """
         first = np.asarray(reference, dtype=np.float64)
         if (first.ndim != 2 or not first.size or not np.isfinite(first).all()
@@ -80,32 +129,39 @@ class WeakStructureQuality:
         if sigma <= 1e-10:
             return dict(unavailable, reason='UNMEASURABLE_REFERENCE_NOISE'), {}
         trend = gaussian_filter(first, cls.BACKGROUND_SCALE, mode='reflect')
-        objects = np.zeros(first.shape, dtype=bool)
+        significance = np.full(first.shape, -np.inf)
         smooth = gaussian_filter(first, 1., mode='reflect')
         for scale in cls.SIGNAL_SCALES:
             signal = gaussian_filter(first, scale, mode='reflect')-trend
-            objects |= signal > max(cls.SIGNAL_SIGMA*sigma/(np.sqrt(4*np.pi)*scale), 1e-7)
-        components, _ = label(objects)
-        sizes = np.bincount(components.ravel())
-        accepted = sizes >= cls.MIN_COMPONENT_PIXELS
-        accepted[0] = False
-        objects = accepted[components] & active
+            filtered_noise = max(sigma/(np.sqrt(4*np.pi)*scale), 1e-7)
+            significance = np.maximum(significance, signal/filtered_noise)
+        seed_level = float(np.quantile(first[active], cls.SEED_QUANTILE))
+        masks = cls.connected_regions(significance, active, seed_support=first > seed_level)
+        objects, faint = masks['objects'], masks['faint']
         sky = (active & ~binary_dilation(objects, iterations=2)
                & (abs(smooth-trend) <= max(cls.SKY_SIGMA*sigma/np.sqrt(4*np.pi), 1e-7))
                & (smooth <= np.quantile(smooth[active], cls.SKY_REFERENCE_QUANTILE)))
-        if min(np.count_nonzero(objects), np.count_nonzero(sky)) < 2*cls.MIN_PIXELS:
-            return unavailable, {}
-        low, high = np.quantile(smooth[objects], cls.FAINT_QUANTILES)
-        faint = objects & (smooth >= low) & (smooth <= high)
-        if np.count_nonzero(faint) < cls.MIN_PIXELS:
-            return unavailable, {}
-        result = dict(available=True, method='fixed multiscale positive structures; object P25–P50',
+        enough_regions = min(np.count_nonzero(objects), np.count_nonzero(sky)) >= 2*cls.MIN_PIXELS
+        enough_faint = np.count_nonzero(faint) >= cls.MIN_PIXELS
+        low = float(smooth[faint].min()) if faint.any() else None
+        high = float(smooth[faint].max()) if faint.any() else None
+        result = dict(available=bool(enough_regions and enough_faint),
+                      classification_available=bool(objects.any()),
+                      method='fixed multiscale significance; connected hysteresis',
+                      segmentation_version=cls.SEGMENTATION_VERSION,
+                      seed_quantile=cls.SEED_QUANTILE, seed_luminance_threshold=seed_level,
+                      sigma_thresholds=dict(seed=cls.SEED_SIGMA, intermediate=cls.INTERMEDIATE_SIGMA,
+                                            weak=cls.WEAK_SIGMA), connectivity=8,
+                      seed_count=int(masks['seeds'].sum()), intermediate_count=int(masks['middle'].sum()),
                       grid_shape=list(first.shape), stride=1, estimated=True,
                       classification='heuristic_not_proof_of_empty_sky',
                       reference_sha256=hashlib.sha256(first.tobytes()).hexdigest(),
                       object_count=int(objects.sum()), faint_count=int(faint.sum()),
-                      sky_count=int(sky.sum()), faint_reference_range=[float(low), float(high)])
-        return result, dict(objects=objects, sky=sky, faint=faint)
+                      sky_count=int(sky.sum()), faint_reference_range=[low, high])
+        if not result['available']:
+            result['reason'] = ('INSUFFICIENT_FIXED_REGIONS' if not enough_regions
+                                else 'INSUFFICIENT_FAINT_PIXELS')
+        return result, dict(**masks, sky=sky) if objects.any() else {}
 
     @classmethod
     def measure(cls, reference: np.ndarray, candidate: np.ndarray, xp: ModuleType = np) -> JSONReport:
@@ -114,7 +170,8 @@ class WeakStructureQuality:
         Les images sont des luminosités normalisées 2D, dans la même géométrie.
         Les objets proviennent d'un excès multi-échelle positif par rapport à
         une tendance lente. Les composantes de moins de 16 cellules sont exclues.
-        Le quartile 25–50 % à l'intérieur des objets définit leurs parties faibles.
+        Les parties faibles sont les excès de 1,5 à 3 sigma connectés à une
+        graine forte ; aucun quantile commun ne mélange les niveaux des objets.
         La tendance et le bruit sont des outils de détection, jamais des corrections.
         """
         if reference.ndim != 2 or reference.shape != candidate.shape:
@@ -165,7 +222,7 @@ class WeakStructureQuality:
         first_model, last_model = before.get('weak_structure', {}), after.get('weak_structure', {})
         if (not first_model.get('available') or not last_model.get('available')
                 or any(first_model.get(k) != last_model.get(k) for k in
-                       ('reference_sha256', 'grid_shape', 'object_count', 'faint_count',
+                       ('segmentation_version', 'reference_sha256', 'grid_shape', 'object_count', 'faint_count',
                         'sky_count', 'faint_reference_range'))):
             return dict(available=False, score_adjustment=0., sufficient=False)
         first, last = first_model['candidate'], last_model['candidate']
