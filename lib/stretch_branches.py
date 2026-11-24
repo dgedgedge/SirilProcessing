@@ -234,6 +234,13 @@ class StarlessStretchProcessor(LayerStretchProcessor):
         report.update(series)
         histogram = report_path.parent / f'{source.stem}_ghs_histograms.png'
         histogram_figure(report, histogram)
+        from lib.starless_zones import StarlessZoneMap
+
+        report['zones_map'] = StarlessZoneMap.write(
+            data, report_path.parent / 'starless_zones.png',
+            color_mode=getattr(args, 'ghs_color_mode', 'human'), rendered=output,
+            title=str(fits.getheader(source).get('OBJECT', source.stem)),
+        )
         report.update(output_image=str(image), output_jpeg=str(jpeg),
                       histogram_path=str(histogram), starless_image=str(image))
         return output, report

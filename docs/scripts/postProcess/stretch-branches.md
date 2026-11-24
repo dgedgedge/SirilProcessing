@@ -71,3 +71,8 @@ Les erreurs de données, moteur et écriture sont propagées. Cette indépendanc
 ne garantit pas la fidélité de la séparation StarNet ni l’absence de halos.
 Les validations synthétiques avec StarNet simulé ne remplacent pas une nouvelle
 validation complète dans Siril sur M31 ou M33.
+
+La branche starless publie aussi une [carte colorée des zones de mesure](ghs-weak-structures.md#zones-map)
+dans `starless_zones.png`. Elle accompagne les histogrammes, sans modifier
+la couche ni les décisions de l'optimiseur. `zones_map` dans son rapport
+décrit les classes, seuils et limites de résolution.

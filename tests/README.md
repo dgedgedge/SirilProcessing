@@ -507,6 +507,11 @@ avec les bornes 999/1 000 et 69,9/70 % sur de vrais catalogues synthétiques.
 Les tests AR vérifient que le seuil relatif local ne réintroduit pas un refus
 quand la cohorte globale atteint 1 000 paires.
 
+`test_starless_zones.py` vérifie les couleurs par identité des masques avec
+les mesures GHS, les quantiles globaux et leurs recouvrements, le pas régulier,
+la disponibilité, le PNG et la conservation des sources. Le test autonome
+de branche starless vérifie également la publication de la carte et de son audit.
+
 `test_stellar_visibility_selection.py` vérifie que l'objectif de visibilité
 modifie réellement le rendu global : les cibles 20 % et 70 % produisent des
 pixels et taux différents. Les tests couvrent la limite de profils et la jupe

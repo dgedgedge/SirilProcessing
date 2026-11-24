@@ -15,6 +15,9 @@ et des lots NumPy/PyTorch, selon la politique CPU/GPU commune. Les filtres et
 statistiques partagent un [moteur PyTorch CUDA/MPS](torch-compute.md).
 Les [temps de traitement](timings.md) sont journalisés en INFO et enregistrés
 dans les rapports pour auditer les préparations, moteurs et contrôles de restauration.
+La [carte des zones GHS](ghs-weak-structures.md#zones-map)
+montre en couleurs les populations de luminosité et les structures détectées
+sur l'entrée starless, dans `starless_zones.png`.
 La [qualité astrophotographique](quality.md) utilise par défaut des masques fixes,
 des mesures de bruit avec incertitude et des diagnostics du signal diffus.
 `--quality-mode legacy --no-restoration-compare-chains` retrouve les métriques

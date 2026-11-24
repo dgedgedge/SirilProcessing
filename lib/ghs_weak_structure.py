@@ -55,6 +55,59 @@ class WeakStructureQuality:
         return float(value) if value > 1e-10 else None
 
     @classmethod
+    def classify_grid(cls, reference: np.ndarray) -> tuple[JSONReport, dict[str, np.ndarray]]:
+        """Expose les masques exacts utilisés par les mesures sur une grille CPU.
+
+        reference est la grille de luminosité 2D déjà échantillonnée (au plus
+        192 cellules par côté dans le chemin normal), finie dans [0,1]. Les
+        masques objects, sky et faint sont fixes sur cette référence et ne
+        modifient aucun pixel. Une classification insuffisante retourne un
+        audit indisponible et aucun masque utilisable, jamais un faux ciel.
+        """
+        first = np.asarray(reference, dtype=np.float64)
+        if (first.ndim != 2 or not first.size or not np.isfinite(first).all()
+                or first.min() < 0 or first.max() > 1+1e-6):
+            raise ValueError('Grille de luminosité GHS invalide')
+        unavailable = dict(available=False, reason='INSUFFICIENT_FIXED_REGIONS',
+                           grid_shape=list(first.shape), stride=1, estimated=True)
+        if min(first.shape) < 2*cls.BACKGROUND_SCALE:
+            return unavailable, {}
+        active = first > 1e-6
+        if np.count_nonzero(active) < 4*cls.MIN_PIXELS:
+            return unavailable, {}
+        difference = np.diff(first, axis=1)
+        sigma = float(1.4826*np.median(abs(difference-np.median(difference)))/np.sqrt(2))
+        if sigma <= 1e-10:
+            return dict(unavailable, reason='UNMEASURABLE_REFERENCE_NOISE'), {}
+        trend = gaussian_filter(first, cls.BACKGROUND_SCALE, mode='reflect')
+        objects = np.zeros(first.shape, dtype=bool)
+        smooth = gaussian_filter(first, 1., mode='reflect')
+        for scale in cls.SIGNAL_SCALES:
+            signal = gaussian_filter(first, scale, mode='reflect')-trend
+            objects |= signal > max(cls.SIGNAL_SIGMA*sigma/(np.sqrt(4*np.pi)*scale), 1e-7)
+        components, _ = label(objects)
+        sizes = np.bincount(components.ravel())
+        accepted = sizes >= cls.MIN_COMPONENT_PIXELS
+        accepted[0] = False
+        objects = accepted[components] & active
+        sky = (active & ~binary_dilation(objects, iterations=2)
+               & (abs(smooth-trend) <= max(cls.SKY_SIGMA*sigma/np.sqrt(4*np.pi), 1e-7))
+               & (smooth <= np.quantile(smooth[active], cls.SKY_REFERENCE_QUANTILE)))
+        if min(np.count_nonzero(objects), np.count_nonzero(sky)) < 2*cls.MIN_PIXELS:
+            return unavailable, {}
+        low, high = np.quantile(smooth[objects], cls.FAINT_QUANTILES)
+        faint = objects & (smooth >= low) & (smooth <= high)
+        if np.count_nonzero(faint) < cls.MIN_PIXELS:
+            return unavailable, {}
+        result = dict(available=True, method='fixed multiscale positive structures; object P25–P50',
+                      grid_shape=list(first.shape), stride=1, estimated=True,
+                      classification='heuristic_not_proof_of_empty_sky',
+                      reference_sha256=hashlib.sha256(first.tobytes()).hexdigest(),
+                      object_count=int(objects.sum()), faint_count=int(faint.sum()),
+                      sky_count=int(sky.sum()), faint_reference_range=[float(low), float(high)])
+        return result, dict(objects=objects, sky=sky, faint=faint)
+
+    @classmethod
     def measure(cls, reference: np.ndarray, candidate: np.ndarray, xp: ModuleType = np) -> JSONReport:
         """Mesure luminosités, contraste relatif, CNR et ciel régional sur une grille.
 
@@ -75,43 +128,11 @@ class WeakStructureQuality:
         if (not np.isfinite(first).all() or not np.isfinite(last).all()
                 or min(first.min(), last.min()) < 0 or max(first.max(), last.max()) > 1+1e-6):
             raise ValueError('Luminosités GHS invalides')
-        unavailable = dict(available=False, reason='INSUFFICIENT_FIXED_REGIONS',
-                           grid_shape=list(first.shape), stride=stride, estimated=True)
-        if min(first.shape) < 2*cls.BACKGROUND_SCALE:
-            return unavailable
-        active = first > 1e-6
-        if np.count_nonzero(active) < 4*cls.MIN_PIXELS:
-            return unavailable
-        difference = np.diff(first, axis=1)
-        sigma = float(1.4826*np.median(abs(difference-np.median(difference)))/np.sqrt(2))
-        if sigma <= 1e-10:
-            return dict(unavailable, reason='UNMEASURABLE_REFERENCE_NOISE')
-        trend = gaussian_filter(first, cls.BACKGROUND_SCALE, mode='reflect')
-        objects = np.zeros(first.shape, dtype=bool)
-        smooth = gaussian_filter(first, 1., mode='reflect')
-        for scale in cls.SIGNAL_SCALES:
-            signal = gaussian_filter(first, scale, mode='reflect')-trend
-            objects |= signal > max(cls.SIGNAL_SIGMA*sigma/(np.sqrt(4*np.pi)*scale), 1e-7)
-        components, _ = label(objects)
-        sizes = np.bincount(components.ravel())
-        accepted = sizes >= cls.MIN_COMPONENT_PIXELS
-        accepted[0] = False
-        objects = accepted[components] & active
-        sky = (active & ~binary_dilation(objects, iterations=2)
-               & (abs(smooth-trend) <= max(cls.SKY_SIGMA*sigma/np.sqrt(4*np.pi), 1e-7))
-               & (smooth <= np.quantile(smooth[active], cls.SKY_REFERENCE_QUANTILE)))
-        if min(np.count_nonzero(objects), np.count_nonzero(sky)) < 2*cls.MIN_PIXELS:
-            return unavailable
-        low, high = np.quantile(smooth[objects], cls.FAINT_QUANTILES)
-        faint = objects & (smooth >= low) & (smooth <= high)
-        if np.count_nonzero(faint) < cls.MIN_PIXELS:
-            return unavailable
-        result = dict(available=True, method='fixed multiscale positive structures; object P25–P50',
-                      grid_shape=list(first.shape), stride=stride, estimated=True,
-                      classification='heuristic_not_proof_of_empty_sky',
-                      reference_sha256=hashlib.sha256(first.tobytes()).hexdigest(),
-                      object_count=int(objects.sum()), faint_count=int(faint.sum()),
-                      sky_count=int(sky.sum()), faint_reference_range=[float(low), float(high)])
+        result, masks = cls.classify_grid(first)
+        result['stride'] = stride
+        if not result['available']:
+            return result
+        sky, faint = masks['sky'], masks['faint']
         for name, plane in [('reference', first), ('candidate', last)]:
             background = float(np.median(plane[sky]))
             object_level = float(np.median(plane[faint]))

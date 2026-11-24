@@ -132,3 +132,45 @@ et de noir artificiel, les références incompatibles, les champs uniformes,
 le repli historique et la protection contre les nouvelles bosses. Les essais
 sur recettes réelles sont des relectures sur grille ; une validation sur
 images complètes reste distincte d'une comparaison de recettes archivées.
+
+<a id="zones-map"></a>
+
+## 1.7. Carte colorée des populations de mesure
+
+Chaque nouveau rendu de la branche starless produit `starless_zones.png`,
+dans `06_autoghs/03_ghs_starless/` pour une sortie numérotée. Le rapport
+`starless.json` contient `zones_map`, avec chemin du PNG, seuils, effectifs,
+pas de grille, disponibilité et signature de la référence spatiale.
+Le module `lib.starless_zones.StarlessZoneMap` expose `classify(data, color_mode)`
+et `write(data, destination, rendered=..., color_mode=...)`. Les entrées sont
+des RGB normalisés ; aucun FITS n'est modifié. La carte est un diagnostic,
+pas un masque appliqué à l'étirement et pas une segmentation astrophysique.
+
+Les trois panneaux montrent :
+
+1. Le rendu starless retenu comme contexte. Sans rendu fourni à l'API, un
+   aperçu asinh global sert uniquement à la visualisation.
+2. Les classes de luminosité de référence : bleu pour le fond ≤ P25, orange
+   pour P75–P95, rose pour > P95, gris pour les autres niveaux et noir pour les
+   pixels inactifs. Si P25 et P75 sont confondus, un violet distinct signale
+   le recouvrement fond/diffus au lieu de cacher l'un des masques.
+3. La détection spatiale : bleu pour le ciel admissible, orange pour les
+   structures hors parties faibles, vert pour les parties faibles P25–P50,
+   gris pour les cellules non classées et noir pour les inactives.
+
+Les deux cartes sont séparées parce que leurs populations peuvent se
+recouvrir. Les percentiles globaux sont calculés sur le champ complet ; les
+structures utilisent la grille régulière et le moteur exact des mesures
+`WeakStructureQuality.classify_grid`. La grille d'au plus 192 cellules sur
+le plus grand côté est affichée sans interpolation. Son pas et sa taille
+sont inscrits sur le PNG ; ce n'est pas une carte à résolution native.
+
+La référence représentée est **l'entrée de la branche starless**, après
+compensation éventuelle des résidus négatifs de StarNet. Les phases internes
+qui utilisent une nouvelle référence peuvent avoir d'autres masques : cette
+carte ne prétend pas représenter simultanément chaque phase de recherche.
+Le contexte étiré ne sert jamais à recalculer les masques de cette carte.
+Une détection indisponible est indiquée explicitement et ne produit pas de
+fausses classes de structures. Les essais synthétiques vérifient l'identité
+avec les masques du score, les quantiles confondus, la grille, le PNG et la
+conservation des sources (`tests/test_starless_zones.py`).
