@@ -217,6 +217,7 @@ class FinalImageAnnotator(processor):
     def draw_panel(image: Image.Image, lines: list[str]) -> tuple[int, int, int, int]:
         """Compose un encart ajusté automatiquement, sans déborder de l'image.
 
+        Les lignes plus longues privilégient un encart large et peu haut.
         La police et les retours à la ligne dépendent des dimensions. La police
         DejaVu livrée avec Matplotlib évite une dépendance aux fontes système.
         Retourne le rectangle du panneau en pixels écran (gauche, haut, droite, bas).
@@ -226,10 +227,12 @@ class FinalImageAnnotator(processor):
         font_path = Path(get_data_path()) / "fonts/ttf/DejaVuSans.ttf"
         margin = max(4, min(image.size) // 60)
         available_width = image.width - 4 * margin
-        size = max(8, min(image.size) // 70)
+        size = max(8, min(image.size) // 78)
         while True:
             font = ImageFont.truetype(str(font_path), size)
-            columns = max(8, int(available_width / font.getlength("M")))
+            # Un chiffre représente mieux la largeur du texte courant que M ;
+            # le contrôle du rectangle ci-dessous protège les lignes très larges.
+            columns = max(8, int(available_width / font.getlength("0")))
             wrapped = [part for line in lines for part in textwrap.wrap(
                 line, width=columns, break_long_words=True, break_on_hyphens=False,
             )]

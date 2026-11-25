@@ -161,7 +161,9 @@ rapports associés au FITS qu'il reçoit ; il ne recherche pas un fichier par
 supposition à partir du nom d'un export final.
 
 
-La taille de police dépend de la plus petite dimension de l'image. Le texte
+La taille initiale de police vaut la plus petite dimension de l'image divisée
+par 78 (partie entière, minimum 8 pixels). Les lignes plus longues privilégient
+un encart plus large et moins haut. Le texte
 revient automatiquement à la ligne et la police diminue si nécessaire pour
 maintenir l'encart dans le champ. Le fond sombre translucide améliore la lecture.
 DejaVu Sans est fourni par Matplotlib, déjà requis ; aucune fonte système ni
