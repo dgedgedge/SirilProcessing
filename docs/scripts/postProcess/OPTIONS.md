@@ -113,6 +113,10 @@ et de contraste brillant sont mesurés séparément. Épaulement, signe des
 pentes, écrêtage, cœur, couleurs et bruit restent des gardes obligatoires.
 Les inversions d’ordre et déséquilibres excessifs des ratios coûtent fortement
 dans le classement final.
+`--ghs-weak-sigma` (défaut `1.1`, de `1` à `3` inclus) règle le seuil
+d'extension des [structures faibles connectées](ghs-weak-structures.md), en
+unités de bruit. La clé de configuration est `ghs_weak_sigma`. Les cartes et
+les évaluations utilisent le même seuil ; l'étirement reste global.
 `--ghs-post-blackpoint rise` recale le BP après chaque courbe, avant conformité,
 en mode `piecewise` ; `off` désactive ce recalage. Voir
 [le pied de montée et son budget cumulatif](ghs-blackpoint.md).

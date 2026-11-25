@@ -610,6 +610,7 @@ class GHSOptimizer(processor):
         reference_shape: JSONReport | None = None,
         trial_images: HistogramDiagnostics | None = None,
         blackpoint_reference: np.ndarray | None = None,
+        weak_sigma: float = 1.1,
     ) -> tuple[np.ndarray, JSONReport]:
         """Délègue la dernière passe à la recherche D/B/SP/HP protégée.
 
@@ -626,6 +627,7 @@ class GHSOptimizer(processor):
         trial_images capture les finalistes sur disque si l'export est activé.
         blackpoint_reference transmet les canaux positifs initiaux, pour un
         budget de perte commun aux phases du rendu.
+        weak_sigma règle la détection faible connectée dans [1,3], défaut 1,1.
         Le moteur conserve l'identité si aucun candidat n'améliore le signal
         diffus sous contraintes. Les erreurs de données/backend sont propagées.
         Voir docs/scripts/postProcess/ghs-highlight-protection.md.
@@ -635,7 +637,7 @@ class GHSOptimizer(processor):
         output, report = ProtectedGHSFinalizer().search(
             data, analyzer, backend, strength, mode, retention, stars, headroom, rms_weight,
             shape_options, reference_shape, trial_images=trial_images,
-            blackpoint_reference=blackpoint_reference,
+            blackpoint_reference=blackpoint_reference, weak_sigma=weak_sigma,
         )
         parameters = report["parameters"]
         LOGGER.info(
@@ -1216,6 +1218,7 @@ class GHSOptimizer(processor):
             current, analyzer, backend, options.ghs_final_strength,
             options.ghs_final_mode, options.ghs_highlight_retention,
             rms_weight=options.ghs_log_rms_weight,
+            weak_sigma=options.ghs_weak_sigma,
             shape_options=(options if options.ghs_histogram_model == 'piecewise' else None),
             reference_shape=reference_shape,
             trial_images=trial_images,

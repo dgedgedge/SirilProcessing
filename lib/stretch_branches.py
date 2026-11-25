@@ -239,6 +239,7 @@ class StarlessStretchProcessor(LayerStretchProcessor):
         report['zones_map'] = StarlessZoneMap.write(
             data, report_path.parent / 'starless_zones.png',
             color_mode=getattr(args, 'ghs_color_mode', 'human'), rendered=output,
+            weak_sigma=getattr(args, 'ghs_weak_sigma', 1.1),
             title=str(fits.getheader(source).get('OBJECT', source.stem)),
         )
         report.update(output_image=str(image), output_jpeg=str(jpeg),

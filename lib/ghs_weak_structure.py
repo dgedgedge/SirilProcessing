@@ -6,6 +6,8 @@ n'est effectuée. Voir docs/scripts/postProcess/ghs-weak-structures.md.
 from __future__ import annotations
 
 import math
+import argparse
+from copy import deepcopy
 import hashlib
 from types import ModuleType
 import numpy as np
@@ -31,9 +33,11 @@ class WeakStructureQuality:
     SEED_SIGMA = 6.
     SEED_QUANTILE = .95
     INTERMEDIATE_SIGMA = 3.
-    WEAK_SIGMA = 1.5
+    WEAK_SIGMA = 1.1
     MIN_SEED_PIXELS = 4
-    SEGMENTATION_VERSION = 'connected_hysteresis_v1'
+    SEGMENTATION_VERSION = 'connected_hysteresis_v5'
+    FALLBACK_FAINT_FRACTION = .01
+    SKY_EXCLUSION_ITERATIONS = 2
     SKY_SIGMA = 2.
     REGION_GRID = 4
     MIN_SKY_REGIONS = 4
@@ -49,23 +53,39 @@ class WeakStructureQuality:
     COMPARABLE_QUALITY_TOLERANCE = .02
 
     @classmethod
+    def add_arguments(cls, parser: argparse.ArgumentParser) -> None:
+        """Déclare le seuil faible en unités de bruit, persistant entre les appels."""
+        parser.add_argument('--ghs-weak-sigma', type=float, default=cls.WEAK_SIGMA,
+                            help='Seuil des extensions faibles connectées, en sigma '
+                                 '(défaut 1,1 ; [1,3])')
+
+    @staticmethod
+    def validate_sigma(value: float) -> float:
+        """Retourne un seuil fini entre 1 et 3 inclus ; refuse booléens et hors domaine."""
+        if isinstance(value, (bool, np.bool_)) or not math.isfinite(value) or not 1 <= value <= 3:
+            raise ValueError('ghs-weak-sigma doit être compris entre 1 et 3')
+        return float(value)
+
+    @classmethod
     def connected_regions(
         cls, significance: np.ndarray, active: np.ndarray,
-        *, seed_support: np.ndarray | None = None,
+        *, seed_support: np.ndarray | None = None, weak_sigma: float = WEAK_SIGMA,
     ) -> dict[str, np.ndarray]:
         """Relie les faibles excès aux graines fortes par hystérésis à huit voisins.
 
         significance est le maximum multi-échelle du signal normalisé par
         son bruit estimé, en unités sigma. Les graines ≥6 sigma d'au moins
-        quatre cellules croissent dans le support ≥3 puis ≥1,5 sigma, sans
+        quatre cellules croissent dans le support ≥3 puis ≥weak_sigma, sans
         franchir de trou sous le seuil faible. Les composantes finales doivent
         avoir au moins 16 cellules. Les parties faibles sont le support connecté
-        entre 1,5 et 3 sigma ; les îlots sans graine sont exclus du critère,
+        entre weak_sigma (défaut 1,1 ; [1,3]) et 3 sigma ; les îlots sans graine
+        sont exclus du critère,
         sans être déclarés bruit ni supprimés des pixels scientifiques.
         seed_support restreint facultativement les graines aux pixels dont la
         luminosité dépasse le percentile fort ; cette restriction ne s'applique
         pas au support d'extension faible.
         """
+        weak_sigma = cls.validate_sigma(weak_sigma)
         if (significance.ndim != 2 or not significance.size or significance.shape != active.shape
                 or not np.isfinite(significance).all() or active.dtype != bool):
             raise ValueError('Significativité finie et masque actif booléen 2D requis')
@@ -81,7 +101,7 @@ class WeakStructureQuality:
         accepted[0] = False
         seeds = accepted[labels]
         middle_support = active & (significance >= cls.INTERMEDIATE_SIGMA)
-        weak_support = active & (significance >= cls.WEAK_SIGMA)
+        weak_support = active & (significance >= weak_sigma)
         middle = binary_propagation(seeds, structure=connectivity, mask=middle_support)
         objects = binary_propagation(middle, structure=connectivity, mask=weak_support)
         labels, _ = label(objects, structure=connectivity)
@@ -91,6 +111,58 @@ class WeakStructureQuality:
         objects = accepted[labels]
         return dict(seeds=seeds & objects, middle=middle_support & objects, objects=objects,
                     faint=objects & ~middle_support)
+
+    @classmethod
+    def admit_margin_regions(
+        cls, significance: np.ndarray, active: np.ndarray,
+        masks: dict[str, np.ndarray], *, weak_sigma: float = WEAK_SIGMA,
+        sky_candidates: np.ndarray | None = None,
+    ) -> dict[str, np.ndarray]:
+        """Propage les admissions amorcées dans la marge figée, puis rattache le faible.
+
+        La marge est la dilatation à quatre voisins, deux itérations, des objets
+        initiaux. Les cellules jaunes S>weak_sigma de cette marge amorcent une
+        propagation à huit voisins dans leur composante jaune entière, puis
+        dans le support faible S>=weak_sigma connecté. Les trous sous seuil,
+        cellules inactives et le ciel figé arrêtent la propagation. Aucune
+        nouvelle dilatation n'est faite après admission. sky_candidates fournit
+        les conditions photométriques du ciel avant exclusion spatiale ; None
+        signifie qu'aucune cellule n'est éligible au ciel pour cet appel.
+        Le masque exclusion reste initial. Les cellules admises <3 sigma rejoignent faint,
+        les autres middle ; elles ne créent pas de nouvelles graines.
+        Les tableaux d'entrée ne sont pas modifiés. Géométries incompatibles
+        ou valeurs de significativité invalides lèvent ValueError.
+        """
+        weak_sigma = cls.validate_sigma(weak_sigma)
+        if 'exclusion' in masks:
+            raise ValueError('La marge des structures faibles est déjà préparée')
+        if (significance.ndim != 2 or not significance.size
+                or significance.shape != active.shape or active.dtype != bool
+                or not np.isfinite(significance).all()
+                or any(masks[name].shape != active.shape or masks[name].dtype != bool
+                       for name in ('objects', 'seeds', 'middle', 'faint'))):
+            raise ValueError('Géométrie de la marge des structures faibles incompatible')
+        initial = masks['objects'].copy()
+        exclusion = binary_dilation(initial, iterations=cls.SKY_EXCLUSION_ITERATIONS)
+        if sky_candidates is not None and (
+                sky_candidates.shape != active.shape or sky_candidates.dtype != bool):
+            raise ValueError('Masque du ciel des structures faibles incompatible')
+        sky = (active & sky_candidates & ~exclusion if sky_candidates is not None
+               else np.zeros_like(active))
+        yellow = active & ~initial & ~sky & (significance > weak_sigma)
+        starts = exclusion & yellow
+        connectivity = np.ones((3, 3), dtype=bool)
+        selected = binary_propagation(starts, structure=connectivity, mask=yellow)
+        support = initial | (active & ~sky & (significance >= weak_sigma))
+        objects = binary_propagation(initial | selected, structure=connectivity, mask=support)
+        admitted = objects & ~initial
+        return dict(
+            **{key: value for key, value in masks.items() if key not in ('objects', 'middle', 'faint')},
+            initial_objects=initial, exclusion=exclusion, admitted=admitted, sky=sky,
+            admission_starts=starts, objects=objects,
+            middle=masks['middle'] | (admitted & (significance >= cls.INTERMEDIATE_SIGMA)),
+            faint=masks['faint'] | (admitted & (significance < cls.INTERMEDIATE_SIGMA)),
+        )
 
     @staticmethod
     def _noise(light: np.ndarray, sky: np.ndarray) -> float | None:
@@ -103,16 +175,55 @@ class WeakStructureQuality:
         return float(value) if value > 1e-10 else None
 
     @classmethod
-    def classify_grid(cls, reference: np.ndarray) -> tuple[JSONReport, dict[str, np.ndarray]]:
+    def faint_reference_regions(
+        cls, reference: np.ndarray, objects: np.ndarray, detected: np.ndarray,
+    ) -> tuple[np.ndarray, JSONReport]:
+        """Choisit le faible détecté ou le centile inférieur du signal retenu.
+
+        Avec moins de MIN_PIXELS cellules détectées, prend exactement
+        ceil(1 % de l'effectif objects), au moins une cellule si objects existe,
+        par luminosité de référence croissante. Les égalités sont départagées
+        par l'ordre spatial stable. Aucun minimum de 32 n'est réappliqué au
+        repli. Le masque retourné est indépendant et figé sur cette référence.
+        Les tableaux doivent partager une géométrie 2D, les masques être booléens
+        et detected inclus dans objects ; les valeurs doivent être finies.
+        """
+        if (reference.ndim != 2 or reference.shape != objects.shape
+                or objects.shape != detected.shape or objects.dtype != bool
+                or detected.dtype != bool or not np.isfinite(reference).all()
+                or (detected & ~objects).any()):
+            raise ValueError('Régions de référence faible incompatibles')
+        count = int(detected.sum())
+        if count >= cls.MIN_PIXELS:
+            return detected.copy(), dict(mode='detected_weak', detected_count=count)
+        indices = np.flatnonzero(objects)
+        mask = np.zeros_like(objects)
+        size = math.ceil(indices.size*cls.FALLBACK_FAINT_FRACTION)
+        if size:
+            order = np.argsort(reference.ravel()[indices], kind='stable')
+            mask.ravel()[indices[order[:size]]] = True
+        return mask, dict(mode='lowest_percentile', fraction=cls.FALLBACK_FAINT_FRACTION,
+                          detected_count=count, selected_count=size,
+                          ranking='reference_luminance; stable_spatial_ties')
+
+    @classmethod
+    def classify_grid(
+        cls, reference: np.ndarray, *, weak_sigma: float = WEAK_SIGMA,
+    ) -> tuple[JSONReport, dict[str, np.ndarray]]:
         """Expose les masques exacts utilisés par les mesures sur une grille CPU.
 
         reference est la grille de luminosité 2D déjà échantillonnée (au plus
         192 cellules par côté dans le chemin normal), finie dans [0,1]. Les
         masques seeds, middle, objects, sky et faint sont fixes sur cette
-        référence et ne modifient aucun pixel. Si les effectifs de mesure sont
-        insuffisants, les zones détectées restent visualisables mais l'audit
-        est indisponible pour le score. Sans objet, aucun masque n'est publié.
+        référence et ne modifient aucun pixel. Si les effectifs des régions
+        faibles sont insuffisants, le centile inférieur du signal retenu sert
+        de repli. Sans assez d'objets ou de ciel, l'audit reste indisponible.
+        La bande diagnostique 1<S<weak_sigma
+        reste publiée si elle existe, même sans objet connecté ; elle ne sert
+        pas aux mesures de qualité.
+        weak_sigma est le seuil faible, fini dans [1,3], en unités de bruit.
         """
+        weak_sigma = cls.validate_sigma(weak_sigma)
         first = np.asarray(reference, dtype=np.float64)
         if (first.ndim != 2 or not first.size or not np.isfinite(first).all()
                 or first.min() < 0 or first.max() > 1+1e-6):
@@ -136,79 +247,75 @@ class WeakStructureQuality:
             filtered_noise = max(sigma/(np.sqrt(4*np.pi)*scale), 1e-7)
             significance = np.maximum(significance, signal/filtered_noise)
         seed_level = float(np.quantile(first[active], cls.SEED_QUANTILE))
-        masks = cls.connected_regions(significance, active, seed_support=first > seed_level)
+        masks = cls.connected_regions(significance, active, seed_support=first > seed_level,
+                                      weak_sigma=weak_sigma)
+        sky_candidates = (active
+                          & (abs(smooth-trend) <= max(cls.SKY_SIGMA*sigma/np.sqrt(4*np.pi), 1e-7))
+                          & (smooth <= np.quantile(smooth[active], cls.SKY_REFERENCE_QUANTILE)))
+        masks = cls.admit_margin_regions(
+            significance, active, masks, weak_sigma=weak_sigma, sky_candidates=sky_candidates,
+        )
+        subthreshold = active & (significance > 1.) & (significance < weak_sigma)
         objects, faint = masks['objects'], masks['faint']
-        sky = (active & ~binary_dilation(objects, iterations=2)
-               & (abs(smooth-trend) <= max(cls.SKY_SIGMA*sigma/np.sqrt(4*np.pi), 1e-7))
-               & (smooth <= np.quantile(smooth[active], cls.SKY_REFERENCE_QUANTILE)))
+        masks['detected_faint'] = faint
+        faint, faint_selection = cls.faint_reference_regions(first, objects, faint)
+        masks['faint'] = faint
+        sky = masks['sky']
         enough_regions = min(np.count_nonzero(objects), np.count_nonzero(sky)) >= 2*cls.MIN_PIXELS
-        enough_faint = np.count_nonzero(faint) >= cls.MIN_PIXELS
+        enough_faint = bool(faint.any())
         low = float(smooth[faint].min()) if faint.any() else None
         high = float(smooth[faint].max()) if faint.any() else None
         result = dict(available=bool(enough_regions and enough_faint),
                       classification_available=bool(objects.any()),
-                      method='fixed multiscale significance; connected hysteresis',
+                      method='fixed multiscale significance; hysteresis and frozen margin admission',
                       segmentation_version=cls.SEGMENTATION_VERSION,
                       seed_quantile=cls.SEED_QUANTILE, seed_luminance_threshold=seed_level,
                       sigma_thresholds=dict(seed=cls.SEED_SIGMA, intermediate=cls.INTERMEDIATE_SIGMA,
-                                            weak=cls.WEAK_SIGMA), connectivity=8,
+                                            weak=weak_sigma), connectivity=8,
                       seed_count=int(masks['seeds'].sum()), intermediate_count=int(masks['middle'].sum()),
                       grid_shape=list(first.shape), stride=1, estimated=True,
                       classification='heuristic_not_proof_of_empty_sky',
                       reference_sha256=hashlib.sha256(first.tobytes()).hexdigest(),
                       object_count=int(objects.sum()), faint_count=int(faint.sum()),
+                      faint_selection=faint_selection,
+                      initial_object_count=int(masks['initial_objects'].sum()),
+                      admitted_count=int(masks['admitted'].sum()),
+                      admission_start_count=int(masks['admission_starts'].sum()),
+                      exclusion_count=int(masks['exclusion'].sum()),
+                      subthreshold_count=int(subthreshold.sum()),
                       sky_count=int(sky.sum()), faint_reference_range=[low, high])
         if not result['available']:
             result['reason'] = ('INSUFFICIENT_FIXED_REGIONS' if not enough_regions
                                 else 'INSUFFICIENT_FAINT_PIXELS')
-        return result, dict(**masks, sky=sky) if objects.any() else {}
+        return result, dict(
+            **masks, subthreshold=subthreshold,
+            below_one=active & (significance < 1.),
+            above_threshold=active & (significance > weak_sigma),
+            on_threshold=active & ((significance == 1.) | (significance == weak_sigma)),
+        )
 
     @classmethod
-    def measure(cls, reference: np.ndarray, candidate: np.ndarray, xp: ModuleType = np) -> JSONReport:
+    def measure(
+        cls, reference: np.ndarray, candidate: np.ndarray, xp: ModuleType = np,
+        *, weak_sigma: float = WEAK_SIGMA,
+        evaluator: WeakStructureEvaluator | None = None,
+    ) -> JSONReport:
         """Mesure luminosités, contraste relatif, CNR et ciel régional sur une grille.
 
         Les images sont des luminosités normalisées 2D, dans la même géométrie.
         Les objets proviennent d'un excès multi-échelle positif par rapport à
         une tendance lente. Les composantes de moins de 16 cellules sont exclues.
-        Les parties faibles sont les excès de 1,5 à 3 sigma connectés à une
-        graine forte ; aucun quantile commun ne mélange les niveaux des objets.
+        Les parties faibles sont les excès de weak_sigma (défaut 1,1) à 3 sigma
+        connectés à une graine forte ; aucun quantile commun ne mélange les niveaux des objets.
         La tendance et le bruit sont des outils de détection, jamais des corrections.
+        evaluator conserve les masques et les mesures de référence entre appels.
+        Sans instance fournie, cet appel autonome en crée une temporaire.
+        À défaut de 32 cellules faibles détectées, leur masque est remplacé
+        par le centile inférieur des luminosités de référence du signal retenu.
         """
-        if reference.ndim != 2 or reference.shape != candidate.shape:
-            raise ValueError('Géométrie des structures faibles incompatible')
-        stride = max(1, math.ceil(max(reference.shape)/cls.MAX_SIDE))
-        def cpu(array: np.ndarray) -> np.ndarray:
-            """Transfère uniquement la petite grille spatiale vers les mesures CPU."""
-            grid = array[::stride, ::stride]
-            return np.asarray(grid if xp is np else xp.asnumpy(grid), dtype=np.float64)
-        first, last = cpu(reference), cpu(candidate)
-        if (not np.isfinite(first).all() or not np.isfinite(last).all()
-                or min(first.min(), last.min()) < 0 or max(first.max(), last.max()) > 1+1e-6):
-            raise ValueError('Luminosités GHS invalides')
-        result, masks = cls.classify_grid(first)
-        result['stride'] = stride
-        if not result['available']:
-            return result
-        sky, faint = masks['sky'], masks['faint']
-        for name, plane in [('reference', first), ('candidate', last)]:
-            background = float(np.median(plane[sky]))
-            object_level = float(np.median(plane[faint]))
-            separation = object_level-background
-            noise = cls._noise(plane, sky)
-            tile_levels = []
-            for ys in np.array_split(np.arange(first.shape[0]), cls.REGION_GRID):
-                for xs in np.array_split(np.arange(first.shape[1]), cls.REGION_GRID):
-                    local_sky = sky[np.ix_(ys, xs)]
-                    if local_sky.sum() >= cls.MIN_PIXELS:
-                        tile_levels.append(float(np.median(plane[np.ix_(ys, xs)][local_sky])))
-            result[name] = dict(sky_median=background, faint_median=object_level,
-                                contrast=(separation/(object_level+background)
-                                          if object_level+background > 1e-10 else None),
-                                cnr=separation/noise if noise is not None else None,
-                                noise=noise, sky_upper_median=float(np.quantile(tile_levels, .9))
-                                if len(tile_levels) >= cls.MIN_SKY_REGIONS else None,
-                                sky_region_count=len(tile_levels))
-        return result
+        model = evaluator or WeakStructureEvaluator(reference, xp, weak_sigma=weak_sigma)
+        model.validate_reference(reference, xp, weak_sigma=weak_sigma)
+        return model.evaluate(candidate, xp)
 
     @classmethod
     def compare(cls, before: JSONReport, after: JSONReport) -> JSONReport:
@@ -222,7 +329,8 @@ class WeakStructureQuality:
         first_model, last_model = before.get('weak_structure', {}), after.get('weak_structure', {})
         if (not first_model.get('available') or not last_model.get('available')
                 or any(first_model.get(k) != last_model.get(k) for k in
-                       ('segmentation_version', 'reference_sha256', 'grid_shape', 'object_count', 'faint_count',
+                       ('segmentation_version', 'sigma_thresholds', 'faint_selection', 'reference_sha256',
+                        'grid_shape', 'object_count', 'faint_count',
                         'sky_count', 'faint_reference_range'))):
             return dict(available=False, score_adjustment=0., sufficient=False)
         first, last = first_model['candidate'], last_model['candidate']
@@ -288,3 +396,83 @@ class WeakStructureQuality:
                 and slopes and all(value < 0 for value in slopes)):
             return min(penalty, cls.SHAPE_PENALTY_CAP)
         return penalty
+
+
+class WeakStructureEvaluator:
+    """Conserve la segmentation d'une référence et mesure ses candidats sans la refaire.
+
+    Une instance appartient à une référence, une grille et un seuil. Elle copie
+    uniquement la petite grille CPU, fige ses masques et calcule les statistiques
+    de référence une seule fois. Aucun état n'est partagé entre phases/images.
+    Les audits retournés sont des copies indépendantes. Voir la documentation
+    des structures faibles GHS pour les hypothèses et limites de détection.
+    """
+
+    def __init__(
+        self, reference: np.ndarray, xp: ModuleType = np, *,
+        weak_sigma: float = WeakStructureQuality.WEAK_SIGMA,
+    ) -> None:
+        """Prépare une luminosité 2D normalisée ; refuse géométrie ou valeurs invalides."""
+        if reference.ndim != 2 or not reference.size:
+            raise ValueError('Géométrie des structures faibles incompatible')
+        self._shape = reference.shape
+        self._weak_sigma = WeakStructureQuality.validate_sigma(weak_sigma)
+        self._stride = max(1, math.ceil(max(reference.shape)/WeakStructureQuality.MAX_SIDE))
+        self._reference = self._grid(reference, xp).copy()
+        self._reference.setflags(write=False)
+        self._audit, self._masks = WeakStructureQuality.classify_grid(
+            self._reference, weak_sigma=self._weak_sigma,
+        )
+        self._audit['stride'] = self._stride
+        for mask in self._masks.values():
+            mask.setflags(write=False)
+        if self._audit['available']:
+            self._audit['reference'] = self._statistics(self._reference)
+
+    def _grid(self, image: np.ndarray, xp: ModuleType) -> np.ndarray:
+        """Échantillonne les mêmes coordonnées CPU/backend et contrôle le domaine [0,1]."""
+        if image.shape != self._shape:
+            raise ValueError('Géométrie des structures faibles incompatible')
+        grid = image[::self._stride, ::self._stride]
+        grid = np.asarray(grid if xp is np else xp.asnumpy(grid), dtype=np.float64)
+        if (not np.isfinite(grid).all() or grid.min() < 0 or grid.max() > 1+1e-6):
+            raise ValueError('Luminosités GHS invalides')
+        return grid
+
+    def validate_reference(
+        self, reference: np.ndarray, xp: ModuleType = np, *, weak_sigma: float,
+    ) -> None:
+        """Refuse la réutilisation avec un autre seuil ou une autre grille de référence."""
+        if (WeakStructureQuality.validate_sigma(weak_sigma) != self._weak_sigma
+                or not np.array_equal(self._grid(reference, xp), self._reference)):
+            raise ValueError('Référence ou seuil des structures faibles incompatible')
+
+    def _statistics(self, plane: np.ndarray) -> JSONReport:
+        """Mesure médianes, contraste et bruit sur les masques fixes, sans redétection."""
+        quality = WeakStructureQuality
+        sky, faint = self._masks['sky'], self._masks['faint']
+        background = float(np.median(plane[sky]))
+        object_level = float(np.median(plane[faint]))
+        separation = object_level-background
+        noise = quality._noise(plane, sky)
+        tile_levels = []
+        for ys in np.array_split(np.arange(plane.shape[0]), quality.REGION_GRID):
+            for xs in np.array_split(np.arange(plane.shape[1]), quality.REGION_GRID):
+                local_sky = sky[np.ix_(ys, xs)]
+                if local_sky.sum() >= quality.MIN_PIXELS:
+                    tile_levels.append(float(np.median(plane[np.ix_(ys, xs)][local_sky])))
+        return dict(sky_median=background, faint_median=object_level,
+                    contrast=(separation/(object_level+background)
+                              if object_level+background > 1e-10 else None),
+                    cnr=separation/noise if noise is not None else None,
+                    noise=noise, sky_upper_median=float(np.quantile(tile_levels, .9))
+                    if len(tile_levels) >= quality.MIN_SKY_REGIONS else None,
+                    sky_region_count=len(tile_levels))
+
+    def evaluate(self, candidate: np.ndarray, xp: ModuleType = np) -> JSONReport:
+        """Mesure un candidat normalisé et retourne un audit indépendant des appels précédents."""
+        last = self._grid(candidate, xp)
+        result = deepcopy(self._audit)
+        if result['available']:
+            result['candidate'] = self._statistics(last)
+        return result

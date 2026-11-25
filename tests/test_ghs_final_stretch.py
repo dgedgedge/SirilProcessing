@@ -9,6 +9,8 @@ from astropy.io import fits
 
 from lib.auto_ghs import ComputeBackend, GHSOptimizer, HistogramAnalyzer, ghs_rgb
 from lib.ghs_final_stretch import ProtectedGHSFinalizer
+from lib.ghs_weak_structure import WeakStructureQuality
+from lib.type_defs import JSONReport
 
 
 def synthetic_field(kind: str) -> np.ndarray:
@@ -31,13 +33,30 @@ def synthetic_field(kind: str) -> np.ndarray:
 
 
 @pytest.mark.parametrize('kind', ['galaxy', 'nebula', 'cluster'])
-def test_search_generic_fields_preserves_highlight_detail(kind: str) -> None:
+def test_search_generic_fields_preserves_highlight_detail(
+    kind: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Améliore le diffus sous gardes, ou conserve un champ déjà presque rectiligne."""
     source = synthetic_field(kind)
     original = source.copy()
+    classify = WeakStructureQuality.classify_grid
+    classified = []
+
+    def counted(
+        cls: type[WeakStructureQuality], reference: np.ndarray, *, weak_sigma: float,
+    ) -> tuple[JSONReport, dict[str, np.ndarray]]:
+        """Compte les détections, qui doivent rester indépendantes du nombre d'essais."""
+        classified.append(1)
+        return classify(reference, weak_sigma=weak_sigma)
+
+    monkeypatch.setattr(WeakStructureQuality, 'classify_grid', classmethod(counted))
     output, report = GHSOptimizer().final_stretch(
         source, HistogramAnalyzer(256), ComputeBackend('cpu'), 1.25,
+        weak_sigma=1.8,
     )
+    assert report['sample_before']['weak_structure']['sigma_thresholds']['weak'] == 1.8
+    # La grille complète n'est préparée que si un finaliste doit être validé.
+    assert len(classified) == 1 + int(bool(report['full_validation']))
     assert report['mode'] == 'auto' and len(report['candidates']) >= 125
     np.testing.assert_array_equal(source, original)
     assert np.isfinite(output).all() and output.min() >= 0 and output.max() <= 1

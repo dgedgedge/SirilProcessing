@@ -18,14 +18,59 @@ mesures peuvent apparaître dans les rapports sans modifier ce classement.
 
 ## 1.2. Référence fixe et détection
 
+Le seuil d'extension faible est réglable avec `--ghs-weak-sigma`, entre **1 et
+3 inclus**, avec **1,1 par défaut**. Par exemple, `--ghs-weak-sigma 1.5` réduit
+l'extension par rapport au défaut, tandis que `--ghs-weak-sigma 1.0` l'élargit.
+La ligne de commande utilise le point décimal. La clé JSON est `ghs_weak_sigma` ;
+la priorité reste CLI > configuration sauvegardée > défaut, avec mémorisation
+par `-S`. Les valeurs non finies, booléennes ou hors domaine sont refusées.
+Le même réglage est transmis aux mesures des essais, aux validations complètes
+et aux cartes de zones ; leurs légendes indiquent le seuil réellement utilisé.
+Les seuils intermédiaire (3 sigma) et fort (6 sigma et >P95) restent fixes.
+Les valeurs ci-dessous décrivent le réglage par défaut. Ce paramètre modifie
+les régions de mesure et peut donc changer la courbe globale sélectionnée ;
+il ne commande aucun étirement local.
+À la borne 3, la bande faible `[seuil,3[` est vide : le repli sur le centile
+inférieur du signal retenu décrit ci-dessous est alors utilisé.
+
+La carte spatiale distingue les cellules **hors ciel et hors objets retenus**
+par trois couleurs, selon la significativité multi-échelle `S` :
+
+- gris sombre : `S < 1` (classe 2) ;
+- gris moyen : `1 < S < seuil` (classe 7) ;
+- jaune clair : `seuil < S` (classe 8).
+
+Avec le défaut, le seuil affiché est **1,1**. À la borne 1, la bande moyenne
+est vide. Les cellules exactement égales à 1 ou au seuil sont repérées
+en blanc (classe 9), sans les attribuer à un intervalle strict. Ces diagnostics ne changent aucun masque de qualité : le ciel bleu et
+les objets colorés conservent leur priorité. Sans significativité mesurable,
+la légende précise « S indisponible » au lieu de lui attribuer un intervalle.
+Le rapport conserve les effectifs réellement affichés dans `spatial_counts` ;
+`subthreshold_count` reste le nombre total de cellules actives avec
+`1 < S < seuil`, y compris celles retenues comme ciel.
+
 Chaque mesure utilise une grille spatiale régulière d'au plus 192 pixels sur
 le plus grand côté, avec les mêmes coordonnées dans référence et candidat.
-Sur GPU, seule cette petite grille est transférée vers le CPU. Les régions
-sont reconstruites de façon déterministe sur la référence, jamais sur le
-candidat : elles ne se déplacent donc pas pour améliorer artificiellement
-un essai. La signature SHA-256 de la grille de référence, ses dimensions,
+Sur GPU, seule cette petite grille est transférée vers le CPU. Une instance de
+`WeakStructureEvaluator` construit les régions une seule fois sur la référence,
+puis conserve ses masques et les statistiques initiales pendant la phase.
+Chaque candidat est mesuré aux mêmes coordonnées, sans relancer la segmentation.
+La référence échantillonnée est copiée et les masques sont non modifiables ;
+chaque audit retourné est une copie indépendante. La réutilisation avec une
+autre grille de référence ou un autre seuil est refusée.
+La signature SHA-256 de la grille de référence, ses dimensions,
 les effectifs et les seuils doivent correspondre pour comparer deux mesures.
 Les phases qui commencent sur une autre image possèdent leur propre référence.
+Les recherches par quartiles et la passe finale gardent une instance par
+référence/grille : essais CPU échantillonnés, validation sur le champ complet
+et, pour les quartiles, sondes brillantes lorsqu'elles existent. Ces dernières
+ne remplacent pas les mesures spatiales de qualité. Les contrôles après
+recomposition réutilisent les zones du fond correspondant. Les instances sont
+libérées avec la recherche ; il n'existe pas de singleton ni de cache global.
+La validation complète applique la courbe à toute l'image, mais cette mesure
+spécifique reste bornée à 192 cellules par côté, comme dans les essais.
+L'API autonome `WeakStructureQuality.measure` accepte `evaluator=instance` ;
+sans instance fournie, elle prépare un évaluateur temporaire pour cet appel.
 
 Le détecteur utilise la luminosité du mode GHS `human` ou `even`. Il combine
 une sélection de graines lumineuses et une croissance par hystérésis :
@@ -40,27 +85,81 @@ une sélection de graines lumineuses et une croissance par hystérésis :
    Une graine doit contenir au moins **quatre cellules connexes**. P95 porte
    ici sur la grille, pas sur les percentiles du champ complet de l'autre mesure.
 4. Les graines s'étendent d'abord dans le support **≥3 sigma**, puis dans le
-   support **≥1,5 sigma**, en connexité à huit voisins. Aucun trou sous le seuil
+   support **≥1,1 sigma**, en connexité à huit voisins. Aucun trou sous le seuil
    faible n'est franchi et aucune dilatation artificielle ne relie les objets.
-5. Les composantes finales doivent avoir au moins **16 cellules**. Les parties
-   faibles sont leurs cellules entre **1,5 inclus et 3 sigma exclus**, reliées
+5. Les composantes initiales doivent avoir au moins **16 cellules**. Les parties
+   faibles sont leurs cellules entre **1,1 inclus et 3 sigma exclus**, reliées
    à une graine forte. La sélection par P25–P50 regroupant tous les objets
    n'est plus utilisée.
+6. La marge d'exclusion du ciel est construite **une seule fois sur ces objets
+   initiaux**, par deux dilatations à quatre voisins. Les cellules jaunes
+   (`S > seuil`, hors objets et hors ciel) de cette marge servent d'**amorces**.
+   La sélection se propage à huit voisins dans leur **composante jaune entière**,
+   même au-delà de la marge. Le signal faible connecté à l'ensemble retenu est
+   ensuite rattaché dans le support `S ≥ seuil`. Les trous sous le seuil, les
+   cellules inactives et le **masque du ciel figé** arrêtent la propagation.
+   Les ajouts avec `S < 3` rejoignent le vert et ses mesures de qualité ; ceux
+   avec `S ≥ 3` rejoignent l'orange. Ils ne créent ni graines, ni nouvelle
+   dilatation. Un autre îlot séparé par un trou reste exclu, même s'il se trouve
+   dans ce qui aurait été la marge d'une zone nouvellement admise. Aucun nouveau
+   seuil de surface n'est appliqué à ces ajouts. Sans objet initial, aucune
+   admission n'est possible.
 
 La contrainte est topologique, sans décroissance stricte pixel par pixel :
 une extension peut contenir des fluctuations, filaments ou renforcements
-secondaires. Une région faible isolée n'entre pas dans cette mesure, mais
+secondaires. Une région faible sans connexion à un objet et sans amorce dans la marge
+initiale n'entre pas dans cette mesure, mais
 n'est pas déclarée bruit et n'est jamais supprimée de l'image. P95 seul ne
 suffit pas à prouver un signal réel ; il est combiné avec la significativité
 et la taille des graines. Ces constantes sont génériques et nécessitent une
 calibration sur plusieurs types de champs, sans réglage par nom d'objet.
 
-Le masque de ciel exclut les objets et leur voisinage dilaté, demande une
-proximité avec la tendance lente à deux sigmas et exclut le quart le plus
-lumineux de la référence. Les zéros inactifs ne deviennent pas du ciel.
-Au moins 32 cellules faibles et suffisamment de ciel sont nécessaires pour
-calculer la qualité. Si une extension est détectée mais trop petite pour cette
-mesure, les masques restent disponibles sur la carte et le score reste
+Le **masque de ciel bleu** est l'intersection de quatre conditions :
+
+- luminosité de référence `Y > 10⁻⁶` : les zéros inactifs sont exclus ;
+- exclusion des objets **initiaux** et de leur voisinage, obtenu par **deux
+  itérations de dilatation** sur la grille d'analyse, avec la connexité en
+  croix à quatre voisins ;
+- proximité du fond local :
+  `|G₁(Y) − G₁₂(Y)| ≤ max(2σ/√(4π), 10⁻⁷)` ;
+- luminosité lissée `G₁(Y) ≤ P75(G₁(Y)[Y > 10⁻⁶])` : le quart le plus
+  lumineux des cellules actives après lissage est exclu, hors égalités au seuil.
+
+`G₁` et `G₁₂` sont les lissages gaussiens d'échelles respectives 1 et 12
+cellules. `σ` est le bruit estimé avant lissage ; `σ/√(4π)` estime le bruit
+après lissage à l'échelle 1. Hors effet du plancher numérique `10⁻⁷`, le
+troisième critère s'écrit **`|S₁| ≤ 2`**, donc **`−2 ≤ S₁ ≤ 2`**, avec
+`S₁ = (G₁(Y) − G₁₂(Y))/(σ/√(4π))`. Il ne signifie pas `S < 1`.
+Ce `S₁` utilise uniquement l'échelle 1, tandis que le `S` des émissions et des
+couleurs diagnostiques est le maximum des échelles 1, 2 et 4. Les critères
+du ciel et des émissions ne sont donc pas complémentaires.
+Le masque du ciel est figé avant l'admission et sert de barrière à la
+propagation. Les ajouts peuvent dépasser la marge initiale, mais ne peuvent
+jamais prendre une cellule déjà retenue comme ciel ; celui-ci reste identique.
+
+L'option `--ghs-weak-sigma` ne modifie pas le seuil de ciel à deux sigmas.
+Elle peut toutefois modifier indirectement son masque en étendant les objets
+exclus et leur voisinage. Les cartes de classes de luminosité utilisent une
+autre définition du bleu, `Y ≤ P25`, distincte de ce masque spatial.
+Si au moins **32 cellules faibles** sont détectées, elles servent de
+référence faible. Sinon, leur masque de mesure est **remplacé par les 1 % des
+cellules les moins lumineuses du signal retenu**, graines et signal intermédiaire
+compris. La sélection utilise la luminosité de référence avant étirement,
+avec un effectif `ceil(0,01 × nombre de cellules retenues)` et un minimum d'une
+cellule si un objet existe. Les égalités de luminosité sont départagées par
+l'ordre spatial stable, pour ne pas sélectionner tout un plateau. Le minimum
+32 ne s'applique pas une seconde fois à ce repli ; une population très petite
+reste donc moins représentative. Les conditions existantes sur les effectifs
+objets/ciel et sur la mesurabilité du bruit restent applicables.
+
+Le masque de repli est calculé une seule fois avec la référence et reste fixe
+pour tous les candidats. Les objets et le ciel ne changent pas. Le vert de la
+carte représente le masque réellement mesuré, avec une légende spécifique
+« centile inférieur du signal retenu », prioritaire sur la couleur des graines
+si nécessaire. Il ne prétend pas que ces cellules satisfont la bande sigma
+faible. Le rapport `faint_selection` précise `mode: lowest_percentile`, la
+fraction, l'effectif sélectionné et l'effectif faible détecté d'origine.
+Sans signal retenu, ou sans ciel suffisamment mesurable, le score reste
 indisponible ; aucun gain n'est inventé.
 Les filtres ne servent qu'à cette détection ; ils ne remplacent aucun pixel.
 
@@ -178,8 +277,8 @@ Les trois panneaux montrent :
    pixels inactifs. Si P25 et P75 sont confondus, un violet distinct signale
    le recouvrement fond/diffus au lieu de cacher l'un des masques.
 3. La détection spatiale : rose pour les graines >P95 et ≥6 sigma, orange
-   pour le signal connecté ≥3 sigma hors graines, vert pour les extensions
-   connectées entre 1,5 et 3 sigma, bleu pour le ciel admissible, gris pour les
+   pour le signal retenu ≥3 sigma hors graines, vert pour les extensions
+   retenues entre 1,1 et 3 sigma, bleu pour le ciel admissible, gris pour les
    cellules non classées et noir pour les inactives.
 
 Les deux cartes sont séparées parce que leurs populations peuvent se
@@ -195,14 +294,17 @@ qui utilisent une nouvelle référence peuvent avoir d'autres masques : cette
 carte ne prétend pas représenter simultanément chaque phase de recherche.
 Le contexte étiré ne sert jamais à recalculer les masques de cette carte.
 Une détection indisponible est indiquée explicitement et ne produit pas de
-fausses classes de structures. Des masques détectés avec trop peu de cellules
-faibles pour le score restent affichés avec « évaluation indisponible ». Les essais synthétiques vérifient l'identité
+fausses classes de structures. Les faibles effectifs déclenchent le repli sur le centile inférieur ; le
+statut reste indisponible si les autres régions requises ne sont pas mesurables. Les essais synthétiques vérifient l'identité
 avec les masques du score, les quantiles confondus, la grille, le PNG et la
 conservation des sources (`tests/test_starless_zones.py`).
 
-Le rapport enregistre `segmentation_version: connected_hysteresis_v1`, les seuils
+Le rapport enregistre `segmentation_version: connected_hysteresis_v5`, les seuils
 sigma et P95, les effectifs de graines et de support intermédiaire, ainsi que
 les cellules faibles. `faint_reference_range` décrit désormais l'étendue des
 luminosités lissées de ces extensions, pas des quantiles. Les comparaisons
-entre méthodes de segmentation différentes sont indisponibles plutôt que de
+entre méthodes de segmentation ou seuils différents sont indisponibles plutôt que de
 comparer des populations incompatibles.
+Les effectifs `initial_object_count`, `admitted_count`, `admission_start_count`
+et `exclusion_count`
+permettent d'auditer les objets initiaux, les ajouts, les amorces et la marge figée.

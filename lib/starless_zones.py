@@ -20,25 +20,38 @@ from lib.type_defs import JSONReport
 class StarlessZoneMap:
     """Dessine les masques de référence de la branche starless, à leur résolution réelle."""
 
-    COLORS = ('#080b12', '#3d9bff', '#777777', '#ffad32', '#ec67c8', '#51e397', '#b49bff')
+    COLORS = ('#080b12', '#3d9bff', '#777777', '#ffad32', '#ec67c8', '#51e397', '#b49bff',
+              '#aaaaaa', '#fff29a', '#ffffff')
     PREVIEW_ASINH = 20.
     GLOBAL_LABELS = ((0, 'Inactif'), (1, 'Fond ≤ P25'), (2, 'Autres niveaux'),
                      (3, 'Diffus global P75–P95'), (4, 'Lumineux > P95'),
                      (6, 'Fond et diffus : seuils confondus'))
-    SPATIAL_LABELS = ((0, 'Inactif'), (1, 'Ciel retenu par détection'), (2, 'Non classé'),
-                      (4, 'Graines > P95 grille et ≥ 6 σ'), (3, 'Signal connecté ≥ 3 σ, hors graines'),
-                      (5, 'Faible émission connectée : 1,5–3 σ'))
+    SPATIAL_LABELS = ((0, 'Inactif'), (1, 'Ciel retenu par détection'), (2, 'Non classé : S < 1'),
+                      (4, 'Graines > P95 grille et ≥ 6 σ'), (3, 'Signal retenu ≥ 3 σ, hors graines'),
+                      (5, 'Faible émission retenue : 1,1–3 σ'),
+                      (7, 'Non classé : 1 < S < 1,1'), (8, 'Non classé : 1,1 < S'),
+                      (9, 'Limite : S = 1 ou S = seuil'))
 
     @classmethod
-    def classify(cls, data: np.ndarray, color_mode: str = 'human') -> tuple[np.ndarray, np.ndarray, JSONReport]:
+    def classify(
+        cls, data: np.ndarray, color_mode: str = 'human', *,
+        weak_sigma: float = WeakStructureQuality.WEAK_SIGMA,
+    ) -> tuple[np.ndarray, np.ndarray, JSONReport]:
         """Classe la grille de l'entrée sans mélanger quantiles globaux et objets spatiaux.
 
         Les seuils globaux P25/P75/P95 sont ceux du champ complet. La grille
         et les masques faibles viennent du même moteur que le score GHS.
+        weak_sigma est leur seuil faible en unités de bruit, dans [1,3].
         Les identifiants sont 0=inactif, 1=ciel, 2=autre, 3=diffus/objet,
         4=lumineux global ou graine spatiale, 5=parties faibles, 6=fond et diffus simultanément
         lorsque les seuils sont confondus. Deux tableaux séparés préservent
-        les recouvrements entre méthodes. Aucune carte n'est une segmentation
+        les recouvrements entre méthodes. Les cellules hors ciel et objets sont
+        réparties en gris sombre (2) pour S<1, gris moyen (7) pour 1<S<weak_sigma
+        et jaune clair (8) pour
+        weak_sigma<S. Les égalités sont repérées en blanc (classe 9). Ces diagnostics ne
+        modifient aucun masque de mesure. Sans S mesurable, la classe 2 est
+        explicitement présentée comme indisponible.
+        Aucune carte n'est une segmentation
         astrophysique certifiée, ni un masque de transformation des pixels.
         """
         validate_rgb(data)
@@ -57,14 +70,30 @@ class StarlessZoneMap:
             global_map[diffuse] = 3
             global_map[sky & diffuse] = 6
             global_map[active & (light > thresholds['diffuse_high'])] = 4
-        weak, masks = WeakStructureQuality.classify_grid(light)
+        weak, masks = WeakStructureQuality.classify_grid(light, weak_sigma=weak_sigma)
         weak['stride'] = stride
         weak_map = np.where(active, 2, 0).astype('uint8')
         if masks:
+            unclassified = active & ~masks['sky'] & ~masks['objects']
+            weak_map[unclassified & masks['subthreshold']] = 7
+            weak_map[unclassified & masks['above_threshold']] = 8
+            weak_map[unclassified & masks['on_threshold']] = 9
             weak_map[masks['sky']] = 1
             weak_map[masks['objects']] = 3
             weak_map[masks['faint']] = 5
             weak_map[masks['seeds']] = 4
+            if weak.get('faint_selection', {}).get('mode') == 'lowest_percentile':
+                weak_map[masks['faint']] = 5
+        spatial_labels = tuple(
+            (i, (('Référence faible : centile inférieur du signal retenu'
+                  if weak.get('faint_selection', {}).get('mode') == 'lowest_percentile'
+                  else f'Faible émission retenue : {weak_sigma:g}–3 σ') if i == 5 else
+                 f'Non classé : 1 < S < {weak_sigma:g}' if i == 7 else
+                 f'Non classé : {weak_sigma:g} < S' if i == 8 else
+                 f'Limite : S = 1 ou S = {weak_sigma:g}' if i == 9 else
+                 'Non classé : S indisponible' if i == 2 and not masks else label).replace('.', ','))
+            for i, label in cls.SPATIAL_LABELS
+        )
         return global_map, weak_map, dict(
             scientific_output=False, reference_scope='starless branch input',
             sampling='regular stride; no block averaging', stride=stride,
@@ -72,15 +101,16 @@ class StarlessZoneMap:
             global_available=bool(thresholds),
             color_mode=color_mode,
             legend={name: {str(i): dict(label=label, color=cls.COLORS[i]) for i, label in labels}
-                    for name, labels in (('global', cls.GLOBAL_LABELS), ('spatial', cls.SPATIAL_LABELS))},
+                    for name, labels in (('global', cls.GLOBAL_LABELS), ('spatial', spatial_labels))},
             global_counts={str(i): int(np.count_nonzero(global_map == i)) for i in range(7)},
-            spatial_counts={str(i): int(np.count_nonzero(weak_map == i)) for i in range(7)},
+            spatial_counts={str(i): int(np.count_nonzero(weak_map == i)) for i in range(len(cls.COLORS))},
         )
 
     @classmethod
     def write(
         cls, data: np.ndarray, destination: Path, *, color_mode: str = 'human',
         rendered: np.ndarray | None = None, title: str = 'Starless',
+        weak_sigma: float = WeakStructureQuality.WEAK_SIGMA,
     ) -> JSONReport:
         """Écrit un PNG avec légendes, vue de contexte et deux cartes de référence.
 
@@ -89,6 +119,7 @@ class StarlessZoneMap:
         à redéfinir les classes. Sans rendu, seul l'aperçu est étiré par asinh.
         L'origine lower reproduit l'affichage natif Siril. La carte conserve
         les cellules de mesure, sans interpolation créant de fausses frontières.
+        weak_sigma règle leur seuil faible dans [1,3], défaut 1,1 sigma.
         """
         import matplotlib.pyplot as plt
         from matplotlib.colors import ListedColormap
@@ -97,7 +128,7 @@ class StarlessZoneMap:
         destination = Path(destination)
         if destination.suffix.lower() != '.png':
             raise ValueError('Une carte de zones PNG est requise')
-        global_map, weak_map, report = cls.classify(data, color_mode)
+        global_map, weak_map, report = cls.classify(data, color_mode, weak_sigma=weak_sigma)
         stride = report['stride']
         if rendered is not None:
             validate_rgb(rendered)
@@ -120,9 +151,11 @@ class StarlessZoneMap:
             axes[0].set_title('Contexte : rendu retenu' if rendered is not None else 'Contexte : aperçu asinh', color='white')
             for axis, plane, label, legend in zip(
                 axes[1:], (global_map, weak_map),
-                ('Classes de luminosité', 'Détection spatiale'), (cls.GLOBAL_LABELS, cls.SPATIAL_LABELS),
+                ('Classes de luminosité', 'Détection spatiale'),
+                tuple(tuple((int(i), item['label']) for i, item in report['legend'][name].items())
+                      for name in ('global', 'spatial')),
             ):
-                axis.imshow(plane, cmap=ListedColormap(cls.COLORS), vmin=0, vmax=6,
+                axis.imshow(plane, cmap=ListedColormap(cls.COLORS), vmin=0, vmax=len(cls.COLORS)-1,
                             origin='lower', interpolation='nearest')
                 axis.set_title(label, color='white')
                 axis.legend(handles=[Patch(color=cls.COLORS[i], label=text) for i, text in legend],
@@ -136,7 +169,7 @@ class StarlessZoneMap:
             fig.suptitle(title + ' — zones utilisées pour les mesures GHS', color='white', fontsize=15)
             fig.text(.5, .025, f"{message}\nGrille {global_map.shape[1]} × {global_map.shape[0]}, pas {stride} pixels ; aucune correction locale.",
                      ha='center', color='#d7deea', fontsize=10)
-            fig.subplots_adjust(top=.88, bottom=.28, wspace=.08)
+            fig.subplots_adjust(top=.88, bottom=.43, wspace=.08)
             destination.parent.mkdir(parents=True, exist_ok=True)
             fig.savefig(destination, dpi=150, facecolor=fig.get_facecolor())
         finally:

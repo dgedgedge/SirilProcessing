@@ -163,6 +163,9 @@ def test_spatial_measure_matches_full_region_definitions() -> None:
     ('ghs_quality_tail_bonus', -.1), ('ghs_quality_tail_bonus', float('inf')),
     ('ghs_quality_reference_weight', -.1), ('ghs_quality_reference_weight', 10.1),
     ('ghs_quality_reference_weight', True), ('ghs_quality_reference_weight', float('nan')),
+    ('ghs_weak_sigma', .99), ('ghs_weak_sigma', 3.01),
+    ('ghs_weak_sigma', True), ('ghs_weak_sigma', float('nan')),
+    ('ghs_weak_sigma', float('inf')),
 ])
 def test_invalid_quality_options_are_rejected(name: str, value: float | bool) -> None:
     """Les domaines et les valeurs non finies sont vérifiés pour CLI et configuration."""
@@ -179,11 +182,41 @@ def test_quality_options_follow_saved_and_cli_priority(tmp_path: Path) -> None:
     assert args.ghs_quality_cnr_floor == .9
     assert args.ghs_quality_tail_bonus == .1
     assert args.ghs_quality_reference_weight == 1.
+    assert args.ghs_weak_sigma == 1.1
+    config.set('ghs_weak_sigma', 1.5)
     config.set('ghs_quality_cnr_floor', .85)
     parser = argparse.ArgumentParser()
     config.register(GHSOptimizer, parser)
     assert config.parse_args(parser, []).ghs_quality_cnr_floor == .85
+    assert config.parse_args(parser, []).ghs_weak_sigma == 1.5
+    assert config.parse_args(parser, ['--ghs-weak-sigma', '3']).ghs_weak_sigma == 3.
     assert config.parse_args(parser, ['--ghs-quality-cnr-floor', '.95']).ghs_quality_cnr_floor == .95
+
+
+def test_quality_and_full_measure_share_custom_weak_threshold(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Les mesures rapides et complètes transmettent le seuil aux mêmes masques fixes."""
+    from lib.auto_ghs import luminance
+    from lib.ghs_weak_structure import WeakStructureEvaluator, WeakStructureQuality
+    y, x = np.indices((160, 160))
+    light = (.02+.035*np.exp(-((x-80)**2+(y-80)**2)/600)
+             + np.random.default_rng(73).normal(0, .001, x.shape))
+    image = np.repeat(light[None], 3, axis=0)
+    thresholds = ProtectedGHSFinalizer.thresholds(image, 'human')
+    model = WeakStructureEvaluator(luminance(image, 'human'), weak_sigma=1.8)
+
+    def unexpected(*args: object, **kwargs: object) -> None:
+        """Refuse toute redétection pendant l'exploitation d'une instance préparée."""
+        pytest.fail('La mesure a reconstruit les masques')
+
+    monkeypatch.setattr(WeakStructureQuality, 'classify_grid', unexpected)
+    sampled = Quality.sample_measure(luminance(image, 'human'), image, thresholds,
+                                     'human', weak_sigma=1.8, weak_evaluator=model)
+    full = ProtectedGHSFinalizer.measure(image, image, thresholds, 'human',
+                                        weak_sigma=1.8, weak_evaluator=model)
+    assert sampled['weak_structure']['sigma_thresholds']['weak'] == 1.8
+    assert sampled['weak_structure']['faint_count'] == full['weak_structure']['faint_count']
 
 
 @pytest.mark.parametrize('key', ['sky_median', 'diffuse_median', 'noise', 'highlight_contrast'])

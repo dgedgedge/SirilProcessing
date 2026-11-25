@@ -33,6 +33,7 @@ from lib.ghs_histogram_shape import (
 )
 from lib.star_separation import validate_rgb, write_rgb
 from lib.type_defs import JSONReport
+from lib.ghs_weak_structure import WeakStructureQuality, WeakStructureEvaluator
 
 if TYPE_CHECKING:
     from lib.auto_ghs import ComputeBackend, HistogramAnalyzer
@@ -114,6 +115,8 @@ class ProtectedGHSFinalizer(processor):
         color_mode: str, xp: ModuleType = np,
         mask_reference: np.ndarray | None = None,
         tail_endpoint: float | None = None,
+        weak_sigma: float = WeakStructureQuality.WEAK_SIGMA,
+        weak_evaluator: WeakStructureEvaluator | None = None,
     ) -> JSONReport:
         """Mesure les mêmes régions Y avant/après, sur le moteur demandé.
 
@@ -122,7 +125,9 @@ class ProtectedGHSFinalizer(processor):
         proxy MAD des différences voisines du ciel ; une mesure absente vaut None.
         Les couleurs sont des proportions RGB, sans primaires FITS supposées.
         mask_reference fixe les masques par le fond lors de la comparaison de
-        deux fusions ; original reste la référence des proportions de couleur.
+        deux fusions. weak_sigma règle le seuil de détection faible dans [1,3].
+        original reste la référence des proportions de couleur.
+        weak_evaluator réutilise les zones fixes préparées pour cette référence.
         La visibilité diffuse est sa séparation du ciel divisée par celle du
         brillant. La queue d'histogramme utilise le champ actif, aux mêmes classes
         de [0,1] sur CPU et CUDA ; seuls les 128 effectifs sont transférés sur CPU.
@@ -195,7 +200,9 @@ class ProtectedGHSFinalizer(processor):
             window_end=tail_endpoint,
         )
         from lib.ghs_weak_structure import WeakStructureQuality
-        result['weak_structure'] = WeakStructureQuality.measure(reference, light, xp)
+        result['weak_structure'] = WeakStructureQuality.measure(
+            reference, light, xp, weak_sigma=weak_sigma, evaluator=weak_evaluator,
+        )
         return result
 
     @staticmethod
@@ -318,6 +325,7 @@ class ProtectedGHSFinalizer(processor):
         reference_shape: JSONReport | None = None,
         trial_images: HistogramDiagnostics | None = None,
         blackpoint_reference: np.ndarray | None = None,
+        weak_sigma: float = WeakStructureQuality.WEAK_SIGMA,
     ) -> tuple[np.ndarray, JSONReport]:
         """Compare D/B/SP/HP, affine puis valide les meilleurs sur tout le champ.
 
@@ -342,6 +350,8 @@ class ProtectedGHSFinalizer(processor):
         rms_weight : float
             Poids de la réduction relative du RMS logarithmique, dans [0,10].
             Deux par défaut ; zéro désactive ce terme sans modifier les gardes.
+        weak_sigma : float
+            Seuil faible connecté en unités de bruit, entre 1 et 3 inclus.
         shape_options : argparse.Namespace or None, optional
             Options complètes résolues par GHSOptimizer.options. Si le modèle
             est piecewise, remplace les bonus globaux par la conservation de
@@ -381,6 +391,7 @@ class ProtectedGHSFinalizer(processor):
         """
         from lib.auto_ghs import ghs_rgb
 
+        weak_sigma = WeakStructureQuality.validate_sigma(weak_sigma)
         shape_enabled = shape_options is not None and shape_options.ghs_histogram_model == 'piecewise'
         align_blackpoint = shape_enabled and shape_options.ghs_post_blackpoint == 'rise'
         blackpoint_reference = data if blackpoint_reference is None else blackpoint_reference
@@ -493,7 +504,25 @@ class ProtectedGHSFinalizer(processor):
         if not thresholds:
             report['reason'] = 'insufficient positive support'
             return data, report
-        baseline = self.measure(sample, sample, thresholds, analyzer.color_mode)
+        from lib.auto_ghs import luminance
+
+        weak_models: dict[int, WeakStructureEvaluator] = {}
+
+        def weak_model(reference: np.ndarray, engine: ModuleType) -> WeakStructureEvaluator:
+            """Conserve un évaluateur par référence/grille pendant cette recherche seulement."""
+            key = id(reference)
+            if key not in weak_models:
+                weak_models[key] = WeakStructureEvaluator(
+                    luminance(reference, analyzer.color_mode, xp=engine), engine,
+                    weak_sigma=weak_sigma,
+                )
+            return weak_models[key]
+
+        baseline = self.measure(
+            sample, sample, thresholds, analyzer.color_mode,
+            weak_sigma=weak_sigma,
+            weak_evaluator=weak_model(sample, np),
+        )
         tail_endpoint = baseline['log_histogram']['window_end']
         report['sample_before'] = baseline
         fusion_before = None
@@ -503,7 +532,8 @@ class ProtectedGHSFinalizer(processor):
             fusion_reference = composed
             fusion_before = self.measure(
                 fusion_reference, composed, thresholds, analyzer.color_mode,
-                mask_reference=sample,
+                mask_reference=sample, weak_sigma=weak_sigma,
+                weak_evaluator=weak_model(sample, np),
             )
             fusion_tail_endpoint = fusion_before['log_histogram']['window_end']
         report['histogram_windows'] = {
@@ -532,8 +562,11 @@ class ProtectedGHSFinalizer(processor):
                     result, shape_options.ghs_blackpoint_loss,
                     reference=sample_blackpoint_reference,
                 )
-            metrics = self.measure(sample, result, thresholds, analyzer.color_mode,
-                                   tail_endpoint=tail_endpoint)
+            metrics = self.measure(
+                sample, result, thresholds, analyzer.color_mode,
+                tail_endpoint=tail_endpoint, weak_sigma=weak_sigma,
+                weak_evaluator=weak_model(sample, np),
+            )
             score, rejected = assess_presentation(
                 baseline, metrics, 1 - 0.8 * (1 - retention),
             )
@@ -544,8 +577,8 @@ class ProtectedGHSFinalizer(processor):
                 composite = headroom * result + sample_stars * (1 - headroom * result)
                 metrics = self.measure(
                     fusion_reference, composite, thresholds, analyzer.color_mode,
-                    mask_reference=sample,
-                    tail_endpoint=fusion_tail_endpoint,
+                    mask_reference=sample, tail_endpoint=fusion_tail_endpoint, weak_sigma=weak_sigma,
+                    weak_evaluator=weak_model(sample, np),
                 )
                 fusion_score, fusion_rejected = assess_presentation(
                     fusion_before, metrics, 1 - 0.8 * (1 - retention), composite=True,
@@ -619,8 +652,11 @@ class ProtectedGHSFinalizer(processor):
             if smoothest not in finalists:
                 finalists[-1] = smoothest
         xp = backend.xp
-        full_before = self.measure(data, data, thresholds, analyzer.color_mode, xp,
-                                   tail_endpoint=tail_endpoint)
+        full_before = self.measure(
+            data, data, thresholds, analyzer.color_mode, xp,
+            tail_endpoint=tail_endpoint, weak_sigma=weak_sigma,
+            weak_evaluator=weak_model(data, xp),
+        )
         full_stars = xp.asarray(stars) if stars is not None else None
         composite_before = None
         if full_stars is not None:
@@ -628,8 +664,8 @@ class ProtectedGHSFinalizer(processor):
             composite_reference = composite
             composite_before = self.measure(
                 composite_reference, composite, thresholds, analyzer.color_mode, xp,
-                mask_reference=data,
-                tail_endpoint=fusion_tail_endpoint,
+                mask_reference=data, tail_endpoint=fusion_tail_endpoint, weak_sigma=weak_sigma,
+                weak_evaluator=weak_model(data, xp),
             )
         best_output = None
         best_rank: tuple[float, float] | None = None
@@ -643,8 +679,11 @@ class ProtectedGHSFinalizer(processor):
                     reference=blackpoint_reference,
                 )
             validate_rgb(output)
-            measured = self.measure(data, output, thresholds, analyzer.color_mode, xp,
-                                    tail_endpoint=tail_endpoint)
+            measured = self.measure(
+                data, output, thresholds, analyzer.color_mode, xp,
+                tail_endpoint=tail_endpoint, weak_sigma=weak_sigma,
+                weak_evaluator=weak_model(data, xp),
+            )
             score, rejected = assess_presentation(full_before, measured, retention)
             if align_blackpoint and post['loss_fraction'] > shape_options.ghs_blackpoint_loss+1e-12:
                 rejected.append('cumulative blackpoint loss')
@@ -660,8 +699,8 @@ class ProtectedGHSFinalizer(processor):
                 composed = headroom * output + full_stars * (1 - headroom * output)
                 fusion = self.measure(
                     composite_reference, composed, thresholds, analyzer.color_mode, xp,
-                    mask_reference=data,
-                    tail_endpoint=fusion_tail_endpoint,
+                    mask_reference=data, tail_endpoint=fusion_tail_endpoint, weak_sigma=weak_sigma,
+                    weak_evaluator=weak_model(data, xp),
                 )
                 fusion_score, reasons = assess_presentation(
                     composite_before, fusion, retention, composite=True,
@@ -710,6 +749,7 @@ class ProtectedGHSFinalizer(processor):
             backend, runtime.ghs_final_strength, runtime.ghs_final_mode,
             runtime.ghs_highlight_retention,
             rms_weight=runtime.ghs_log_rms_weight,
+            weak_sigma=runtime.ghs_weak_sigma,
         )
         output.parent.mkdir(parents=True, exist_ok=True)
         write_rgb(source, output, backend.numpy(result), nonlinear=True, role='STARLESS')

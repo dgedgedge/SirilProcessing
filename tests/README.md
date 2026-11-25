@@ -524,3 +524,27 @@ voisins, absence de franchissement d'un trou sous seuil et exclusion des îlots
 sans graine ou des pics isolés. Une extension trop petite reste visible sur la
 carte mais ne reçoit pas de score de qualité. Les masques restent fixes par
 référence et les pixels scientifiques inchangés.
+Le seuil faible configurable est vérifié aux bornes 1 et 3, avec rejet des
+valeurs non finies, booléennes et hors domaine. Les tests contrôlent la priorité
+CLI/configuration/défaut, l'effet sur les extensions connectées, les légendes
+des cartes et l'incompatibilité des mesures issues de seuils différents.
+Les évaluateurs de structures faibles sont contrôlés pour ne segmenter qu'une
+fois par référence/grille, conserver les statistiques initiales, isoler leurs
+audits et refuser une réutilisation sur une autre référence ou un autre seuil.
+Les recherches par quartiles et finale comptent les constructions de masques
+pour vérifier leur indépendance vis-à-vis du nombre de candidats et l'absence
+d'état partagé entre recherches successives.
+Les diagnostics de significativité sont vérifiés aux bornes strictes
+`1<S<seuil`, sans condition de connexion, y compris sans objet détecté. Les
+tests des cartes contrôlent les deux gris et le jaune clair (classes 2, 7 et 8), leurs limites
+et la priorité du ciel et des objets, sans modifier les masques de mesure.
+L'admission amorcée dans la marge figée est testée sur un fragment détaché,
+sa propagation au-delà de la marge et le rattachement du faible connecté.
+Les tests vérifient l'arrêt aux trous, aux cellules inactives et au ciel figé,
+l'absence de dilatation en cascade vers un îlot séparé, la conservation des
+graines et l'impossibilité de créer une admission sans objet initial.
+
+Le repli sur le centile inférieur est vérifié pour un faible effectif détecté,
+une bande faible vide, les égalités de luminosité, un objet très petit et
+l'absence d'objet. La carte verte et sa légende doivent correspondre au masque
+effectivement utilisé pour la qualité, même si ce masque inclut des graines.
