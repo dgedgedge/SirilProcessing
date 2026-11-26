@@ -37,6 +37,7 @@ from lib.parameterized_component import ParameterizedComponent
 from lib.ghs_diagnostics import HistogramDiagnostics
 from lib.ghs_blackpoint import HistogramBlackpointNormalizer
 from lib.ghs_render_quality import HistogramRenderQuality
+from lib.ghs_weak_structure import WeakStructureEvaluator
 from lib.ghs_histogram_shape import (
     piecewise_histogram_profile, protect_histogram_shape,
     DEFAULT_SMOOTHING, DEFAULT_PEAK_SHIFT,
@@ -798,6 +799,7 @@ class QuartileGHSProcessor(processor):
         from lib.auto_ghs import linear_blackpoint, luminance
 
         self.validate_options(args)
+        weak_sigma = getattr(args, 'ghs_weak_sigma', 1.1)
         validate_rgb(data)
         if stars is not None:
             validate_rgb(stars)
@@ -854,21 +856,50 @@ class QuartileGHSProcessor(processor):
         thresholds['bright'], thresholds['core'] = BRIGHT_THRESHOLD, CORE_THRESHOLD
         protected_hp = tuple(thresholds[key] for key in ('q90', 'diffuse_high', 'q98'))
         report['protected_hp'] = list(protected_hp)
-        sample_before = fixed.measure(sample_start, sample_start, thresholds, analyzer.color_mode)
+        weak_models: dict[int, WeakStructureEvaluator] = {}
+
+        def weak_model(reference: np.ndarray, engine: ModuleType) -> WeakStructureEvaluator:
+            """Conserve un évaluateur par référence/grille pendant cette recherche seulement."""
+            key = id(reference)
+            if key not in weak_models:
+                weak_models[key] = WeakStructureEvaluator(
+                    luminance(reference, analyzer.color_mode, xp=engine), engine,
+                    weak_sigma=weak_sigma,
+                )
+            return weak_models[key]
+
+        sample_before = fixed.measure(
+            sample_start, sample_start, thresholds, analyzer.color_mode,
+            weak_sigma=weak_sigma,
+            weak_evaluator=weak_model(sample_start, np),
+        )
         quality_reference_light = (luminance(sample_start, analyzer.color_mode)
                                    if self.preserve_shape else None)
         sample_stars = backend.numpy(stars[:, ::stride, ::stride]) if stars is not None else None
         sample_fused = (headroom * sample_start + sample_stars * (1 - headroom * sample_start)
                         if sample_stars is not None else None)
-        sample_fused_before = (fixed.measure(sample_fused, sample_fused, thresholds,
-                                            analyzer.color_mode, mask_reference=sample_start)
-                               if sample_fused is not None else None)
-        full_before = fixed.measure(start, start, thresholds, analyzer.color_mode, xp)
+        sample_fused_before = (
+            fixed.measure(
+                sample_fused, sample_fused, thresholds, analyzer.color_mode,
+                mask_reference=sample_start, weak_sigma=weak_sigma,
+                weak_evaluator=weak_model(sample_start, np),
+            ) if sample_fused is not None else None
+        )
+        full_before = fixed.measure(
+            start, start, thresholds, analyzer.color_mode, xp,
+            weak_sigma=weak_sigma,
+            weak_evaluator=weak_model(start, xp),
+        )
         report.update(protection_before=full_before, thresholds=thresholds)
         fused_start = (headroom * start + xp.asarray(stars) * (1 - headroom * start)
                        if stars is not None else None)
-        fused_before = (fixed.measure(fused_start, fused_start, thresholds, analyzer.color_mode,
-                                     xp, mask_reference=start) if stars is not None else None)
+        fused_before = (
+            fixed.measure(
+                fused_start, fused_start, thresholds, analyzer.color_mode, xp,
+                mask_reference=start, weak_sigma=weak_sigma,
+                weak_evaluator=weak_model(start, xp),
+            ) if stars is not None else None
+        )
         report['composite_protection_before'] = fused_before
         initial_light = luminance(start, analyzer.color_mode, xp=xp)
         sparse_tail = self.sparse_tail_retention(
@@ -897,13 +928,21 @@ class QuartileGHSProcessor(processor):
         probe_start = probe(start) if probe_rows.size else None
         probe_stars = (probe(xp.asarray(stars))
                        if stars is not None and probe_rows.size else None)
-        probe_before = (fixed.measure(probe_start, probe_start, thresholds, analyzer.color_mode)
-                        if probe_start is not None else None)
+        probe_before = (
+            fixed.measure(
+                probe_start, probe_start, thresholds, analyzer.color_mode,
+                weak_sigma=weak_sigma,
+                weak_evaluator=weak_model(probe_start, np),
+            ) if probe_start is not None else None
+        )
         probe_fused = (headroom * probe_start + probe_stars * (1 - headroom * probe_start)
                        if probe_stars is not None else None)
         probe_fused_before = (
-            fixed.measure(probe_fused, probe_fused, thresholds, analyzer.color_mode,
-                          mask_reference=probe_start)
+            fixed.measure(
+                probe_fused, probe_fused, thresholds, analyzer.color_mode,
+                mask_reference=probe_start, weak_sigma=weak_sigma,
+                weak_evaluator=weak_model(probe_start, np),
+            )
             if probe_fused is not None else None
         )
         # Les paires peuvent répéter un même pixel brillant. Elles ne doivent
@@ -1087,13 +1126,20 @@ class QuartileGHSProcessor(processor):
                     reasons.append('new near-white pixels')
                 rejected.extend(prefix + reason for reason in reasons)
 
-            measured = fixed.measure(original, candidate, thresholds, analyzer.color_mode, engine)
+            measured = fixed.measure(
+                original, candidate, thresholds, analyzer.color_mode, engine,
+                weak_sigma=weak_sigma,
+                weak_evaluator=weak_model(original, engine),
+            )
             check(baseline, measured)
             protection = {'starless': measured}
             if star_field is not None:
                 fused = headroom * candidate + engine.asarray(star_field) * (1 - headroom * candidate)
-                measured = fixed.measure(fusion_original, fused, thresholds, analyzer.color_mode,
-                                         engine, mask_reference=original)
+                measured = fixed.measure(
+                    fusion_original, fused, thresholds, analyzer.color_mode, engine,
+                    mask_reference=original, weak_sigma=weak_sigma,
+                    weak_evaluator=weak_model(original, engine),
+                )
                 check(fusion_baseline, measured, 'composite: ')
                 protection['composite'] = measured
             return rejected, fraction, protection
@@ -1131,6 +1177,7 @@ class QuartileGHSProcessor(processor):
             if self.preserve_shape:
                 quality_before = HistogramRenderQuality.sample_measure(
                     quality_reference_light, sample, thresholds, analyzer.color_mode,
+                    weak_sigma=weak_sigma, weak_evaluator=weak_model(sample_start, np),
                 )
                 before = grade(before, quality_before, estimated=True)
             bp = isolated_blackpoint(sample, args.ghs_blackpoint_loss)
@@ -1164,6 +1211,7 @@ class QuartileGHSProcessor(processor):
                         spatial = linear_blackpoint(spatial, post['BP'])
                     measured_quality = HistogramRenderQuality.sample_measure(
                         quality_reference_light, spatial, thresholds, analyzer.color_mode,
+                        weak_sigma=weak_sigma, weak_evaluator=weak_model(sample_start, np),
                     )
                     after = grade(after, measured_quality, estimated=True)
                 if self.preserve_shape:

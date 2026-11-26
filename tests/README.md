@@ -183,11 +183,16 @@ le dossier des poids ; sinon le dossier ignoré `tmp/cache/models/cosmicclarity`
 
 ## Qualité astrophotographique
 
+`test_stellar_appearance.py` vérifie l'objectif non bloquant de 30 % d'étoiles
+visibles : 30 % atteint le seuil, tandis que 20 % et 25 % échouent au diagnostic.
+
 Les tests synthétiques utilisent un ciel/bruit et des structures connus, y compris
 une galaxie et un filament effacés, une nébulosité dominante, du signal rouge et
 du bruit corrélé. Les décisions UNKNOWN sont vérifiées sans faux bonus de bruit.
 Le contrôle diffus distingue une perte corroborée (FAIL) d'une augmentation de
-flux (variation négative conservée dans le rapport, sans FAIL).
+flux (variation positive conservée dans le rapport, sans FAIL). Les valeurs
+suivent `(après - avant) / avant`, avec un seuil signé négatif et des résidus
+et intervalles négatifs pour les pertes confirmées.
 Les champs stellaires denses vérifient que le lissage ne transforme pas les
 étoiles en faux signal diffus. Une image majoritairement couverte de signal
 vérifie que le ciel connu dans les quatre coins reste exploitable, tandis
@@ -481,3 +486,75 @@ de segmentation fiable. Il contrôle aussi le maintien de la garde de nouvelle
 bosse sombre malgré un bonus de signal faible et la limitation des écarts de
 courbure aux pentes descendantes. Les essais réels sur grille et les recherches
 GHS complètes sont distingués dans les comptes rendus.
+
+`test_aberration_stage.py` vérifie le déclenchement optique avant restauration,
+les gains appariés de rondeur/FWHM au centre et aux bords, le refus des
+régressions et des pertes de correspondances, et le maintien exact de la source.
+Les tests de séquence vérifient que AR précède la restauration sans y être rejoué.
+`test_output_layout.py` vérifie aussi la numérotation photométrie 03, AR 04,
+restauration 05, AutoGHS 06 et couleur 07, ainsi que la lecture explicite des
+anciens rapports numérotés. Les reprises et comparaisons couvrent les chemins
+compatibles sans renommer les produits existants.
+L'audit de flux d'AR est vérifié sur une structure étendue synthétique atténuée
+ou amplifiée et sur un champ sans mesure. `test_final_annotation.py` vérifie
+que la synthèse d'AR (rondeur initiale, largeur relative et décision) apparaît
+dans le PNG, même si les mesures détaillées
+et seuils sont présents dans le rapport. `test_aberration.py` vérifie la
+protection du fond par défaut et sa désactivation explicite.
+
+Les tests de comparaison stellaire couvrent la règle « 1 000 paires OU 70 % »,
+avec les bornes 999/1 000 et 69,9/70 % sur de vrais catalogues synthétiques.
+Les tests AR vérifient que le seuil relatif local ne réintroduit pas un refus
+quand la cohorte globale atteint 1 000 paires.
+
+`test_starless_zones.py` vérifie les couleurs par identité des masques avec
+les mesures GHS, les quantiles globaux et leurs recouvrements, le pas régulier,
+la disponibilité, le PNG et la conservation des sources. Le test autonome
+de branche starless vérifie également la publication de la carte et de son audit.
+
+`test_stellar_visibility_selection.py` vérifie que l'objectif de visibilité
+modifie réellement le rendu global : les cibles 20 % et 70 % produisent des
+pixels et taux différents. Les tests couvrent la limite de profils et la jupe
+du groupe brillant, un objectif inaccessible, les valeurs invalides, les deux
+triplets identiques sous des voisinages différents et le rejeu exact de la recette.
+
+La détection des structures faibles est testée par hystérésis : graines fortes
+restreintes à P95, extensions intermédiaires puis faibles, connexité à huit
+voisins, absence de franchissement d'un trou sous seuil et exclusion des îlots
+sans graine ou des pics isolés. Une extension trop petite reste visible sur la
+carte mais ne reçoit pas de score de qualité. Les masques restent fixes par
+référence et les pixels scientifiques inchangés.
+Le seuil faible configurable est vérifié aux bornes 1 et 3, avec rejet des
+valeurs non finies, booléennes et hors domaine. Les tests contrôlent la priorité
+CLI/configuration/défaut, l'effet sur les extensions connectées, les légendes
+des cartes et l'incompatibilité des mesures issues de seuils différents.
+Les évaluateurs de structures faibles sont contrôlés pour ne segmenter qu'une
+fois par référence/grille, conserver les statistiques initiales, isoler leurs
+audits et refuser une réutilisation sur une autre référence ou un autre seuil.
+Les recherches par quartiles et finale comptent les constructions de masques
+pour vérifier leur indépendance vis-à-vis du nombre de candidats et l'absence
+d'état partagé entre recherches successives.
+Les diagnostics de significativité sont vérifiés aux bornes strictes
+`1<S<seuil`, sans condition de connexion, y compris sans objet détecté. Les
+tests des cartes contrôlent les deux gris et le jaune clair (classes 2, 7 et 8), leurs limites
+et la priorité du ciel et des objets, sans modifier les masques de mesure.
+L'admission amorcée dans la marge figée est testée sur un fragment détaché,
+sa propagation au-delà de la marge et le rattachement du faible connecté.
+Les tests vérifient l'arrêt aux trous, aux cellules inactives et au ciel figé,
+l'absence de dilatation en cascade vers un îlot séparé, la conservation des
+graines et l'impossibilité de créer une admission sans objet initial.
+
+Le repli sur le centile inférieur est vérifié pour un faible effectif détecté,
+une bande faible vide, les égalités de luminosité, un objet très petit et
+l'absence d'objet. La carte verte et sa légende doivent correspondre au masque
+effectivement utilisé pour la qualité, même si ce masque inclut des graines.
+
+La sélection de visibilité stellaire distingue les écarts progressifs des ailes
+(0,60 à 0,90) des rejets d'amincissement du corps ou de déformation forte. Les
+tests contrôlent ces frontières, la tolérance supérieure d'ailes de 10 %, les
+95 % de profils mesurables, la reprise appariée à 31 pixels, les groupes de
+luminosité, la priorité de visibilité et les courbes de puissance globales.
+Le rejeu exact de la recette et l'identité spatiale de la courbe sont vérifiés.
+Les diagnostics sont exportés pour une courbe de puissance retenue et pour un
+motif d'arrêt nouveau, afin qu'une simple extension des libellés ne bloque pas
+le post-traitement après un rendu admissible.

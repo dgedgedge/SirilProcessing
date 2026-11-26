@@ -29,7 +29,7 @@ Pour comparer les rapports directement accessibles dans une collection :
   -o /tmp/restoration_comparison_all
 ```
 
-Les entrées peuvent être un fichier JSON, un dossier `04_restoration`, un
+Les entrées peuvent être un fichier JSON, un dossier `05_restoration`, un
 dossier d'objet ou une collection d'objets. Les chemins sont dédoublonnés.
 L'option `--recursive` recherche aussi dans tous les sous-répertoires.
 

@@ -4,7 +4,7 @@
 
 ## 1.1. Organisation des sorties
 
-La comparaison des chaînes produit un `04_restoration/restoration.json`
+La comparaison des chaînes produit un `05_restoration/restoration.json`
 synthétique, identifié par `report_schema_version: 2` et
 `report_detail: "summary"`. Il conserve les décisions, scores et contributions,
 critères agrégés, seuils enregistrés, drapeaux bloquants, motifs de rejet,

@@ -4,6 +4,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from lib.type_defs import JSONReport
 
 from lib.star_rendering import (
     ConservativeStarRenderer, recompose, stellar_peak_positions,
@@ -144,7 +145,7 @@ def test_adaptive_histogram_reveals_faint_peaks_with_bounded_width() -> None:
         light += amplitude * np.exp(-((x - cx) ** 2 + (y - cy) ** 2) / 2)
     data = np.array([light, 0.6 * light, 0.3 * light])
     fixed, previous = ConservativeStarRenderer.render(data, histogram_strength=0)
-    default, default_report = ConservativeStarRenderer.render(data)
+    default, default_report = ConservativeStarRenderer.render(data, visible_fraction=0)
     assert default_report["histogram_balance"]["requested_strength"] == 1
     assert default_report['visibility']['above_threshold'] >= previous['visibility']['above_threshold']
     assert default_report['boost_selection']['fraction'] == .25
@@ -263,6 +264,28 @@ def test_unmeasurable_width_remains_explicit() -> None:
     assert report['fwhm']['median_ratio'] is None
     assert report['width_adaptation']['stop_reason'] == 'unmeasurable width'
     assert len(report['width_adaptation']['iterations']) == 1
+
+
+def test_rejection_log_uses_the_group_ratio_actually_checked(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Une médiane globale admissible n'est pas affichée comme supérieure à la limite."""
+    source = np.zeros((3, 20, 20), dtype='f4')
+
+    def rejected(*args: object, **kwargs: object) -> tuple[np.ndarray, JSONReport]:
+        """Fournit une médiane globale sûre mais un groupe hors limite."""
+        return source.copy(), dict(
+            fwhm=dict(median_ratio=1.377028, maximum_group_median_ratio=1.6),
+            histogram_balance=dict(accepted_strength=0.),
+        )
+
+    monkeypatch.setattr(ConservativeStarRenderer, '_render_candidate', rejected)
+    with caplog.at_level('INFO', logger='lib.star_rendering'):
+        with pytest.raises(ValueError, match='ratio 1.600000'):
+            ConservativeStarRenderer._render_unrestricted(source, faint_boost=1., max_width_ratio=1.5)
+    assert '1.600000 > limite 1.5' in caplog.text
+    assert 'médiane globale 1.377028' in caplog.text
+    assert '1.377028 >' not in caplog.text
 
 
 def test_stellar_trial_recording_preserves_render_and_source() -> None:
@@ -474,7 +497,7 @@ def test_default_fraction_builds_pointwise_quantile_curve(
     source = fractional_star_field
     original = source.copy()
     base, _ = ConservativeStarRenderer.render(source, boost_fraction=0, contrast_mode='pointwise')
-    rendered, report = ConservativeStarRenderer.render(source, contrast_mode='pointwise')
+    rendered, report = ConservativeStarRenderer.render(source, contrast_mode='pointwise', visible_fraction=0)
     selection = report['boost_selection']
     assert selection['fraction'] == .25
     assert selection['selected_count'] <= selection['budget'] == 9

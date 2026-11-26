@@ -68,7 +68,11 @@ class ProcessingHtmlReport:
         '02_photometrie': ('Étalonnage des couleurs',
             'Résolution astrométrique puis étalonnage SPCC ou PCC selon les paramètres. '
             'Les catalogues, profils spectraux et commandes utilisés figurent dans les audits.'),
-        '04_restoration': ('Restauration et sélection',
+        '04_aberration_remover': ('Aberration Remover',
+            'Correction optique conditionnelle avant restauration. Les mesures de rondeur '
+            'et de FWHM, au centre et aux bords, guident le déclenchement et la sélection. '
+            'Sans gain utile, l’image d’entrée est conservée.'),
+        '05_restoration': ('Restauration et sélection',
             'Comparaison des candidats de netteté et débruitage. Les contrôles locaux '
             'évaluent chaque opération ; les contrôles finaux comparent les chaînes à '
             'l’image d’origine. Un rejet conserve l’entrée, un gain non démontré ne vaut pas amélioration.'),
@@ -85,7 +89,7 @@ class ProcessingHtmlReport:
             'flux stellaire et structures diffuses selon les critères présents dans l’audit. '
             'PASS signifie satisfait, FAIL non satisfait, UNKNOWN non vérifiable. '
             'Les valeurs, seuils et motifs du compte rendu font foi.'),
-        '05_autoghs': ('Rendu GHS',
+        '06_autoghs': ('Rendu GHS',
             'Séparation des étoiles et du fond, étirement GHS du fond, rendu conservateur '
             'des étoiles puis recomposition et diagnostics. Les couches restent disponibles pour la reprise couleur.'),
         '01_separation': ('Séparation des étoiles',
@@ -105,7 +109,7 @@ class ProcessingHtmlReport:
         '05_diagnostics': ('Diagnostics du rendu',
             'Histogrammes, aperçus et rapports détaillés servant à examiner les résultats '
             'du rendu. Une image de diagnostic ne remplace pas les critères chiffrés.'),
-        '06_color': ('Couleur et publication finale',
+        '07_color': ('Couleur et publication finale',
             'Passe couleur éventuelle après GHS, recomposition, export et annotation. '
             'Les contrôles de luminosité et de couleur et les snapshots des couches '
             'documentent les résultats et leur provenance.'),
@@ -1739,7 +1743,7 @@ class ProcessingHtmlReport:
                 else:
                     content = (cls._stellar_selection_view(payload, directory) if path.name == 'stellar_profiles.json'
                                else cls._selection_view(payload, directory) + cls._summary_view(
-                                   payload, compact=any(parent.name == '04_restoration'
+                                   payload, compact=any(parent.name in ('04_restoration', '05_restoration')
                                                         for parent in (directory, *directory.parents))))
                 return f'<section><h3>{title}</h3>{content}</section>'
             else:
@@ -1770,7 +1774,7 @@ class ProcessingHtmlReport:
         Préserve les liens vers les sous-étapes et ne déduit aucun succès de
         l'absence d'un audit. Les autres étapes conservent leur présentation.
         """
-        compact = any(parent.name == '04_restoration' for parent in (base, *base.parents))
+        compact = any(parent.name in ('04_restoration', '05_restoration') for parent in (base, *base.parents))
         rows = []
         for child in sorted(children):
             findings = []

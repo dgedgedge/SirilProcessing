@@ -4,31 +4,18 @@
 
 ## 1. Utilisation
 
-Le moteur `AberrationRemoverProcessor` ajoute un candidat de netteté aux
-comparaisons de restauration. Selon la
-[recommandation de l’auteur du modèle 2.5.0](https://github.com/riccardoalberghi/abberation_models/releases/tag/2.5.0),
-il doit intervenir sur l’image linéaire après correction du fond et des couleurs,
-**avant tout débruitage ou autre déconvolution**.
+[L'étape optique indépendante](aberration-stage.md) intervient après la
+correction du fond et des couleurs, **avant la restauration**, sur l'image
+linéaire. Elle mesure la rondeur et la finesse des étoiles, notamment aux bords,
+pour décider de lancer le modèle puis de retenir son résultat. Un gain
+insuffisant conserve l'entrée sans modification. Aberration Remover n'est plus
+ajouté aux combinaisons déconvolution/débruitage de la restauration.
 
-En comparaison des chaînes, Aberration Remover est un moteur de netteté à
-part entière. Il est essayé seul ou suivi d'un débruitage. Il ne peut pas être
-associé à une déconvolution Siril ou à la netteté Cosmic Clarity : cela
-répéterait une étape de netteté. Toutes les chaînes comportent au plus deux
-traitements, avec au plus une netteté et un débruitage.
-`--restoration-reverse-order` ne déplace pas Aberration Remover après le
-débruitage ; cette option concerne seulement les autres moteurs de netteté.
-Les contrôles locaux et finaux ainsi que la comparaison avec l’identité sont
-conservés.
-Sans comparaison des chaînes, la séquence standard évalue les candidats de
-netteté avant le débruitage.
-Il utilise par défaut le modèle livré dans
-`data/AberrationRemover/model_v2_5_0.onnx`, avec un chemin absolu calculé depuis
-l'emplacement du module, indépendant du dossier de lancement. Il est donc
-inclus par défaut dans la comparaison lorsque la déconvolution est activée.
-`--aberration-model /chemin/modele.onnx` sélectionne un autre modèle ;
-`--aberration-model ""` désactive ce moteur.
-Les seuils de contrôle stellaire et d'artefacts sont ceux de la déconvolution ;
-un résultat refusé ne remplace pas l'entrée.
+Il utilise le modèle `data/AberrationRemover/model_v2_5_0.onnx`, avec un chemin
+absolu calculé depuis le module. `--aberration-model` change ce chemin ; une
+chaîne vide ou `--disable-aberration` désactive l'étape. Les options du moteur
+ci-dessous restent disponibles ; les seuils de décision sont décrits sur la
+[page de l'étape](aberration-stage.md).
 
 Installer ONNX Runtime dans l'environnement Python utilisé, comme pour
 GraXpert, et fournir un modèle compatible issu des
@@ -51,7 +38,7 @@ Options persistantes (CLI prioritaire sur configuration JSON puis défauts) :
 | `--aberration-model` | chemin absolu vers `data/AberrationRemover/model_v2_5_0.onnx` | Modèle livré ; chemin vide pour désactiver |
 | `--aberration-strength` | `1.0` | Mélange entre entrée et correction, entre 0 et 1 |
 | `--aberration-dark-ringing` | faux | Réduction des anneaux sombres |
-| `--aberration-protect-background` | faux | Protection des pixels sous le seuil du fond |
+| `--aberration-protect-background` | vrai | Protection des pixels sous le seuil du fond |
 
 La politique `--compute-backend cpu` impose CPU. Avec `auto`, CUDA est choisi
 s'il est disponible dans ONNX Runtime, sinon CPU. CoreML est exclu.
@@ -70,10 +57,16 @@ ONNX actifs et l'intensité. Le modèle est inclus dans l'empreinte du cache des
 chaînes. Un modèle absent, une forme ONNX incompatible ou des pixels non finis
 font échouer ce candidat et sont enregistrés par l'orchestrateur.
 
+La protection du fond est activée par défaut.
+`--no-aberration-protect-background` la désactive explicitement ; une valeur
+sauvegardée en configuration reste prioritaire sur le défaut.
+
 ## 2. Module et algorithme
 
 `lib/aberration.py` sépare `AberrationEngine` (calcul indépendant) et
-`AberrationRemoverProcessor` (candidat avec contrôles communs). Le moteur expose
+`AberrationRemoverProcessor` (adaptateur historique avec contrôles communs).
+La séquence standard utilise `AberrationCorrectionStage`, dont la politique
+de sélection optique est décrite séparément. Le moteur expose
 `process(source, candidate)` pour les FITS et `restore(data, session, input_name,
 ...)` pour des tableaux CHW normalisés. L'adaptateur réutilise le cycle de
 contrôle du processeur neuronal existant via sa méthode `_infer`.

@@ -84,7 +84,18 @@ Le sous-rapport `stacking` conserve les comptes, les rapports sources, les
 motifs d'indisponibilité et le statut `AVAILABLE`, `PARTIAL`, `UNAVAILABLE` ou
 `INVALID`. Les rapports de stacking/mosaïque doivent donc rester disponibles.
 
-L'encart affiche aussi le type de restauration réellement appliqué, par exemple :
+L'encart distingue la correction optique et la restauration réellement appliquées.
+
+Une ligne indépendante décrit [Aberration Remover](aberration-stage.md) :
+`appliqué`, `essai non retenu, entrée conservée`, `non déclenché` ou `désactivé`.
+La ligne résume trois points : rondeur initiale champ/bords, rapport initial
+FWHM bords/centre et statut, sans explication en cas de refus. Exemple : `Aberration Remover : rondeur champ/bords 0,649/0,650 |
+FWHM bords/centre 1,02 | appliqué`. Les mesures manquantes sont omises. Les
+gains, variations de flux et seuils détaillés restent dans les rapports.
+Les reprises réutilisent le statut sauvegardé. Sans rapport d'AR, aucun usage
+n'est déduit des options ; une chaîne AR historique retenue reste identifiable.
+
+La ligne de restauration reste distincte :
 
 ```text
 Restauration : Débruitage (GraXpert) → Déconvolution (Siril)
@@ -150,7 +161,9 @@ rapports associés au FITS qu'il reçoit ; il ne recherche pas un fichier par
 supposition à partir du nom d'un export final.
 
 
-La taille de police dépend de la plus petite dimension de l'image. Le texte
+La taille initiale de police vaut la plus petite dimension de l'image divisée
+par 78 (partie entière, minimum 8 pixels). Les lignes plus longues privilégient
+un encart plus large et moins haut. Le texte
 revient automatiquement à la ligne et la police diminue si nécessaire pour
 maintenir l'encart dans le champ. Le fond sombre translucide améliore la lecture.
 DejaVu Sans est fourni par Matplotlib, déjà requis ; aucune fonte système ni

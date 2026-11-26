@@ -161,9 +161,63 @@ class FinalImageAnnotator(processor):
         return "Restauration : " + (description or "aucune")
 
     @staticmethod
+    def aberration_line(treatments: JSONReport | None) -> str:
+        """Résume rondeur initiale, largeur bords/centre et décision d'utilisation.
+
+        Les valeurs viennent des mesures initiales sauvegardées ; les données
+        absentes ne deviennent pas zéro. Les gains, flux et seuils détaillés
+        restent dans le rapport scientifique. Aucun motif de refus n'est ajouté.
+        """
+        prefix = 'Aberration Remover : '
+        if treatments is None:
+            return prefix + 'non renseigné'
+        stage = treatments.get('aberration')
+        if stage is None:
+            restoration = treatments.get('restoration', {})
+            chain = restoration.get('selected_chain') if isinstance(restoration, dict) else None
+            if (isinstance(restoration, dict)
+                    and isinstance(chain, list) and 'sharpen:aberration_remover' in chain):
+                return prefix + 'appliqué via restauration (ancien rapport)'
+            return prefix + 'non appliqué'
+        if not isinstance(stage, dict):
+            return prefix + 'non renseigné'
+        status = stage.get('status')
+        labels = {'accepted': 'appliqué', 'retained_input': 'essai non retenu, entrée conservée',
+                  'skipped': 'non déclenché', 'DISABLED': 'désactivé', 'disabled': 'désactivé',
+                  'failed': 'en échec'}
+        description = labels.get(status, 'statut non renseigné')
+        if stage.get('reason') == 'model_disabled':
+            description = 'désactivé'
+        before = stage.get('before', {})
+        before = before if isinstance(before, dict) else {}
+
+        def value(group: str, key: str) -> float | None:
+            """Lit uniquement une mesure numérique finie du groupe initial."""
+            measures = before.get(group, {})
+            item = measures.get(key) if isinstance(measures, dict) else None
+            if isinstance(item, bool) or not isinstance(item, (int, float)) or not math.isfinite(item):
+                return None
+            return float(item)
+
+        parts = []
+        whole, edge = value('all', 'roundness'), value('edge', 'roundness')
+        if whole is not None and edge is not None:
+            parts.append(f'rondeur champ/bords {whole:.3f}/{edge:.3f}'.replace('.', ','))
+        elif whole is not None:
+            parts.append(f'rondeur champ {whole:.3f}'.replace('.', ','))
+        elif edge is not None:
+            parts.append(f'rondeur bords {edge:.3f}'.replace('.', ','))
+        width, center = value('edge', 'fwhm_px'), value('center', 'fwhm_px')
+        if width is not None and center is not None and center > 0:
+            parts.append(f'FWHM bords/centre {width/center:.2f}'.replace('.', ','))
+        parts.append(description)
+        return prefix + ' | '.join(parts)
+
+    @staticmethod
     def draw_panel(image: Image.Image, lines: list[str]) -> tuple[int, int, int, int]:
         """Compose un encart ajusté automatiquement, sans déborder de l'image.
 
+        Les lignes plus longues privilégient un encart large et peu haut.
         La police et les retours à la ligne dépendent des dimensions. La police
         DejaVu livrée avec Matplotlib évite une dépendance aux fontes système.
         Retourne le rectangle du panneau en pixels écran (gauche, haut, droite, bas).
@@ -173,10 +227,12 @@ class FinalImageAnnotator(processor):
         font_path = Path(get_data_path()) / "fonts/ttf/DejaVuSans.ttf"
         margin = max(4, min(image.size) // 60)
         available_width = image.width - 4 * margin
-        size = max(8, min(image.size) // 70)
+        size = max(8, min(image.size) // 78)
         while True:
             font = ImageFont.truetype(str(font_path), size)
-            columns = max(8, int(available_width / font.getlength("M")))
+            # Un chiffre représente mieux la largeur du texte courant que M ;
+            # le contrôle du rectangle ci-dessous protège les lignes très larges.
+            columns = max(8, int(available_width / font.getlength("0")))
             wrapped = [part for line in lines for part in textwrap.wrap(
                 line, width=columns, break_long_words=True, break_on_hyphens=False,
             )]
@@ -347,7 +403,8 @@ class FinalImageAnnotator(processor):
             Sans surcharge, consulter les rapports associés au FITS fourni.
         treatments : JSONReport, optional
             Résultats complets du post-traitement, après fusion des reprises,
-            pour afficher la restauration réellement appliquée. Sans ces
+            pour afficher le statut d'Aberration Remover et la restauration
+            réellement appliquée. Sans ces
             rapports, afficher « Restauration : non renseignée ».
 
         Returns
@@ -381,6 +438,7 @@ class FinalImageAnnotator(processor):
                     acquisition_source if acquisition_source is not None else source
                 )
                 lines.extend(stacking['lines'])
+                lines.append(self.aberration_line(treatments))
                 lines.append(self.restoration_line(treatments))
                 objects, sky_audit = [], {"status": "DISABLED"}
                 if getattr(runtime, "annotation_objects", True):

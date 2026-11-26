@@ -163,7 +163,7 @@ def summarize(entry: dict[str, object], report: Path, scope: str) -> dict[str, o
         'rapport': str(report),
         'audit': entry.get('audit_path', entry.get('report_path')),
         'objet': (report.parent.parent.name
-                  if report.parent.name == '04_restoration' else report.parent.name),
+                  if report.parent.name in ('04_restoration', '05_restoration') else report.parent.name),
         'portee': scope, 'numero': entry.get('number', entry.get('operation_id')),
         'chaine': entry.get('chain'), 'statut': entry.get('status'),
         'retenu': False, 'score': entry.get('selection_score'),
@@ -236,7 +236,7 @@ def read_report(path: Path) -> list[dict[str, object]]:
 def discover(inputs: list[Path], recursive: bool = False) -> list[Path]:
     """Résout fichiers, dossiers de restauration, objets ou collections d'objets.
 
-    Sans récursion, accepte ``restoration.json``, ``04_restoration/restoration.json``
+    Sans récursion, accepte ``restoration.json``, ``05_restoration/restoration.json``
     et les mêmes chemins dans les enfants immédiats. Refuse une entrée vide de
     rapports ; dédoublonne les chemins résolus et conserve l'ordre des entrées.
     """
@@ -250,8 +250,10 @@ def discover(inputs: list[Path], recursive: bool = False) -> list[Path]:
                 found = sorted(source.rglob('restoration.json'))
             else:
                 candidates = [source / 'restoration.json',
+                              source / '05_restoration/restoration.json',
                               source / '04_restoration/restoration.json']
                 candidates.extend(sorted(source.glob('*/restoration.json')))
+                candidates.extend(sorted(source.glob('*/05_restoration/restoration.json')))
                 candidates.extend(sorted(source.glob('*/04_restoration/restoration.json')))
                 found = [path for path in candidates if path.is_file()]
         else:

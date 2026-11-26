@@ -14,6 +14,23 @@ from lib.postprocess import PostProcessingProcessor
 from lib.postprocess_resume import PostProcessResume
 
 
+def test_optical_stage_numbers_and_legacy_reports(tmp_path: Path) -> None:
+    """Les nouvelles sorties suivent 03–07 ; les anciens rapports restent lisibles."""
+    layout = OutputLayout(tmp_path / 'object')
+    layout.create()
+    assert [layout.stage_report(prefix).parent.name for prefix in (
+        'photometry', 'aberration', 'restoration', 'autoghs', 'final_color',
+    )] == ['03_photometrie', '04_aberration_remover', '05_restoration',
+          '06_autoghs', '07_color']
+    old = OutputLayout.for_report(layout.root / '06_color/postprocess.json')
+    assert old is not None and old.legacy
+    assert old.stage_report('restoration') == layout.root / '04_restoration/restoration.json'
+    assert old.stage_report('autoghs') == layout.root / '05_autoghs/autoghs.json'
+    assert old.report == layout.root / '06_color/postprocess.json'
+    current = OutputLayout.for_report(layout.report)
+    assert current is not None and not current.legacy
+
+
 def test_handoff_is_a_physical_copy_and_preserves_resume_identity(tmp_path: Path) -> None:
     """Le relais uniforme ne modifie ni les pixels ni les dates d'une calibration."""
     layout = OutputLayout(tmp_path / 'M_33')
@@ -33,7 +50,7 @@ def test_handoff_is_a_physical_copy_and_preserves_resume_identity(tmp_path: Path
     assert PostProcessingProcessor.report_path_for(result) == layout.report
     assert PostProcessingProcessor.report_path_for(result, layout.root) == layout.report
     assert {path.name for path in layout.root.iterdir() if path.is_dir()} == {
-        '01_calibration', '02_mosaic', '03_photometrie', '04_restoration', '05_autoghs', '06_color',
+        '01_calibration', '02_mosaic', '03_photometrie', '04_aberration_remover', '05_restoration', '06_autoghs', '07_color',
     }
 
 
@@ -63,7 +80,7 @@ def test_reports_and_manifest_stay_inside_stages(tmp_path: Path) -> None:
         layout.write_summary(report, payload)
         assert json.loads(report.read_text()) == payload
         assert 'SUCCESS' in report.with_suffix('.txt').read_text()
-        assert report.relative_to(layout.root).parts[0][:2] in ('03', '04', '05', '06')
+        assert report.relative_to(layout.root).parts[0][:2] in ('03', '04', '05', '06', '07')
     PostProcessResume.save_final_images(layout.root, roots, True, [layout.image])
     assert PostProcessResume.final_images(layout.root, tmp_path / 'work', roots, 'M31') == [layout.image]
     assert not list(layout.root.glob('*.json')) and not list(layout.root.glob('*.txt'))
@@ -77,7 +94,7 @@ def test_interrupted_numbered_history_is_resumable_without_guessing(tmp_path: Pa
     layout = OutputLayout(tmp_path / 'M33')
     layout.create()
     fits.writeto(layout.image, np.ones((3, 12, 16), dtype='f4')*.01)
-    prepared = layout.root / '04_restoration/prepared.fits'
+    prepared = layout.root / '05_restoration/prepared.fits'
     fits.writeto(prepared, np.ones((3, 12, 16), dtype='f4')*.02)
     layout.write_summary(layout.stage_report('restoration'), {
         'status': 'SUCCESS', 'image_path': str(layout.image), 'output_image': str(prepared),
@@ -119,18 +136,18 @@ def test_numbered_postprocess_keeps_original_sources_and_resumes_color(
                 'stars': {'output_image': str(stars)}, 'parameters': {'ghs_headroom': .95}}
 
     monkeypatch.setattr(AutoGHSFinalRenderer, 'post_process', render)
-    args = argparse.Namespace(enable_gradient=False, enable_photometry=False,
+    args = argparse.Namespace(enable_gradient=False, enable_photometry=False, enable_aberration=False,
                               enable_deconvolution=False, enable_denoise=False, enable_autoghs=True,
                               enable_final_color=True, final_annotation=False, compute_backend='cpu')
     result = PostProcessingProcessor().post_process(layout.image, layout.report, args)
     assert Path(result['output_image']) == layout.root / 'M_31.fits'
-    assert Path(result['output_ghs_image']) == layout.root / '05_autoghs/render.fits'
+    assert Path(result['output_ghs_image']) == layout.root / '06_autoghs/render.fits'
     assert layout.stage_report('final_color').is_file()
     assert layout.stage_report('final_color').with_suffix('.txt').is_file()
     assert layout.report.with_suffix('.txt').is_file()
     assert layout.image.read_bytes() == source_bytes
     assert not list(layout.root.glob('*.json'))
-    original_ghs = (layout.root / '05_autoghs/starless.fits').read_bytes()
+    original_ghs = (layout.root / '06_autoghs/starless.fits').read_bytes()
     args.color_only = True
 
     def forbidden(*args: object, **kwargs: object) -> None:
@@ -141,7 +158,7 @@ def test_numbered_postprocess_keeps_original_sources_and_resumes_color(
     resumed = PostProcessingProcessor().post_process(layout.image, layout.report, args)
     assert Path(resumed['output_image']) == layout.root / 'M_31.fits'
     assert len(calls) == 1
-    assert (layout.root / '05_autoghs/starless.fits').read_bytes() == original_ghs
+    assert (layout.root / '06_autoghs/starless.fits').read_bytes() == original_ghs
     assert layout.image.read_bytes() == source_bytes
 
 
@@ -168,6 +185,7 @@ def test_all_standard_engines_use_their_numbered_stage(
     """Le même relais suit gradient, photométrie, restauration et GHS sans fuite de rapports."""
     import shutil
     from lib.postprocess import _PostProcessorSequence, GradientExtractor, PhotometricColorCalibrator
+    from lib.aberration_stage import AberrationCorrectionStage
     from lib.restoration_chains import RestorationChainProcessor
     from lib.deconvolution import DeconvolutionProcessor
     from lib.denoising import NoiseReductionProcessor
@@ -190,14 +208,14 @@ def test_all_standard_engines_use_their_numbered_stage(
         observed.append(prefix)
         return {'status': 'SUCCESS', 'image_path': str(input_path), 'output_image': str(image)}
 
-    for engine in (GradientExtractor, PhotometricColorCalibrator, RestorationChainProcessor,
+    for engine in (GradientExtractor, PhotometricColorCalibrator, AberrationCorrectionStage, RestorationChainProcessor,
                    DeconvolutionProcessor, NoiseReductionProcessor, AutoGHSFinalRenderer):
         monkeypatch.setattr(engine, 'post_process', execute)
     result = _PostProcessorSequence().post_process(layout.image, layout.report, argparse.Namespace(
         restoration_compare_chains=compare_chains, enable_autoghs=True,
     ))
-    expected = (['gradient', 'photometry', 'restoration', 'autoghs'] if compare_chains else
-                ['gradient', 'photometry', 'deconvolution', 'denoise', 'autoghs'])
+    expected = (['gradient', 'photometry', 'aberration', 'restoration', 'autoghs'] if compare_chains else
+                ['gradient', 'photometry', 'aberration', 'deconvolution', 'denoise', 'autoghs'])
     assert observed == expected and list(result) == expected
     for prefix in expected:
         assert layout.stage_report(prefix).is_file()

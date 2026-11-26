@@ -4,7 +4,8 @@ Script de post-traitement extensible pour une image FITS unique.
 
 Ce script prend UNE SEULE image FITS calibrée en entrée et exécute les
 traitements activés par défaut : analyse du gradient, résolution
-astrométrique Gaia suivie de l'étalonnage spectrophotométrique SPCC des couleurs, puis
+astrométrique Gaia suivie de l'étalonnage spectrophotométrique SPCC des couleurs,
+correction optique conditionnelle Aberration Remover, puis
 comparaison des chaînes complètes de débruitage et de déconvolution,
 avec contrôles locaux et finaux sur une référence commune. L’option
 --no-restoration-compare-chains rétablit la comparaison par étape.

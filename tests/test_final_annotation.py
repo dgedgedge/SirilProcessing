@@ -55,6 +55,88 @@ def test_metadata_does_not_invent_mosaic_integration() -> None:
     assert "Informations non renseignées" in FinalImageAnnotator.acquisition_lines(fits.Header())
 
 
+@pytest.mark.parametrize('status,label', [
+    ('accepted', 'appliqué'), ('retained_input', 'essai non retenu, entrée conservée'),
+])
+def test_aberration_panel_shows_compact_summary(
+    tmp_path: Path, status: str, label: str,
+) -> None:
+    """Le PNG résume rondeur, largeur relative et décision sans les autres détails."""
+    source = tmp_path / 'render.fits'
+    fits.writeto(source, np.full((3, 300, 600), .2, dtype='f4'),
+                 fits.Header({'SPNLIN': True}))
+    original = source.read_bytes()
+    treatments = {'aberration': {
+        'status': status,
+        'parameters': {'aberration_roundness_target': .88, 'aberration_max_fwhm_px': 3.8,
+                       'aberration_edge_fwhm_ratio': 1.3,
+                       'aberration_min_roundness_gain': .04, 'aberration_min_fwhm_gain': .07},
+        'before': {'all': {'roundness': .72, 'fwhm_px': 4.},
+                   'edge': {'roundness': .65, 'fwhm_px': 4.2},
+                   'center': {'fwhm_px': 3.}},
+        'quality': {'groups': {
+            'all': {'roundness_gain': .08, 'fwhm_gain': .12,
+                    'roundness_after': .8, 'fwhm_after_px': 3.52},
+            'edge': {'roundness_gain': .1, 'fwhm_gain': .15,
+                     'roundness_after': .75, 'fwhm_after_px': 3.57},
+        }},
+        'diffuse_flux': {'median_relative_change': -.23, 'measured_count': 20,
+                         'loss_limit': -.08},
+    }}
+    result = FinalImageAnnotator().post_process(
+        source, tmp_path / 'annotation.json', argparse.Namespace(annotation_objects=False),
+        treatments=treatments,
+    )
+    lines = [line for line in result['lines'] if line.startswith('Aberration Remover :')]
+    assert len(lines) == 1
+    line = lines[0]
+    assert label in line
+    assert line == ('Aberration Remover : rondeur champ/bords 0,720/0,650 | '
+                    'FWHM bords/centre 1,40 | ' + label)
+    assert 'flux' not in line and 'gain requis' not in line
+    with Image.open(result['output_annotated_image']) as image:
+        assert image.size == (600, 300)
+    assert source.read_bytes() == original
+
+
+def test_skipped_aberration_hides_measurements_and_limits() -> None:
+    """Les mesures initiales restent dans le rapport et ne surchargent pas le PNG."""
+    line = FinalImageAnnotator.aberration_line({'aberration': {
+        'status': 'skipped', 'before': {'all': {'roundness': .95, 'fwhm_px': 3.}},
+        'parameters': {'aberration_roundness_target': .9},
+    }})
+    assert line == 'Aberration Remover : rondeur champ 0,950 | non déclenché'
+
+
+def test_aberration_summary_omits_refusal_reason_and_invalid_values() -> None:
+    """Le statut suffit ; motifs de refus et valeurs invalides restent omis."""
+    line = FinalImageAnnotator.aberration_line({'aberration': {
+        'status': 'retained_input', 'quality': {'reasons': ['insufficient_matches']},
+        'before': {'all': {'roundness': float('nan')},
+                   'edge': {'fwhm_px': 3.}, 'center': {'fwhm_px': 0.}},
+    }})
+    assert line == 'Aberration Remover : essai non retenu, entrée conservée'
+
+
+
+@pytest.mark.parametrize('treatments,expected', [
+    (None, 'non renseigné'), ({}, 'non appliqué'),
+    ({'aberration': {'status': 'skipped'}}, 'non déclenché'),
+    ({'aberration': {'status': 'skipped', 'reason': 'model_disabled'}}, 'désactivé'),
+    ({'aberration': {'status': 'accepted', 'quality': None,
+                     'diffuse_flux': {'median_relative_change': None}}}, 'appliqué'),
+    ({'aberration': {'status': 'accepted', 'quality': {'groups': None},
+                     'diffuse_flux': {'median_relative_change': float('nan')}}}, 'appliqué'),
+    ({'restoration': {'selected_chain': ['sharpen:aberration_remover']}},
+     'appliqué via restauration (ancien rapport)'),
+])
+def test_aberration_line_does_not_invent_missing_gains(
+    treatments: JSONReport | None, expected: str,
+) -> None:
+    """Désactivation, archives et mesures absentes ne deviennent pas des gains nuls."""
+    assert FinalImageAnnotator.aberration_line(treatments) == 'Aberration Remover : ' + expected
+
+
 @pytest.mark.parametrize('treatments,expected', [
     (None, 'non renseignée'),
     ({}, 'aucune'),
@@ -148,6 +230,9 @@ def test_last_stage_integration(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     ) -> JSONReport:
         """Fournit une sortie scientifique déterministe sans exécuter Siril."""
         return {
+            'aberration': {'status': 'accepted',
+                           'quality': {'groups': {'edge': {'roundness_gain': .1}}},
+                           'diffuse_flux': {'median_relative_change': -.2}},
             'restoration': {'status': 'accepted', 'selected_chain': ['denoise:graxpert']},
             'autoghs': {'output_image': str(rendered)},
         }
@@ -169,6 +254,7 @@ def test_last_stage_integration(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     assert result['treatments']['annotation']['status'] == 'SUCCESS'
     assert 'Images empilées (retenues/total) : 12/20' in result['treatments']['annotation']['lines']
     assert 'Restauration : Débruitage (GraXpert)' in result['treatments']['annotation']['lines']
+    assert 'Aberration Remover : appliqué' in result['treatments']['annotation']['lines']
     assert json.loads(report.read_text()) == result['treatments']
     assert Path(result['output_image']).read_bytes() == rendered.read_bytes()
 

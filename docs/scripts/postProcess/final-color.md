@@ -122,8 +122,8 @@ avant réinitialisation du dossier couleur. Les anciens rapports contenant les
 couches explicites restent utilisables, sans pouvoir certifier rétroactivement
 leur provenance avant la première passe couleur.
 
-Dans le plan lightProcess, le rapport est `06_color/color.json` et les
-fichiers sont dans `06_color/color_work/`. Les champs permettent de distinguer
+Dans le plan lightProcess, le rapport est `07_color/color.json` et les
+fichiers sont dans `07_color/color_work/`. Les champs permettent de distinguer
 les couches, même lorsque leurs noms de fichiers commencent tous par `starless` :
 
 | Champ du rapport | Image référencée dans le pipeline complet | Rôle FITS |

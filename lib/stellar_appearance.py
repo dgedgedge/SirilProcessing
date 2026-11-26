@@ -20,7 +20,7 @@ class StellarAppearanceQuality:
     du fond local, en unités normalisées. Les mesures locales sont diagnostiques.
     """
 
-    VISIBLE_TARGET = .25
+    VISIBLE_TARGET = .30
     VISIBILITY_LEVEL = .03
     RADIUS = 32
     RAYS = 16
@@ -83,15 +83,19 @@ class StellarAppearanceQuality:
     def evaluate(
         cls, before: np.ndarray, after: np.ndarray,
         positions: tuple[np.ndarray, np.ndarray],
+        *, target_fraction: float | None = None,
     ) -> JSONReport:
-        """Évalue le rendu sans sélection ni modification de ses pixels.
+        """Évalue le rendu sans modifier ses pixels ; la cible guide le moteur global.
 
         Le fond local est la médiane du bord d'un carré de rayon 32 pixels.
-        Les candidats trop proches d'un bord restent inconnus. L'objectif 25 %
+        Les candidats trop proches d'un bord restent inconnus. L'objectif 30 %
         utilise des bornes incluant ces inconnus, jamais assimilés à zéro.
         Les profils concernent au plus 64 candidats visibles répartis en amplitude.
         Les autres objectifs n'ont pas encore de seuil perceptuel calibré.
         """
+        target = cls.VISIBLE_TARGET if target_fraction is None else target_fraction
+        if not np.isfinite(target) or not 0 <= target <= 1:
+            raise ValueError('Objectif de visibilité stellaire hors de [0,1]')
         validate_rgb(before)
         validate_rgb(after)
         if before.shape != after.shape:
@@ -129,8 +133,8 @@ class StellarAppearanceQuality:
         visible = len(candidates)
         lower = visible/count if count else None
         upper = (visible+unknown)/count if count else None
-        status = ('UNKNOWN' if count == 0 else 'PASS' if lower >= cls.VISIBLE_TARGET
-                  else 'FAIL' if upper < cls.VISIBLE_TARGET else 'UNKNOWN')
+        status = ('UNKNOWN' if count == 0 else 'PASS' if lower >= target
+                  else 'FAIL' if upper < target else 'UNKNOWN')
         ordered = sorted(candidates, key=lambda item: item[0])
         if len(ordered) > cls.MAX_PROFILES:
             ordered = [ordered[i] for i in np.linspace(0, len(ordered)-1,
@@ -160,7 +164,7 @@ class StellarAppearanceQuality:
         return dict(
             blocking=False, method='fixed input candidates; luminance contrast; radial crossings',
             luminance_weights=[.2126, .7152, .0722],
-            visibility=dict(status=status, blocking=False, target_fraction=cls.VISIBLE_TARGET,
+            visibility=dict(status=status, blocking=False, target_fraction=target,
                             contrast_threshold=cls.VISIBILITY_LEVEL, candidate_count=count,
                             visible_count=visible, unknown_count=unknown,
                             fraction_lower_bound=lower, fraction_upper_bound=upper),

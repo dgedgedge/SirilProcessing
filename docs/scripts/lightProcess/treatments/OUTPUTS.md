@@ -6,8 +6,8 @@
 ## Fichiers produits
 
 Les nouvelles exécutions suivent [l'arborescence numérotée](../output-layout.md) :
-`01_calibration`, `02_mosaic`, `03_photometrie`, `04_restoration`, `05_autoghs`,
-`06_color`. Les panneaux sont sous `01_calibration/part_XX`, les sous-sessions
+`01_calibration`, `02_mosaic`, `03_photometrie`, `05_restoration`, `06_autoghs`,
+`07_color`. Les panneaux sont sous `01_calibration/part_XX`, les sous-sessions
 sous leur dossier `01_session/`. Le stack est `stack_combined.fits` avec son
 rapport `stack_combined.drizzle.json`.
 
@@ -15,7 +15,7 @@ Le relais linéaire est toujours `02_mosaic/image.fits`, une copie du stack
 sans mosaïque. Les rapports et synthèses texte sont rangés dans leurs étapes.
 Les fichiers finaux `<objet>.fits`, `.jpg` et éventuellement `_annotated.png`
 sont publiés à la racine de l'objet. La synthèse globale du post-traitement,
-son manifeste et son journal sont sous `06_color`.
+son manifeste et son journal sont sous `07_color`.
 
 Les séquences exportées permettent de rouvrir les calibrations dans Siril.
 Les `.seq` contiennent les références, mesures et transformations, pas les

@@ -8,7 +8,10 @@ from types import ModuleType
 
 import numpy as np
 import pytest
+
 from astropy.io import fits
+
+from lib.ghs_weak_structure import WeakStructureEvaluator, WeakStructureQuality
 
 from lib.auto_ghs import ComputeBackend, GHSOptimizer, HistogramAnalyzer
 from lib.config import Config
@@ -166,15 +169,32 @@ def field() -> np.ndarray:
     return np.array([base, base, base], dtype='f4')
 
 
-def test_search_is_deterministic_bounded_and_preserves_source() -> None:
+def test_search_is_deterministic_bounded_and_preserves_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Chaque passe améliore le champ entier sous budget cumulé et pic < 0,25."""
     data = field()
     original = data.copy()
     args = GHSOptimizer.options(argparse.Namespace(ghs_quartile_iterations=3))
     engine = QuartileGHSProcessor()
     backend, analyzer = ComputeBackend('cpu'), HistogramAnalyzer(256)
+    classify = WeakStructureQuality.classify_grid
+    classified = []
+
+    def counted(
+        cls: type[WeakStructureQuality], reference: np.ndarray, *, weak_sigma: float,
+    ) -> tuple[JSONReport, dict[str, np.ndarray]]:
+        """Compte une construction par grille, jamais une par candidat."""
+        classified.append(1)
+        return classify(reference, weak_sigma=weak_sigma)
+
+    monkeypatch.setattr(WeakStructureQuality, 'classify_grid', classmethod(counted))
     output, report = engine.search(data, analyzer, backend, args)
+    expected_grids = 2 + int(report['highlight_probe_before'] is not None)
+    assert len(classified) == expected_grids
+    classified.clear()
     repeated, again = engine.search(data, analyzer, backend, args)
+    assert len(classified) == expected_grids
     np.testing.assert_array_equal(output, repeated)
     np.testing.assert_array_equal(data, original)
     assert report == again
@@ -409,12 +429,15 @@ def test_search_continues_after_three_full_resolution_rejections(
         thresholds: dict[str, float], color_mode: str, xp: ModuleType = np,
         mask_reference: np.ndarray | None = None,
         tail_endpoint: float | None = None,
+        weak_sigma: float = 1.2,
+        weak_evaluator: WeakStructureEvaluator | None = None,
     ) -> JSONReport:
         """Simule une structure rare absente de la grille aux trois premiers essais."""
         nonlocal full_trials
         result = original_measure(
             original, candidate, thresholds, color_mode, xp,
             mask_reference=mask_reference, tail_endpoint=tail_endpoint,
+            weak_sigma=weak_sigma, weak_evaluator=weak_evaluator,
         )
         if original.shape == data.shape and candidate is not original:
             full_trials += 1
@@ -453,11 +476,14 @@ def test_validation_budget_exhaustion_is_explicit(
         thresholds: dict[str, float], color_mode: str, xp: ModuleType = np,
         mask_reference: np.ndarray | None = None,
         tail_endpoint: float | None = None,
+        weak_sigma: float = 1.2,
+        weak_evaluator: WeakStructureEvaluator | None = None,
     ) -> JSONReport:
         """Rejette toute transformation du champ entier pour un bruit révélé au champ entier."""
         result = original_measure(
             original, candidate, thresholds, color_mode, xp,
             mask_reference=mask_reference, tail_endpoint=tail_endpoint,
+            weak_sigma=weak_sigma, weak_evaluator=weak_evaluator,
         )
         if original.shape == data.shape and candidate is not original:
             result['noise'] = 1.0
@@ -517,12 +543,15 @@ def test_highlight_probes_reject_before_full_validation(
         thresholds: dict[str, float], color_mode: str, xp: ModuleType = np,
         mask_reference: np.ndarray | None = None,
         tail_endpoint: float | None = None,
+        weak_sigma: float = 1.2,
+        weak_evaluator: WeakStructureEvaluator | None = None,
     ) -> JSONReport:
         """Rend une perte de couleur visible uniquement dans le sondage ciblé."""
         nonlocal full_trials, probe_trials
         result = original_measure(
             original, candidate, thresholds, color_mode, xp,
             mask_reference=mask_reference, tail_endpoint=tail_endpoint,
+            weak_sigma=weak_sigma, weak_evaluator=weak_evaluator,
         )
         if candidate is not original:
             if original.shape[1:] == (16, 2):
@@ -747,10 +776,13 @@ def test_repeated_probe_neighbors_do_not_create_a_measurable_bright_region(
         original: np.ndarray, candidate: np.ndarray, thresholds: dict[str, float],
         color_mode: str, xp: ModuleType = np,
         mask_reference: np.ndarray | None = None, tail_endpoint: float | None = None,
+        weak_sigma: float = 1.2,
+        weak_evaluator: WeakStructureEvaluator | None = None,
     ) -> JSONReport:
         """Expose une fausse dérive seulement dans les paires qui répètent les pixels."""
         result = measure(original, candidate, thresholds, color_mode, xp,
-                         mask_reference=mask_reference, tail_endpoint=tail_endpoint)
+                         mask_reference=mask_reference, tail_endpoint=tail_endpoint,
+                         weak_sigma=weak_sigma, weak_evaluator=weak_evaluator)
         if original.shape[1:] == (7, 2) and candidate is not original:
             result['color_drift'] = 1.0
             result['highlight_contrast'] = 0.0

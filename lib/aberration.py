@@ -57,7 +57,7 @@ class AberrationEngine(ParameterizedComponent):
                             default=False)
         parser.add_argument('--aberration-protect-background',
                             action=argparse.BooleanOptionalAction,
-                            default=False)
+                            default=True)
 
     @staticmethod
     def starts(length: int) -> list[int]:
@@ -69,7 +69,7 @@ class AberrationEngine(ParameterizedComponent):
     def restore(
         data: NDArray[np.float32], session: InferenceSession, input_name: str,
         strength: float = 1.0, dark_ringing: bool = False,
-        protect_background: bool = False,
+        protect_background: bool = True,
     ) -> NDArray[np.float32]:
         """Infère les plans CHW normalisés puis applique les protections.
 
@@ -176,7 +176,7 @@ class AberrationEngine(ParameterizedComponent):
                 data[None] if mono else data, session, session.get_inputs()[0].name,
                 getattr(args, 'aberration_strength', 1.0),
                 getattr(args, 'aberration_dark_ringing', False),
-                getattr(args, 'aberration_protect_background', False),
+                getattr(args, 'aberration_protect_background', True),
             )
             hdul[0].data = (restored[0] if mono else restored) * scale
             candidate.parent.mkdir(parents=True, exist_ok=True)
@@ -185,7 +185,7 @@ class AberrationEngine(ParameterizedComponent):
             model_path=str(model), providers=session.get_providers(),
             strength=getattr(args, 'aberration_strength', 1.0),
             dark_ringing=getattr(args, 'aberration_dark_ringing', False),
-            protect_background=getattr(args, 'aberration_protect_background', False),
+            protect_background=getattr(args, 'aberration_protect_background', True),
         )
 
 

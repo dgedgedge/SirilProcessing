@@ -113,6 +113,10 @@ et de contraste brillant sont mesurés séparément. Épaulement, signe des
 pentes, écrêtage, cœur, couleurs et bruit restent des gardes obligatoires.
 Les inversions d’ordre et déséquilibres excessifs des ratios coûtent fortement
 dans le classement final.
+`--ghs-weak-sigma` (défaut `1.1`, de `1` à `3` inclus) règle le seuil
+d'extension des [structures faibles connectées](ghs-weak-structures.md), en
+unités de bruit. La clé de configuration est `ghs_weak_sigma`. Les cartes et
+les évaluations utilisent le même seuil ; l'étirement reste global.
 `--ghs-post-blackpoint rise` recale le BP après chaque courbe, avant conformité,
 en mode `piecewise` ; `off` désactive ce recalage. Voir
 [le pied de montée et son budget cumulatif](ghs-blackpoint.md).
@@ -179,10 +183,9 @@ sans surcharge, ils suivent `--compute-backend auto` ou `cpu`. Les fenêtres
 retenues, mesures de flux et seuils gardent les mêmes définitions.
 
 
-Le moteur ONNX [Aberration Remover](aberration.md) complète par défaut les
-comparaisons de netteté avec le modèle livré dans `data/`. `--aberration-model`
-permet de changer le chemin (une chaîne vide désactive le moteur). Cette page décrit ses
-options, son algorithme et ses limites de validation.
+[Aberration Remover](aberration-stage.md) est une étape optique indépendante,
+après la photométrie et avant la restauration. Il n'est plus comparé aux
+moteurs de déconvolution. Son modèle et ses réglages restent configurables.
 
 Les [aperçus JPEG AutoStretch de restauration](restoration-previews.md) sont
 activés par défaut pour l'entrée, les résultats des moteurs et la sortie finale.
@@ -204,14 +207,19 @@ une valeur numérique dans ]0 ; 0,5[ l'impose. Pour conserver le comportement
 historique, utiliser `--no-starnet-adaptive-stretch --starnet-target-background auto`.
 Voir la [méthode et ses limites](star-rendering.md#pre-etirement-adapte-a-limage).
 
+## Objectif de visibilité des étoiles
+
+`--star-visible-fraction 0.30` guide la recherche d'une courbe globale révélant
+au moins 30 % des candidats de l'entrée. Les gardes de finesse et d'ailes,
+y compris sur les étoiles brillantes, priment sur cet objectif. Une cible
+inaccessible n'arrête pas le rendu. `--star-visible-fraction 0` désactive la
+recherche supplémentaire, comme une intensité ou fraction de calage nulle.
+Voir [sélection et limites de mesure](stellar-appearance.md).
+
 ## Recherche prioritaire de restauration
 
-`--restoration-early-stop` est actif par défaut : AR → GraXpert est essayé en
-premier, puis les autres variantes ne sont lancées que si ses critères ou ses
-gains sont insuffisants. `--no-restoration-early-stop` rétablit le parcours
-exhaustif. Les seuils stricts sont réglés par
-`--restoration-early-stop-fwhm-gain 0.30` et
-`--restoration-early-stop-noise-gain 0.35`, fractions finies dans `[0,1[`,
-mémorisables avec `-S`. Tous les critères finaux doivent être PASS, y compris
-les diagnostics non bloquants. Voir
-[conditions d'arrêt et poursuite avec cache](restoration.md#restoration-early-stop).
+Le raccourci historique AR → GraXpert n'est plus utilisé dans la séquence
+standard : AR a sa propre [étape optique](aberration-stage.md), activée par
+`--enable-aberration` et désactivable par `--disable-aberration`. Les anciennes
+options `--restoration-early-stop` et leurs seuils restent acceptées pour les
+configurations historiques ; elles ne réintroduisent pas AR dans la restauration.

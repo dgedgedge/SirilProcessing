@@ -96,6 +96,23 @@ class StarComparisonProcessor(QualityProcessor):
 
     stage_key = 'star_comparison'
     stage_label = 'Qualité — appariement et critères stellaires'
+    ABSOLUTE_MATCH_THRESHOLD = 1000
+
+    @classmethod
+    def sufficient_retention(
+        cls, matched: int, reference: int, fraction: float,
+        *, total_matched: int | None = None,
+    ) -> bool:
+        """Accepte 1 000 paires globales ou la fraction minimale des références.
+
+        Pour un sous-groupe spatial, total_matched désigne la cohorte globale
+        validée : 1 000 paires dispensent alors du seuil relatif local, mais
+        pas du minimum local d'étoiles ni des autres contrôles de qualité.
+        Les appelants vérifient séparément leur effectif minimal absolu.
+        """
+        count = matched if total_matched is None else total_matched
+        return (count >= cls.ABSOLUTE_MATCH_THRESHOLD
+                or (reference > 0 and matched/reference >= fraction))
 
     CONFIG_DEFAULTS = {
         'deconvolution_match_radius': 1.0, 'deconvolution_min_stars': 10,
@@ -121,7 +138,7 @@ class StarComparisonProcessor(QualityProcessor):
                 "--deconvolution-min-match-fraction",
                 type=float,
                 default=cls.CONFIG_DEFAULTS['deconvolution_min_match_fraction'],
-                help="Fraction minimale des étoiles valides avant retrouvées après",
+                help="Fraction minimale retrouvée après (défaut 70 %%), ou au moins 1000 paires",
             )
         if not cls.has_argument(parser, 'deconvolution_force_manual_matching'):
             parser.add_argument(
@@ -212,7 +229,9 @@ class StarComparisonProcessor(QualityProcessor):
                     )
                 )
         fraction = len(pairs) / len(before) if before else 0.0
-        valid = len(pairs) >= min_stars and fraction >= min_fraction
+        valid = len(pairs) >= min_stars and self.sufficient_retention(
+            len(pairs), len(before), min_fraction,
+        )
         result = dict(
             status="validated" if valid else "insufficient_matches",
             metric="sqrt(FWHMx_px * FWHMy_px)",
@@ -226,6 +245,8 @@ class StarComparisonProcessor(QualityProcessor):
             matched_fraction_before=fraction,
             min_stars=min_stars,
             min_match_fraction=min_fraction,
+            absolute_match_threshold=self.ABSOLUTE_MATCH_THRESHOLD,
+            matching_rule='minimum_count AND (absolute_count OR minimum_fraction)',
             rejected_before=rejected_before,
             rejected_after=rejected_after,
             unmatched_before_ids=[s["id"] for s in before if s["id"] not in used_before],
@@ -259,6 +280,8 @@ class StarComparisonProcessor(QualityProcessor):
             status='PASS' if valid else 'UNKNOWN' if len(before) < min_stars else 'FAIL',
             reason=result['status'], value=fraction, threshold=min_fraction,
             uncertainty=None, sample_count=len(before),
+            alternative_matched_count_threshold=self.ABSOLUTE_MATCH_THRESHOLD,
+            matched_count=len(pairs),
         )
         # Aucune statistique de comparaison publiée tant que la cohorte n'est pas validée.
         if valid:

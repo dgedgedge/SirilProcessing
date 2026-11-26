@@ -7,7 +7,7 @@ Le [processeur complet `PostProcessingProcessor`](../../../postProcess/pipeline.
 l’utilise dans `postProcess` et dans `lightProcess --postprocess`, puis ajoute
 les diagnostics et les exports finaux communs.
 Par défaut, cette liste contient `GradientExtractor()`, `PhotometricColorCalibrator()`,
-`DeconvolutionProcessor()`, `NoiseReductionProcessor()` puis le rendu final
+`AberrationCorrectionStage()`, `DeconvolutionProcessor()`, `NoiseReductionProcessor()` puis le rendu final
 `AutoGHSFinalRenderer()`. Le choix des moteurs
 appartient aux orchestrateurs des traitements. Par défaut,
 la séquence remplace les deux étapes de restauration par
@@ -17,6 +17,9 @@ Le [rendu final AutoGHS](../../../postProcess/auto-ghs.md) reste après la
 restauration dans les deux modes et est activé par défaut ; `--disable-autoghs` conserve la sortie linéaire.
 Une liste de processeurs fournie explicitement au constructeur reste exécutée
 telle quelle ; la fusion automatique concerne la séquence standard.
+
+La [correction optique conditionnelle](../../../postProcess/aberration-stage.md)
+précède la restauration et ne participe plus à ses comparaisons de moteurs.
 
 ## Contrat commun
 
@@ -31,7 +34,7 @@ Un processeur hérite de `processor` et expose :
 
 La séquence ajoute automatiquement `--enable-<prefixe>` et `--disable-<prefixe>`.
 L’attribut `enabled_by_default` du processeur détermine son activation par défaut
-(`True` pour les cinq traitements, y compris AutoGHS). Un appel Python sans `args` utilise
+(`True` pour les six traitements, y compris AutoGHS). Un appel Python sans `args` utilise
 la copie mémorisée par `set_from_args`, puis les paramètres partagés de `Config`
 si aucune copie locale n’a été fournie. Les défauts locaux du traitement
 s’appliquent aux paramètres absents.

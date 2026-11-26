@@ -57,6 +57,9 @@ def test_standalone_branch_publishes_its_own_subject(
     assert fits.getheader(result['output_image'])['SPNLIN']
     assert Path(result['output_jpeg']).is_file()
     assert Path(result['histogram_path']).is_file()
+    if subject == 'starless':
+        assert Path(result['zones_map']['output_png']).is_file()
+        assert result['zones_map']['scientific_output'] is False
     assert all(item['population'] == subject for item in result['histogram_series'])
     assert 'recomposition' not in result and 'recomposed_histogram' not in result
     assert all(Path(item['path']).parent == path.parent / 'histogram_trials'

@@ -151,12 +151,12 @@ de réexécuter la calibration, la photométrie ou la restauration.
 ## Sorties et publication
 
 Dans le plan numéroté de lightProcess, les produits sont directement dans
-`05_autoghs/`, à côté du rapport `autoghs.json`. En appel autonome postProcess,
-les cinq sous-étapes sont directement à côté de `05_autoghs.json`. Le niveau
+`06_autoghs/`, à côté du rapport `autoghs.json`. En appel autonome postProcess,
+les cinq sous-étapes sont directement à côté de `06_autoghs.json`. Le niveau
 `autoghs_work/` n'est pas créé. Les transformations sont ordonnées ainsi :
 
 ```text
-05_autoghs/
+06_autoghs/
   autoghs.json
   01_separation/separation_work/  # entrée, fond et étoiles linéaires, script et journal Siril
   03_ghs_stars/        # étoiles étirées, diagnostics, stars.json et histogram_trials/

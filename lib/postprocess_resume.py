@@ -72,7 +72,10 @@ class PostProcessResume:
         """
         directory = report.parent / report.stem
         layout = OutputLayout.for_report(report)
-        autoghs_path = layout.stage_report('autoghs') if layout else directory / '05_autoghs.json'
+        new_sequence = ((directory / '03_aberration.json').is_file()
+                        or (directory / '06_autoghs.json').is_file())
+        autoghs_path = (layout.stage_report('autoghs') if layout else
+                        directory / ('06_autoghs.json' if new_sequence else '05_autoghs.json'))
         if not autoghs_path.is_file():
             raise FileNotFoundError(
                 f'Aucun rapport AutoGHS permettant de reprendre le traitement : {report}'
@@ -87,8 +90,11 @@ class PostProcessResume:
             path = Path(value)
             return (path if path.is_absolute() else directory / path).resolve()
 
-        for name in ('01_gradient', '02_photometry', '03_restoration',
-                     '03_deconvolution', '04_denoise', '05_autoghs'):
+        names = (('01_gradient', '02_photometry', '03_aberration', '04_restoration',
+                  '04_deconvolution', '05_denoise', '06_autoghs') if new_sequence or layout else
+                 ('01_gradient', '02_photometry', '03_restoration',
+                  '03_deconvolution', '04_denoise', '05_autoghs'))
+        for name in names:
             stage_path = layout.stage_report(name[3:]) if layout else directory / f'{name}.json'
             if not stage_path.is_file():
                 continue

@@ -111,17 +111,19 @@ def test_fits_metadata_and_units(
 
 
 def test_options_and_chains() -> None:
-    """Un modèle explicite ajoute le moteur aux étapes et chaînes de netteté."""
+    """Le modèle reste configurable sans ajouter AR aux chaînes de restauration."""
     parser = argparse.ArgumentParser()
     RestorationChainProcessor.add_arguments(parser)
     args = parser.parse_args(['--aberration-model', '/tmp/model.onnx',
                               '--aberration-strength', '.5'])
     engines = dict(DeconvolutionProcessor.engines(args))
-    assert engines['aberration_remover'] is AberrationRemoverProcessor
+    assert 'aberration_remover' not in engines
     assert args.aberration_strength == .5
-    assert any(any(name == 'aberration_remover' for _, name, _ in chain)
+    assert args.aberration_protect_background is True
+    assert parser.parse_args(['--no-aberration-protect-background']).aberration_protect_background is False
+    assert not any(any(name == 'aberration_remover' for _, name, _ in chain)
                for chain in RestorationChainProcessor.variants(args))
-    assert 'aberration_remover' in dict(DeconvolutionProcessor.engines(parser.parse_args([])))
+    assert 'aberration_remover' not in dict(DeconvolutionProcessor.engines(parser.parse_args([])))
     disabled = parser.parse_args(['--aberration-model', ''])
     assert 'aberration_remover' not in dict(DeconvolutionProcessor.engines(disabled))
 
@@ -132,10 +134,11 @@ def test_strength_and_background_mask() -> None:
     session = SimpleNamespace(run=lambda _, inputs: [np.flip(
         next(iter(inputs.values())), axis=-1,
     ).copy()])
-    full = AberrationEngine.restore(data, session, 'image')
-    half = AberrationEngine.restore(data, session, 'image', .5)
+    full = AberrationEngine.restore(data, session, 'image', protect_background=False)
+    half = AberrationEngine.restore(data, session, 'image', .5, protect_background=False)
     np.testing.assert_allclose(half, (full + data) / 2, atol=2e-7)
     protected = AberrationEngine.restore(data, session, 'image', protect_background=True)
+    np.testing.assert_array_equal(AberrationEngine.restore(data, session, 'image'), protected)
     sample = data[0, ::4, ::4]
     threshold = np.median(sample) + 1.4826 * np.median(np.abs(sample - np.median(sample)))
     mask = data < threshold
@@ -214,7 +217,7 @@ def test_default_model_from_another_directory(
     assert DEFAULT_MODEL_PATH.is_file()
     assert DEFAULT_MODEL_PATH.name == 'model_v2_5_0.onnx'
     variants = RestorationChainProcessor.variants(args)
-    assert any(chain == (('sharpen', 'aberration_remover', AberrationRemoverProcessor),)
+    assert not any(chain == (('sharpen', 'aberration_remover', AberrationRemoverProcessor),)
                for chain in variants)
 
 
@@ -243,5 +246,5 @@ def test_chains_never_repeat_treatment_type(
         assert denoise or 'denoise' not in kinds
         assert sharpen or 'sharpen' not in kinds
     if denoise and sharpen:
-        assert any(len(chain) == 2 and chain[0][1] == 'aberration_remover'
+        assert not any(len(chain) == 2 and chain[0][1] == 'aberration_remover'
                    for chain in chains)

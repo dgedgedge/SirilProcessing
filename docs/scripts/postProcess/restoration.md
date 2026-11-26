@@ -105,15 +105,14 @@ Le bandeau de chaque nouveau calcul et ses lignes de durée indiquent la
 séquence jusqu’au moteur courant, dans l’ordre d’application. Par exemple :
 
 ```text
-Restauration — Calcul 06 : Netteté avec Aberration Remover
-Restauration — Calcul 09 : Netteté avec Aberration Remover → Débruitage avec Cosmic Clarity
+Restauration — Calcul 06 : Débruitage avec GraXpert
+Restauration — Calcul 09 : Débruitage avec GraXpert → Netteté avec Siril
 ```
 
-Ces calculs utilisent deux entrées différentes : l’image de référence pour le
-premier, la sortie d’Aberration Remover pour le débruitage du second. La
-correction des aberrations précède toujours le débruitage et ne peut pas
-être associée à une autre netteté/déconvolution. Une étape future de la variante
-n’est pas incluse dans le titre du calcul courant.
+Le titre donne la séquence jusqu'au calcul courant. Chaque opération reçoit
+la sortie retenue de la précédente. Aberration Remover est une étape séparée,
+avant cette restauration ; une étape future de la variante n'est pas incluse
+dans le titre courant.
 Une opération déjà en cache n’affiche pas de nouveau bandeau de calcul : sa
 réutilisation est en DEBUG. Un contrôle final déjà en cache n’est pas annoncé
 comme un nouveau contrôle. Les étapes non atteintes après rejet ne sont pas
@@ -170,10 +169,9 @@ Le moteur [GraXpert natif](graxpert.md) déclare ses services d’inférence et 
 modèles dans la même hiérarchie de paramètres.
 
 
-Le moteur ONNX [Aberration Remover](aberration.md) complète par défaut les
-comparaisons de netteté avec le modèle livré dans `data/`. `--aberration-model`
-permet de changer le chemin (une chaîne vide désactive le moteur). Cette page décrit ses
-options, son algorithme et ses limites de validation.
+[Aberration Remover](aberration-stage.md) est une étape optique indépendante,
+après la photométrie et avant la restauration. Il n'est plus comparé aux
+moteurs de déconvolution. Son modèle et ses réglages restent configurables.
 
 ## Traçabilité des entrées et références d’évaluation
 
@@ -237,63 +235,9 @@ référencés par `audit_path` : voir
 
 ## Arrêt anticipé après Aberration Remover → GraXpert
 
-Avec `--restoration-early-stop` activé par défaut, le premier traitement essayé
-est la chaîne **Aberration Remover → GraXpert**, si les deux moteurs sont actifs.
-La référence inchangée est enregistrée au préalable sans exécuter de moteur.
-La chaîne conserve les contrôles locaux habituels, puis son contrôle final
-contre l'entrée originale de restauration.
-
-Les autres essais ne sont pas lancés si, et seulement si :
-
-- le candidat final est accepté ;
-- tous les critères finaux actuels sont explicitement `PASS`, y compris les
-  diagnostics non bloquants `diffuse` et `stellar_flux`, la significativité,
-  l'appariement, la rondeur, les anneaux et les contrôles de bruit ;
-- la réduction de FWHM **médiane** est strictement supérieure à **30 %** ;
-- le gain de **bruit utile mesuré** est strictement supérieur à **35 %**.
-
-Le gain de netteté est `1 - fwhm_median_ratio`, et le gain de bruit est le
-`useful_noise_gain` enregistré dans la décomposition du score. Ces deux
-quantités sont sans unité. Pour éviter un dépassement artificiel dû à
-l'arrondi de `1 - 0.7`, le premier test compare directement le ratio à
-`1 - seuil`. Une égalité exacte à un seuil ne suffit pas.
-
-Un `FAIL`, même non bloquant pour l'acceptation, un `UNKNOWN`, un critère attendu
-absent ou une mesure absente/non finie interdit l'arrêt anticipé. Un nouveau
-critère final est également contrôlé. Les critères requis sont ceux de la
-validation actuelle d'une chaîne de netteté avec débruitage, pas uniquement
-les critères bloquants. Cette règle peut donc poursuivre tous les essais même
-si les gains de netteté et de bruit dépassent les seuils.
-
-Sinon l'orchestrateur poursuit toutes les autres variantes prévues, avec la
-même référence et les mêmes règles de classement. Le cache réutilise les
-opérations et contrôles finaux déjà effectués ; AR seul n'est pas recalculé.
-Si AR est rejeté localement, GraXpert n'est pas appliqué au candidat refusé,
-mais le débruitage seul reste essayé sur l'original. Si un moteur de la chaîne
-prioritaire est désactivé, la recherche habituelle reste disponible.
-
-Le service `lib.restoration_early_stop.RestorationEarlyStop`, dérivé de
-`ParameterizedComponent`, possède les options et la décision de suffisance ;
-il n'effectue aucun calcul d'image. Les paramètres se résolvent suivant
-CLI > JSON > défaut et sont mémorisables avec `-S` :
-
-| Option | Défaut | Effet |
-|---|---|---|
-| `--restoration-early-stop` / `--no-restoration-early-stop` | activé | Priorité à AR → GraXpert et arrêt conditionnel ; désactiver pour retrouver l'ordre et le parcours exhaustifs |
-| `--restoration-early-stop-fwhm-gain` | `0.30` | Gain médian de FWHM à dépasser strictement, fraction finie dans `[0,1[` |
-| `--restoration-early-stop-noise-gain` | `0.35` | Gain de bruit utile à dépasser strictement, fraction finie dans `[0,1[` |
-
-Le champ `early_stop` du rapport indique l'activation, le déclenchement, les
-conditions mesurées, les critères absents ou non PASS, et les nombres de
-variantes prévues, évaluées et non exécutées. La synthèse texte et l'index HTML
-signalent un arrêt anticipé. Les variantes non exécutées n'ont ni verdict ni
-score : elles ne sont jamais présentées comme rejetées. Le résultat retenu
-satisfait une condition de suffisance ; il n'est pas démontré meilleur que les
-variantes non exécutées. Une reprise `--autoghs-only` ne relance pas cette
-recherche de restauration.
-
-En cas de poursuite, le journal INFO énumère chaque condition non satisfaite
-sur une ligne « motif de poursuite » : candidat rejeté, critère absent,
-FAIL/UNKNOWN avec son motif et son rôle bloquant ou diagnostique, gains
-insuffisants ou non mesurés avec les seuils stricts attendus. Un critère
-non bloquant pour accepter une image peut ainsi empêcher l'arrêt anticipé.
+Le raccourci AR → GraXpert ne s'applique plus à la séquence standard :
+Aberration Remover possède sa [propre étape conditionnelle](aberration-stage.md)
+en amont. La restauration compare ses moteurs sur l'image retenue par cette
+étape, sans relancer AR. Les options `restoration-early-stop` et leurs seuils
+restent lisibles pour les configurations et appels API historiques ; aucun
+arrêt AR → GraXpert ne peut se déclencher sans cette chaîne dans le plan.

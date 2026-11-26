@@ -169,6 +169,9 @@ class StarStretchProcessor(LayerStretchProcessor):
             contrast_mode=getattr(
                 args, 'star_contrast_mode', ConservativeStarRenderer.default_contrast_mode,
             ),
+            visible_fraction=getattr(
+                args, 'star_visible_fraction', ConservativeStarRenderer.default_visible_fraction,
+            ),
         )
         image, jpeg = self.write_layer(source, report_path, output, 'stars_render', 'STARS')
         diagnostic = report_path.parent / f'{source.stem}_stars_diagnostic.png'
@@ -231,6 +234,14 @@ class StarlessStretchProcessor(LayerStretchProcessor):
         report.update(series)
         histogram = report_path.parent / f'{source.stem}_ghs_histograms.png'
         histogram_figure(report, histogram)
+        from lib.starless_zones import StarlessZoneMap
+
+        report['zones_map'] = StarlessZoneMap.write(
+            data, report_path.parent / 'starless_zones.png',
+            color_mode=getattr(args, 'ghs_color_mode', 'human'), rendered=output,
+            weak_sigma=getattr(args, 'ghs_weak_sigma', 1.1),
+            title=str(fits.getheader(source).get('OBJECT', source.stem)),
+        )
         report.update(output_image=str(image), output_jpeg=str(jpeg),
                       histogram_path=str(histogram), starless_image=str(image))
         return output, report

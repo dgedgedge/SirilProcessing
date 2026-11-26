@@ -10,13 +10,15 @@ def rgb(light: np.ndarray) -> np.ndarray:
     return np.repeat(light[None], 3, axis=0).astype('float32')
 
 
-def test_visibility_target_is_exactly_a_quarter() -> None:
-    """Une étoile visible sur quatre suffit, sans changement des pixels."""
-    y, x = np.indices((321, 321))
+@pytest.mark.parametrize('count,total,status', [(1, 4, 'FAIL'), (2, 10, 'FAIL'), (3, 10, 'PASS'), (4, 10, 'PASS')])
+def test_visibility_target_is_thirty_percent(count: int, total: int, status: str) -> None:
+    """30 % suffit exactement ; 25 % ne suffit pas, sans changement des pixels."""
+    y, x = np.indices((401, 401))
     before = np.zeros(y.shape)
     after = np.zeros(y.shape)
-    positions = [(80, 80), (80, 240), (240, 80), (240, 240)]
-    for (cy, cx), amplitude in zip(positions, [.04, .02, .01, .005]):
+    positions = [(cy, cx) for cy in (90, 250) for cx in (60, 130, 200, 270, 340)][:total]
+    for index, (cy, cx) in enumerate(positions):
+        amplitude = .04 if index < count else .01
         star = np.exp(-((y-cy)**2+(x-cx)**2)/8)
         before += .001*star
         after += amplitude*star
@@ -24,9 +26,9 @@ def test_visibility_target_is_exactly_a_quarter() -> None:
     saved = last.copy()
     report = Quality.evaluate(first, last, tuple(np.array(positions).T))
     visible = report['visibility']
-    assert visible['status'] == 'PASS' and not visible['blocking']
-    assert visible['visible_count'] == 1
-    assert visible['fraction_lower_bound'] == visible['fraction_upper_bound'] == .25
+    assert visible['status'] == status and not visible['blocking']
+    assert visible['visible_count'] == count
+    assert visible['fraction_lower_bound'] == visible['fraction_upper_bound'] == count/total
     np.testing.assert_array_equal(last, saved)
     assert report['shape']['status'] == 'UNKNOWN'
     assert report['shape']['reason'] == 'NO_CALIBRATED_SHAPE_TARGET'

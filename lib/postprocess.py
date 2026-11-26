@@ -26,6 +26,7 @@ from lib.output_layout import OutputLayout
 from lib.postprocess_paths import reset_work_dir, treatment_file_prefix
 from lib.denoising import NoiseReductionProcessor
 from lib.deconvolution import DeconvolutionProcessor
+from lib.aberration_stage import AberrationCorrectionStage
 from lib.final_annotation import FinalImageAnnotator
 from lib.final_color import FinalColorProcessor
 from lib.final_render import AutoGHSFinalRenderer
@@ -1340,6 +1341,7 @@ class _PostProcessorSequence(processor):
             else [
                 GradientExtractor(),
                 PhotometricColorCalibrator(),
+                AberrationCorrectionStage(),
                 DeconvolutionProcessor(),
                 NoiseReductionProcessor(),
                 AutoGHSFinalRenderer(),
@@ -1428,6 +1430,7 @@ class _PostProcessorSequence(processor):
     def default_processors(cls) -> tuple[type[processor], ...]:
         """Déclare les étapes Siril dans leur ordre d’exécution."""
         return (GradientExtractor, PhotometricColorCalibrator,
+                AberrationCorrectionStage,
                 DeconvolutionProcessor, NoiseReductionProcessor, AutoGHSFinalRenderer)
 
     @classmethod
@@ -1506,8 +1509,8 @@ class _PostProcessorSequence(processor):
         Chaque traitement reçoit son rapport dans l'étape numérotée lorsqu'une
         arborescence commune est reconnue, sinon sous <rapport>_steps. Le même
         Namespace d'arguments est transmis sans nouveau parsing.
-        Les nouveaux dossiers fixent 03 pour la photométrie, 04 pour la
-        restauration et 05 pour AutoGHS. Les appels historiques gardent leurs indices.
+        Les nouveaux dossiers fixent 03 pour la photométrie, 04 pour Aberration
+        Remover, 05 pour la restauration et 06 pour AutoGHS.
         La durée murale de chaque appel est journalisée en INFO et enregistrée
         sous processing_duration_seconds dans son rapport, sans modifier les
         mesures internes éventuelles du moteur.
@@ -1535,6 +1538,7 @@ class _PostProcessorSequence(processor):
         stage_titles = {
             "gradient": "Correction du gradient",
             "photometry": "Étalonnage photométrique des couleurs",
+            "aberration": "Aberration Remover",
             "restoration": "Comparaison des chaînes de restauration",
             "deconvolution": "Déconvolution",
             "denoise": "Débruitage",
@@ -1696,7 +1700,7 @@ class PostProcessingProcessor(processor):
         """Résout le rapport global numéroté ou le rapport autonome historique.
 
         Un relais 02_mosaic/image.fits ou une sortie marquée par 01_calibration
-        utilise 06_color/postprocess.json. Les autres appels conservent le nom
+        utilise 07_color/postprocess.json. Les autres appels conservent le nom
         historique : output_arg est un répertoire ou un ancien rapport dont
         seul le parent est utilisé. Cette méthode ne crée aucun fichier.
         """
@@ -1755,7 +1759,7 @@ class PostProcessingProcessor(processor):
         """Copie les exports finaux et retourne leurs chemins avec les rapports.
 
         Dans l'arborescence numérotée, l'export est <objet>.fits et le GHS
-        conservé est sous 05_autoghs/render. Les appels autonomes historiques
+        conservé est sous 06_autoghs/render. Les appels autonomes historiques
         gardent _saturated pour la couleur et _ghs pour le rendu préalable.
         Toute erreur est propagée ; la source n’est jamais modifiée et le rapport
         historique garde ses clés par étape.
@@ -1789,7 +1793,7 @@ class PostProcessingProcessor(processor):
                 ):
                     if ghs.get(key):
                         original = Path(str(ghs[key])).resolve()
-                        preserved = (layout.root / '05_autoghs' / f'render{suffix}' if layout
+                        preserved = (layout.stage_report('autoghs').parent / f'render{suffix}' if layout
                                      else report.with_name(report.stem + "_ghs" + suffix))
                         if original != preserved:
                             copyfile(original, preserved)
@@ -1887,7 +1891,7 @@ class PostProcessingProcessor(processor):
                       else report.with_suffix(".fits"))
         if layout:
             final_path = layout.root / f'{layout.root.name}.fits'
-        log_file = layout.root / '06_color' / 'postprocess.log' if layout else steps_dir / f"00_{source.stem}_postProcess.log"
+        log_file = layout.report.parent / 'postprocess.log' if layout else steps_dir / f"00_{source.stem}_postProcess.log"
         if source in (
             report, report.with_suffix(".fits"), saturated_path, ghs_path, log_file, final_path,
         ):
@@ -1984,14 +1988,14 @@ class PostProcessingProcessor(processor):
             log_section("Annotation finale : informations de prise de vue")
             annotation = FinalImageAnnotator().post_process(
                 Path(summary["output_image"]),
-                layout.root / '06_color' / 'annotation.json' if layout else report.with_name(report.stem + "_annotation.json"),
+                layout.report.parent / 'annotation.json' if layout else report.with_name(report.stem + "_annotation.json"),
                 args=runtime,
                 acquisition_source=source,
                 treatments=results,
             )
             results["annotation"] = annotation
             if layout:
-                layout.write_summary(layout.root / '06_color/annotation.json', annotation)
+                layout.write_summary(layout.report.parent / 'annotation.json', annotation)
             if annotation.get("output_annotated_image"):
                 summary["output_annotated_image"] = annotation["output_annotated_image"]
             logging.debug("Rapport détaillé d’annotation finale : %s", annotation)

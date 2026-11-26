@@ -92,12 +92,12 @@ d'appariement, `--deconvolution-layer`, `--deconvolution-output` et
 En netteté (`03_deconvolution`), les seuils d’appariement stellaires sont
 automatiques en mode `--quality-mode legacy` : ils sont estimés depuis le catalogue `before.tsv`
 (rayon en fonction de la FWHM médiane et nombre minimal de correspondances).
-Pour la netteté Cosmic Clarity, avec moins de 60 étoiles initiales, la fraction
-minimale de 70 % reste bloquante. À partir de 60 étoiles, ce pourcentage devient
-un seuil d’alerte : le nombre minimal reste obligatoire, puis des contrôles
-de représentativité conditionnent l’évaluation de finesse et d’artefacts.
-Le mode manuel forcé conserve son seuil de fraction bloquant ; le débruitage
-conserve ses contrôles existants. Pour conserver des seuils fixes, fournir
+La comparaison utilise le [contrôle commun](reference-stars.md) : minimum
+d'étoiles configuré, puis au moins 1 000 paires ou la fraction minimale (70 %
+par défaut). Les contrôles de représentativité restent nécessaires. Ce seuil
+commun vaut également en mode legacy ; un catalogue initial de 60 étoiles
+ne dispense pas à lui seul de la condition relative.
+Pour conserver des seuils fixes, fournir
 les valeurs manuelles et ajouter `--deconvolution-force-manual-matching`.
 Sans cette option de forçage, les valeurs manuelles d’appariement ne
 remplacent pas le mode auto en `legacy`. En mode fiable, les seuils manuels

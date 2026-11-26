@@ -65,6 +65,7 @@ nav:
               - Pipeline commun: docs/scripts/postProcess/pipeline.md
               - Temps de traitement: docs/scripts/postProcess/timings.md
               - Photométrie: docs/scripts/postProcess/photometry.md
+              - Correction optique conditionnelle: docs/scripts/postProcess/aberration-stage.md
               - Restauration: docs/scripts/postProcess/restoration.md
               - Rapports de restauration: docs/scripts/postProcess/restoration-reports.md
               - Contrôles de qualité: docs/scripts/postProcess/quality.md

@@ -393,9 +393,9 @@ class FluxQualityProcessor(QualityProcessor):
 class DiffuseSignalProcessor(FluxQualityProcessor):
     """Détecte les pertes significatives de flux diffus, pas les augmentations.
 
-    La perte relative signée (avant - après) / avant doit dépasser strictement
-    le seuil configuré et être corroborée par les contrôles statistiques.
-    Les variations négatives restent enregistrées sans déclencher ce rejet.
+    La variation relative (après - avant) / avant doit être strictement sous
+    l'opposé du seuil de perte configuré et corroborée statistiquement.
+    Une perte est négative ; une augmentation ne déclenche pas ce rejet.
     """
 
     stage_key = "diffuse"
@@ -496,7 +496,7 @@ class DiffuseSignalProcessor(FluxQualityProcessor):
                 )
                 fb = float(np.sum(before[aperture] - bg_before))
                 fa = float(np.sum(after[aperture] - bg_after))
-                difference = (before - after) - (bg_before - bg_after)
+                difference = (after - before) - (bg_after - bg_before)
                 blocks = []
                 for y in range(0, mask.shape[0], reference.tile_size):
                     for x in range(0, mask.shape[1], reference.tile_size):
@@ -532,7 +532,7 @@ class DiffuseSignalProcessor(FluxQualityProcessor):
                         )
                     )
                     continue
-                loss = (fb - fa) / fb
+                relative_change = (fa - fb) / fb
                 scale_results, corroborated = filters.multiscale(
                     before - bg_before, difference, aperture, reference.sigmas[channel][ys, xs],
                     reference.scales, reference.source_sigma, sigma,
@@ -542,7 +542,7 @@ class DiffuseSignalProcessor(FluxQualityProcessor):
                     and (ci[0] > 0 or ci[1] < 0)
                     and abs(fb - fa) > 3 * uncertainty
                 )
-                lost = loss > reference.flux_loss and significant and corroborated
+                lost = relative_change < -reference.flux_loss and significant and corroborated
                 entries.append(
                     dict(
                         criterion(
@@ -552,8 +552,8 @@ class DiffuseSignalProcessor(FluxQualityProcessor):
                                 if lost
                                 else "NO_CONFIRMED_DIFFUSE_LOSS"
                             ),
-                            value=loss,
-                            threshold=reference.flux_loss,
+                            value=relative_change,
+                            threshold=-reference.flux_loss,
                             uncertainty=float(uncertainty / fb),
                             sample_count=int(aperture.sum()),
                         ),

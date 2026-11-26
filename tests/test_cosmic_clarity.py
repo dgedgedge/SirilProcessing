@@ -36,12 +36,12 @@ def test_backend_selection_and_override() -> None:
     sequence = _PostProcessorSequence()
     selected = sequence._selected_processors(arguments())
     assert [p.get_prefix() for p in selected] == [
-        'gradient', 'photometry', 'restoration', 'autoghs',
+        'gradient', 'photometry', 'aberration', 'restoration', 'autoghs',
     ]
     assert selected[0] is sequence.processors[0]
     selected = sequence._selected_processors(arguments('--disable-clarity', '--no-restoration-compare-chains'))
-    assert isinstance(selected[2], DeconvolutionProcessor)
-    assert isinstance(selected[3], NoiseReductionProcessor)
+    assert isinstance(selected[3], DeconvolutionProcessor)
+    assert isinstance(selected[4], NoiseReductionProcessor)
     custom = _PostProcessorSequence([DeconvolutionProcessor()])
     assert isinstance(custom._selected_processors(arguments('--enable-clarity'))[0], DeconvolutionProcessor)
 
@@ -271,17 +271,17 @@ def test_sequence_neural_handoff(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(DeconvolutionProcessor, 'post_process', process)
     monkeypatch.setattr(NoiseReductionProcessor, 'post_process', process)
     args = arguments('--enable-clarity', '--disable-gradient', '--disable-photometry',
-                     '--no-restoration-compare-chains', '--disable-autoghs')
+                     '--no-restoration-compare-chains', '--disable-autoghs', '--disable-aberration')
     sequence = _PostProcessorSequence()
     sequence.set_from_args(args)
     result = sequence.post_process(source, tmp_path / 'global.json')
     assert list(result) == ['deconvolution', 'denoise']
-    assert calls == [(source, '03_deconvolution.json'),
-                     (tmp_path / 'global_steps' / '03_deconvolution.fits', '04_denoise.json')]
+    assert calls == [(source, '04_deconvolution.json'),
+                     (tmp_path / 'global_steps' / '04_deconvolution.fits', '05_denoise.json')]
     calls.clear()
     args.enable_deconvolution = False
     sequence.post_process(source, tmp_path / 'disabled.json', args)
-    assert calls == [(source, '04_denoise.json')]
+    assert calls == [(source, '05_denoise.json')]
 
 
 def test_sequence_continues_when_fallback_has_no_gain(
@@ -316,7 +316,7 @@ def test_sequence_continues_when_fallback_has_no_gain(
     ))
     monkeypatch.setattr(NoiseReductionProcessor, 'post_process', denoise)
     args = arguments('--enable-clarity', '--disable-gradient', '--disable-photometry',
-                     '--no-restoration-compare-chains', '--disable-autoghs')
+                     '--no-restoration-compare-chains', '--disable-autoghs', '--disable-aberration')
     results = _PostProcessorSequence().post_process(source, tmp_path / 'global.json', args)
     assert results['deconvolution']['status'] == 'no_safe_improvement'
     assert results['deconvolution']['selected_engine'] is None

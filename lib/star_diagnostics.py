@@ -84,6 +84,7 @@ def write_star_diagnostic(
         "width limit": "limite de largeur ; gain fixe conservé",
         "width limited": "force réduite par la limite de largeur",
         "requested strength": "force demandée admissible",
+        "smooth power candidate": "courbe globale de puissance retenue",
     }
     annotation = (
         "OBJECTIF : répartir les amplitudes des pics sur une plage logarithmique plus large, "
@@ -94,7 +95,8 @@ def write_star_diagnostic(
         "Ce sont des indicateurs, pas des étoiles certifiées.\n"
         f"Force demandée / retenue : {balance['requested_strength']:.3f} / "
         f"{balance['accepted_strength']:.3f} ; essais : {len(balance['iterations'])} ; "
-        f"arrêt : {reasons[balance['stop_reason']]}. Rapport FWHM médian : {width_text}.\n"
+        f"arrêt : {reasons.get(balance['stop_reason'], balance['stop_reason'])}. "
+        f"Rapport FWHM médian : {width_text}.\n"
         f"Pixels max RGB nuls exclus du log : {100 * np.mean(before.max(axis=0) == 0):.2f} % ; "
         "la visibilité finale dépend aussi du fond après recomposition."
     )
@@ -103,8 +105,10 @@ def write_star_diagnostic(
     if visibility:
         lower = visibility.get('fraction_lower_bound')
         fraction = 'inconnue' if lower is None else f"≥ {100*lower:.1f} %"
+        target = visibility.get('target_fraction')
+        target_text = '' if target is None else f'≥ {100*target:g} % '
         annotation += (
-            f"\nObjectif indicatif ≥ 25 % visibles (contraste local Y ≥ 0,03) : {visibility['status']} ; "
+            f"\nObjectif {target_text}visibles (contraste local Y ≥ 0,03) : {visibility['status']} ; "
             f"{visibility['visible_count']} / {visibility['candidate_count']} candidats, "
             f"fraction {fraction}, inconnus {visibility['unknown_count']} (non bloquant)."
         )
@@ -120,7 +124,12 @@ def write_star_diagnostic(
             annotation += "\n" + ' ; '.join(measures) + ' — mesures indicatives.'
     recomposed = report.get("recomposed_visibility", {})
     selection = report.get('boost_selection')
-    if selection is not None:
+    if selection is not None and selection.get('curve_family') == 'smooth_power':
+        annotation += (
+            f"\nCourbe globale de puissance : exposant {selection['exponent']:g} ; "
+            "même transformation pour tous les pixels."
+        )
+    elif selection is not None:
         label = ('Quantile de calibration' if selection.get('mode') == 'contrast_profiles'
                  else 'Fraction demandée')
         annotation += (

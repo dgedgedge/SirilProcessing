@@ -71,8 +71,8 @@ def reset_restoration_work_dir(
 ) -> Path:
     """Prépare un dossier direct et protège l'entrée avant toute suppression.
 
-    Dans un objet numéroté (04_restoration et marqueur 01_calibration), les
-    chaînes utilisent directement 04_restoration et les moteurs leur rapport, sans
+    Dans un objet numéroté (05_restoration et marqueur 01_calibration), les
+    chaînes utilisent directement 05_restoration et les moteurs leur rapport, sans
     suffixe _work. Les appels autonomes conservent <rapport>_work, sans 001.
     ``prepared_directory`` désigne un dossier déjà nettoyé par l’orchestrateur,
     contenant les masques et le rapport : il est conservé pour éviter de les
@@ -91,11 +91,11 @@ def reset_restoration_work_dir(
         work.mkdir(parents=True, exist_ok=True)
         return work
     numbered = any(
-        parent.name == "04_restoration"
+        parent.name in ("04_restoration", "05_restoration")
         and (parent.parent / "01_calibration").is_dir()
         for parent in report.parents
     )
-    if numbered and report.parent.name == "04_restoration" and report.stem == "restoration":
+    if numbered and report.parent.name in ("04_restoration", "05_restoration") and report.stem == "restoration":
         work = report.parent
         if source.is_relative_to(work):
             raise ValueError("L’entrée se trouve dans le dossier de travail réinitialisé")

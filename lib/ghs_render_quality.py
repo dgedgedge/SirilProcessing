@@ -13,6 +13,7 @@ import numpy as np
 
 from lib.parameterized_component import ParameterizedComponent
 from lib.type_defs import JSONReport
+from lib.ghs_weak_structure import WeakStructureQuality, WeakStructureEvaluator
 
 DEFAULT_CNR_FLOOR = .9
 DEFAULT_TAIL_BONUS = .1
@@ -54,6 +55,7 @@ class HistogramRenderQuality(ParameterizedComponent):
     @classmethod
     def add_arguments(cls, parser: argparse.ArgumentParser) -> None:
         """Déclare le seuil de suffisance et le bonus borné des objectifs lumineux."""
+        WeakStructureQuality.add_arguments(parser)
         parser.add_argument('--ghs-quality-cnr-floor', type=float, default=DEFAULT_CNR_FLOOR,
                             help='Début de pénalité contraste/bruit en piecewise '
                                  '(défaut 0,9 ; ]0,1])')
@@ -66,6 +68,7 @@ class HistogramRenderQuality(ParameterizedComponent):
     @staticmethod
     def validate_options(args: argparse.Namespace) -> None:
         """Refuse les réglages non finis, booléens ou hors de leur domaine."""
+        WeakStructureQuality.validate_sigma(getattr(args, 'ghs_weak_sigma', WeakStructureQuality.WEAK_SIGMA))
         reference_weight = getattr(args, 'ghs_quality_reference_weight', DEFAULT_REFERENCE_WEIGHT)
         if (isinstance(reference_weight, (bool, np.bool_)) or not math.isfinite(reference_weight)
                 or not 0 <= reference_weight <= 10):
@@ -156,6 +159,8 @@ class HistogramRenderQuality(ParameterizedComponent):
     @staticmethod
     def sample_measure(
         reference_light: np.ndarray, image: np.ndarray, thresholds: JSONReport, color_mode: str,
+        *, weak_sigma: float = WeakStructureQuality.WEAK_SIGMA,
+        weak_evaluator: WeakStructureEvaluator | None = None,
     ) -> JSONReport:
         """Mesure vite les régions fixes d'une grille spatiale, jamais d'un sondage trié.
 
@@ -169,6 +174,10 @@ class HistogramRenderQuality(ParameterizedComponent):
             Seuils figés sky/diffuse_low/diffuse_high/bright de cette phase.
         color_mode : str
             Mode human ou even partagé avec le moteur GHS.
+        weak_sigma : float
+            Seuil faible connecté en unités de bruit, entre 1 et 3 inclus.
+        weak_evaluator : WeakStructureEvaluator or None
+            Instance conservant les masques de cette référence pendant la phase.
 
         Returns
         -------
@@ -209,7 +218,9 @@ class HistogramRenderQuality(ParameterizedComponent):
             total = (light[:, 1:]+light[:, :-1])[pairs]
             result['local_contrast'] = float(np.median(abs(delta)/np.maximum(total, 1e-12)))
         from lib.ghs_weak_structure import WeakStructureQuality
-        result['weak_structure'] = WeakStructureQuality.measure(reference_light, light)
+        result['weak_structure'] = WeakStructureQuality.measure(
+            reference_light, light, weak_sigma=weak_sigma, evaluator=weak_evaluator,
+        )
         return result
 
     @classmethod

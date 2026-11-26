@@ -10,8 +10,15 @@ sous-sessions d'acquisition. Le nom de l'objet est celui du répertoire fourni,
 ou `--mosaic-name` / le nom commun calculé en mosaïque.
 
 La racine est `<output>/<objet>/`. Si `--output` désigne déjà un dossier portant
-le nom de l'objet, le nom n'est pas ajouté une seconde fois. Les six dossiers
+le nom de l'objet, le nom n'est pas ajouté une seconde fois. Les sept dossiers
 de premier niveau sont fixes, sans préfixe d'objet répété :
+
+L'ordre du post-traitement est photométrie `03`, correction optique
+Aberration Remover `04`, restauration `05`, AutoGHS `06`, puis couleur et
+publication `07`. Les anciens dossiers ne sont pas renommés automatiquement :
+un calcul en cours doit conserver ses chemins. La lecture explicite d'un
+ancien `06_color/postprocess.json` reconnaît son plan historique ; les nouvelles
+exécutions écrivent `07_color/postprocess.json`.
 
 ```text
 M31/
@@ -37,7 +44,10 @@ M31/
     01_gradient/gradient.json
     photometry.json
     02_photometrie/                # scripts et journaux, sans niveau 001
-  04_restoration/
+  04_aberration_remover/           # après photométrie, avant restauration
+    aberration.json
+    aberration_work/              # catalogues, journaux et candidat optique
+  05_restoration/
     restoration.json
     restoration_summary.txt       # toutes les vérifications et le classement
     00_mask_origine/
@@ -55,7 +65,7 @@ M31/
         ...                     # catalogues, scripts et journaux finaux
       ...                       # scripts, candidats et résultat de cet essai
     09_denoise_graxpert_then_sharpen_siril/  # exemple d’essai enchaîné
-  05_autoghs/
+  06_autoghs/
     autoghs.json
     01_separation/
     03_ghs_stars/
@@ -66,7 +76,7 @@ M31/
       histogram_trials/
     04_recomposition/
     render.fits                   # rendu GHS conservé avec la passe couleur
-  06_color/
+  07_color/
     color.json
     annotation.json
     postprocess.json              # synthèse globale des post-traitements
@@ -80,7 +90,7 @@ M31/
 Les rapports d’étapes et la synthèse globale ont une synthèse `.txt` voisine ;
 les audits techniques internes peuvent rester uniquement en JSON. Les moteurs créent
 leurs sous-répertoires de travail dans l'étape correspondante. Les cinq
-sous-étapes AutoGHS sont directement dans `05_autoghs/`, sans enveloppe
+sous-étapes AutoGHS sont directement dans `06_autoghs/`, sans enveloppe
 `autoghs_work/`. Les dossiers des étapes désactivées
 peuvent rester vides. Le JPEG et le PNG dépendent des étapes actives et de
 leurs prérequis ; ils ne sont pas inventés lorsqu'aucun rendu n'est disponible.
@@ -140,14 +150,14 @@ en mosaïque. `--keep-intermediate` conserve ses règles de nettoyage.
 
 La photométrie inclut la correction initiale de gradient dans son sous-dossier
 `01_gradient/`. Si la comparaison de chaînes de restauration est désactivée,
-les moteurs sont rangés sous `04_restoration/01_deconvolution/` et
-`04_restoration/02_denoise/`. La comparaison complète utilise
-`04_restoration/`, avec un dossier direct par opération, sans
+les moteurs sont rangés sous `05_restoration/01_deconvolution/` et
+`05_restoration/02_denoise/`. La comparaison complète utilise
+`05_restoration/`, avec un dossier direct par opération, sans
 suffixe `_work` ni niveau `001` ; voir les [chaînes de restauration](../postProcess/quality.md).
 
 `--autoghs-only` et `--color-only` retrouvent le relais avec le manifeste situé
-sous `02_mosaic`, puis les rapports et snapshots sous `06_color`. La reprise
-couleur conserve les couches GHS sous `05_autoghs`. La mesure, l'ordre et les
+sous `02_mosaic`, puis les rapports et snapshots sous `07_color`. La reprise
+couleur conserve les couches GHS sous `06_autoghs`. La mesure, l'ordre et les
 paramètres scientifiques des traitements ne changent pas avec cette organisation.
 Un appel à `postProcess` sur ce relais reconnaît l'arborescence ; il en est de
 même si son répertoire de sortie explicite désigne cette racine numérotée.
