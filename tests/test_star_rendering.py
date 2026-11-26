@@ -4,6 +4,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from lib.type_defs import JSONReport
 
 from lib.star_rendering import (
     ConservativeStarRenderer, recompose, stellar_peak_positions,
@@ -263,6 +264,28 @@ def test_unmeasurable_width_remains_explicit() -> None:
     assert report['fwhm']['median_ratio'] is None
     assert report['width_adaptation']['stop_reason'] == 'unmeasurable width'
     assert len(report['width_adaptation']['iterations']) == 1
+
+
+def test_rejection_log_uses_the_group_ratio_actually_checked(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Une médiane globale admissible n'est pas affichée comme supérieure à la limite."""
+    source = np.zeros((3, 20, 20), dtype='f4')
+
+    def rejected(*args: object, **kwargs: object) -> tuple[np.ndarray, JSONReport]:
+        """Fournit une médiane globale sûre mais un groupe hors limite."""
+        return source.copy(), dict(
+            fwhm=dict(median_ratio=1.377028, maximum_group_median_ratio=1.6),
+            histogram_balance=dict(accepted_strength=0.),
+        )
+
+    monkeypatch.setattr(ConservativeStarRenderer, '_render_candidate', rejected)
+    with caplog.at_level('INFO', logger='lib.star_rendering'):
+        with pytest.raises(ValueError, match='ratio 1.600000'):
+            ConservativeStarRenderer._render_unrestricted(source, faint_boost=1., max_width_ratio=1.5)
+    assert '1.600000 > limite 1.5' in caplog.text
+    assert 'médiane globale 1.377028' in caplog.text
+    assert '1.377028 >' not in caplog.text
 
 
 def test_stellar_trial_recording_preserves_render_and_source() -> None:

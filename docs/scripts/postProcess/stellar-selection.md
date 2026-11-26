@@ -53,7 +53,7 @@ réduire les paramètres de la courbe globale. Les gardes ne créent aucun
 traitement local. La force retenue reste identique pour toute l'image.
 Une garde non mesurable ne constitue pas une validation physique.
 
-L'[objectif de visibilité](stellar-appearance.md) `--star-visible-fraction 0.40`
+L'[objectif de visibilité](stellar-appearance.md) `--star-visible-fraction 0.30`
 peut élargir le quantile et ajuster le mélange de la courbe pour révéler davantage
 d'étoiles. Il sature le bénéfice à la cible et contrôle les profils à 50 %, 10 %
 et 5 % du pic, par luminosité. S'il n'est pas atteignable sans dégradation,

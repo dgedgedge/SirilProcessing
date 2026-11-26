@@ -41,7 +41,7 @@ Il est activé par défaut ; `--disable-autoghs` conserve la sortie linéaire.
 Les [deux classes de traitement indépendantes](stretch-branches.md) possèdent
 chacune leurs exports, diagnostics et galerie d’essais.
 La [courbe stellaire globale](stellar-selection.md) est calibrée sur les pics.
-L’[objectif de visibilité de 40 %](stellar-appearance.md) guide son choix sous
+L’[objectif de visibilité de 30 %](stellar-appearance.md) guide son choix sous
 les gardes de finesse et d’ailes, sans correction spatiale.
 La [courbe de transformation cumulée](stretch-transfer.md) accompagne chaque
 histogramme d’essai, avec ses échantillons float64 et sa recette RGB.

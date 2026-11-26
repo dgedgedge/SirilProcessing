@@ -20,7 +20,7 @@ class StellarAppearanceQuality:
     du fond local, en unités normalisées. Les mesures locales sont diagnostiques.
     """
 
-    VISIBLE_TARGET = .40
+    VISIBLE_TARGET = .30
     VISIBILITY_LEVEL = .03
     RADIUS = 32
     RAYS = 16
@@ -88,7 +88,7 @@ class StellarAppearanceQuality:
         """Évalue le rendu sans modifier ses pixels ; la cible guide le moteur global.
 
         Le fond local est la médiane du bord d'un carré de rayon 32 pixels.
-        Les candidats trop proches d'un bord restent inconnus. L'objectif 40 %
+        Les candidats trop proches d'un bord restent inconnus. L'objectif 30 %
         utilise des bornes incluant ces inconnus, jamais assimilés à zéro.
         Les profils concernent au plus 64 candidats visibles répartis en amplitude.
         Les autres objectifs n'ont pas encore de seuil perceptuel calibré.

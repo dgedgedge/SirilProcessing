@@ -10,9 +10,9 @@ def rgb(light: np.ndarray) -> np.ndarray:
     return np.repeat(light[None], 3, axis=0).astype('float32')
 
 
-@pytest.mark.parametrize('count,total,status', [(1, 4, 'FAIL'), (2, 10, 'FAIL'), (3, 10, 'FAIL'), (4, 10, 'PASS')])
-def test_visibility_target_is_forty_percent(count: int, total: int, status: str) -> None:
-    """40 % suffit exactement ; 30 % ne suffit plus, sans changement des pixels."""
+@pytest.mark.parametrize('count,total,status', [(1, 4, 'FAIL'), (2, 10, 'FAIL'), (3, 10, 'PASS'), (4, 10, 'PASS')])
+def test_visibility_target_is_thirty_percent(count: int, total: int, status: str) -> None:
+    """30 % suffit exactement ; 25 % ne suffit pas, sans changement des pixels."""
     y, x = np.indices((401, 401))
     before = np.zeros(y.shape)
     after = np.zeros(y.shape)

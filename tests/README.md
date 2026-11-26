@@ -183,8 +183,8 @@ le dossier des poids ; sinon le dossier ignoré `tmp/cache/models/cosmicclarity`
 
 ## Qualité astrophotographique
 
-`test_stellar_appearance.py` vérifie l'objectif non bloquant de 40 % d'étoiles
-visibles : 40 % atteint le seuil, tandis que 20 %, 25 % et 30 % échouent au diagnostic.
+`test_stellar_appearance.py` vérifie l'objectif non bloquant de 30 % d'étoiles
+visibles : 30 % atteint le seuil, tandis que 20 % et 25 % échouent au diagnostic.
 
 Les tests synthétiques utilisent un ciel/bruit et des structures connus, y compris
 une galaxie et un filament effacés, une nébulosité dominante, du signal rouge et
@@ -548,3 +548,13 @@ Le repli sur le centile inférieur est vérifié pour un faible effectif détect
 une bande faible vide, les égalités de luminosité, un objet très petit et
 l'absence d'objet. La carte verte et sa légende doivent correspondre au masque
 effectivement utilisé pour la qualité, même si ce masque inclut des graines.
+
+La sélection de visibilité stellaire distingue les écarts progressifs des ailes
+(0,60 à 0,90) des rejets d'amincissement du corps ou de déformation forte. Les
+tests contrôlent ces frontières, la tolérance supérieure d'ailes de 10 %, les
+95 % de profils mesurables, la reprise appariée à 31 pixels, les groupes de
+luminosité, la priorité de visibilité et les courbes de puissance globales.
+Le rejeu exact de la recette et l'identité spatiale de la courbe sont vérifiés.
+Les diagnostics sont exportés pour une courbe de puissance retenue et pour un
+motif d'arrêt nouveau, afin qu'une simple extension des libellés ne bloque pas
+le post-traitement après un rendu admissible.

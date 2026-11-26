@@ -259,6 +259,11 @@ haut/bas suit l'affichage Siril, même lorsque `ROWORDER=TOP-DOWN`.
 à côté du FITS. Les chemins sont dans `stars.diagnostic_path` et
 `stars.output_jpeg`. Le processeur stellaire autonome produit les mêmes types
 d'exports à côté de son rapport. Ces vues sont des diagnostics de présentation.
+Le diagnostic reconnaît les courbes globales de puissance ; un motif d'arrêt
+inconnu reste affiché tel quel sans interrompre l'export. Dans les journaux de
+rejet d'un renforcement, le rapport indiqué est le maximum des médianes FWHM
+par groupe, effectivement comparé à la limite ; la médiane globale est affichée
+séparément et n'est pas présentée à tort comme la cause du rejet.
 
 Dans le pipeline AutoGHS, `stars.json` et `histogram_trials/` décrivent les
 essais sur la couche stellaire seule : entrée, courbes fixes, adaptations des
@@ -326,11 +331,21 @@ Les sources et les FITS scientifiques restent inchangés.
 ## Objectifs indicatifs de visibilité et de forme
 
 Les [indicateurs d'apparence stellaire](stellar-appearance.md) mesurent un objectif
-non bloquant d'au moins 40 % de candidats visibles par contraste local,
+non bloquant d'au moins 30 % de candidats visibles par contraste local,
 le diamètre apparent, la pente de transition et l'étendue de la jupe. Ils
 figurent dans `appearance_quality` et dans le diagnostic PNG. La visibilité
 guide désormais le choix de la courbe globale via `--star-visible-fraction` ;
 les nouvelles courbes sont contrôlées en finesse et ailes par groupes de
-luminosité. Aucun gain spatial ni modification locale ne sont appliqués.
+luminosité. La FWHM reste protégée par un plancher dur de 0,90 ; pour les ailes
+et la jupe, les rapports entre 0,60 et 0,90 coûtent une pénalité progressive,
+sans bloquer une meilleure visibilité. Sous 0,60, le candidat est refusé.
+Le plafond FWHM reste bloquant ; pour les ailes et la jupe, une tolérance de
+10 % au-dessus de cette limite est admise avec pénalité. Au moins 95 % des
+profils de référence doivent rester mesurables. Les traversées manquantes sont
+remesurées à 31 pixels avant ce contrôle. Si les courbes quantiles ne suffisent
+pas, des puissances globales douces sont évaluées avec ces mêmes protections.
+Ces seuils heuristiques concernent des profils relatifs, pas une mesure de
+déconvolution physique. Les décisions figurent dans `visibility_selection`
+(`profile_guard`, pénalités et motifs des essais). Aucun gain spatial ni modification locale ne sont appliqués.
 Aucun seuil perceptuel de
 netteté ou de jupe n'est encore déclaré validé.
